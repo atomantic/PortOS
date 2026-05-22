@@ -284,11 +284,20 @@ export async function runPromptThroughProvider(args) {
     // noisy "investigate" entry in their plan for a failure that was
     // auto-recovered. Keys must match what server/index.js's onRunFailed
     // hook published (metadata.providerName + metadata.model).
-    const noteFallbackHandled = await loadNoteFallbackHandled();
-    noteFallbackHandled({
-      provider: failed.name || failed.id,
-      model: failedModel,
-    });
+    //
+    // Best-effort: a failure to load the autoFixer module or in the
+    // suppress call itself must not turn a successful fallback run into
+    // a user-visible error. The worst case is a stale investigation
+    // task in the user's plan — the actual result still flows through.
+    try {
+      const noteFallbackHandled = await loadNoteFallbackHandled();
+      noteFallbackHandled({
+        provider: failed.name || failed.id,
+        model: failedModel,
+      });
+    } catch (suppressErr) {
+      console.error(`❌ noteFallbackHandled failed (investigation task not suppressed): ${suppressErr.message}`);
+    }
 
     return {
       ...fallbackResult,

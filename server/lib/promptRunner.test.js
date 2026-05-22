@@ -873,6 +873,32 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(mapPassed).toHaveProperty('primary-cli');
   });
 
+  it('does not turn a successful fallback into a failure when noteFallbackHandled itself throws (best-effort suppression)', async () => {
+    mockToolkitWithFallback();
+    autoFixer.noteFallbackHandled.mockImplementation(() => {
+      throw new Error('autoFixer is offline');
+    });
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'primary boom' });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('still works');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    // Fallback ran and returned its result — the suppression failure was
+    // logged but did not surface as a rejection.
+    expect(out.text).toBe('still works');
+    expect(out.usedFallback).toBe(true);
+  });
+
   it('routes USAGE_LIMIT failures through markUsageLimit (parses wait time)', async () => {
     const status = mockToolkitWithFallback();
     runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
