@@ -424,6 +424,34 @@ describe('peerSync', () => {
       expect(await autoSubscribePeerToAllRecords('', 'universe')).toEqual([]);
       expect(await autoSubscribePeerToAllRecords('peer-a', 'bogus')).toEqual([]);
     });
+
+    it('converges from peer:online when the toggle fired before instanceId was known', async () => {
+      // Regression for the addPeer→toggle→probe ordering: addPeer creates
+      // a peer with instanceId=null. The user can flip syncCategories on
+      // before the first probe lands, in which case instances.updatePeer's
+      // inline backfill silently no-ops (no instanceId to subscribe to).
+      // The peer:online listener (wired in installPeerSyncListener) must
+      // re-run autoSubscribePeerToAllRecords once the probe assigns the
+      // instanceId, otherwise the user's intent is lost forever.
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      installPeerSyncListener();
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      // Emit peer:online with a peer that has universe-sync turned on but
+      // was never seen by the inline backfill (the test never called
+      // updatePeer — that's the point).
+      instanceEvents.emit('peer:online', {
+        instanceId: 'peer-a',
+        name: 'A',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        syncCategories: { universe: true },
+      });
+      // Allow the listener's fire-and-forget IIFE to settle.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
+    });
   });
 
   describe('retryPendingPushesForPeer', () => {
@@ -607,7 +635,7 @@ describe('peerSync', () => {
       expect(result.reason).toBe('peer-not-found');
     });
 
-    it('refuses to push to a peer with syncEnabled=false (stale sub doesnt outlive the user toggle)', async () => {
+    it('refuses to push to a peer with syncEnabled=false (stale sub does not outlive the user toggle)', async () => {
       // Regression: an existing subscription is not a license to keep pushing
       // after the user has globally silenced the peer. Without this gate,
       // every subsequent edit would still leak across the wire.

@@ -1034,12 +1034,40 @@ export function installPeerSyncListener() {
     });
   };
   recordEvents.on('updated', onUpdated);
-  // Retry pending initial pushes the moment a peer transitions to online —
-  // covers the "subscribe fired while peer offline" case the auto-subscribe
-  // path can produce after createUniverse / createSeries.
+  // On peer:online, drive the local subscription state to convergence with
+  // the user's intent. Two cases:
+  //
+  // (1) Backfill missed at toggle time. `instances.updatePeer` runs the
+  //     `autoSubscribePeerToAllRecords` backfill inline ONLY when the peer
+  //     already has a known instanceId; for a freshly-added peer that
+  //     hasn't been probed yet, instanceId is null and the inline backfill
+  //     silently no-ops. By re-running it here for every category the peer
+  //     has enabled, we recover that intent the moment the peer comes
+  //     online and we learn its instanceId.
+  //
+  // (2) Initial-push retry. Subscriptions whose `lastPushedAt == null`
+  //     (typically because the peer was offline when subscribePeer fired
+  //     the initial push) get a second attempt now that the peer is
+  //     reachable. Already-pushed subs are filtered inside the helper.
+  //
+  // Both helpers are idempotent: (1) calls subscribePeer which short-
+  // circuits on existing subs, (2) filters by lastPushedAt. Safe to fire
+  // both unconditionally per peer:online.
   onPeerOnline = (peer) => {
     if (!peer?.instanceId) return;
-    retryPendingPushesForPeer(peer.instanceId).catch(() => {});
+    (async () => {
+      const cats = peer.syncCategories || {};
+      // KIND_TO_CATEGORY['universe']='universe', ['series']='pipeline'.
+      // Iterate the kind keys so the (kind, category) mapping stays single-
+      // sourced from KIND_TO_CATEGORY.
+      for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+        const cat = KIND_TO_CATEGORY[kind];
+        if (cats[cat] === true) {
+          await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {});
+        }
+      }
+      await retryPendingPushesForPeer(peer.instanceId).catch(() => {});
+    })().catch(() => {});
   };
   instanceEvents.on('peer:online', onPeerOnline);
 }
