@@ -46,12 +46,12 @@
  * Because the retired-id map covers every member of every legacy shape, no
  * tier pointer can be left referencing a model that's no longer in
  * `provider.models` after the rewrite (which would otherwise break dropdowns).
- * As a final safety net, any pointer that still doesn't resolve to a member
- * of the new `provider.models` (e.g. a user pinned `defaultModel` to a
- * hand-typed/future/foreign id while the models list happened to match a
- * legacy shape) is reset to its per-tier fallback (light=haiku-4-5,
- * medium=sonnet-4-6, heavy/default=opus-4-7) so tier intent is preserved
- * and the provider stays usable.
+ * As a final safety net, any pointer that doesn't resolve to a member of
+ * the new `provider.models` — whether it's null/undefined/empty-string or
+ * points at a hand-typed/future/foreign id — is reset to its per-tier
+ * fallback (light=haiku-4-5, medium=sonnet-4-6, heavy/default=opus-4-7)
+ * so tier intent is preserved and the provider stays usable (the UI
+ * selector and server callers both expect every slot to be a real id).
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -202,16 +202,17 @@ export default {
           provider[key] = successor;
         }
       }
-      // Orphan safety net: if a user customized a pointer to a value not in
-      // any of our maps (e.g. a hand-typed id, a model from a different
-      // provider, a future model id) and the legacy models list happened to
-      // match, the pointer could still reference a model not in NEW_MODELS.
-      // UI selectors (e.g. ProviderModelSelector) only render options from
-      // provider.models, so an orphan pointer becomes an empty selection.
-      // Reset orphans to the per-tier fallback so tier intent is preserved
-      // (light slot stays haiku, medium stays sonnet, heavy/default → opus).
+      // Orphan safety net: a pointer that doesn't resolve to a member of
+      // the new `provider.models` would render as an empty UI selection
+      // (`ProviderModelSelector` only lists options from `provider.models`)
+      // and break server callers that expect a real id. Reset orphans to
+      // the per-tier fallback so tier intent is preserved (light → haiku,
+      // medium → sonnet, heavy/default → opus). Treats null, undefined,
+      // and empty-string as orphans alongside foreign ids — all three
+      // produce the same broken UI state.
       for (const key of ['defaultModel', ...TIER_POINTER_KEYS]) {
-        if (provider[key] != null && !provider.models.includes(provider[key])) {
+        const v = provider[key];
+        if (v == null || v === '' || !provider.models.includes(v)) {
           provider[key] = TIER_FALLBACK[key];
         }
       }

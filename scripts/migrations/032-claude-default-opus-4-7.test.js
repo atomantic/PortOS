@@ -118,12 +118,12 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
       mediumModel: 'claude-sonnet-4-6',
       heavyModel: 'claude-opus-4-7',
     };
-    const before = JSON.stringify({ providers: { 'claude-code': current } });
-    writeJson(providersPath, JSON.parse(before));
+    writeJson(providersPath, { providers: { 'claude-code': current } });
+    const beforeBytes = readFileSync(providersPath, 'utf-8');
 
     await migration.up({ rootDir });
 
-    expect(readJson(providersPath)).toEqual(JSON.parse(before));
+    expect(readFileSync(providersPath, 'utf-8')).toBe(beforeBytes);
   });
 
   it('skips a customized models list (user dropped sonnet, etc.)', async () => {
@@ -149,12 +149,12 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
       models: ['claude-opus-4-6', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101'],
       defaultModel: 'claude-opus-4-6',
     };
-    const before = JSON.stringify({ providers: { 'claude-code': reordered } });
-    writeJson(providersPath, JSON.parse(before));
+    writeJson(providersPath, { providers: { 'claude-code': reordered } });
+    const beforeBytes = readFileSync(providersPath, 'utf-8');
 
     await migration.up({ rootDir });
 
-    expect(readJson(providersPath)).toEqual(JSON.parse(before));
+    expect(readFileSync(providersPath, 'utf-8')).toBe(beforeBytes);
   });
 
   it('preserves a user-pin to a still-current model (claude-sonnet-4-6) with a non-aiToolkit fingerprint', async () => {
@@ -265,6 +265,55 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     expect(after.mediumModel).toBe('claude-sonnet-4-6');
   });
 
+  it('resets a null defaultModel to the per-tier fallback (opus-4-7)', async () => {
+    // null defaultModel would render as an empty UI selection and break
+    // server callers that read provider.defaultModel — same broken state
+    // as a foreign-id orphan, so the safety net treats it identically.
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': dataSampleLegacy({ defaultModel: null }),
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.defaultModel).toBe('claude-opus-4-7');
+    expect(after.models).toContain(after.defaultModel);
+  });
+
+  it('resets an empty-string lightModel to the per-tier fallback (haiku-4-5)', async () => {
+    // Same broken-state class as null/foreign — empty string renders as
+    // nothing in dropdowns.
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': dataSampleLegacy({ lightModel: '' }),
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.lightModel).toBe('claude-haiku-4-5');
+    expect(after.models).toContain(after.lightModel);
+  });
+
+  it('resets a missing (undefined) heavyModel to the per-tier fallback (opus-4-7)', async () => {
+    // Provider had a legacy 4-item models list but the user actively
+    // removed the heavyModel pointer — leaving the key undefined after
+    // the JSON roundtrip. The safety net coerces it to opus-4-7 so the
+    // provider has a usable heavy tier after the rewrite.
+    const legacy = dataSampleLegacy();
+    delete legacy.heavyModel;
+    writeJson(providersPath, { providers: { 'claude-code': legacy } });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.heavyModel).toBe('claude-opus-4-7');
+    expect(after.models).toContain(after.heavyModel);
+  });
+
   it('upgrades a user-pinned retired opus-4-5 as defaultModel via per-model successor (no orphan)', async () => {
     // Retired but not a seeded default → per-model successor (opus-4-7).
     // Ensures no orphan pointer (model id absent from provider.models).
@@ -283,12 +332,12 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
   });
 
   it('handles missing claude-code / claude-code-tui (skip silently, no write)', async () => {
-    const before = JSON.stringify({ providers: { 'codex': { id: 'codex', models: [] } } });
-    writeJson(providersPath, JSON.parse(before));
+    writeJson(providersPath, { providers: { 'codex': { id: 'codex', models: [] } } });
+    const beforeBytes = readFileSync(providersPath, 'utf-8');
 
     await migration.up({ rootDir });
 
-    expect(readJson(providersPath)).toEqual(JSON.parse(before));
+    expect(readFileSync(providersPath, 'utf-8')).toBe(beforeBytes);
   });
 
   it('is a no-op when data/providers.json does not exist (fresh install)', async () => {
@@ -307,12 +356,12 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
   });
 
   it('does not modify the file when providers map is absent (logs a warning and skips)', async () => {
-    const before = JSON.stringify({ activeProvider: 'claude-code' });
-    writeJson(providersPath, JSON.parse(before));
+    writeJson(providersPath, { activeProvider: 'claude-code' });
+    const beforeBytes = readFileSync(providersPath, 'utf-8');
 
     await migration.up({ rootDir });
 
-    expect(readJson(providersPath)).toEqual(JSON.parse(before));
+    expect(readFileSync(providersPath, 'utf-8')).toBe(beforeBytes);
   });
 
   it('processes claude-code and claude-code-tui together in one pass', async () => {
