@@ -16,7 +16,8 @@
  * sender to allow GC of the tombstone once every subscribed peer has seen
  * it. Snapshot sync (`dataSync.js` 60s loop) remains the safety net for
  * (peer, kind) pairs that DON'T have per-record subscriptions; the
- * orchestrator skip-when-subscribed wiring lands in Stage 3.
+ * `syncOrchestrator` consults `listPeerSubscriptions` per cycle and skips
+ * the snapshot category for any kind a peer-sub already covers.
  *
  * State files (under `data/sharing/`):
  *   - `peer_subscriptions.json` — outgoing subscriptions FROM this instance.
@@ -24,11 +25,14 @@
  *   - `peer_tombstone_cursors.json` — per-peer tombstone ack water-marks
  *     (managed by `peerTombstoneCursors.js`, this module advances it).
  *
- * Stage 2 boundary: the push uses `peerFetch` (an HTTPS-or-HTTP client) and
- * targets a `/api/peer-sync/push` endpoint that doesn't exist yet — the
- * actual HTTP route + the orchestrator wiring land in Stage 3. Until then
- * pushes fail closed (logged + retried on next event), which is the right
- * behavior even in the deployed system.
+ * Transport: pushes POST to the peer's `/api/peer-sync/push` (wired in
+ * `server/routes/peerSync.js`) via `peerFetch` — an HTTPS-or-HTTP node-fetch
+ * variant that accepts the Tailnet's self-signed certs. Receiver pulls
+ * missing assets back over the sender's `/data/{images,image-refs,videos}/`
+ * static mounts (accept-ranges enabled). All five stages of the federated
+ * peer-sync project are live: subscription store + asset manifest (this
+ * module), HTTP routes (Stage 3), UI + receiver-side asset pull (Stage 4),
+ * and tombstone GC (Stage 5; `sharing/tombstoneGc.js`).
  */
 
 import { join, basename } from 'path';
@@ -170,8 +174,11 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
     return { sub: existing, created: wasCreated };
   });
   // initCursor manages its own state file; no need to hold the subscription
-  // lock across it.
-  await initCursor(peerId);
+  // lock across it. Callers that already initialized the cursor for this
+  // peerId (e.g. the backfill loop in `autoSubscribePeerToAllRecords`) can
+  // pass `skipCursorInit: true` to avoid N redundant cursor reads + lock
+  // acquisitions when subscribing many records to the same peer in sequence.
+  if (!opts.skipCursorInit) await initCursor(peerId);
 
   // Trigger initial push unless this was auto-created by a reverse-subscribe
   // (the peer just pushed us their latest, so pushing back is a no-op cycle).
@@ -231,6 +238,13 @@ const KIND_TO_CATEGORY = Object.freeze({
 
 function peerAllowsOutbound(peer) {
   if (!peer || peer.enabled === false) return false;
+  // `syncEnabled` is the global "sync this peer at all" toggle (separate from
+  // per-category `syncCategories.*`). When the user has globally disabled sync
+  // for a peer, auto-subscribe MUST NOT create subscriptions or fire pushes —
+  // doing so would leak records to a peer the user explicitly silenced. The
+  // per-category check (peerHasCategory) is necessary but not sufficient on
+  // its own, because syncCategories can be set independently.
+  if (peer.syncEnabled === false) return false;
   const directions = Array.isArray(peer.directions) ? peer.directions : [];
   if (directions.length > 0 && !directions.includes('outbound')) return false;
   return true;
@@ -300,13 +314,19 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
     records = await listSeries({ includeDeleted: false }).catch(() => []);
   }
   if (records.length === 0) return [];
+  // Initialize the tombstone cursor for this peer ONCE up front. Each
+  // subsequent subscribePeer call passes `skipCursorInit: true` so we don't
+  // re-read the cursor state file (and re-take its writeTail lock) for every
+  // record. Cheap when N is small, but a peer with 50+ universes pays for
+  // 50+ redundant cursor reads otherwise.
+  await initCursor(peerId).catch(() => {});
   // Only track newly-created subscriptions so re-runs of this helper (e.g. a
   // second toggle on the same category) don't double-report or noise the
   // backfill log line with already-subscribed records.
   const created = [];
   for (const rec of records) {
     if (!isNonEmptyStr(rec.id)) continue;
-    const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }).catch((err) => {
+    const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: true }).catch((err) => {
       console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
       return null;
     });

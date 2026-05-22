@@ -269,6 +269,20 @@ describe('peerSync', () => {
       expect(created.map(c => c.peerId)).toEqual(['peer-c']);
     });
 
+    it('skips peers with syncEnabled=false (global toggle off)', async () => {
+      // Regression guard: the per-category bit is necessary but not sufficient
+      // — `syncEnabled` is the global "sync this peer at all" toggle. Without
+      // this check, a peer the user silenced would still be auto-subscribed
+      // and pushed to from createUniverse / createSeries.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, syncEnabled: false, syncCategories: { universe: true } },
+        { instanceId: 'peer-b', enabled: true, syncEnabled: true, syncCategories: { universe: true } },
+      ]);
+      const created = await autoSubscribeRecordToAllPeers('universe', 'u1');
+      expect(created.map(c => c.peerId)).toEqual(['peer-b']);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+    });
+
     it('maps series records to the pipeline category', async () => {
       vi.mocked(getPeers).mockResolvedValue([
         { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: false } },
@@ -329,6 +343,18 @@ describe('peerSync', () => {
       // disabled — the category bit can be stale even after `enabled: false`.
       vi.mocked(getPeers).mockResolvedValue([
         { instanceId: 'peer-a', enabled: false, syncCategories: { universe: true } },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created).toEqual([]);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+    });
+
+    it('returns [] when syncEnabled is false (global toggle off)', async () => {
+      // Mirrors the autoSubscribeRecordToAllPeers test — both helpers go
+      // through `peerAllowsOutbound` which now consults syncEnabled.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, syncEnabled: false, syncCategories: { universe: true } },
       ]);
       vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
       const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
