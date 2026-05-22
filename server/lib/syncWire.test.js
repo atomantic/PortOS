@@ -66,10 +66,25 @@ describe('syncWire', () => {
       // state to include { deleted: false, deletedAt: null } would compute a
       // different snapshot checksum than a not-yet-upgraded peer with the
       // same logical content, and the 60s sync loop would churn forever.
+      // computeChecksum uses JSON.stringify, which is key-order sensitive —
+      // assert STRING equality, not just object equality.
       const legacy = { id: 'u1', name: 'U' };
       const rewritten = { id: 'u1', name: 'U', deleted: false, deletedAt: null };
-      expect(sanitizeRecordForWire('universe', legacy))
-        .toEqual(sanitizeRecordForWire('universe', rewritten));
+      const a = sanitizeRecordForWire('universe', legacy);
+      const b = sanitizeRecordForWire('universe', rewritten);
+      expect(a).toEqual(b);
+      expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    });
+
+    it('canonicalizes records with oddly-ordered keys (deleted in head position) to canonical tail order', () => {
+      // Regression for the Copilot finding: spreading sanitizeSoftDeleteFields
+      // into a record that already has `deleted` in a non-tail position only
+      // OVERWRITES the value — the key keeps its original position. Without
+      // explicitly stripping then re-adding, the JSON.stringify output differs.
+      const odd = { deleted: false, id: 'u1', deletedAt: null, name: 'U' };
+      const canonical = { id: 'u1', name: 'U', deleted: false, deletedAt: null };
+      expect(JSON.stringify(sanitizeRecordForWire('universe', odd)))
+        .toBe(JSON.stringify(sanitizeRecordForWire('universe', canonical)));
     });
 
     it('strips stray deletedAt when deleted=false (defensive against corrupted payloads)', () => {

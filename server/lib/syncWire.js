@@ -50,8 +50,18 @@ export function sanitizeRecordForWire(kind, record) {
   switch (kind) {
     case 'universe':
     case 'series':
-    case 'issue':
-      return { ...record, ...sanitizeSoftDeleteFields(record) };
+    case 'issue': {
+      // Strip the soft-delete fields from the input first, then re-add them
+      // in canonical position at the END. JS object spread preserves key
+      // position when *overwriting* an existing key — without this strip, a
+      // record where `deleted` happens to sit in a non-tail position would
+      // serialize differently from a freshly-rewritten record where it sits
+      // at the tail, defeating the byte-stable-checksum invariant the
+      // dataSync snapshot loop relies on (computeChecksum uses
+      // JSON.stringify, which is key-order sensitive).
+      const { deleted: _deleted, deletedAt: _deletedAt, ...rest } = record;
+      return { ...rest, ...sanitizeSoftDeleteFields(record) };
+    }
     default:
       return null;
   }
