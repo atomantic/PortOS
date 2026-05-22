@@ -708,10 +708,6 @@ describe('cos.js source — priority + capacity invariants', () => {
     // rotation type for the app. Mirrors the legacy direct-spawn caller.
     expect(
       fnBody,
-      'queue path must load per-app lastImprovementType so getNextTaskType rotates correctly'
-    ).toMatch(/getAppActivityById\(app\.id\)/);
-    expect(
-      fnBody,
       'queue path must pass the loaded lastType through to getNextTaskType so rotation advances'
     ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*\)/);
 
@@ -724,6 +720,28 @@ describe('cos.js source — priority + capacity invariants', () => {
       fnBody,
       'queue path must not dynamically import ./appActivity.js inside the per-app loop'
     ).not.toMatch(/await\s+import\(['"]\.\/appActivity\.js['"]\)/);
+
+    // The cooldown check + lastImprovementType lookup both come from the
+    // same `data/app-activity.json` file. Before snapshotting, each app
+    // paid two separate disk reads per tick (one via `isAppOnCooldown`, one
+    // via `getAppActivityById`), so a 10-app install did 20 reads per
+    // scheduler tick. The queue path must (a) call `loadAppActivity()`
+    // exactly ONCE before the per-app loop and (b) drive the per-app
+    // cooldown gate via the pure `isAppActivityOnCooldown` predicate
+    // (which takes the per-app activity record from the snapshot), NOT
+    // the async `isAppOnCooldown` (which re-reads the file).
+    expect(
+      fnBody,
+      'queue path must hoist loadAppActivity() before the per-app loop'
+    ).toMatch(/loadAppActivity\(\)/);
+    expect(
+      fnBody,
+      'queue path must gate cooldown via the pure isAppActivityOnCooldown predicate, not the disk-reading isAppOnCooldown'
+    ).toMatch(/isAppActivityOnCooldown\(/);
+    expect(
+      fnBody,
+      'queue path must not call the disk-reading isAppOnCooldown per app'
+    ).not.toMatch(/await\s+isAppOnCooldown\(/);
   });
 
   it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {

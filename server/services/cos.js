@@ -20,7 +20,7 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents, getAppActivityById } from './appActivity.js';
+import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents, getAppActivityById, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats, parseCronToNextRun } from './eventScheduler.js';
@@ -1102,6 +1102,18 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
   let queued = 0;
 
+  // Load the activity snapshot ONCE before the per-app loop. Both the
+  // cooldown gate and the rotation `lastType` lookup are derived from
+  // `data/app-activity.json`; before this hoist, each app paid two
+  // separate disk reads (one via `isAppOnCooldown` + one via
+  // `getAppActivityById`), so a 10-app deployment did 20 reads of the
+  // same file per scheduler tick. With the snapshot pinned, the cost
+  // is O(1) read per `queueEligibleImprovementTasks` invocation. Falls
+  // back to an empty `apps` map on disk error so the loop's per-app
+  // lookups uniformly return `undefined` (both gates treat that as
+  // "no activity yet — not on cooldown, no last type").
+  const activitySnapshot = await loadAppActivity().catch(() => ({ apps: {} }));
+
   // Queue eligible improvement tasks for all managed apps (including PortOS)
   const apps = await getActiveApps().catch(() => []);
   for (const app of apps) {
@@ -1113,22 +1125,19 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
       continue;
     }
 
-    // Check if app is on cooldown
-    const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
-    if (onCooldown) continue;
+    // Derive both gates from the single shared snapshot. The async
+    // `isAppOnCooldown` would also work, but it loads the activity file
+    // again per app — see comment on `activitySnapshot` above.
+    const appActivity = activitySnapshot.apps[app.id];
+    if (isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs)) continue;
 
     // Get next eligible improvement type for this app. `getNextTaskType`
     // falls back to ROTATION when nothing is time-due, and the rotation
     // pointer is derived from the `lastType` argument — without it, the
     // rotation always restarts from index 0 and starves every other
     // rotation type for the app. Mirror `generateManagedAppTask` (the
-    // legacy direct-spawn caller above) which loads the per-app
-    // `lastImprovementType` and threads it in. `getAppActivityById` is
-    // statically imported at the top of the file alongside the other
-    // appActivity helpers — keep it that way; the dynamic-import-inside-
-    // loop pattern adds avoidable per-iteration async overhead and hides
-    // the real dependency graph.
-    const appActivity = await getAppActivityById(app.id).catch(() => null);
+    // legacy direct-spawn caller above) which threads the per-app
+    // `lastImprovementType` in.
     const lastType = appActivity?.lastImprovementType || '';
     const nextTypeResult = await getNextTaskType(app.id, lastType).catch(() => null);
     if (!nextTypeResult) continue;
