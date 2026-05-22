@@ -229,16 +229,17 @@ export async function spawnTuiAgent({
     }, OUTPUT_FLUSH_INTERVAL_MS);
   };
 
-  // Raw PTY-bytes flush pipeline. Parallel to flushPendingLines but appends
-  // unprocessed chunks (no ANSI strip, no line semantics) to raw.txt. Chunks
-  // are queued as Node Buffers — NOT pre-decoded strings — so that a
-  // multi-byte UTF-8 sequence split across two PTY chunks doesn't get a
-  // U+FFFD replacement char in the persisted spool. Buffer.concat happens
-  // once per 250ms batch, never accumulating in memory beyond a single tick.
+  // Raw PTY flush pipeline. Parallel to flushPendingLines but appends the
+  // unprocessed chunks (no ANSI strip, no line semantics) to raw.txt.
+  // shellService surfaces node-pty output as already-decoded UTF-8 strings
+  // (node-pty's internal StringDecoder handles multi-byte boundaries before
+  // we see chunks), so queueing strings here is sufficient — no Buffer
+  // bookkeeping needed. Joined once per 250ms batch, never accumulating in
+  // memory beyond a single tick.
   const flushPendingRawChunks = async () => {
     if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
     if (pendingRawChunks.length === 0) return;
-    const batch = Buffer.concat(pendingRawChunks);
+    const batch = pendingRawChunks.join('');
     pendingRawChunks = [];
     await appendFile(rawFile, batch).catch(() => {});
   };
@@ -336,9 +337,13 @@ export async function spawnTuiAgent({
     const rawAnalysisText = finalSuccess
       ? null
       : await readFileTail(rawFile, RAW_TAIL_ANALYSIS_BYTES);
+    // `??` (not `||`) so an empty raw spool ('') stays distinguishable from
+    // a read failure (null) — readFileTail's contract. An intentionally
+    // empty raw transcript should run failure analysis against ''; only
+    // a failed read falls back to outputBuffer.
     const errorAnalysis = finalSuccess
       ? null
-      : analyzeAgentFailure(rawAnalysisText || outputBuffer, task, model);
+      : analyzeAgentFailure(rawAnalysisText ?? outputBuffer, task, model);
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, worktree
@@ -390,14 +395,14 @@ export async function spawnTuiAgent({
     // disk-spool would race the rm of raw.txt (if we did remove it), and the
     // post-paste accumulator + state mutations are pointless after finish.
     if (finalized) return;
-    // Queue the raw Buffer so the disk spool preserves the exact PTY bytes —
-    // a multi-byte UTF-8 char split across two chunks would otherwise corrupt
-    // raw.txt with U+FFFD replacement chars at the boundary. The per-chunk
-    // decode below is only used for ASCII-byte marker matching, which is
-    // unaffected by boundary splits.
-    pendingRawChunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+    // node-pty surfaces output as already-decoded UTF-8 strings via
+    // shellService's onData hook (StringDecoder handles multi-byte
+    // boundaries internally), so `data` is a string here in normal use.
+    // The String(...) coerces defensively in case a future caller wires
+    // a Buffer-emitting encoding.
+    const text = typeof data === 'string' ? data : String(data);
+    pendingRawChunks.push(text);
     scheduleRawFlush();
-    const text = data.toString();
     if (postPasteBuffer !== null) postPasteBuffer += text;
     lastOutputAt = Date.now();
     if (firstOutputAt === null) firstOutputAt = lastOutputAt;
