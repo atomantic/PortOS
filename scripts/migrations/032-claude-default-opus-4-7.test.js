@@ -1,7 +1,7 @@
 /**
  * Test for migration 032 — flip Claude CLI/TUI providers to the current
  * undated trio with `claude-opus-4-7` as defaultModel. Picked up by
- * server/vitest.config.js's `../scripts/migrations/**\/*.test.js` glob.
+ * server/vitest.config.js's `../scripts/**\/*.test.js` glob.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
@@ -209,6 +209,39 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     const after = readJson(providersPath).providers['claude-code'];
     expect(after.models).toEqual(NEW_MODELS);
     expect(after.defaultModel).toBe('claude-haiku-4-5');
+  });
+
+  it('resets an orphan defaultModel (custom id not in any map) to POLICY_DEFAULT', async () => {
+    // User pinned a hand-typed / future / foreign id as defaultModel while
+    // leaving the legacy models list intact. The pointer isn't a retired id,
+    // isn't a seeded default, isn't in the new trio — without the orphan
+    // safety net it would be left dangling. Should land on opus-4-7.
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': dataSampleLegacy({ defaultModel: 'claude-some-future-model' }),
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.models).toEqual(NEW_MODELS);
+    expect(after.defaultModel).toBe('claude-opus-4-7');
+    expect(after.models).toContain(after.defaultModel);
+  });
+
+  it('resets an orphan tier pointer (lightModel pinned to a foreign id) to POLICY_DEFAULT', async () => {
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': dataSampleLegacy({ lightModel: 'gpt-4o-mini' }),
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.models).toContain(after.lightModel);
+    expect(after.lightModel).toBe('claude-opus-4-7');
   });
 
   it('upgrades a user-pinned retired opus-4-5 as defaultModel via per-model successor (no orphan)', async () => {

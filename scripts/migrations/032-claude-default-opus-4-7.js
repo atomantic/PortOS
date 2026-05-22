@@ -46,6 +46,10 @@
  * Because the retired-id map covers every member of every legacy shape, no
  * tier pointer can be left referencing a model that's no longer in
  * `provider.models` after the rewrite (which would otherwise break dropdowns).
+ * As a final safety net, any pointer that still doesn't resolve to a member
+ * of the new `provider.models` (e.g. a user pinned `defaultModel` to a
+ * hand-typed/future/foreign id while the models list happened to match a
+ * legacy shape) is reset to `POLICY_DEFAULT` so the provider stays usable.
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -178,6 +182,18 @@ export default {
         const successor = RETIRED_TO_SUCCESSOR[provider[key]];
         if (successor) {
           provider[key] = successor;
+        }
+      }
+      // Orphan safety net: if a user customized a pointer to a value not in
+      // any of our maps (e.g. a hand-typed id, a model from a different
+      // provider, a future model id) and the legacy models list happened to
+      // match, the pointer could still reference a model not in NEW_MODELS.
+      // UI selectors (e.g. ProviderModelSelector) only render options from
+      // provider.models, so an orphan pointer becomes an empty selection.
+      // Reset orphans to POLICY_DEFAULT so the provider stays usable.
+      for (const key of ['defaultModel', ...TIER_POINTER_KEYS]) {
+        if (provider[key] != null && !provider.models.includes(provider[key])) {
+          provider[key] = POLICY_DEFAULT;
         }
       }
       touched.push({ id, defaultModel: provider.defaultModel });
