@@ -276,13 +276,15 @@ const SHEET_VARIANTS = Object.freeze({
 });
 
 function getVariantConfig(variant = LEGACY_SHEET_VARIANT_ID) {
-  const config = SHEET_VARIANTS[variant];
-  if (!config) {
+  // Own-property check so `variant=constructor` / `toString` / `hasOwnProperty`
+  // from an unfiltered request body can't return an inherited Object.prototype
+  // member and have downstream `.build()` / `.storage` access crash with a 500.
+  if (!Object.prototype.hasOwnProperty.call(SHEET_VARIANTS, variant)) {
     throw new ServerError(`Unknown character sheet variant "${variant}"`, {
       status: 400, code: 'VALIDATION_ERROR',
     });
   }
-  return config;
+  return SHEET_VARIANTS[variant];
 }
 
 // Catalog for the UI — pure, no I/O. The client renders one panel row per

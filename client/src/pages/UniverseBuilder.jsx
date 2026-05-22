@@ -765,14 +765,19 @@ export default function UniverseBuilder() {
   // Generic filename → preview opener used by every clickable thumb on the
   // page (variation grids, composite sheets, canon entries, character
   // reference sheets). `opts.isSheet` forces a key match against the
-  // `canon-sheet:` prefix so a basename collision with a gallery image
-  // can't route the lightbox to `/data/images/` instead of
-  // `/data/image-refs/`.
+  // `canon-sheet:<variant>:` prefix so a basename collision with a gallery
+  // image can't route the lightbox to `/data/images/` instead of
+  // `/data/image-refs/`. The exact variant id isn't known at this callsite
+  // (the panel reads the field; the variant only lives inside the key),
+  // so match on the `canon-sheet:` prefix + filename suffix instead of an
+  // exact equality compare. Pre-variant keys (`canon-sheet:<filename>`)
+  // still match this prefix check.
   const openPreviewByFilename = useCallback((filename, opts) => {
     if (!filename) return;
-    const targetKey = opts?.isSheet ? `canon-sheet:${filename}` : null;
-    const match = (targetKey && previewItems.find((i) => i.key === targetKey))
-      || previewItems.find((i) => i.filename === filename);
+    const sheetMatch = opts?.isSheet
+      ? previewItems.find((i) => typeof i.key === 'string' && i.key.startsWith('canon-sheet:') && i.filename === filename)
+      : null;
+    const match = sheetMatch || previewItems.find((i) => i.filename === filename);
     if (match) setPreview(match);
   }, [previewItems, setPreview]);
   // Legacy name retained for the variation/composite call sites that pass a

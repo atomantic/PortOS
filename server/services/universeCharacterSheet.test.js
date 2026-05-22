@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, resolveSheetModelId } from './universeCharacterSheet.js';
+import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, resolveSheetModelId, listSheetVariants } from './universeCharacterSheet.js';
 
 const baseUniverse = {
   id: 'u-123',
@@ -194,5 +194,34 @@ describe('universeCharacterSheet — resolveSheetModelId', () => {
   it('returns null when no models are registered (caller surfaces the 400)', () => {
     const out = resolveSheetModelId({ override: undefined, settings: {}, allModels: [] });
     expect(out).toBeNull();
+  });
+});
+
+describe('universeCharacterSheet — variant catalog + prototype-pollution guard', () => {
+  // Renderer/delete read the registry by string key. Without an own-property
+  // check, an attacker can send `variant=constructor` (or any Object.prototype
+  // member) through the route's `.string().min(1).max(48)` schema — bracket
+  // access returns Object.prototype.constructor and the renderer crashes 500.
+  // Verify the registry lookup rejects every Object.prototype name.
+  it('listSheetVariants exposes the two registered variants', () => {
+    const variants = listSheetVariants();
+    const ids = variants.map((v) => v.id);
+    expect(ids).toContain('standard');
+    expect(ids).toContain('blueprint');
+    for (const v of variants) {
+      expect(v).toHaveProperty('label');
+      expect(v).toHaveProperty('description');
+    }
+  });
+
+  it('renderCharacterReferenceSheet rejects inherited Object.prototype member names with 400', async () => {
+    // Lazy import so we can call without setting up the full universe stack;
+    // the lookup error fires before any I/O.
+    const { renderCharacterReferenceSheet } = await import('./universeCharacterSheet.js');
+    for (const variant of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      await expect(
+        renderCharacterReferenceSheet('u-1', 'c-1', { variant }),
+      ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    }
   });
 });
