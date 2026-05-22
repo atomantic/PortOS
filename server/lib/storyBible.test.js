@@ -29,6 +29,7 @@ const {
   BIBLE_KIND,
   createBibleStore,
   pruneStaleReferenceSheets,
+  mergePreservedSheetPointers,
   stripCanonControlFields,
   CANON_CONTROL_FIELDS,
   SERVER_OWNED_CHARACTER_FIELDS,
@@ -599,6 +600,61 @@ describe('storyBible — pruneStaleReferenceSheets', () => {
     expect(out).not.toBe(list);
     expect(out[0].referenceSheets).toEqual({});
     expect(out[0].name).toBe('A');
+  });
+
+  it('mergePreservedSheetPointers preserves legacy + map pointers from prev when files still resolve', () => {
+    // Inject a fake FS check so the test is hermetic.
+    const onDisk = new Set(['live-std.png', 'live-bp.png']);
+    const checkExists = (name) => onDisk.has(name);
+
+    // patch carries a stale legacy filename AND no map; prev has both.
+    const prev = {
+      id: 'c-1', name: 'Vex',
+      referenceSheetImageRef: 'live-std.png',
+      referenceSheets: { blueprint: 'live-bp.png' },
+    };
+    const patchOmits = { id: 'c-1', name: 'Vex' };
+    const merged1 = mergePreservedSheetPointers(prev, patchOmits, checkExists);
+    expect(merged1.referenceSheetImageRef).toBe('live-std.png');
+    expect(merged1.referenceSheets).toEqual({ blueprint: 'live-bp.png' });
+
+    // Map merge: prev's blueprint wins over the patch's stale blueprint; the
+    // patch's other variant ('noir') flows through.
+    const patchStale = {
+      id: 'c-1', name: 'Vex',
+      referenceSheetImageRef: 'old-std.png',
+      referenceSheets: { blueprint: 'old-bp.png', noir: 'patch-noir.png' },
+    };
+    const merged2 = mergePreservedSheetPointers(prev, patchStale, checkExists);
+    expect(merged2.referenceSheetImageRef).toBe('live-std.png');
+    expect(merged2.referenceSheets).toEqual({ blueprint: 'live-bp.png', noir: 'patch-noir.png' });
+  });
+
+  it('mergePreservedSheetPointers falls through to the patch when prev pointer no longer resolves', () => {
+    // GET-route pruner returns null when the file is gone; client PATCH
+    // carries that null back. Preservation MUST not re-introduce the stale
+    // pointer from cur — otherwise the UI 404s on the next render.
+    const onDisk = new Set(); // nothing resolves
+    const checkExists = (name) => onDisk.has(name);
+    const prev = {
+      id: 'c-1', name: 'A',
+      referenceSheetImageRef: 'dead-std.png',
+      referenceSheets: { blueprint: 'dead-bp.png' },
+    };
+    const patch = {
+      id: 'c-1', name: 'A',
+      referenceSheetImageRef: null,
+      referenceSheets: {},
+    };
+    const merged = mergePreservedSheetPointers(prev, patch, checkExists);
+    expect(merged.referenceSheetImageRef).toBeNull();
+    expect(merged.referenceSheets).toEqual({});
+  });
+
+  it('mergePreservedSheetPointers is a pass-through when prev or patchChar is missing', () => {
+    const checkExists = () => true;
+    expect(mergePreservedSheetPointers(null, { id: 'c-1' }, checkExists)).toEqual({ id: 'c-1' });
+    expect(mergePreservedSheetPointers({ id: 'c-1' }, null, checkExists)).toBeNull();
   });
 
   it('prunes legacy + map pointers together without blowing away unrelated fields', () => {

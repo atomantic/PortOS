@@ -380,6 +380,42 @@ export function listSheetPointers(character) {
   return out;
 }
 
+/** Merge `prev`'s server-stamped sheet pointers into `patchChar`, keeping
+ *  cur's value for every slot whose underlying file still exists on disk.
+ *  Run by the `updateUniverse` literal-patch preservation guard so a stale
+ *  client snapshot can't clobber a render-completion stamp that landed
+ *  between GET and PATCH. Per-key for the map: each `referenceSheets[k]`
+ *  is considered independently so a freshly-stamped 'blueprint' survives
+ *  even when the patch carries an older `referenceSheets` (or omits it).
+ *
+ *  `resolveExists(filename) → boolean` is injected so this helper stays
+ *  pure with respect to the FS — callers wire `resolveImageRef(..., { mustExist: true })`
+ *  in. Returns a new character object; callers should treat it as
+ *  immutable-by-convention. */
+export function mergePreservedSheetPointers(prev, patchChar, resolveExists) {
+  if (!prev || !patchChar) return patchChar;
+  const out = { ...patchChar };
+
+  if (prev.referenceSheetImageRef && resolveExists(prev.referenceSheetImageRef)) {
+    out.referenceSheetImageRef = prev.referenceSheetImageRef;
+  }
+
+  const prevMap = isPlainObject(prev.referenceSheets) ? prev.referenceSheets : null;
+  if (prevMap) {
+    const patchMap = isPlainObject(patchChar.referenceSheets) ? patchChar.referenceSheets : {};
+    // Preserved keys win over the patch — same one-way precedence as the
+    // legacy field. Unresolvable cur values fall through so a deleted-then-
+    // PATCHed slot can clear.
+    const merged = { ...patchMap };
+    for (const [variant, filename] of Object.entries(prevMap)) {
+      if (filename && resolveExists(filename)) merged[variant] = filename;
+    }
+    out.referenceSheets = merged;
+  }
+
+  return out;
+}
+
 /** Apply (or clear, when `filename` is null) a variant's pointer on a
  *  character, returning a NEW character object — OR the same reference when
  *  the slot already holds the target value, so callers downstream of an

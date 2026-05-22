@@ -441,6 +441,41 @@ describe("universeBuilder service", () => {
     refSheetFilesByName.delete("sheet-DEAD.png");
   });
 
+  it("updateUniverse preserves server-owned referenceSheets[<variant>] map across literal PATCHes", async () => {
+    // Same multi-tab race, but for the map-stored variants (blueprint, etc.).
+    // A render-completion mutator stamps `referenceSheets.blueprint`; a stale
+    // client PATCH that round-trips a body with the field omitted (or with
+    // an older snapshot) must NOT lose the freshly-stamped variant. Per-key
+    // preservation means a separately-rendered legacy 'standard' sheet
+    // survives even when only blueprint is in the map.
+    const w = await seedWorld();
+    await svc.updateUniverse(w.id, (latest) => ({
+      characters: [...(latest.characters || []), {
+        id: "c-map", name: "Vex",
+        referenceSheetImageRef: "sheet-STD.png",
+        referenceSheets: { blueprint: "sheet-BP.png" },
+      }],
+    }));
+    // PATCH that omits referenceSheets entirely — guard must preserve both
+    // the legacy 'standard' field AND the blueprint map slot.
+    const afterOmit = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-map", name: "Vex" }],
+    });
+    const c1 = afterOmit.characters.find((c) => c.id === "c-map");
+    expect(c1?.referenceSheetImageRef).toBe("sheet-STD.png");
+    expect(c1?.referenceSheets).toEqual({ blueprint: "sheet-BP.png" });
+
+    // PATCH that carries an older map (a different variant set or stale
+    // filename). Cur's still-resolvable entries override the patch's same
+    // keys; the patch's other keys flow through.
+    const afterStale = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-map", name: "Vex", referenceSheets: { blueprint: "sheet-OLD.png", noir: "sheet-NOIR.png" } }],
+    });
+    const c2 = afterStale.characters.find((c) => c.id === "c-map");
+    expect(c2?.referenceSheets.blueprint).toBe("sheet-BP.png"); // cur wins (resolves)
+    expect(c2?.referenceSheets.noir).toBe("sheet-NOIR.png"); // patch-only key flows through
+  });
+
   it("updateUniverse persists null for stale referenceSheetImageRef on the write path, not just GET", async () => {
     // Reviewer-found bug: the GET-route pruner nulled the response but the
     // on-disk record kept the stale filename, so a later PATCH that omitted
