@@ -83,6 +83,7 @@ function DraggableTicket({ ticket, disabled }) {
 function DroppableColumn({ category, tickets, isOver, disabled }) {
   const { setNodeRef } = useDroppable({ id: category, disabled });
   const config = COLUMN_CONFIG[category];
+  const totalPoints = tickets.reduce((sum, t) => sum + (Number(t.storyPoints) || 0), 0);
 
   return (
     <div
@@ -93,6 +94,9 @@ function DroppableColumn({ category, tickets, isOver, disabled }) {
         <span className={`w-2 h-2 rounded-full ${config.dot}`} />
         <span className="text-sm font-medium text-white">{category}</span>
         <span className="text-xs text-gray-500">({tickets.length})</span>
+        {totalPoints > 0 && (
+          <span className="text-xs text-cyan-400">{totalPoints}pt</span>
+        )}
       </div>
       <div className="space-y-2">
         {tickets.map(ticket => (

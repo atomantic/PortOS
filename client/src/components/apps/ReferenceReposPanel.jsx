@@ -4,13 +4,11 @@ import toast from '../ui/Toast';
 import * as api from '../../services/api';
 
 /**
- * Per-app reference-repos manager. Embedded inside the app detail page
- * (Tasks tab) and reused on the global /reference-repos page in
- * read-only-ish mode (`compact={true}` hides the "Add" form so the
- * global summary stays a summary).
+ * Per-app reference-repos manager. Embedded inside the app detail page's
+ * "References" tab — the only surface for managing reference repos.
  */
-export default function ReferenceReposPanel({ appId, appName, compact = false, initialRefs = null }) {
-  const [refs, setRefs] = useState(initialRefs || []);
+export default function ReferenceReposPanel({ appId, appName }) {
+  const [refs, setRefs] = useState([]);
   // Two distinct loading states:
   //   - `initialLoading` is true only on the very first fetch (mount); the
   //     panel renders a placeholder while it's true. Stays false after
@@ -20,7 +18,7 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
   //     unsaved notes draft, an expanded commit list <details>) doesn't
   //     get unmounted and lost every time the user clicks Check or
   //     Mark-reviewed.
-  const [initialLoading, setInitialLoading] = useState(initialRefs == null);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   // Per-ref UI state — keyed by ref id. Holds the in-progress check snapshot
@@ -49,13 +47,9 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
     setInitialLoading(false);
   }, [appId]);
 
-  // Fetch on mount unless the parent seeded us with initialRefs. After
-  // any local mutation we re-fetch unconditionally to pick up server-side
-  // status updates (lastCheckedAt, lastError).
-  const initialRefsProvided = initialRefs != null;
   useEffect(() => {
-    if (!initialRefsProvided) fetch();
-  }, [fetch, initialRefsProvided]);
+    fetch();
+  }, [fetch]);
 
   const handleAdd = async (form) => {
     const created = await api.addReferenceRepo(appId, form).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
@@ -159,27 +153,25 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
 
   return (
     <div className="space-y-3">
-      {!compact && (
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-              <GitBranch size={14} /> Reference Repos
-              {refreshing && <RefreshCw size={11} className="animate-spin text-gray-500" />}
-            </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Upstream repos {appName} watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task fetches each weekly and proposes features/fixes worth re-building in our own code via <code>REFERENCE_REVIEW.md</code>.
-            </p>
-          </div>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded text-xs inline-flex items-center gap-1 shrink-0"
-          >
-            <Plus size={14} /> Add reference
-          </button>
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <GitBranch size={14} /> Reference Repos
+            {refreshing && <RefreshCw size={11} className="animate-spin text-gray-500" />}
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Upstream repos {appName} watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task fetches each weekly, runs a security screen, and — for adoption-worthy commits — appends slug-tagged <code>[ref-watch-…]</code> checklist items to <code>PLAN.md</code> for <code>/claim</code> / <code>plan-task</code> to pick up. No source-code edits, no separate review file.
+          </p>
         </div>
-      )}
+        <button
+          onClick={() => setShowAdd(true)}
+          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded text-xs inline-flex items-center gap-1 shrink-0"
+        >
+          <Plus size={14} /> Add reference
+        </button>
+      </div>
 
-      {showAdd && !compact && (
+      {showAdd && (
         <AddRefForm onSubmit={handleAdd} onCancel={() => setShowAdd(false)} />
       )}
 
@@ -208,7 +200,6 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
               onEditNotes={() => setEditingNotesId(ref.id)}
               onCancelNotes={() => setEditingNotesId(null)}
               onSaveNotes={(notes) => handleSaveNotes(ref, notes)}
-              compact={compact}
             />
           ))}
         </div>
@@ -235,7 +226,7 @@ function StatusBadge({ status, lastError }) {
   );
 }
 
-function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkReviewed, onDelete, onEditNotes, onCancelNotes, onSaveNotes, compact }) {
+function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkReviewed, onDelete, onEditNotes, onCancelNotes, onSaveNotes }) {
   // Seed the draft when the user enters edit mode. Don't depend on
   // `reference.notes` — a parent re-fetch produces a new ref object every
   // poll and would clobber whatever the user is mid-typing.
@@ -288,24 +279,20 @@ function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkRe
               Mark reviewed
             </button>
           )}
-          {!compact && (
-            <>
-              <button
-                onClick={onEditNotes}
-                className="px-2 py-1 text-gray-400 hover:text-white rounded"
-                title="Edit notes"
-              >
-                <Edit3 size={12} />
-              </button>
-              <button
-                onClick={onDelete}
-                className="px-2 py-1 text-gray-400 hover:text-port-error rounded"
-                title="Remove this reference"
-              >
-                <Trash2 size={12} />
-              </button>
-            </>
-          )}
+          <button
+            onClick={onEditNotes}
+            className="px-2 py-1 text-gray-400 hover:text-white rounded"
+            title="Edit notes"
+          >
+            <Edit3 size={12} />
+          </button>
+          <button
+            onClick={onDelete}
+            className="px-2 py-1 text-gray-400 hover:text-port-error rounded"
+            title="Remove this reference"
+          >
+            <Trash2 size={12} />
+          </button>
         </div>
       </div>
 

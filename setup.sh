@@ -36,6 +36,23 @@ fi
 
 echo ""
 
+# macOS Tailscale.app CLI is sandboxed (`tailscale cert` can't write outside its
+# container → EPERM). Detection delegates to server/lib/tailscale.js so the
+# candidate path list stays a single source of truth.
+if node -e "import('./server/lib/tailscale.js').then(m => process.exit(m.hasOnlySandboxedTailscale() ? 0 : 1)).catch(() => process.exit(1))" 2>/dev/null; then
+    echo "Detected Tailscale.app without the unsandboxed CLI."
+    echo "Installing tailscale via Homebrew so 'tailscale cert' can write to data/certs/..."
+    if command -v brew &> /dev/null; then
+        if ! brew install tailscale; then
+            echo "⚠️  brew install tailscale failed — HTTPS via Tailscale won't work until you install it manually."
+        fi
+    else
+        echo "⚠️  Homebrew not found. Install brew (https://brew.sh) then run: brew install tailscale"
+        echo "    Without it, the 'Enable HTTPS' button on the Instances page will fail with EPERM."
+    fi
+    echo ""
+fi
+
 # Install/update slash-do (project-level slash commands for Claude Code et al.)
 # via npx. Auto-detects the installed AI environments and lays down the latest
 # command set under ~/.claude/commands (or per-environment equivalent). The

@@ -452,14 +452,45 @@ export function initSyncOrchestrator() {
   };
   instanceEvents.on('peer:online', peerOnlineHandler);
 
-  // Background safety-net interval
+  // Background safety-net interval. The two side-cycle jobs (tombstone GC,
+  // future asset-orphan GC) ride the same interval rather than getting their
+  // own timer — once-per-minute is plenty given the 24h grace period, and
+  // sharing a tick keeps the wake-up cost flat.
   syncTimer = setInterval(() => {
     syncAllPeers().catch(err => {
       console.error(`❌ Periodic sync failed: ${err.message}`);
     });
+    // The outer `.catch` is non-optional — runTombstoneSweep is async and
+    // can reject BEFORE its inner .catch fires (e.g. if the dynamic import
+    // of tombstoneGc.js itself fails). An unhandled rejection on the
+    // interval tick would crash the Node process under default settings.
+    runTombstoneSweep().catch(err => {
+      console.error(`❌ Tombstone sweep tick failed: ${err.message}`);
+    });
   }, SYNC_INTERVAL_MS);
 
   console.log(`🔄 Sync orchestrator started (${SYNC_INTERVAL_MS / 1000}s interval)`);
+}
+
+/**
+ * Run a single tombstone GC sweep, fire-and-forget. Dynamic import keeps
+ * the GC module's universe / pipeline / sharing dependency graph off the
+ * orchestrator's module-load path (same reason as `categoriesCoveredByPeerSync`
+ * above). Logs a single-line summary only when something was actually
+ * pruned — quiet on no-op cycles.
+ */
+async function runTombstoneSweep() {
+  const { sweepTombstones } = await import('./sharing/tombstoneGc.js');
+  const result = await sweepTombstones().catch((err) => {
+    console.error(`❌ Tombstone sweep failed: ${err.message}`);
+    return null;
+  });
+  if (result && (result.universes > 0 || result.series > 0 || result.issues > 0)) {
+    // "series" is already its own plural so no s-suffix toggle needed there.
+    const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
+    const issues = `${result.issues} issue${result.issues === 1 ? '' : 's'}`;
+    console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}`);
+  }
 }
 
 /**

@@ -952,3 +952,29 @@ export function mergeIssuesFromSync(remoteIssues) {
     return { applied: true, count: changed };
   });
 }
+
+/**
+ * Garbage-collect issue tombstones older than `beforeMs`. See
+ * `pruneTombstonedUniverses` for the contract — pure mechanical prune; the
+ * caller owns the policy. Tombstones with unparseable `deletedAt` are kept.
+ *
+ * Issue tombstones ride series pushes (the receiver bundles child issues
+ * with each series push) so the relevant ack horizon is "peers subscribed
+ * to the parent series." The caller resolves that.
+ */
+export async function pruneTombstonedIssues(beforeMs) {
+  if (!Number.isFinite(beforeMs)) return { pruned: 0 };
+  return queueIssueWrite(async () => {
+    const state = await readState();
+    const original = state.issues.length;
+    state.issues = state.issues.filter((i) => {
+      if (!i?.deleted) return true;
+      const t = Date.parse(i.deletedAt || '');
+      if (!Number.isFinite(t)) return true;
+      return t >= beforeMs;
+    });
+    const pruned = original - state.issues.length;
+    if (pruned > 0) await writeState(state);
+    return { pruned };
+  });
+}

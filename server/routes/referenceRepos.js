@@ -4,7 +4,8 @@
  * Per-app management of upstream repos we borrow code from. The
  * `reference-watch` scheduled task uses `checkReferenceRepo` to find
  * commits since each ref's `lastReviewedSha`, then dispatches a CoS
- * sub-agent to write REFERENCE_REVIEW.md to the app's repo.
+ * sub-agent that appends slug-tagged `[ref-watch-…]` checklist items
+ * to the app's PLAN.md for `/claim` / `plan-task` to pick up.
  *
  * Mounted at /api/apps/:appId/reference-repos so it sits next to the
  * existing apps API surface.

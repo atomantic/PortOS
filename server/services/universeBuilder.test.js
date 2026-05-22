@@ -696,6 +696,55 @@ describe("universeBuilder service", () => {
         expect(fresh.universeId).toBeNull();
       });
     });
+
+    describe("pruneTombstonedUniverses", () => {
+      it("removes tombstones older than the cutoff and leaves newer ones + live records", async () => {
+        const live = await seedWorld();
+        const oldTombstone = await seedWorld();
+        const newTombstone = await seedWorld();
+        await svc.deleteUniverse(oldTombstone.id);
+        await svc.deleteUniverse(newTombstone.id);
+        // Backdate the old tombstone's deletedAt directly via merge.
+        const oldDeletedAt = new Date(Date.now() - 100_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...(await svc.getUniverse(oldTombstone.id, { includeDeleted: true })),
+          deletedAt: oldDeletedAt,
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+
+        // Cutoff = now - 50s — old (100s ago) is past, new (just now) is not.
+        const cutoff = Date.now() - 50_000;
+        const result = await svc.pruneTombstonedUniverses(cutoff);
+        expect(result.pruned).toBe(1);
+        const remaining = await svc.listUniverses({ includeDeleted: true });
+        const ids = remaining.map((u) => u.id);
+        expect(ids).toContain(live.id);
+        expect(ids).toContain(newTombstone.id);
+        expect(ids).not.toContain(oldTombstone.id);
+      });
+
+      it("keeps tombstones with unparseable deletedAt (conservative)", async () => {
+        const w = await seedWorld();
+        await svc.deleteUniverse(w.id);
+        // Corrupt the deletedAt via merge — this can happen if a peer ships
+        // a malformed record. We refuse to prune anything we can't time-stamp.
+        await svc.mergeUniversesFromSync([{
+          ...(await svc.getUniverse(w.id, { includeDeleted: true })),
+          deletedAt: 'not-a-date',
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+        const result = await svc.pruneTombstonedUniverses(Date.now() + 60_000_000);
+        expect(result.pruned).toBe(0);
+        const remaining = await svc.listUniverses({ includeDeleted: true });
+        expect(remaining.find((u) => u.id === w.id)).toBeTruthy();
+      });
+
+      it("returns { pruned: 0 } for a non-finite cutoff (defensive)", async () => {
+        expect(await svc.pruneTombstonedUniverses(NaN)).toEqual({ pruned: 0 });
+        expect(await svc.pruneTombstonedUniverses(Infinity)).toEqual({ pruned: 0 });
+        expect(await svc.pruneTombstonedUniverses('not-a-number')).toEqual({ pruned: 0 });
+      });
+    });
   });
 
   describe("synthesizeCanonPrompt", () => {

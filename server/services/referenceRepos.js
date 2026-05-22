@@ -8,7 +8,8 @@
  * (e.g., PortOS itself watches `phosphene` for video-gen ideas). The
  * `reference-watch` scheduled task asks this service to fetch each ref
  * and find commits since `lastReviewedSha`. The CoS sub-agent then
- * produces a REFERENCE_REVIEW.md proposal in the target app's repo.
+ * appends slug-tagged `[ref-watch-…]` checklist items to PLAN.md in the
+ * target app's repo, which `/claim` / `plan-task` picks up later.
  *
  * Storage: refs live inline on each app in data/apps.json under the
  * `referenceRepos` array — fits the existing per-app config model and
@@ -504,8 +505,8 @@ export async function checkReferenceRepo(appId, refId) {
 
 /**
  * Mark a ref as reviewed up to the given SHA — called after a CoS
- * sub-agent finishes producing REFERENCE_REVIEW.md, or by the UI's
- * "mark as reviewed" button. SHA must match a real commit visible from
+ * sub-agent finishes appending PLAN.md items for the new commits, or by
+ * the UI's "mark as reviewed" button. SHA must match a real commit visible from
  * the ref's working tree (verified via `git cat-file -e <sha>^{commit}`
  * against the managed clone or the user-supplied local path).
  */

@@ -45,7 +45,9 @@ const syncCategoriesSchema = z.object({
   goals: z.boolean().optional(),
   character: z.boolean().optional(),
   digitalTwin: z.boolean().optional(),
-  meatspace: z.boolean().optional()
+  meatspace: z.boolean().optional(),
+  universe: z.boolean().optional(),
+  pipeline: z.boolean().optional()
 }).optional();
 
 const updatePeerSchema = z.object({

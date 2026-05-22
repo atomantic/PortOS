@@ -21,7 +21,6 @@ const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const CyberCity = lazyWithReload(() => import('./pages/CyberCity'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
-const ReferenceRepos = lazyWithReload(() => import('./pages/ReferenceRepos'));
 const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
@@ -146,7 +145,6 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
-          <Route path="reference-repos" element={<ReferenceRepos />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/github" element={<GitHub />} />

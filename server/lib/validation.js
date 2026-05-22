@@ -204,10 +204,10 @@ export const datadogConfigSchema = z.object({
 // Reference-repo entry. Each app can list upstream repos it watches for
 // clean-room reimplementation;
 // the `reference-watch` scheduled task fetches each one, finds commits since
-// `lastReviewedSha`, and produces a REFERENCE_REVIEW.md proposal in the app's
-// repo. `notes` is the free-text "what we use from this repo" field — fed
-// into the review prompt so the agent knows which features in our app are
-// load-bearing for the watch.
+// `lastReviewedSha`, and appends slug-tagged `[ref-watch-…]` checklist items
+// to the app's PLAN.md for `/claim` / `plan-task` to pick up. `notes` is the
+// free-text "what we use from this repo" field — fed into the review prompt
+// so the agent knows which features in our app are load-bearing for the watch.
 export const referenceRepoSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(120),

@@ -476,3 +476,26 @@ export async function mergeSeriesFromSync(remoteSeries) {
   }
   return result;
 }
+
+/**
+ * Garbage-collect series tombstones older than `beforeMs`. See
+ * `pruneTombstonedUniverses` in universeBuilder.js for the contract — the
+ * caller owns the ack-cursor + grace-period math and just tells us the
+ * cutoff timestamp. Tombstones with unparseable `deletedAt` are kept.
+ */
+export async function pruneTombstonedSeries(beforeMs) {
+  if (!Number.isFinite(beforeMs)) return { pruned: 0 };
+  return queueSeriesWrite(async () => {
+    const state = await readState();
+    const original = state.series.length;
+    state.series = state.series.filter((s) => {
+      if (!s?.deleted) return true;
+      const t = Date.parse(s.deletedAt || '');
+      if (!Number.isFinite(t)) return true;
+      return t >= beforeMs;
+    });
+    const pruned = original - state.series.length;
+    if (pruned > 0) await writeState(state);
+    return { pruned };
+  });
+}

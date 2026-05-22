@@ -9,7 +9,6 @@ export const NAV_COMMANDS = [
   { id: 'nav.cybercity', path: '/city', label: 'CyberCity', section: 'Main', aliases: ['city', 'cybercity'], keywords: ['3d', 'visualization'] },
   { id: 'nav.cybercity.settings', path: '/city/settings', label: 'CyberCity Settings', section: 'Main', aliases: ['city settings', 'cybercity settings', 'city-settings', 'cybercity-config'], keywords: ['cybercity', 'settings', '3d', 'configure'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
-  { id: 'nav.reference-repos', path: '/reference-repos', label: 'Reference Repos', section: 'Main', aliases: ['reference-repos', 'references', 'reference', 'upstream', 'watch'], keywords: ['upstream', 'reference code', 'borrowed code', 'fork', 'git watch', 'commit watch', 'phosphene'] },
 
   { id: 'nav.media', path: '/media/image', label: 'Media Gen', section: 'Create', aliases: ['media', 'media-gen', 'mediagen', 'generate'], keywords: ['image', 'video', 'render', 'art', 'movie'] },
   { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'Create', aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw', 'flux', 'mflux'] },
@@ -58,6 +57,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', aliases: ['cos-config'] },
   { id: 'nav.cos.digest', path: '/cos/digest', label: 'Digest', section: 'Chief of Staff', aliases: ['cos-digest'] },
   { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', aliases: ['gsd', 'cos-gsd'] },
+  { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', aliases: ['cos-health', 'health'] },
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
@@ -107,7 +107,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Digital Twin', aliases: ['time-capsule', 'twin-time-capsule', 'capsule'], keywords: ['legacy', 'archive', 'snapshot'] },
 
   { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'MeatSpace', aliases: ['meatspace'] },
-  { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Health', section: 'MeatSpace', aliases: ['meatspace-health', 'health'] },
+  { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Health', section: 'MeatSpace', aliases: ['meatspace-health'] },
   { id: 'nav.meatspace.body', path: '/meatspace/body', label: 'Body', section: 'MeatSpace', aliases: ['meatspace-body', 'body'] },
   { id: 'nav.meatspace.alcohol', path: '/meatspace/alcohol', label: 'Alcohol', section: 'MeatSpace', aliases: ['meatspace-alcohol', 'alcohol'] },
   { id: 'nav.meatspace.nicotine', path: '/meatspace/nicotine', label: 'Nicotine', section: 'MeatSpace', aliases: ['meatspace-nicotine', 'nicotine'] },
@@ -134,7 +134,6 @@ export const NAV_COMMANDS = [
 
   { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'System', aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'System', aliases: ['data'] },
-  { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'System', aliases: ['cos-health'] },
   { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'System', aliases: ['instances'] },
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'System', aliases: ['loops'] },
   { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'System', aliases: ['devtools-processes', 'processes'] },
@@ -185,20 +184,33 @@ export const resolveNavCommand = (input) => {
   if (!norm) return null;
 
   const tail = norm.split('-').filter(Boolean).pop();
+  // Each tier is { test, longest? }. `longest:true` picks the longest matching
+  // alias (so "meatspace health" prefers `meatspace-health` over the shorter
+  // `health` that also ends/contains-matches the input). Other tiers keep
+  // first-declared-wins ordering because shorter aliases there are intentional
+  // (e.g. `cos` should match before `cos-tasks` when input is bare "cos").
   const tiers = [
-    (a) => a === norm,
-    (a) => norm.startsWith(a) && a.length >= 3,
-    (a) => a.startsWith(norm),
-    (a) => norm.endsWith(`-${a}`) && a.length >= 3,
-    (a) => norm.includes(a) && a.length >= 4,
-    (a) => a.includes(norm),
-    (a) => tail && tail !== norm && a === tail,
+    { test: (a) => a === norm },
+    { test: (a) => norm.startsWith(a) && a.length >= 3 },
+    { test: (a) => a.startsWith(norm) },
+    { test: (a) => norm.endsWith(`-${a}`) && a.length >= 3, longest: true },
+    { test: (a) => norm.includes(a) && a.length >= 4, longest: true },
+    { test: (a) => a.includes(norm) },
+    { test: (a) => tail && tail !== norm && a === tail },
   ];
 
   let matched = null;
-  for (const test of tiers) {
-    matched = ALIAS_KEYS.find(test);
-    if (matched) break;
+  for (const { test, longest } of tiers) {
+    if (longest) {
+      const candidates = ALIAS_KEYS.filter(test);
+      if (candidates.length) {
+        matched = candidates.reduce((a, b) => (b.length > a.length ? b : a));
+        break;
+      }
+    } else {
+      matched = ALIAS_KEYS.find(test);
+      if (matched) break;
+    }
   }
   if (!matched) return null;
 

@@ -21,7 +21,7 @@ import { execFile } from 'child_process';
 import { existsSync, mkdirSync, statSync } from 'fs';
 import { promisify } from 'util';
 import { PATHS, atomicWrite } from '../lib/fileUtils.js';
-import { findTailscale } from '../lib/tailscale.js';
+import { findTailscale, isSandboxedTailscale } from '../lib/tailscale.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { PORTS } from '../lib/ports.js';
 import { certPaths } from '../../lib/certPaths.js';
@@ -97,6 +97,15 @@ export async function provisionTailscaleCert() {
     const stderr = certResult._err;
     const firstLine = stderr.split('\n')[0].trim() || 'unknown error';
     const needsPeriod = !/[.!?]$/.test(firstLine);
+
+    if (isSandboxedTailscale(bin) && /operation not permitted/i.test(stderr)) {
+      return {
+        ok: false,
+        reason: 'tailscale-sandboxed',
+        message: 'The macOS Tailscale.app CLI is sandboxed and can\'t write the cert file. Install the unsandboxed CLI with `brew install tailscale`, then restart PortOS and retry.'
+      };
+    }
+
     const httpsHint = /HTTPS.*not.*enabled|invalid request/i.test(stderr)
       ? ' Enable "HTTPS Certificates" at login.tailscale.com/admin/dns and retry.'
       : '';
