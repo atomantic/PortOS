@@ -714,6 +714,16 @@ describe('cos.js source — priority + capacity invariants', () => {
       fnBody,
       'queue path must pass the loaded lastType through to getNextTaskType so rotation advances'
     ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*\)/);
+
+    // appActivity helpers must come from the file-level static import (line ~23),
+    // NOT a dynamic `await import('./appActivity.js')` *inside* the per-app
+    // loop. Dynamic imports are cached but still add an extra microtask + a
+    // promise allocation per iteration, and they hide the real dependency
+    // graph at file scope.
+    expect(
+      fnBody,
+      'queue path must not dynamically import ./appActivity.js inside the per-app loop'
+    ).not.toMatch(/await\s+import\(['"]\.\/appActivity\.js['"]\)/);
   });
 
   it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {

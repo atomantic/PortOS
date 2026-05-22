@@ -20,7 +20,7 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents } from './appActivity.js';
+import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents, getAppActivityById } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats, parseCronToNextRun } from './eventScheduler.js';
@@ -1123,8 +1123,11 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     // rotation always restarts from index 0 and starves every other
     // rotation type for the app. Mirror `generateManagedAppTask` (the
     // legacy direct-spawn caller above) which loads the per-app
-    // `lastImprovementType` and threads it in.
-    const { getAppActivityById } = await import('./appActivity.js');
+    // `lastImprovementType` and threads it in. `getAppActivityById` is
+    // statically imported at the top of the file alongside the other
+    // appActivity helpers — keep it that way; the dynamic-import-inside-
+    // loop pattern adds avoidable per-iteration async overhead and hides
+    // the real dependency graph.
     const appActivity = await getAppActivityById(app.id).catch(() => null);
     const lastType = appActivity?.lastImprovementType || '';
     const nextTypeResult = await getNextTaskType(app.id, lastType).catch(() => null);
