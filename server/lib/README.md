@@ -102,10 +102,12 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
+| `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
+| `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
 | `tailscale.js` | Common paths where the Tailscale CLI binary is found. |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
 | `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |

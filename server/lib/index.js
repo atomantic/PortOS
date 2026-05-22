@@ -86,10 +86,12 @@ export * from './fetchWithTimeout.js';
 export * from './httpClient.js';
 export * from './httpsState.js';
 export * from './networkExposure.js';
+export * from './assetHash.js';
 export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
 export * from './sharingOrigin.js';
+export * from './syncWire.js';
 export * from './tailscale.js';
 
 // === Search & indexing ===
