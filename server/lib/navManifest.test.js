@@ -54,6 +54,14 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(hit?.command?.id).toBe('nav.create.universe-builder');
   });
 
+  it('resolves bare "health" to /cos/health (CoS owns the alias; meatspace keeps meatspace-health)', () => {
+    // The CoS Health page is the canonical destination for "take me to health"
+    // per the page's move into the Chief of Staff sidebar group. MeatSpace's
+    // health tab is still reachable via the explicit `meatspace-health` alias.
+    expect(resolveNavCommand('health')?.path).toBe('/cos/health');
+    expect(resolveNavCommand('meatspace-health')?.path).toBe('/meatspace/health');
+  });
+
   it('resolves "pipeline" to the new Create Pipeline page (not CoS Workflow)', () => {
     // The `pipeline` alias used to belong to /cos/workflow; the new dedicated
     // Pipeline page owns it now. CoS Workflow keeps `pipeline` as a keyword.
