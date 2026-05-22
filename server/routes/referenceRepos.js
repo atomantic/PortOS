@@ -22,6 +22,7 @@ import {
   markReferenceRepoReviewed,
   triggerReferenceAnalysis,
 } from '../services/referenceRepos.js';
+import { getAppById } from '../services/apps.js';
 
 const router = Router({ mergeParams: true });
 
@@ -54,15 +55,18 @@ router.delete('/:refId', asyncHandler(async (req, res) => {
 // Does NOT advance lastReviewedSha; that happens via the explicit /reviewed
 // endpoint after the user / agent has actually processed the changes.
 router.post('/:refId/check', asyncHandler(async (req, res) => {
-  const { appId } = req.params;
-  const snapshot = await checkReferenceRepo(appId, req.params.refId);
+  const { appId, refId } = req.params;
+  const snapshot = await checkReferenceRepo(appId, refId);
   let analysis = { queued: false, reason: 'no-new-commits' };
   if (snapshot.commitCount > 0) {
-    const refs = (await listReferenceRepos(appId)) || [];
-    const ref = refs.find((r) => r.id === req.params.refId);
-    if (ref) {
-      analysis = await triggerReferenceAnalysis(appId, ref, snapshot)
-        .catch((err) => ({ queued: false, reason: err.message }));
+    const app = await getAppById(appId);
+    const ref = app?.referenceRepos?.find((r) => r.id === refId);
+    if (app && ref) {
+      analysis = await triggerReferenceAnalysis(app, ref, snapshot)
+        .catch((err) => {
+          console.error(`❌ Analysis trigger failed for ${refId}: ${err.message}`);
+          return { queued: false, reason: 'analysis-trigger-failed' };
+        });
     }
   }
   res.json({ ...snapshot, analysis });

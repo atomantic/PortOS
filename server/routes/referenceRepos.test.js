@@ -15,7 +15,17 @@ vi.mock('../services/referenceRepos.js', () => ({
   triggerReferenceAnalysis: vi.fn(async () => ({ queued: true, taskId: 'ref-analysis-1' })),
 }));
 
+vi.mock('../services/apps.js', () => ({
+  getAppById: vi.fn(async () => ({
+    id: 'app-1',
+    name: 'TestApp',
+    repoPath: '/mock/repo',
+    referenceRepos: [{ id: 'r1', name: 'phosphene', repoUrl: 'https://github.com/x/y.git' }],
+  })),
+}));
+
 import * as svc from '../services/referenceRepos.js';
+import { getAppById } from '../services/apps.js';
 import referenceReposRoutes from './referenceRepos.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -123,10 +133,17 @@ describe('reference repos routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.analysis).toEqual({ queued: true, taskId: 'ref-analysis-1' });
       expect(svc.triggerReferenceAnalysis).toHaveBeenCalledWith(
-        'app-1',
+        expect.objectContaining({ id: 'app-1', name: 'TestApp' }),
         expect.objectContaining({ id: 'r1' }),
         expect.objectContaining({ commitCount: 2 }),
       );
+    });
+
+    it('returns stable reason code when analysis trigger throws', async () => {
+      svc.triggerReferenceAnalysis.mockRejectedValueOnce(new Error('something internal'));
+      const r = await request(app).post('/api/apps/app-1/reference-repos/r1/check');
+      expect(r.status).toBe(200);
+      expect(r.body.analysis).toEqual({ queued: false, reason: 'analysis-trigger-failed' });
     });
 
     it('skips analysis when no new commits', async () => {

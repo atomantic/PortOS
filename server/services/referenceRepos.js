@@ -587,11 +587,10 @@ export function formatReferenceForPrompt(ref, snapshot) {
  * Returns `{ queued: true, taskId }` on success, or `{ queued: false, reason }`
  * when the task can't be created (e.g. no commits, CoS not running).
  */
-export async function triggerReferenceAnalysis(appId, ref, snapshot) {
+export async function triggerReferenceAnalysis(app, ref, snapshot) {
   if (!snapshot || snapshot.commitCount === 0) {
     return { queued: false, reason: 'no-new-commits' };
   }
-  const app = await getAppById(appId);
   if (!app) return { queued: false, reason: 'app-not-found' };
 
   const { addTask } = await import('./cos.js');
@@ -612,7 +611,7 @@ export async function triggerReferenceAnalysis(appId, ref, snapshot) {
     status: 'pending',
     priority: 'MEDIUM',
     priorityValue: 2,
-    description: `Reference-watch analysis: ${ref.name || ref.url} for ${app.name}`,
+    description: `Reference-watch analysis: ${ref.name} (${ref.repoUrl}) for ${app.name}`,
     metadata: {
       app: app.id,
       appName: app.name,
