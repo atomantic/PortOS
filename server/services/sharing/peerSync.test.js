@@ -56,6 +56,7 @@ import {
   buildAssetManifest,
   autoSubscribeRecordToAllPeers,
   autoSubscribePeerToAllRecords,
+  retryPendingPushesForPeer,
   __resetForTests,
 } from './peerSync.js';
 
@@ -422,6 +423,43 @@ describe('peerSync', () => {
     it('returns [] for invalid arguments', async () => {
       expect(await autoSubscribePeerToAllRecords('', 'universe')).toEqual([]);
       expect(await autoSubscribePeerToAllRecords('peer-a', 'bogus')).toEqual([]);
+    });
+  });
+
+  describe('retryPendingPushesForPeer', () => {
+    beforeEach(() => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+    });
+
+    it('re-pushes subs with lastPushedAt=null and skips already-pushed subs', async () => {
+      // Create a sub with the initial push FAILING — leaves lastPushedAt=null.
+      vi.mocked(peerFetch).mockResolvedValueOnce(null);
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // Wait for the fire-and-forget initial push to settle so the
+      // persisted lastPushedAt is final before we re-check it.
+      await new Promise((r) => setTimeout(r, 10));
+      const stale = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(stale.lastPushedAt).toBeNull();
+      // Peer comes back — retry must succeed and stamp lastPushedAt.
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      const result = await retryPendingPushesForPeer('peer-a');
+      expect(result.retried).toBe(1);
+      const updated = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(updated.lastPushedAt).toBeTruthy();
+      // Second retry must be a no-op now that lastPushedAt is set.
+      const second = await retryPendingPushesForPeer('peer-a');
+      expect(second.retried).toBe(0);
+    });
+
+    it('returns {retried: 0} when the peer has no subscriptions', async () => {
+      const result = await retryPendingPushesForPeer('peer-without-subs');
+      expect(result).toEqual({ retried: 0 });
+    });
+
+    it('returns {retried: 0} for invalid peerId', async () => {
+      expect(await retryPendingPushesForPeer('')).toEqual({ retried: 0 });
+      expect(await retryPendingPushesForPeer(null)).toEqual({ retried: 0 });
     });
   });
 

@@ -48,6 +48,7 @@ import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { recordEvents } from './recordEvents.js';
 import { getInstanceId, getPeers, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { instanceEvents } from '../instanceEvents.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
@@ -995,9 +996,36 @@ async function getIssueSeriesId(issueId) {
   return found?.seriesId || null;
 }
 
-let onUpdated = null;
+/**
+ * Re-push every subscription targeting `peerId` whose initial push hasn't
+ * landed yet (`lastPushedAt == null`). Fires on `peer:online` so a record
+ * created while the peer was unreachable still reaches it the moment the
+ * peer comes back — without this retry, the new record would sit in limbo
+ * until the user edited it again (creation paths don't fire
+ * `recordEvents.updated`, so the existing debounce listener never sees it).
+ *
+ * Already-pushed subs are filtered out so this can't double-push under load.
+ * Failures stay non-fatal — the next `peer:online` (or the user's next edit)
+ * gets another attempt.
+ */
+export async function retryPendingPushesForPeer(peerId) {
+  if (!isNonEmptyStr(peerId)) return { retried: 0 };
+  const subs = await listPeerSubscriptions({ peerId });
+  const pending = subs.filter(s => !s.lastPushedAt);
+  if (pending.length === 0) return { retried: 0 };
+  console.log(`🔄 peerSync: retrying ${pending.length} pending push${pending.length === 1 ? '' : 'es'} → ${peerId}`);
+  for (const sub of pending) {
+    await pushRecordToPeer(sub).catch((err) => {
+      console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
+    });
+  }
+  return { retried: pending.length };
+}
 
-/** Attach the `recordEvents` listener — call once during sharing init. */
+let onUpdated = null;
+let onPeerOnline = null;
+
+/** Attach the `recordEvents` + `peer:online` listeners — call once during sharing init. */
 export function installPeerSyncListener() {
   if (onUpdated) return;
   onUpdated = ({ recordKind, recordId }) => {
@@ -1006,6 +1034,14 @@ export function installPeerSyncListener() {
     });
   };
   recordEvents.on('updated', onUpdated);
+  // Retry pending initial pushes the moment a peer transitions to online —
+  // covers the "subscribe fired while peer offline" case the auto-subscribe
+  // path can produce after createUniverse / createSeries.
+  onPeerOnline = (peer) => {
+    if (!peer?.instanceId) return;
+    retryPendingPushesForPeer(peer.instanceId).catch(() => {});
+  };
+  instanceEvents.on('peer:online', onPeerOnline);
 }
 
 /**
@@ -1017,6 +1053,8 @@ export async function __resetForTests() {
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
   if (onUpdated) recordEvents.off('updated', onUpdated);
+  if (onPeerOnline) instanceEvents.off('peer:online', onPeerOnline);
   onUpdated = null;
+  onPeerOnline = null;
   await writeTail.catch(() => {});
 }
