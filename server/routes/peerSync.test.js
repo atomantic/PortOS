@@ -211,7 +211,7 @@ describe('peer-sync routes', () => {
   });
 
   describe('POST /api/peer-sync/subscriptions', () => {
-    it('200s with the new subscription', async () => {
+    it('201s with the new subscription (matches share-bucket subscribe convention)', async () => {
       svc.subscribePeer.mockResolvedValue({
         id: 'peer-universe-u1-peer-a',
         peerId: 'peer-a',
@@ -221,7 +221,7 @@ describe('peer-sync routes', () => {
       const res = await request(buildApp())
         .post('/api/peer-sync/subscriptions')
         .send({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(201);
       expect(res.body.subscription.peerId).toBe('peer-a');
     });
 

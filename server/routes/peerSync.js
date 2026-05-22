@@ -6,9 +6,17 @@
  *   POST   /api/peer-sync/subscriptions              → subscribe a record to a peer
  *   DELETE /api/peer-sync/subscriptions/:id          → unsubscribe
  *
- * All inputs flow through Zod schemas in `server/lib/validation.js`. Service
- * errors carry an `ERR_*` code that maps to the HTTP status here; anything
- * un-mapped surfaces as a 500 via the global error handler.
+ * POST bodies flow through Zod schemas in `server/lib/validation.js`. Query
+ * params on GET and the `:id` path param on DELETE are guarded inline:
+ *   - GET /subscriptions filter values are accepted only when `typeof === 'string'`
+ *     (Express returns arrays for repeated keys; the guard prevents those from
+ *     leaking into the filter).
+ *   - DELETE /:id is forwarded straight to the service layer, which validates
+ *     it via the same `isNonEmptyStr` check used by every other id-keyed
+ *     call (returns ERR_NOT_FOUND for missing, ERR_VALIDATION for malformed).
+ *
+ * Service errors carry an `ERR_*` code that maps to the HTTP status here;
+ * anything un-mapped surfaces as a 500 via the global error handler.
  *
  * Stage 3 — the routes themselves; Stage 2 already provided the service
  * functions (`applyIncomingPush`, `subscribePeer`, etc.) that these wrap.
@@ -80,7 +88,10 @@ router.get('/subscriptions', asyncHandler(async (req, res) => {
 router.post('/subscriptions', asyncHandler(async (req, res) => {
   const input = validateRequest(peerSubscribeSchema, req.body || {});
   const subscription = await subscribePeer(input).catch(mapAndRethrow);
-  res.json({ subscription });
+  // 201 even on idempotent re-subscribe — matches the share-bucket subscribe
+  // convention in server/routes/sharing.js so REST clients can apply the same
+  // status-code branching across both transports.
+  res.status(201).json({ subscription });
 }));
 
 // --- DELETE /subscriptions/:id --- tear down a subscription.
