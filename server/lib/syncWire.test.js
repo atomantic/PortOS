@@ -30,6 +30,15 @@ describe('syncWire', () => {
         .toEqual({ deleted: true, deletedAt: null });
     });
 
+    it('normalizes empty / whitespace deletedAt to null (no useless tombstone markers)', () => {
+      expect(sanitizeSoftDeleteFields({ deleted: true, deletedAt: '' }))
+        .toEqual({ deleted: true, deletedAt: null });
+      expect(sanitizeSoftDeleteFields({ deleted: true, deletedAt: '   ' }))
+        .toEqual({ deleted: true, deletedAt: null });
+      expect(sanitizeSoftDeleteFields({ deleted: true, deletedAt: '\t\n' }))
+        .toEqual({ deleted: true, deletedAt: null });
+    });
+
     it('null/undefined input returns live shape', () => {
       expect(sanitizeSoftDeleteFields(null)).toEqual({ deleted: false, deletedAt: null });
       expect(sanitizeSoftDeleteFields(undefined)).toEqual({ deleted: false, deletedAt: null });
@@ -45,6 +54,21 @@ describe('syncWire', () => {
 
     it('returns null for unknown kinds', () => {
       expect(sanitizeRecordForWire('mystery', { id: 'x' })).toBeNull();
+    });
+
+    it('returns null for arrays (typeof [] is "object" — must be excluded explicitly)', () => {
+      expect(sanitizeRecordForWire('universe', [])).toBeNull();
+      expect(sanitizeRecordForWire('universe', [{ id: 'u1' }])).toBeNull();
+    });
+
+    it('returns null for records missing or having a non-string id (receiver merges drop these)', () => {
+      // Without the id guard, a corrupted entry crosses the wire and the
+      // checksum reflects content the receiver can never merge in — permanent
+      // sync churn until both sides clean up the corrupt record.
+      expect(sanitizeRecordForWire('universe', { name: 'no id' })).toBeNull();
+      expect(sanitizeRecordForWire('universe', { id: '', name: 'empty id' })).toBeNull();
+      expect(sanitizeRecordForWire('universe', { id: '   ', name: 'ws id' })).toBeNull();
+      expect(sanitizeRecordForWire('universe', { id: 42, name: 'num id' })).toBeNull();
     });
 
     it('passes through universe/series/issue records with canonical soft-delete fields', () => {

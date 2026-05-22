@@ -1,16 +1,20 @@
-const isStr = (v) => typeof v === 'string';
+const isNonEmptyStr = (v) => typeof v === 'string' && v.trim().length > 0;
 
 /**
  * Normalize the `deleted` + `deletedAt` tombstone fields on a raw record.
  * Used by every sanitizer that participates in soft-delete / peer sync
  * (`sanitizeTemplate` for universes, `sanitizeSeries`, `sanitizeIssue`) so
  * the shape of a tombstone is identical regardless of which file owns the
- * record. The invariant is: when `deleted=false`, `deletedAt` is always
- * `null` — never a stray timestamp from a corrupted payload.
+ * record. The invariants are:
+ *   1. when `deleted=false`, `deletedAt` is always `null` — never a stray
+ *      timestamp from a corrupted payload.
+ *   2. `deletedAt` is a NON-EMPTY string when present; empty/whitespace
+ *      strings normalize to `null` so a malformed payload (`{ deleted: true,
+ *      deletedAt: '' }`) doesn't persist a useless tombstone marker.
  */
 export function sanitizeSoftDeleteFields(raw) {
   const deleted = raw?.deleted === true;
-  const deletedAt = deleted && isStr(raw?.deletedAt) ? raw.deletedAt : null;
+  const deletedAt = deleted && isNonEmptyStr(raw?.deletedAt) ? raw.deletedAt : null;
   return { deleted, deletedAt };
 }
 
@@ -46,7 +50,13 @@ export function sanitizeSoftDeleteFields(raw) {
  * decision lands in one place.
  */
 export function sanitizeRecordForWire(kind, record) {
-  if (!record || typeof record !== 'object') return null;
+  // Reject non-objects, arrays (typeof [] === 'object'), and records missing
+  // a usable id. Receiver-side merge functions (mergeUniversesFromSync etc.)
+  // skip records without an `id`, so including such records here would mean
+  // the snapshot checksum reflects content the receiver can never apply —
+  // permanent mismatch + churn until both sides clean up the corrupt entries.
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  if (!isNonEmptyStr(record.id)) return null;
   switch (kind) {
     case 'universe':
     case 'series':
