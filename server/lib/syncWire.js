@@ -30,11 +30,20 @@ export function sanitizeSoftDeleteFields(raw) {
 // them and every transport updates together.
 
 /**
- * Wire-safe projection of a single record. Currently a passthrough — per-record
- * field stripping (e.g. dropping `runHistory` from issue stages once it grows
- * too large for sync) goes here when the time comes. The function exists today
- * so the new push path has the same callsite as the snapshot path, and so the
- * next "should this field cross the wire?" decision lands in one place.
+ * Wire-safe projection of a single record. Normalizes soft-delete fields so
+ * the on-disk shape is irrelevant to the wire hash — a legacy record without
+ * `deleted` / `deletedAt` and a freshly-rewritten record with
+ * `{ deleted: false, deletedAt: null }` carry the same logical content and
+ * MUST produce the same checksum. Without this, the 60s snapshot loop would
+ * see a permanent checksum mismatch between an upgraded peer and a not-yet-
+ * upgraded peer for the same live records (the merge LWW would no-op because
+ * `updatedAt` is equal, so the files never converge and sync churns forever).
+ *
+ * Per-record field stripping (e.g. dropping `runHistory` from issue stages
+ * once it grows too large for sync) goes here when the time comes — the
+ * function exists today so the new push path has the same callsite as the
+ * snapshot path, and so the next "should this field cross the wire?"
+ * decision lands in one place.
  */
 export function sanitizeRecordForWire(kind, record) {
   if (!record || typeof record !== 'object') return null;
@@ -42,7 +51,7 @@ export function sanitizeRecordForWire(kind, record) {
     case 'universe':
     case 'series':
     case 'issue':
-      return record;
+      return { ...record, ...sanitizeSoftDeleteFields(record) };
     default:
       return null;
   }

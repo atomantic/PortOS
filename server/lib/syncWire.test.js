@@ -47,16 +47,35 @@ describe('syncWire', () => {
       expect(sanitizeRecordForWire('mystery', { id: 'x' })).toBeNull();
     });
 
-    it('passes through valid universe/series/issue records', () => {
-      const u = { id: 'u1', name: 'Foo', deleted: false };
-      expect(sanitizeRecordForWire('universe', u)).toBe(u);
-      expect(sanitizeRecordForWire('series', u)).toBe(u);
-      expect(sanitizeRecordForWire('issue', u)).toBe(u);
+    it('passes through universe/series/issue records with canonical soft-delete fields', () => {
+      const u = { id: 'u1', name: 'Foo' };
+      const canonical = { id: 'u1', name: 'Foo', deleted: false, deletedAt: null };
+      expect(sanitizeRecordForWire('universe', u)).toEqual(canonical);
+      expect(sanitizeRecordForWire('series', u)).toEqual(canonical);
+      expect(sanitizeRecordForWire('issue', u)).toEqual(canonical);
     });
 
-    it('passes tombstone records (deleted: true must cross the wire)', () => {
+    it('preserves tombstone records (deleted: true must cross the wire)', () => {
       const u = { id: 'u1', deleted: true, deletedAt: '2026-01-01T00:00:00Z' };
-      expect(sanitizeRecordForWire('universe', u)).toBe(u);
+      expect(sanitizeRecordForWire('universe', u))
+        .toEqual({ id: 'u1', deleted: true, deletedAt: '2026-01-01T00:00:00Z' });
+    });
+
+    it('canonicalizes a legacy record (no deleted/deletedAt fields) to match a rewritten live record byte-for-byte', () => {
+      // Regression: without this, an upgraded peer that has rewritten its
+      // state to include { deleted: false, deletedAt: null } would compute a
+      // different snapshot checksum than a not-yet-upgraded peer with the
+      // same logical content, and the 60s sync loop would churn forever.
+      const legacy = { id: 'u1', name: 'U' };
+      const rewritten = { id: 'u1', name: 'U', deleted: false, deletedAt: null };
+      expect(sanitizeRecordForWire('universe', legacy))
+        .toEqual(sanitizeRecordForWire('universe', rewritten));
+    });
+
+    it('strips stray deletedAt when deleted=false (defensive against corrupted payloads)', () => {
+      const corrupt = { id: 'u1', deleted: false, deletedAt: '2026-01-01T00:00:00Z' };
+      expect(sanitizeRecordForWire('universe', corrupt))
+        .toEqual({ id: 'u1', deleted: false, deletedAt: null });
     });
   });
 
@@ -68,7 +87,12 @@ describe('syncWire', () => {
       };
       const result = sanitizeStateForWire('universe', state);
       expect(result.kind).toBe('universe');
-      expect(result.data).toEqual({ universes: [{ id: 'u1', name: 'U' }] });
+      // Universes are canonicalized through sanitizeRecordForWire, which adds
+      // the default soft-delete fields so legacy + rewritten records hash the
+      // same on the wire (see the canonicalization regression test above).
+      expect(result.data).toEqual({
+        universes: [{ id: 'u1', name: 'U', deleted: false, deletedAt: null }],
+      });
       expect(result.data.runs).toBeUndefined();
     });
 

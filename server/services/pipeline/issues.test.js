@@ -770,6 +770,36 @@ describe('pipeline issues service', () => {
         expect(live).toMatchObject({ title: 'Edited After Delete', deleted: false });
       });
 
+      it('synced RESURRECTION compacts collisions — issue restored mid-series gets a unique number', async () => {
+        // Regression: local delete already compacts numbering (A=1, C=2 after
+        // deleting B). When B's tombstone is overridden by a later remote edit
+        // (B comes back to life), B re-enters with its OLD number (2) and
+        // collides with C. mergeIssuesFromSync must trigger a renumber on
+        // both delete-transitions AND resurrection-transitions.
+        const a = await svc.createIssue({ seriesId: 'ser-resurrect', title: 'A' });
+        const b = await svc.createIssue({ seriesId: 'ser-resurrect', title: 'B' });
+        const c = await svc.createIssue({ seriesId: 'ser-resurrect', title: 'C' });
+        expect([a.number, b.number, c.number]).toEqual([1, 2, 3]);
+        await svc.deleteIssue(b.id);
+        // Local compacts to A=1, C=2.
+        const afterDelete = await svc.listIssues({ seriesId: 'ser-resurrect' });
+        expect(afterDelete.map((i) => i.number)).toEqual([1, 2]);
+        // Remote sends B with a later updatedAt — resurrection.
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeIssuesFromSync([{
+          ...b,
+          deleted: false,
+          deletedAt: null,
+          updatedAt: editTs,
+        }]);
+        const live = await svc.listIssues({ seriesId: 'ser-resurrect' });
+        // All three live, contiguous numbering, no duplicates.
+        expect(live.map((i) => i.title).sort()).toEqual(['A', 'B', 'C']);
+        const numbers = live.map((i) => i.number).sort((x, y) => x - y);
+        expect(numbers).toEqual([1, 2, 3]);
+        expect(new Set(numbers).size).toBe(3);
+      });
+
       it('synced delete-transition compacts surviving issues for that series', async () => {
         const a = await svc.createIssue({ seriesId: 'ser-sync-renum', title: 'A' });
         const b = await svc.createIssue({ seriesId: 'ser-sync-renum', title: 'B' });

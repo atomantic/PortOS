@@ -918,8 +918,17 @@ export function mergeIssuesFromSync(remoteIssues) {
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
           localById.set(sanitized.id, sanitized);
-          if (sanitized.deleted && !local.deleted) {
+          // Renumber on EITHER direction of the transition: a delete leaves
+          // a gap, a resurrection (deleted→live) reintroduces a previously-
+          // compacted number and can collide with live siblings until some
+          // unrelated edit triggers a renumber. Cover both here.
+          if (sanitized.deleted !== local.deleted) {
             seriesNeedingRenumber.add(sanitized.seriesId);
+            // A resurrection may move from the OLD seriesId to a different
+            // one in the inbound record (rare, but possible) — renumber both.
+            if (local.seriesId && local.seriesId !== sanitized.seriesId) {
+              seriesNeedingRenumber.add(local.seriesId);
+            }
           }
           changed++;
         }
@@ -928,8 +937,9 @@ export function mergeIssuesFromSync(remoteIssues) {
     if (changed === 0) return { applied: false, count: 0 };
     state.issues = Array.from(localById.values());
     // Compact issue numbers for each affected series — the merge may have
-    // tombstoned a middle issue, and renumberInline (which excludes deleted)
-    // closes the gap. Single renumber per series, all inside the queue.
+    // tombstoned (gap) or resurrected (collision) an issue. renumberInline
+    // skips tombstones, so the resulting numbering is always contiguous
+    // across live issues. Single renumber per series, all inside the queue.
     for (const seriesId of seriesNeedingRenumber) {
       await renumberInline(state, seriesId, null);
     }
