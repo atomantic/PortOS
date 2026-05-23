@@ -52,20 +52,27 @@ export default function Universes() {
     // Guard setState against a navigate-away before the fetch resolves —
     // mirrors the editor's load effect (UniverseBuilder.jsx).
     let cancelled = false;
-    Promise.all([
-      listUniverses().catch((err) => {
+    // Universes drive the page; resolve `loading` as soon as they land so a
+    // slow/hung series fetch can't keep the list stuck on "Loading…".
+    listUniverses()
+      .catch((err) => {
         toast.error(err.message || 'Failed to load universes');
         return [];
-      }),
-      // Series counts are a nice-to-have join — a failed fetch should still
-      // render the universe list (counts just show 0). Silent on failure.
-      listPipelineSeries().catch(() => []),
-    ]).then(([u, s]) => {
-      if (cancelled) return;
-      setUniverses(Array.isArray(u) ? u : []);
-      setSeries(Array.isArray(s) ? s : []);
-      setLoading(false);
-    });
+      })
+      .then((u) => {
+        if (cancelled) return;
+        setUniverses(Array.isArray(u) ? u : []);
+        setLoading(false);
+      });
+    // Series counts are a nice-to-have join, fetched independently — a failed
+    // or slow request should never block the universe list (counts just show
+    // 0). Silent on failure.
+    listPipelineSeries()
+      .catch(() => [])
+      .then((s) => {
+        if (cancelled) return;
+        setSeries(Array.isArray(s) ? s : []);
+      });
     return () => { cancelled = true; };
   }, []);
 
