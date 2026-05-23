@@ -872,41 +872,67 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   const directions = Array.isArray(peer.directions) ? peer.directions : [];
   if (directions.length > 0 && !directions.includes('outbound')) return false;
 
-  // Now the disk read: skip if the local record is ephemeral — auto-creating
-  // a reverse sub for a local-only record would accumulate orphan rows in
-  // peer_subscriptions.json. Every future edit on the local side fires
-  // recordEvents.updated → triggerPushForRecord → pushRecordToPeer →
-  // buildPushPayload → sanitizeRecordForWire returns null (ephemeral
-  // filter) → push aborts with "record-not-found". The sub burns an
-  // asset-manifest sha-pass on every edit and never sends bytes. Better
-  // to refuse the reverse-subscribe at the source. Note: the merge path
-  // upstream already refused the inbound edit (local-ephemeral → continue),
-  // so the sender's record state isn't reflected locally anyway — there's
-  // nothing meaningful to push back even if we did create the sub.
-  if (await isLocalRecordEphemeral(recordKind, recordId)) return false;
+  // Now the disk read: only reverse-subscribe when the local record exists
+  // AND is non-ephemeral. Three reasons to hard-stop on missing/read-failed:
+  //
+  // 1. Ephemeral: auto-creating a reverse sub for a local-only record
+  //    would accumulate orphan rows in peer_subscriptions.json. Every
+  //    future edit on the local side fires recordEvents.updated →
+  //    triggerPushForRecord → pushRecordToPeer → buildPushPayload →
+  //    sanitizeRecordForWire returns null (ephemeral filter) → push
+  //    aborts with "record-not-found". The sub burns an asset-manifest
+  //    sha-pass on every edit and never sends bytes. The merge path
+  //    upstream already refused the inbound edit (local-ephemeral →
+  //    continue), so the sender's record state isn't reflected locally
+  //    anyway — there's nothing meaningful to push back.
+  //
+  // 2. Record-missing: the sender pushed a record that passed Zod but was
+  //    dropped by the service sanitizer (missing name, etc.). The merge
+  //    never created the local copy, so a reverse sub would point at a
+  //    nonexistent record and every push would resolve to null. Same
+  //    orphan-row dynamic as ephemeral, but worse because there's never
+  //    going to be a record to clear it via the ephemeral lifecycle
+  //    transition.
+  //
+  // 3. Read-failed: a transient IO error reading the record file —
+  //    treating it as "non-ephemeral, go ahead and subscribe" can create
+  //    a sub for a record that turns out to be ephemeral once the IO
+  //    settles. Conservative default: don't subscribe.
+  const localState = await classifyLocalRecord(recordKind, recordId);
+  if (localState !== 'syncable') return false;
 
   await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
   return true;
 }
 
 /**
- * Look up the local record (live or tombstoned) and return whether its
- * `ephemeral` flag is set. Used by the reverse-subscribe gate; the static
- * imports for `getUniverse` / `getSeries` are already at module top, so no
- * dynamic import needed here. Returns `false` on any error path (record
- * missing, IO failure) — the conservative default is "let the reverse-sub
- * happen," matching pre-flag behavior for any record we can't classify.
+ * Look up the local record (live or tombstoned) and tri-state-classify it
+ * for the reverse-subscribe gate. Returns one of:
+ *
+ *   'syncable'   — record exists, is non-ephemeral; safe to reverse-subscribe.
+ *   'ephemeral'  — record exists but is local-only; reverse-subscribe would
+ *                  accumulate an orphan sub that never sends bytes.
+ *   'missing'    — record is not on disk OR a read error occurred; can't
+ *                  classify, so the conservative default is to skip the
+ *                  reverse-subscribe (callers treat anything other than
+ *                  'syncable' as a no-go).
+ *
+ * Includes deleted records on the lookup so a tombstone-as-state record
+ * still gets classified as 'syncable' (we WANT peer pushes to converge
+ * a deleted record's tombstone if they're targeting it).
  */
-async function isLocalRecordEphemeral(recordKind, recordId) {
+async function classifyLocalRecord(recordKind, recordId) {
   if (recordKind === 'universe') {
-    const u = await getUniverse(recordId, { includeDeleted: true }).catch(() => null);
-    return u?.ephemeral === true;
+    const u = await getUniverse(recordId, { includeDeleted: true }).catch(() => undefined);
+    if (!u) return 'missing';
+    return u.ephemeral === true ? 'ephemeral' : 'syncable';
   }
   if (recordKind === 'series') {
-    const s = await getSeries(recordId, { includeDeleted: true }).catch(() => null);
-    return s?.ephemeral === true;
+    const s = await getSeries(recordId, { includeDeleted: true }).catch(() => undefined);
+    if (!s) return 'missing';
+    return s.ephemeral === true ? 'ephemeral' : 'syncable';
   }
-  return false;
+  return 'missing';
 }
 
 // --- Receiver-side asset pull worker ------------------------------------

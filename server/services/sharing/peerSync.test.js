@@ -1137,6 +1137,13 @@ describe('peerSync', () => {
     });
 
     it('auto-creates a reverse subscription back to the sender', async () => {
+      // The merge path actually landed the record locally, so the
+      // classifyLocalRecord('universe', 'u1') call inside
+      // maybeCreateReverseSubscription will find a syncable record on
+      // disk. Mock the lookup explicitly — the tri-state gate refuses
+      // 'missing' to avoid orphan reverse-subs (e.g. for records the
+      // sanitizer dropped at the merge boundary).
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
       await applyIncomingPush({
         kind: 'universe',
         record: { id: 'u1' },
@@ -1146,6 +1153,23 @@ describe('peerSync', () => {
       const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
       expect(sub).not.toBeNull();
       expect(sub.adoptedFromReverse).toBe(true);
+    });
+
+    it('does NOT create a reverse subscription when the local record is missing (merge dropped it)', async () => {
+      // Regression: classifyLocalRecord must hard-stop on 'missing'.
+      // Previously the gate only checked `ephemeral === true`, so a
+      // record the sanitizer dropped during merge (missing name, schema
+      // mismatch, etc.) would still get an orphan reverse-sub that fires
+      // pushes against a nonexistent local record forever.
+      vi.mocked(getUniverse).mockResolvedValue(undefined);
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u-dropped' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      const sub = await findPeerSubscription('peer-a', 'universe', 'u-dropped');
+      expect(sub).toBeNull();
     });
 
     it('does NOT create a reverse subscription when the sender peer is configured as inbound-only', async () => {
