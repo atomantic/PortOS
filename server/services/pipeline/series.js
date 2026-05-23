@@ -324,18 +324,22 @@ export async function updateSeries(id, patch = {}) {
   // shareable series reaches every peer with the pipeline category enabled.
   // Must run BEFORE emitRecordUpdated so the peerSync 'updated' listener
   // doesn't schedule pushes against subs that are about to be torn down.
+  // The dynamic import is awaited (NOT fire-and-forget .then) — otherwise
+  // the unsubscribe resolves on a microtask after emitRecordUpdated has
+  // already fired the listener and pushes get scheduled against the
+  // about-to-be-deleted subs.
   if (prevEphemeral && !nextEphemeral) {
-    import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
-      autoSubscribeRecordToAllPeers('series', merged.id)
-    ).catch((err) => {
-      console.log(`⚠️ series: re-subscribe after un-ephemeralizing failed: ${err.message}`);
-    });
+    await import('../sharing/peerSync.js')
+      .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('series', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ series: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+      });
   } else if (!prevEphemeral && nextEphemeral) {
-    import('../sharing/peerSync.js').then(({ unsubscribeAllForRecord }) =>
-      unsubscribeAllForRecord('series', merged.id)
-    ).catch((err) => {
-      console.log(`⚠️ series: unsubscribe after ephemeralizing failed: ${err.message}`);
-    });
+    await import('../sharing/peerSync.js')
+      .then(({ unsubscribeAllForRecord }) => unsubscribeAllForRecord('series', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ series: unsubscribe after ephemeralizing failed: ${err.message}`);
+      });
   }
   // Cascade rename onto the linked per-series media collection (if any) —
   // log but don't fail the save. Runs OUTSIDE the queue so the media-

@@ -1169,9 +1169,18 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   // `serve-static` always sets content-length for static files (verified
   // by the `acceptRanges: true` mount config in server/index.js), so this
   // is enforceable in the real deployment path.
-  const contentLength = Number(res.headers.get('content-length'));
-  if (!Number.isFinite(contentLength) || contentLength < 0) {
+  // Use has() to distinguish "header missing" from "header is '0'" — without
+  // the explicit check, `Number(null)` is 0 and slips past the finite-non-negative
+  // guard, letting a peer that omits the header buffer an unbounded body before
+  // the size cap runs (the cap on .arrayBuffer() length only kicks in AFTER the
+  // body lands in memory).
+  if (!res.headers.has('content-length')) {
     console.log(`⚠️ peerSync: asset ${safeName} has no content-length — refusing pull`);
+    return;
+  }
+  const contentLength = Number(res.headers.get('content-length'));
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    console.log(`⚠️ peerSync: asset ${safeName} has invalid content-length (${res.headers.get('content-length')}) — refusing pull`);
     return;
   }
   if (contentLength > ASSET_PULL_MAX_BYTES) {

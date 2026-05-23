@@ -266,8 +266,20 @@ export async function spawnTuiAgent({
       // Safety valve: rewrite the file with just this batch instead of
       // appending. The tail-read at finalize wants the MOST RECENT bytes,
       // not the oldest, so truncating preserves what analyzeAgentFailure
-      // actually uses while bounding disk usage at ~RAW_SPOOL_MAX_BYTES
-      // plus one debounce window.
+      // actually uses while bounding disk usage at ~RAW_SPOOL_MAX_BYTES.
+      // If a single debounce-window batch exceeds the cap (runaway producer
+      // emitting MB/sec), slice to the trailing RAW_SPOOL_MAX_BYTES bytes
+      // first — Buffer-slice to keep UTF-8 byte semantics correct (a
+      // string.slice would index by UTF-16 code units and produce torn
+      // multi-byte sequences at the boundary).
+      let writeBuf;
+      if (batchBytes > RAW_SPOOL_MAX_BYTES) {
+        const buf = Buffer.from(batch, 'utf8');
+        writeBuf = buf.subarray(buf.length - RAW_SPOOL_MAX_BYTES);
+      } else {
+        writeBuf = batch;
+      }
+      const writeBytes = typeof writeBuf === 'string' ? batchBytes : writeBuf.length;
       if (!rawSpoolTruncationWarned) {
         rawSpoolTruncationWarned = true;
         console.warn(`⚠️ TUI agent ${agentId} raw PTY spool reached ${Math.round(RAW_SPOOL_MAX_BYTES / 1024 / 1024)}MB — truncating spool (oldest bytes dropped; tail-read still reflects most recent)`);
@@ -277,8 +289,8 @@ export async function spawnTuiAgent({
       // Only update the byte counter on successful write — a failed write
       // would otherwise inflate rawBytesWritten and make subsequent flush
       // decisions race the actual on-disk state.
-      const wrote = await writeFile(rawFile, batch).then(() => true).catch(() => false);
-      if (wrote) rawBytesWritten = batchBytes;
+      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch(() => false);
+      if (wrote) rawBytesWritten = writeBytes;
       return;
     }
     const wrote = await appendFile(rawFile, batch).then(() => true).catch(() => false);
@@ -432,46 +444,55 @@ export async function spawnTuiAgent({
   };
 
   const handleData = async (data) => {
-    // node-pty can deliver chunks between finalize starting and the shell
-    // session being killed in finalize's finally block. Once finalized, drop
-    // them — appending to the spool, growing the post-paste accumulator, or
-    // mutating timing state is all pointless after finish has settled.
-    if (finalized) return;
-    // node-pty surfaces output as already-decoded UTF-8 strings via
-    // shellService's onData hook (StringDecoder handles multi-byte
-    // boundaries internally), so `data` is a string here in normal use.
-    // The String(...) coerces defensively in case a future caller wires
-    // a Buffer-emitting encoding.
-    const text = typeof data === 'string' ? data : String(data);
-    pendingRawChunks.push(text);
-    scheduleRawFlush();
-    if (postPasteBuffer !== null) postPasteBuffer += text;
-    lastOutputAt = Date.now();
-    if (firstOutputAt === null) firstOutputAt = lastOutputAt;
+    // EventEmitter listeners run outside the request lifecycle — a rejection
+    // here on Node ≥15 will kill the process unless we catch locally. The
+    // outer try/catch routes failures through emitLog (best-effort log, no
+    // re-throw) and leaves the agent run intact.
+    // See skill: nodejs-async-event-listener-unhandled-rejection.
+    try {
+      // node-pty can deliver chunks between finalize starting and the shell
+      // session being killed in finalize's finally block. Once finalized, drop
+      // them — appending to the spool, growing the post-paste accumulator, or
+      // mutating timing state is all pointless after finish has settled.
+      if (finalized) return;
+      // node-pty surfaces output as already-decoded UTF-8 strings via
+      // shellService's onData hook (StringDecoder handles multi-byte
+      // boundaries internally), so `data` is a string here in normal use.
+      // The String(...) coerces defensively in case a future caller wires
+      // a Buffer-emitting encoding.
+      const text = typeof data === 'string' ? data : String(data);
+      pendingRawChunks.push(text);
+      scheduleRawFlush();
+      if (postPasteBuffer !== null) postPasteBuffer += text;
+      lastOutputAt = Date.now();
+      if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
-    if (!hasStartedWorking) {
-      hasStartedWorking = true;
-      await updateAgent(agentId, { metadata: { phase: 'working' } });
-      emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
-    }
-
-    // The TUI is a *screen*, not a log: every progress tick repaints the
-    // status line (`thinking with…`, token counters, footer) and gets
-    // re-captured if we parse it line-by-line. The attached shell session
-    // shows the live TUI faithfully — see-the-shell is the user-facing
-    // path. We still spool the raw stream to raw.txt for error analysis
-    // on failure, and we detect early "command not found" so a missing
-    // binary fails fast instead of idling.
-    if (!promptSentAt) {
-      const lowerStripped = streamingStrip(text).toLowerCase();
-      if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
-        await finish({
-          success: false,
-          exitCode: 127,
-          error: `TUI command not found: ${tuiConfig.command}`,
-          reason: 'command-not-found'
-        });
+      if (!hasStartedWorking) {
+        hasStartedWorking = true;
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
       }
+
+      // The TUI is a *screen*, not a log: every progress tick repaints the
+      // status line (`thinking with…`, token counters, footer) and gets
+      // re-captured if we parse it line-by-line. The attached shell session
+      // shows the live TUI faithfully — see-the-shell is the user-facing
+      // path. We still spool the raw stream to raw.txt for error analysis
+      // on failure, and we detect early "command not found" so a missing
+      // binary fails fast instead of idling.
+      if (!promptSentAt) {
+        const lowerStripped = streamingStrip(text).toLowerCase();
+        if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
+          await finish({
+            success: false,
+            exitCode: 127,
+            error: `TUI command not found: ${tuiConfig.command}`,
+            reason: 'command-not-found'
+          });
+        }
+      }
+    } catch (err) {
+      emitLog('error', `TUI agent ${agentId} handleData failed: ${err?.message || err}`, { agentId });
     }
   };
 

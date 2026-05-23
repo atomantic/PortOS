@@ -82,11 +82,10 @@ describe('SyncToPeerButton', () => {
     await user.click(screen.getByRole('button', { name: /Sync/i }));
     await screen.findByText('Peer A');
     await user.click(screen.getByText('Peer A'));
-    expect(api.subscribeToPeer).toHaveBeenCalledWith({
-      peerId: 'peer-a',
-      recordKind: 'universe',
-      recordId: 'u1',
-    });
+    expect(api.subscribeToPeer).toHaveBeenCalledWith(
+      { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+      { silent: true },
+    );
   });
 
   it('unsubscribes when a checked peer row is clicked', async () => {
@@ -104,6 +103,6 @@ describe('SyncToPeerButton', () => {
     await user.click(screen.getByRole('button', { name: /Sync/i }));
     await screen.findByText('Peer A');
     await user.click(screen.getByText('Peer A'));
-    expect(api.unsubscribeFromPeer).toHaveBeenCalledWith('peer-universe-u1-peer-a');
+    expect(api.unsubscribeFromPeer).toHaveBeenCalledWith('peer-universe-u1-peer-a', { silent: true });
   });
 });

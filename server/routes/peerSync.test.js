@@ -53,6 +53,27 @@ describe('peer-sync routes', () => {
       }));
     });
 
+    it('accepts a universe push that bundles a linkedCollection (Stage 5 media-collections sync)', async () => {
+      // Regression: peerSyncPushSchema's strict() branches must include
+      // `linkedCollection` — without it, every production push from a
+      // universe/series with images 400s because peerSync.js's
+      // buildPushPayload spreads `linkedCollection` into the payload.
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          linkedCollection: { id: 'col-1', name: 'Universe: Foo', items: [] },
+        });
+      expect(res.status).toBe(200);
+      expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
+        linkedCollection: expect.objectContaining({ id: 'col-1' }),
+      }));
+    });
+
     it('accepts a series push with bundled issues', async () => {
       svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
       const res = await request(buildApp())

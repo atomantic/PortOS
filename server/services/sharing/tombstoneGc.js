@@ -85,6 +85,12 @@ async function snapshotPeerIdsForKind(recordKind) {
   return peers
     .filter((p) => {
       if (!p?.enabled) return false;
+      // Mirror syncOrchestrator's syncAllPeers gate — a globally-silenced
+      // peer (syncEnabled === false) never receives snapshots, so it can't
+      // resurrect a pruned tombstone. Without this filter, a silenced peer's
+      // stale syncCategories map permanently stalls GC by reporting "snapshot
+      // peer not covered by per-record sub" → cutoff = null → refuse to prune.
+      if (p.syncEnabled === false) return false;
       const cats = p.syncCategories;
       return !!cats && typeof cats === 'object' && cats[category] === true;
     })

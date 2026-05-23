@@ -218,6 +218,23 @@ export async function isMortalLoomEnabled() {
 }
 
 /**
+ * Single-read snapshot of {enabled, path} from settings — collapses the prior
+ * isMortalLoomEnabled() + readStore() → resolvePath() → getSettings() double-
+ * read in every runtime helper into one settings I/O. Without this, the half-
+ * fail window the boot-pin fix guards against (settings rejects transiently
+ * between the two calls) is still live in the read path — first call says
+ * "enabled", second call fails and the helper returns null even though sync
+ * is on. Returns `null` when sync is disabled OR the read fails.
+ */
+async function readEnabledStore() {
+  const s = await getSettings();
+  if (!s?.mortalloom?.enabled) return null;
+  const path = normalizePath(s.mortalloom.path);
+  if (!path) return null;
+  return readStoreAtPath(path);
+}
+
+/**
  * Read + parse the store at `path`. Returns `null` for:
  *  - file absent (ENOENT or `existsSync` false) — silently
  *  - any other `readFile` failure (EAGAIN/EDEADLK/EACCES/unknown errno/etc.) —
@@ -329,8 +346,7 @@ export async function mlReplace(key, array) {
 
 /** Returns `store.profile` when MortalLoom sync is enabled, else null. */
 export async function mlGetProfileIfEnabled() {
-  if (!(await isMortalLoomEnabled())) return null;
-  const store = await readStore();
+  const store = await readEnabledStore();
   return (store && typeof store.profile === 'object') ? store.profile : null;
 }
 
@@ -381,7 +397,7 @@ export async function mlUpsertHealthMetricByDate(date, patch) {
  * Return the id of the N-th record in store[key] with the given date (in stored order).
  */
 export async function mlIdAtDateIndex(key, date, index) {
-  const store = await readStore();
+  const store = await readEnabledStore();
   if (!store || !Array.isArray(store[key])) return null;
   const sameDate = store[key].filter(r => r.date === date);
   return sameDate[index]?.id ?? null;
@@ -391,8 +407,7 @@ export async function mlIdAtDateIndex(key, date, index) {
 
 /** Returns an array for `key` from the store when enabled, else null (fall through to local). */
 export async function mlArrayIfEnabled(key) {
-  if (!(await isMortalLoomEnabled())) return null;
-  const store = await readStore();
+  const store = await readEnabledStore();
   if (!store || !Array.isArray(store[key])) return null;
   return store[key];
 }
@@ -429,8 +444,7 @@ export function buildDailyLogFromMortalLoom(store) {
 }
 
 export async function readDailyLogIfEnabled() {
-  if (!(await isMortalLoomEnabled())) return null;
-  const store = await readStore();
+  const store = await readEnabledStore();
   return store ? buildDailyLogFromMortalLoom(store) : null;
 }
 

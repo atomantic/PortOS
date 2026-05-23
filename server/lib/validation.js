@@ -1222,6 +1222,14 @@ const peerSyncPushBase = {
   record: peerWireRecordSchema,
   assetManifest: z.array(peerAssetManifestEntrySchema).max(2000),
   sourceInstanceId: z.string().trim().min(1).max(120),
+  // Optional bundled media collection — Stage 5 media-collections sync
+  // attaches the universe / series's linked collection so collection-only
+  // edits propagate via the per-record push pipeline. Same shape as a
+  // record on the wire (id required, sanitizer handles the rest); without
+  // this field on both push branches the strict() rejection drops every
+  // production push from a universe / series with images. See
+  // peerSync.js buildPushPayload and applyIncomingPush.
+  linkedCollection: peerWireRecordSchema.optional(),
 };
 const universePushSchema = z.object({
   kind: z.literal('universe'),

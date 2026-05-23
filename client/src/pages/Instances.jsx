@@ -570,7 +570,8 @@ function PeerSyncSubscriptionsSection({ peer, peerSubs, peerSubsLoaded, setPeerS
 
   const handleUnsubscribe = async (sub) => {
     setBusyId(sub.id);
-    const ok = await unsubscribeFromPeer(sub.id).catch((err) => {
+    // silent:true — own toast in the catch, so suppress the apiCore default.
+    const ok = await unsubscribeFromPeer(sub.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Unsubscribe failed');
       return null;
     });

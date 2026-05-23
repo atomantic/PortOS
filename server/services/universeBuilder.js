@@ -1179,18 +1179,23 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //             by per-record subs (see syncOrchestrator.categoriesCoveredByPeerSync),
   //             so without this re-subscribe the record would be silently
   //             invisible to those peers.
+  // Await the dynamic import — fire-and-forget .then() resolves on a
+  // microtask AFTER the synchronous emitRecordUpdated below, so the
+  // peerSync 'updated' listener would schedule pushes against subs the
+  // user just disabled. The await keeps the documented "BEFORE
+  // emitRecordUpdated" contract honest.
   if (prevEphemeral && !nextEphemeral) {
-    import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
-      autoSubscribeRecordToAllPeers('universe', merged.id)
-    ).catch((err) => {
-      console.log(`⚠️ universe: re-subscribe after un-ephemeralizing failed: ${err.message}`);
-    });
+    await import('./sharing/peerSync.js')
+      .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('universe', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ universe: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+      });
   } else if (!prevEphemeral && nextEphemeral) {
-    import('./sharing/peerSync.js').then(({ unsubscribeAllForRecord }) =>
-      unsubscribeAllForRecord('universe', merged.id)
-    ).catch((err) => {
-      console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
-    });
+    await import('./sharing/peerSync.js')
+      .then(({ unsubscribeAllForRecord }) => unsubscribeAllForRecord('universe', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
+      });
   }
   emitRecordUpdated('universe', merged.id);
   return merged;
