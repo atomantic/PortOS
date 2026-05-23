@@ -447,6 +447,27 @@ describe('initMortalLoomStore — brctl pinning', () => {
     expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
   });
 
+  it('reads settings exactly once during init (no half-fail window)', async () => {
+    // Regression: an earlier shape called isMortalLoomEnabled() and then
+    // resolvePath() — each invoking getSettings() — so init read settings
+    // twice. A transient failure on the second read could skip the boot
+    // pin even though the first read confirmed sync enabled. Reading once
+    // and deriving both fields collapses the partial-failure window.
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    const { getSettings } = await import('./settings.js');
+    // Other tests in this file accumulate calls on the shared getSettings
+    // mock — clear before asserting count to isolate this test's call pattern.
+    getSettings.mockClear();
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+
+    await store.initMortalLoomStore();
+
+    expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+  });
+
   it('retries the initial pin on a subsequent call when the first attempt threw', async () => {
     // Regression for the listenerAttached/didInitialPin split: if
     // isMortalLoomEnabled() rejects, didInitialPin must stay false so a

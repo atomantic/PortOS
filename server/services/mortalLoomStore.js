@@ -183,11 +183,16 @@ export async function initMortalLoomStore() {
 
   if (didInitialPin) return;
 
-  // The awaits below can throw under transient disk pressure on settings.json.
-  // Only flip didInitialPin after they succeed so a caller can retry the
+  // The await below can throw under transient disk pressure on settings.json.
+  // Only flip didInitialPin after it succeeds so a caller can retry the
   // boot pin on a subsequent invocation without re-attaching the listener.
-  if (await isMortalLoomEnabled()) {
-    pinAgainstEviction(await resolvePath());
+  // Read settings ONCE and derive both enabled+path from the same snapshot —
+  // a prior split into isMortalLoomEnabled() + resolvePath() did two reads
+  // and could half-fail (first succeeds, second hits a transient and skips
+  // the boot pin even though sync was confirmed enabled).
+  const s = await getSettings();
+  if (s?.mortalloom?.enabled) {
+    pinAgainstEviction(normalizePath(s.mortalloom.path));
   }
   didInitialPin = true;
 }
