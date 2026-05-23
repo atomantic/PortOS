@@ -331,8 +331,12 @@ export default function VideoGen() {
     if (!item) return;
     setStylePreset(null);
     if (item.prompt) setPrompt(item.prompt);
-    const neg = item.negativePrompt || item.negative_prompt;
-    if (neg) setNegativePrompt(neg);
+    // negativePrompt: always set explicitly so remixing a clip with no
+    // negative prompt clears any value the user previously typed. Skipping the
+    // else-branch would leave stale form text and break the "round-trip
+    // original settings" expectation.
+    const neg = item.negativePrompt || item.negative_prompt || '';
+    setNegativePrompt(neg);
     if (item.modelId && models.some((m) => m.id === item.modelId)) setModelId(item.modelId);
     if (item.width) setWidth(item.width);
     if (item.height) setHeight(item.height);
