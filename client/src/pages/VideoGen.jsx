@@ -202,7 +202,12 @@ export default function VideoGen() {
     // guidanceScale=0 is a meaningful value (CFG off); test for presence,
     // not truthiness, so "0" round-trips through Remix correctly.
     if (get('guidanceScale') != null && get('guidanceScale') !== '') setGuidanceScale(get('guidanceScale'));
-    if (get('tiling')) setTiling(get('tiling'));
+    // tiling: URL params are user-controlled; only accept known enum strings
+    // (auto|none|spatial|temporal) so a hand-edited URL or stale link can't
+    // push the <select> into an invalid state and 400 the next POST.
+    const TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
+    const urlTiling = get('tiling');
+    if (urlTiling && TILING_ENUM.has(urlTiling)) setTiling(urlTiling);
     // disableAudio is a boolean; explicitly set to false when the URL says so
     // (or omits the key, which means "default off"). Without this, the toggle
     // sticks ON across remixes of clips that had audio.
