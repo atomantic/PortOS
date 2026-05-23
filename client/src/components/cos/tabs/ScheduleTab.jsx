@@ -503,7 +503,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
             <ReviewerPicker
               reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : DEFAULT_REVIEWERS)}
               stopMode={config.taskMetadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE}
-              reviewerApplies={!!config.taskMetadata?.reviewerApplies}
+              reviewerApplies={config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true'}
               disabled={updating}
               onChange={({ reviewers, stopMode, reviewerApplies }) => {
                 // Drop the legacy single `reviewer` key so storage converges on `reviewers`.

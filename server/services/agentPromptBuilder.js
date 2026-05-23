@@ -236,7 +236,9 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // focused wording; for a list, dispatch each reviewer in order. Only emit the
   // per-reviewer-kind bullet that actually applies to the configured list.
   const multiBullets = [
-    hasCopilot ? '**copilot**: request a Copilot review when you reach its turn (the system pre-requested it only if Copilot leads the list), wait for it (poll every 5–15s, max 5 min/round), and re-request on later rounds.' : null,
+    hasCopilot ? `**copilot**: ${copilotIsFirst
+      ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
+      : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
     hasCli ? `**codex / gemini / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).` : null,
   ].filter(Boolean).join(' ');
   const waitOrInvokeStep = multi

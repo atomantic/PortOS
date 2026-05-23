@@ -1111,8 +1111,12 @@ export const MAX_TOTAL_SPAWNS = 5;
 const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 
 /**
- * Sanitize taskMetadata to only allowed agent-option keys with boolean values.
- * Prevents prototype pollution and reserved metadata field overrides.
+ * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
+ * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
+ * are kept only when actually boolean; the review-loop keys are constrained by
+ * value — `reviewer` to a known reviewer, `reviewers` to a filtered/deduped list
+ * of known reviewers, `reviewStopMode` to a known stop-mode — plus a validated
+ * `pipeline` object. Prevents prototype pollution and reserved-field overrides.
  * Returns a clean plain object or null if input is empty/invalid.
  */
 export function sanitizeTaskMetadata(raw) {
