@@ -307,27 +307,40 @@ describe('peerSync', () => {
       // whose unsubscribe call throws (concurrent teardown, malformed id)
       // must NOT appear in `removed`. Callers reading `removed.length`
       // need an honest count.
+      //
+      // We force the failure path by racing two `unsubscribeAllForRecord`
+      // calls in parallel. `listPeerSubscriptions` (line 401 of peerSync)
+      // is NOT inside withStateLock — so both calls take an identical
+      // snapshot containing sub1+sub2 before either's first
+      // `unsubscribePeer` runs. The first call's two `unsubscribePeer`
+      // invocations execute under the state lock and remove both subs.
+      // The second call's invocations then hit ERR_NOT_FOUND, so both
+      // ids land in its `failed` array — proving the per-sub catch
+      // honestly separates success from failure.
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       const sub1 = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
       const sub2 = await subscribePeer({ peerId: 'peer-b-inbound-only', recordKind: 'universe', recordId: 'u1' });
-      // Manually rip sub2 out from under unsubscribePeer so its call
-      // throws ERR_NOT_FOUND when it tries to find the id.
-      await unsubscribePeer(sub2.id);
-      // Now call unsubscribeAllForRecord — but listPeerSubscriptions only
-      // sees sub1 since sub2 is already gone. Use a different approach:
-      // make sub2 ALSO present, then mock unsubscribePeer via partial.
-      // Simpler: spy on unsubscribePeer behavior — but we can't easily
-      // mock our own module's export. Instead, exploit the listPeerSubscriptions
-      // snapshot path: re-subscribe sub2, then call unsubscribeAllForRecord;
-      // the second iteration finds the sub and removes it. Pure happy path
-      // — to actually exercise the failure path we'd need module-level
-      // mocking. Settle for asserting the shape contract: `failed` always
-      // exists and is an array.
-      const result = await unsubscribeAllForRecord('universe', 'u1');
-      expect(Array.isArray(result.removed)).toBe(true);
-      expect(Array.isArray(result.failed)).toBe(true);
-      expect(result.removed).toContain(sub1.id);
+      const [resultA, resultB] = await Promise.all([
+        unsubscribeAllForRecord('universe', 'u1'),
+        unsubscribeAllForRecord('universe', 'u1'),
+      ]);
+      // Exactly one call wins each sub. Across the two results, every sub
+      // must appear in exactly one `removed` (success) and exactly one
+      // `failed` (the racing duplicate).
+      const allRemoved = [...resultA.removed, ...resultB.removed].sort();
+      const allFailed = [...resultA.failed, ...resultB.failed].sort();
+      expect(allRemoved).toEqual([sub1.id, sub2.id].sort());
+      expect(allFailed).toEqual([sub1.id, sub2.id].sort());
+      // No id appears in both removed AND failed of the same call.
+      for (const result of [resultA, resultB]) {
+        for (const id of result.removed) {
+          expect(result.failed).not.toContain(id);
+        }
+      }
+      // Both subs are actually gone from disk.
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+      expect(await findPeerSubscription('peer-b-inbound-only', 'universe', 'u1')).toBeNull();
     });
 
     it('returns {removed: [], failed: []} for invalid arguments', async () => {

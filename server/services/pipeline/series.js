@@ -310,7 +310,6 @@ export async function updateSeries(id, patch = {}) {
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
     state.series[idx] = next;
     await writeState(state);
-    emitRecordUpdated('series', next.id);
     return {
       merged: next,
       nameChanged: next.name !== cur.name,
@@ -323,6 +322,8 @@ export async function updateSeries(id, patch = {}) {
   // Ephemeral lifecycle wiring — see updateUniverse for the rationale. false→true
   // tears down per-record subs; true→false re-auto-subscribes so the now-
   // shareable series reaches every peer with the pipeline category enabled.
+  // Must run BEFORE emitRecordUpdated so the peerSync 'updated' listener
+  // doesn't schedule pushes against subs that are about to be torn down.
   if (prevEphemeral && !nextEphemeral) {
     import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
       autoSubscribeRecordToAllPeers('series', merged.id)
@@ -346,6 +347,7 @@ export async function updateSeries(id, patch = {}) {
       console.error(`❌ series-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
     });
   }
+  emitRecordUpdated('series', merged.id);
   return merged;
 }
 
