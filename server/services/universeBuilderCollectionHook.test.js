@@ -159,10 +159,12 @@ describe('universeBuilderCollectionHook', () => {
       name,
       characters,
       categories: { [categoryKey]: { variations } },
-      // Test uses a real tempdir but doesn't mock instances.js, so a
-      // non-ephemeral create would fire autoSubscribeRecordToAllPeers and
-      // initial-push a fixture universe to every real peer in
-      // data/instances.json — see series.js#createSeries auto-subscribe.
+      // Defense-in-depth: the file-top vi.mock of ./instances.js
+      // already stubs getPeers to []. Without that mock, a non-ephemeral
+      // create would fire autoSubscribeRecordToAllPeers and initial-push
+      // the fixture to every real peer in data/instances.json. ephemeral
+      // protects the wire even if the mock ever regresses or a future
+      // production code path bypasses getPeers.
       ephemeral: true,
     });
     return created;

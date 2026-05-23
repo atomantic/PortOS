@@ -151,10 +151,12 @@ describe('promoteWorkToPipeline', () => {
     // Simulate a corrupted link: rewrite the work manifest to point at the
     // first series but a DIFFERENT (unrelated) series' issue. Mirrors a
     // manual edit, partial delete, or migration bug.
-    // ephemeral:true keeps the fixture out of peer-sync. Test uses a real
-    // tempdir but doesn't mock instances.js; without this, autosubscribe-
-    // on-create initial-pushes the 'Strayer' record to every real peer in
-    // data/instances.json.
+    // ephemeral:true is defense-in-depth here. The file-top vi.mock of
+    // ./instances.js already stubs getPeers to return []; without that
+    // mock, autosubscribe-on-create would initial-push 'Strayer' to every
+    // real peer in data/instances.json. The ephemeral flag protects the
+    // wire even if the mock ever regresses or a future production code
+    // path bypasses getPeers.
     const strayerSeries = await seriesSvc.createSeries({ name: 'Strayer', ephemeral: true });
     const strayerIssue = await issuesSvc.createIssue({ seriesId: strayerSeries.id, title: 'Stray', ephemeral: true });
     await wrLocal.linkToPipeline(work.id, { seriesId: first.series.id, issueId: strayerIssue.id });
