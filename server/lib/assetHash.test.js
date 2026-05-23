@@ -4,9 +4,13 @@ import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { sidecarPathForImage, getOrComputeImageSha256 } from './assetHash.js';
 
-// PATHS.images is resolved at module-load from fileUtils. We monkey-patch it
-// per-test by writing a tmpdir-rooted image and pointing the sidecar resolver
-// at it via the same getOrComputeImageSha256 signature.
+// PATHS.images is resolved at module-load from fileUtils and we deliberately
+// do NOT monkey-patch it — the absent-file tests use a tmpdir-rooted dir for
+// negative cases, but the positive sha256-compute / cache / invalidate tests
+// write fixtures into the REAL PATHS.images dir under a unique
+// `portos-assethash-test-*` token so the sidecar resolver hits a real
+// callsite. Each test wraps in try/finally to clean up the fixture even on
+// assertion failure (see the body of each `it()` below).
 
 let imageDir;
 

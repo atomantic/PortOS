@@ -12,7 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
-import { installPeerSyncListener, peerSyncEvents } from './peerSync.js';
+import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents } from './peerSync.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
@@ -80,6 +80,11 @@ export async function initSharing({ io: socketIo } = {}) {
 export async function shutdownSharing() {
   await shutdownAllWatchers();
   sharingEvents.removeAllListeners();
+  // Detach the recordEvents + instanceEvents listeners that
+  // installPeerSyncListener attached. Without this, the peer-sync service
+  // listeners stay attached after shutdown and pollute any subsequent
+  // re-init or test teardown.
+  uninstallPeerSyncListener();
   peerSyncEvents.removeAllListeners();
   initialized = false;
   io = null;

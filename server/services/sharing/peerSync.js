@@ -1482,11 +1482,13 @@ export function installPeerSyncListener() {
 }
 
 /**
- * Test-only: clear pending debounces, detach our listener, and await any
- * in-flight state writes so the test can rm-rf the tmpdir without an
- * ENOTEMPTY race. Async so callers can `await __resetForTests()`.
+ * Detach the recordEvents + instanceEvents listeners and clear pending
+ * debounces. Mirror image of `installPeerSyncListener`. Called from
+ * `shutdownSharing` so the peer-sync service has a clean stop/start
+ * lifecycle (otherwise listeners leak across server re-inits and pollute
+ * test teardown when a follow-up test re-creates events).
  */
-export async function __resetForTests() {
+export function uninstallPeerSyncListener() {
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
   if (onUpdated) recordEvents.off('updated', onUpdated);
@@ -1495,5 +1497,14 @@ export async function __resetForTests() {
   onUpdated = null;
   onDeleted = null;
   onPeerOnline = null;
+}
+
+/**
+ * Test-only: full reset including a `writeTail` await so the test can
+ * rm-rf its tmpdir without an ENOTEMPTY race. Wraps uninstallPeerSyncListener
+ * so the listener-detach logic stays single-sourced.
+ */
+export async function __resetForTests() {
+  uninstallPeerSyncListener();
   await writeTail.catch(() => {});
 }
