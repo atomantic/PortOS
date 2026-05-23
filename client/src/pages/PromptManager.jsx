@@ -12,6 +12,7 @@ import {
   TIMEOUT_INPUT_STEP_MS,
 } from '../utils/formatters';
 import useFieldDraft from '../hooks/useFieldDraft';
+import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -262,11 +263,28 @@ export default function PromptManager() {
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading prompts" /></div>;
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-3 p-4 border-b border-port-border">
+          <h1 className="text-2xl font-bold text-white">Settings</h1>
+        </div>
+        <SettingsTabsHeader activeTab="prompts" />
+        <div className="flex-1 flex items-center justify-center">
+          <BrailleSpinner text="Loading prompts" />
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 p-4 border-b border-port-border">
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+      </div>
+
+      <SettingsTabsHeader activeTab="prompts" />
+
+      <div className="flex-1 overflow-auto p-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
@@ -877,6 +895,7 @@ export default function PromptManager() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
