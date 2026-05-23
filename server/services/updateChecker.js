@@ -273,11 +273,15 @@ export async function getUpdateStatus() {
 
   // Single source of truth for the freshness check — the UI reads this
   // directly instead of re-implementing the time math + fullName match.
+  // GitHub owner/repo names are case-insensitive, so the fullName match
+  // must be too (otherwise a remote like `ALICE/PortOS` vs a stored
+  // `alice/PortOS` falsely flips this to false).
   const lastSync = state.lastForkSync;
   const forkSyncFresh = !!(
     lastSync &&
     remoteInfo?.fullName &&
-    lastSync.fullName === remoteInfo.fullName &&
+    typeof lastSync.fullName === 'string' &&
+    lastSync.fullName.toLowerCase() === remoteInfo.fullName.toLowerCase() &&
     (Date.now() - new Date(lastSync.syncedAt).getTime()) < FORK_SYNC_FRESHNESS_MS
   );
 

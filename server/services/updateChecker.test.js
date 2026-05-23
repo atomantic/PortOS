@@ -537,6 +537,27 @@ describe('getUpdateStatus remoteInfo', () => {
     expect(status.forkSyncFresh).toBe(false);
   });
 
+  it('forkSyncFresh is case-insensitive on fullName (matches GitHub semantics)', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:ALICE/PortOS.git', host: 'github.com',
+      owner: 'ALICE', repo: 'PortOS', fullName: 'ALICE/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const recent = new Date(Date.now() - 1 * 60 * 1000).toISOString();
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        // Stored with lowercase variant — should still match the uppercase origin
+        lastForkSync: { fullName: 'alice/portos', syncedAt: recent }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(true);
+  });
+
   it('forkSyncFresh is false when lastForkSync.fullName mismatches the current origin', async () => {
     const remote = {
       hasOrigin: true, originUrl: 'git@github.com:bob/PortOS.git', host: 'github.com',
