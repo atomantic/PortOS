@@ -511,7 +511,7 @@ export default function UniverseCanonSection({
   const charCount = (universe.characters || []).length;
 
   return (
-    // `id="canon"` is the scroll target for `/universe-builder/:id#canon`
+    // `id="canon"` is the scroll target for `/universes/:id#canon`
     // deep-links (legacy `/canon` route redirect + PipelineSeries "Manage
     // characters, places, and objects" link). Keep this id stable.
     <section id="canon" className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3 scroll-mt-4">

@@ -40,6 +40,7 @@ const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollecti
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
+const Universes = lazyWithReload(() => import('./pages/Universes'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
@@ -92,7 +93,7 @@ function RedirectWithSearch({ to }) {
 // Canon page was folded into Universe Builder; redirect the old sub-route to
 // the builder so deep-links and bookmarks keep working. Strips the trailing
 // `/canon` (with optional trailing slash — React Router matches both forms,
-// otherwise `/universe-builder/abc/canon/` would self-loop), preserves the
+// otherwise `/universes/abc/canon/` would self-loop), preserves the
 // query string (e.g. `?series=<id>` filter), and adds `#canon` so the
 // browser scrolls to the embedded canon section instead of the bible at the
 // top of the builder (UniverseCanonSection renders with `id="canon"`).
@@ -101,16 +102,18 @@ function CanonRedirect() {
   return <Navigate to={`${pathname.replace(/\/canon\/?$/, '')}${search}#canon`} replace />;
 }
 
-// /media/universe-builder/* → /universe-builder/* redirect for legacy bookmarks
-// after the MediaGen tab for Universe Builder was removed in favor of the
-// Create sidebar link. The canon variant forces `#canon` to scroll the
-// embedded canon section; non-canon preserves whatever hash the user had.
-function UniverseBuilderRedirect({ canon = false }) {
+// Redirect a legacy universe mount to the current `/universes/*` route. Two
+// legacy prefixes feed this: `/media/universe-builder` (MediaGen tab removed in
+// favor of the Create sidebar link) and `/universe-builder` (page route renamed
+// when the list/table index landed). Both keep old bookmarks + in-app
+// deep-links alive. The canon variant forces `#canon` to scroll the embedded
+// canon section; non-canon preserves whatever hash the user had.
+function UniverseRouteRedirect({ fromPrefix, canon = false }) {
   const { pathname, search, hash } = useLocation();
-  const rest = pathname.replace(/^\/media\/universe-builder/, '');
+  const rest = pathname.replace(fromPrefix, '');
   const target = canon
-    ? `/universe-builder${rest.replace(/\/canon\/?$/, '')}${search}#canon`
-    : `/universe-builder${rest}${search}${hash}`;
+    ? `/universes${rest.replace(/\/canon\/?$/, '')}${search}#canon`
+    : `/universes${rest}${search}${hash}`;
   return <Navigate to={target} replace />;
 }
 
@@ -221,12 +224,12 @@ export default function App() {
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
             <Route path="loras" element={<Loras />} />
-            {/* Universe Builder lives at /universe-builder (Create sidebar
-                link). These redirects keep legacy /media/universe-builder
-                bookmarks working after the MediaGen tab was removed. */}
-            <Route path="universe-builder" element={<Navigate to="/universe-builder" replace />} />
-            <Route path="universe-builder/:universeId" element={<UniverseBuilderRedirect />} />
-            <Route path="universe-builder/:universeId/canon" element={<UniverseBuilderRedirect canon />} />
+            {/* Universes live at /universes (Create sidebar link). These
+                redirects keep legacy /media/universe-builder bookmarks working
+                after the MediaGen tab was removed. */}
+            <Route path="universe-builder" element={<Navigate to="/universes" replace />} />
+            <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} />} />
+            <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} canon />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
@@ -235,9 +238,20 @@ export default function App() {
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
-          <Route path="universe-builder" element={<UniverseBuilder />} />
-          <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
-          <Route path="universe-builder/:universeId/canon" element={<CanonRedirect />} />
+          {/* `/universes` is the universe index (list/table). The editor lives
+              at `/universes/:universeId`; `new` is the create-mode sentinel
+              (UniverseBuilder treats it as no-id → blank draft). Universe ids are
+              UUIDs, so `new` can never collide with a real record. */}
+          <Route path="universes" element={<Universes />} />
+          <Route path="universes/new" element={<UniverseBuilder />} />
+          <Route path="universes/:universeId" element={<UniverseBuilder />} />
+          <Route path="universes/:universeId/canon" element={<CanonRedirect />} />
+          {/* Legacy /universe-builder* → /universes* (route renamed when the
+              index landed). Keeps old bookmarks + in-app deep-links working. */}
+          <Route path="universe-builder" element={<Navigate to="/universes" replace />} />
+          <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} canon />} />
+          <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} />} />
+          <Route path="universe-builder/new" element={<Navigate to="/universes/new" replace />} />
           <Route path="writers-room" element={<WritersRoom />} />
           <Route path="sharing" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />

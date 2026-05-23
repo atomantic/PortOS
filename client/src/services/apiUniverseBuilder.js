@@ -28,8 +28,12 @@ export const updateUniverse = (id, patch, options = {}) => request(`/universe-bu
   ...options,
 });
 
-export const deleteUniverse = (id) => request(`/universe-builder/${encodeURIComponent(id)}`, {
+// `options` lets callers that own their own error toast (a custom `.catch`)
+// pass `{ silent: true }` so the request() helper doesn't also toast — see
+// CLAUDE.md "Custom catch ⇒ silent: true". Mirrors updateUniverse's signature.
+export const deleteUniverse = (id, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  ...options,
 });
 
 export const expandUniverse = ({
