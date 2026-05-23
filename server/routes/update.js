@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
 
@@ -9,6 +10,14 @@ const router = Router();
 
 const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
+});
+
+const syncForkSchema = z.object({
+  branch: z.string().min(1).max(255).regex(/^[A-Za-z0-9._/-]+$/, 'branch contains invalid characters').optional()
+});
+
+const executeSchema = z.object({
+  acknowledgeFork: z.boolean().optional()
 });
 
 // GET /api/update/status — returns update state (also clears stale locks)
@@ -39,8 +48,63 @@ router.delete('/ignore', asyncHandler(async (req, res) => {
   res.json(status);
 }));
 
+// POST /api/update/sync-fork — fast-forward the user's GitHub fork from upstream
+// via `gh repo sync`. Non-destructive: gh refuses to overwrite divergent fork
+// history without --force, so a 409 FORK_DIVERGED here means the fork's main has
+// commits not on upstream (user customizations). Other failures (gh missing,
+// network, etc.) bubble as 502 FORK_SYNC_FAILED.
+router.post('/sync-fork', asyncHandler(async (req, res) => {
+  const { branch } = validateRequest(syncForkSchema, req.body || {});
+  // Surface git-binary/spawn failures as a structured 502 instead of an
+  // unclassified 500 — the UI banner relies on err.message for guidance.
+  const info = await updateChecker.getRemoteInfo().catch(err => {
+    throw new ServerError(`Could not inspect git origin remote: ${err.message}`,
+      { status: 502, code: 'GIT_UNAVAILABLE' });
+  });
+  if (!info?.hasOrigin) {
+    throw new ServerError('No git origin remote found — fork sync requires a GitHub remote.',
+      { status: 400, code: 'NO_ORIGIN' });
+  }
+  if (!info.isGithub) {
+    throw new ServerError('Origin remote is not on GitHub — fork sync is GitHub-only.',
+      { status: 400, code: 'NOT_GITHUB' });
+  }
+  if (info.isUpstream) {
+    throw new ServerError(`Origin is already the upstream ${UPSTREAM_FULL_NAME} — nothing to sync.`,
+      { status: 400, code: 'ALREADY_UPSTREAM' });
+  }
+  if (!info.isFork) {
+    throw new ServerError(
+      `Origin ${info.fullName} is not a fork of ${UPSTREAM_FULL_NAME} (repo name differs). ` +
+      `Fork sync requires the origin to be a GitHub fork.`,
+      { status: 400, code: 'NOT_A_FORK' }
+    );
+  }
+
+  // Default mirrors syncFork()'s internal default so error messaging matches
+  // the actual branch the gh call targeted.
+  const targetBranch = branch || 'main';
+  const result = await updateChecker.syncFork({ branch, remoteInfo: info }).catch(err => {
+    const msg = err.message || 'Fork sync failed';
+    // gh's "would not be a fast forward" / "diverged" error → 409 so client
+    // can show the "you have local customizations" guidance
+    if (/fast forward|diverge|non-fast/i.test(msg)) {
+      throw new ServerError(
+        `Fork sync would overwrite commits on ${info.fullName}'s ${targetBranch} branch (GitHub): ${msg}. ` +
+        `Move customizations to a feature branch, PR them upstream, or run ` +
+        `\`gh repo sync ${info.fullName} --branch ${targetBranch} --force\` from a terminal if you want to discard them.`,
+        { status: 409, code: 'FORK_DIVERGED' }
+      );
+    }
+    throw new ServerError(msg, { status: 502, code: 'FORK_SYNC_FAILED' });
+  });
+
+  res.json(result);
+}));
+
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
+  const { acknowledgeFork } = validateRequest(executeSchema, req.body || {});
   const status = await updateChecker.getUpdateStatus();
   if (!status.latestRelease?.tag) {
     throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
@@ -50,6 +114,23 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
   if (!/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(tag)) {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
+  }
+
+  // Fork gate: update.sh pulls from origin, so running from an unsynced fork
+  // would silently no-op (or pull a stale version). Require either a recent
+  // fork sync of the upstream branch or an explicit acknowledgement that the
+  // user knows they're updating from their own origin.
+  const remote = status.remoteInfo;
+  if (remote?.isFork && !acknowledgeFork) {
+    // Reuse the freshness boolean the service already computed so the route
+    // and `status.forkSyncFresh` agree by construction (no duplicate math).
+    if (!status.forkSyncFresh) {
+      throw new ServerError(
+        `Running from a fork (${remote.fullName}). Sync your fork from ${status.upstream.fullName} ` +
+        `first, or re-submit with acknowledgeFork: true to update from your fork's origin as-is.`,
+        { status: 412, code: 'FORK_SYNC_REQUIRED' }
+      );
+    }
   }
 
   // Atomic check-and-set: rejects if already in progress, preventing concurrent updates

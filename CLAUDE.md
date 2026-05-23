@@ -135,6 +135,14 @@ PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodul
 - CoS agents can use `loadSlashdoCommand(name)` from `subAgentSpawner.js` to inline command content into prompts (resolves `!cat` lib includes automatically)
 - The `.claude/commands/do/` symlinks make all `/do:*` commands available as project-level Claude Code slash commands
 
+### Self-update flow (`server/services/updateChecker.js` + `update.sh`)
+
+- The release notification poll **always queries the upstream `atomantic/PortOS`** so users running from a personal fork still see new versions. Constants come from `server/lib/gitRemote.js` (`UPSTREAM_OWNER`, `UPSTREAM_REPO`, `UPSTREAM_FULL_NAME`) — don't re-hardcode `atomantic/PortOS` anywhere else.
+- `getOriginInfo()` in `server/lib/gitRemote.js` classifies the local `origin` remote into `{ isUpstream, isFork, isGithub, owner, repo, fullName }`. `getUpdateStatus()` includes this as `remoteInfo` plus a fixed `upstream` block. New UI that says "running from PortOS" must read `remoteInfo.isUpstream` (NOT just `currentVersion`) — otherwise it lies to fork users.
+- `update.sh` / `update.ps1` always `git pull --rebase --autostash` from **origin**, not upstream. Fork users who haven't merged upstream into their fork get a silent no-op pull. To prevent that confusion: `POST /api/update/execute` rejects fork runs with 412 `FORK_SYNC_REQUIRED` unless `acknowledgeFork: true` is set in the body OR `lastForkSync.fullName` matches `remoteInfo.fullName` within the last 10 minutes.
+- Fork sync happens via `POST /api/update/sync-fork` → `gh repo sync <owner>/<fork> --source atomantic/PortOS --branch <branch>`. `gh` is fast-forward only by default, so a diverged fork main returns 409 `FORK_DIVERGED` — never add `--force` server-side. The error message points users at the explicit `--force` they can run from a terminal if they really want to discard fork commits.
+- The UpdateTab UI swaps "Update Now" for three buttons when `isFork`: "Sync Fork & Update", "Sync Fork Only", "Update from Fork As-Is" (the last sends `acknowledgeFork: true`). Keep these three behaviors distinct — collapsing them strips user agency over what touches their GitHub fork.
+
 ## Module Organization
 
 PortOS has reached the size where re-implementing a helper is now cheaper to *start* than to find what already exists. To keep that pressure off, every directory that holds reusable code carries a catalog `README.md` and an enumerable `index.js` barrel. **Before writing a helper, grep the catalog.**
