@@ -65,6 +65,7 @@ import {
   autoSubscribePeerToAllRecords,
   retryPendingPushesForPeer,
   __resetForTests,
+  __drainForTests,
 } from './peerSync.js';
 
 import { getInstanceId, getPeers } from '../instances.js';
@@ -561,7 +562,10 @@ describe('peerSync', () => {
       // and pay N subscribePeer readState calls per online transition.
       vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
       await autoSubscribePeerToAllRecords('peer-a', 'universe');
-      await new Promise((r) => setTimeout(r, 10));
+      // Deterministically settle the fire-and-forget initial pushes (their
+      // peerFetch fires a tick after subscribe returns) so they don't leak past
+      // a fixed sleep into the assertion window below — the CI flake this fixes.
+      await __drainForTests();
       vi.mocked(peerFetch).mockClear();
       // Re-run on steady state — no push should fire because the set-diff
       // is empty and the for-loop body never runs.

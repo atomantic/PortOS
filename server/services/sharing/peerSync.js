@@ -1711,3 +1711,16 @@ export async function __resetForTests() {
   uninstallPeerSyncListener();
   await writeTail.catch(() => {});
 }
+
+/**
+ * Test-only: await the in-flight write/push tail WITHOUT resetting state or
+ * detaching listeners, so a test can deterministically settle the fire-and-forget
+ * pushes a `subscribePeer` kicks off before asserting on the network mock. Awaits
+ * twice because a push's `persistPushSuccess` only enqueues on `writeTail` after
+ * its `peerFetch` resolves — i.e. a tick after the subscribe returned.
+ */
+export async function __drainForTests() {
+  await writeTail.catch(() => {});
+  await new Promise((r) => setTimeout(r, 0));
+  await writeTail.catch(() => {});
+}
