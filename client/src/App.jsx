@@ -83,11 +83,12 @@ const PageLoader = () => (
   </div>
 );
 
-// Preserve query string when redirecting legacy media routes — Settings.jsx's
-// /image-gen?settings=1 chain depends on ?settings=1 reaching the new path.
+// Preserve query string + hash when redirecting legacy routes — Settings.jsx's
+// /image-gen?settings=1 chain depends on ?settings=1 reaching the new path, and
+// legacy universe bookmarks may carry a hash (e.g. `#canon`) we must not drop.
 function RedirectWithSearch({ to }) {
-  const { search } = useLocation();
-  return <Navigate to={`${to}${search}`} replace />;
+  const { search, hash } = useLocation();
+  return <Navigate to={`${to}${search}${hash}`} replace />;
 }
 
 // Canon page was folded into Universe Builder; redirect the old sub-route to
@@ -227,7 +228,7 @@ export default function App() {
             {/* Universes live at /universes (Create sidebar link). These
                 redirects keep legacy /media/universe-builder bookmarks working
                 after the MediaGen tab was removed. */}
-            <Route path="universe-builder" element={<Navigate to="/universes" replace />} />
+            <Route path="universe-builder" element={<RedirectWithSearch to="/universes" />} />
             <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} />} />
             <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} canon />} />
           </Route>
@@ -248,10 +249,10 @@ export default function App() {
           <Route path="universes/:universeId/canon" element={<CanonRedirect />} />
           {/* Legacy /universe-builder* → /universes* (route renamed when the
               index landed). Keeps old bookmarks + in-app deep-links working. */}
-          <Route path="universe-builder" element={<Navigate to="/universes" replace />} />
+          <Route path="universe-builder" element={<RedirectWithSearch to="/universes" />} />
           <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} canon />} />
           <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} />} />
-          <Route path="universe-builder/new" element={<Navigate to="/universes/new" replace />} />
+          <Route path="universe-builder/new" element={<RedirectWithSearch to="/universes/new" />} />
           <Route path="writers-room" element={<WritersRoom />} />
           <Route path="sharing" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />

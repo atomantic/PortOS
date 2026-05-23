@@ -89,12 +89,13 @@ export default function Universes() {
       return;
     }
     setArmedId(null);
-    const prior = universes;
     setUniverses((prev) => prev.filter((x) => x.id !== u.id));
     // silent: the custom catch below owns the error toast (CLAUDE.md).
     await deleteUniverse(u.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
-      setUniverses(prior);
+      // Roll back only this row (re-insert if still missing) so a concurrent
+      // delete's optimistic removal isn't clobbered by a stale full-list snapshot.
+      setUniverses((prev) => (prev.some((x) => x.id === u.id) ? prev : [...prev, u]));
     });
   };
 
