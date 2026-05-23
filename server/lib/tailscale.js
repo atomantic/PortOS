@@ -48,5 +48,21 @@ export function isSandboxedTailscale(binPath) {
 
 export function hasOnlySandboxedTailscale() {
   if (process.platform !== 'darwin') return false;
-  return findTailscale() === MACOS_TAILSCALE_APP_BUNDLE;
+  // True iff the MAS app bundle exists AND no unsandboxed binary is
+  // reachable anywhere. The previous implementation delegated to
+  // findTailscale which returns the FIRST candidate in TAILSCALE_CANDIDATES
+  // order — so an unsandboxed `tailscale` living in a non-standard $PATH
+  // directory (not in TAILSCALE_CANDIDATES) was missed entirely, and we
+  // misclassified the machine as sandboxed-only.
+  if (!existsSync(MACOS_TAILSCALE_APP_BUNDLE)) return false;
+  for (const p of TAILSCALE_CANDIDATES) {
+    if (p === MACOS_TAILSCALE_APP_BUNDLE) continue;
+    if (existsSync(p)) return false;
+  }
+  for (const dir of (process.env.PATH || '').split(delimiter)) {
+    if (!dir) continue;
+    const p = join(dir, TAILSCALE_BIN);
+    if (existsSync(p) && p !== MACOS_TAILSCALE_APP_BUNDLE) return false;
+  }
+  return true;
 }

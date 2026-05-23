@@ -112,7 +112,13 @@ export function sanitizeRecordForWire(kind, record) {
         if (kind === 'universe' || kind === 'series') {
           minimized.name = isNonEmptyStr(record.name) ? record.name : '_';
         } else if (kind === 'issue') {
-          if (record.seriesId) minimized.seriesId = record.seriesId;
+          // seriesId is REQUIRED by sanitizeIssue on the receiver. Without
+          // a placeholder, an ephemeral issue tombstone whose on-disk
+          // seriesId got cleared (rare, but possible via hand-edit or a
+          // partial-delete race) would be silently dropped on receive and
+          // the tombstone would never land — peer keeps the live issue
+          // copy forever.
+          minimized.seriesId = isNonEmptyStr(record.seriesId) ? record.seriesId : '_';
           minimized.title = isNonEmptyStr(record.title) ? record.title : '_';
         }
         return { ...minimized, ...sanitizeSoftDeleteFields(record) };
