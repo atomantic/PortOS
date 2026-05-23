@@ -225,9 +225,9 @@ export default function MediaLightbox({
           onTouchEnd={onTouchEnd}
         >
           {isVideo ? (
-            // playsInline keeps iOS Safari from auto-promoting autoplay video
-            // to a native fullscreen player — exiting that leaves the modal
-            // laid out as a tiny strip with no reachable close button.
+            /* playsInline keeps iOS Safari from auto-promoting autoplay video
+               to a native fullscreen player — exiting that leaves the modal
+               laid out as a tiny strip with no reachable close button. */
             <video src={item.downloadUrl} controls autoPlay loop playsInline className={imgMax} />
           ) : (
             <img src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} />
