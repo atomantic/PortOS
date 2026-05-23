@@ -496,9 +496,11 @@ After completing your work and before committing, run \`/simplify\` to review th
   // review inline — the system-side post-exit handler never fires for TUI.
   const reviewLoopSection = willReviewLoop && willOpenPR && !isTui ? `
 ## Code Review
-After your task completes, the system will spawn a follow-up agent that runs the review-and-fix loop until all configured reviewers are satisfied, then merges the PR. The follow-up uses **${taskReviewers.join(' → ')}** (in order). ${taskReviewers.includes(DEFAULT_REVIEWER)
-    ? 'For GitHub PRs the system will also request a native Copilot review automatically (skipped for GitLab MRs and other non-GitHub forges).'
-    : 'The follow-up agent will invoke the configured CLI reviewers directly to critique the PR diff, then iterate on their feedback.'} You do not need to open the PR, trigger the review, or address feedback yourself — focus on producing high-quality, well-tested code so the review passes go cleanly.
+After your task completes, the system will spawn a follow-up agent that runs the review-and-fix loop until all configured reviewers are satisfied, then merges the PR. The follow-up uses **${taskReviewers.join(' → ')}** (in order). ${taskReviewers[0] === DEFAULT_REVIEWER
+    ? 'Copilot leads the list, so for GitHub PRs the system pre-requests its initial review automatically (skipped on GitLab MRs and other non-GitHub forges); the follow-up then drives the rest of the chain.'
+    : taskReviewers.includes(DEFAULT_REVIEWER)
+      ? 'The follow-up invokes the CLI reviewers itself and requests Copilot at its turn (Copilot is GitHub-only, so it is skipped on non-GitHub forges).'
+      : 'The follow-up agent will invoke the configured CLI reviewers directly to critique the PR diff, then iterate on their feedback.'} You do not need to open the PR, trigger the review, or address feedback yourself — focus on producing high-quality, well-tested code so the review passes go cleanly.
 ` : '';
 
   // Build review-loop follow-up section. This is the agent that addresses Copilot's
