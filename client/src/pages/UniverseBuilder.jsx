@@ -40,7 +40,7 @@ import EntryCard from '../components/universe/EntryCard';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import MediaPreview from '../components/media/MediaPreview';
-import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { listImageGallery } from '../services/apiImageVideo';
@@ -753,7 +753,7 @@ export default function UniverseBuilder() {
   // as the History grid + Image Gen page. `onCleanComplete` splices the
   // cleaned image into the local gallery map so the next preview open
   // shows it immediately — no full refetch needed.
-  const previewActions = useImagePreviewActions({
+  const previewActions = useMediaPreviewActions({
     onCleanComplete: useCallback((cleaned) => {
       if (!cleaned?.filename) return;
       setGalleryByFilename((prev) => {

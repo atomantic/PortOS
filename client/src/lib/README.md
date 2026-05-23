@@ -44,6 +44,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata. |
 | `imageGenResolutions.js` | Shared resolution presets for image generation. |
 | `videoGenResolutions.js` | Shared resolution presets for video generation (companion to image side; LTX-2 latent-friendly sizes). |
+| `videoTilingOptions.js` | `VIDEO_TILING_OPTIONS` (the `<select>` rows) + `VIDEO_TILING_ENUM_SET` (the value-only Set). Single source consumed by `VideoGen.jsx` and the Remix URL builder in `useMediaPreviewActions`. Mirrors the server's `z.enum` in `server/routes/videoGen.js`. |
 
 ## Graph & sim
 

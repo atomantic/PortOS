@@ -2,12 +2,7 @@ import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
-
-// Video tiling enum — mirrors TILING_OPTIONS in pages/VideoGen.jsx and the
-// z.enum on the server in server/routes/videoGen.js. Hoisted to module scope
-// so it's not re-allocated on every Remix call. If a new tiling mode is added
-// to TILING_OPTIONS, also add it here (and to the server enum).
-const VIDEO_TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
+import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
 /**
  * Shared MediaPreview / MediaLightbox action handlers. The same four
@@ -30,7 +25,7 @@ const VIDEO_TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
  *
  * Returns the four handlers shaped for direct use as MediaPreview props.
  */
-export default function useImagePreviewActions({ onCleanComplete = null } = {}) {
+export default function useMediaPreviewActions({ onCleanComplete = null } = {}) {
   const navigate = useNavigate();
 
   // Remix: hand the prompt + render settings to the source-kind's gen page
@@ -62,7 +57,7 @@ export default function useImagePreviewActions({ onCleanComplete = null } = {}) 
       // tiling must match the server's enum. Legacy sidecars sometimes store
       // a boolean here — pass through only known-good string values so the
       // remixed POST doesn't 400 on /api/video-gen validation.
-      if (typeof raw.tiling === 'string' && VIDEO_TILING_ENUM.has(raw.tiling)) {
+      if (typeof raw.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(raw.tiling)) {
         params.set('tiling', raw.tiling);
       }
       const disableAudio = raw.disableAudio ?? raw.disable_audio;

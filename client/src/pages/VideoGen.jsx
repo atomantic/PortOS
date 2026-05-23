@@ -54,6 +54,7 @@ import {
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
+import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
@@ -64,16 +65,6 @@ import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 // see the hint under the Frames dropdown.
 const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481];
 const FPS_OPTIONS = [16, 24, 30];
-const TILING_OPTIONS = [
-  { value: 'auto', label: 'Auto (recommended)' },
-  { value: 'none', label: 'None (fastest, more VRAM)' },
-  { value: 'spatial', label: 'Spatial only' },
-  { value: 'temporal', label: 'Temporal only' },
-];
-// Derive the valid-enum set from TILING_OPTIONS so adding a new option in one
-// place automatically flows through the remix-prefill / handleRemixVideo
-// guards. Keeps client and server (videoGen.js z.enum) in sync via the UI.
-const TILING_ENUM_SET = new Set(TILING_OPTIONS.map((o) => o.value));
 
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
@@ -209,14 +200,15 @@ export default function VideoGen() {
     // not truthiness, so "0" round-trips through Remix correctly.
     if (get('guidanceScale') != null && get('guidanceScale') !== '') setGuidanceScale(get('guidanceScale'));
     // tiling: URL params are user-controlled; only accept values defined in
-    // TILING_OPTIONS so a hand-edited URL or stale link can't push the <select>
-    // into an invalid state and 400 the next POST.
+    // VIDEO_TILING_OPTIONS so a hand-edited URL or stale link can't push the
+    // <select> into an invalid state and 400 the next POST.
     const urlTiling = get('tiling');
-    if (urlTiling && TILING_ENUM_SET.has(urlTiling)) setTiling(urlTiling);
-    // disableAudio is a boolean; explicitly set to false when the URL says so
-    // (or omits the key, which means "default off"). Without this, the toggle
-    // sticks ON across remixes of clips that had audio.
-    setDisableAudio(get('disableAudio') === '1');
+    if (urlTiling && VIDEO_TILING_ENUM_SET.has(urlTiling)) setTiling(urlTiling);
+    // disableAudio is a boolean; accept the common encodings a hand-edited URL
+    // might carry ('1' from our own Remix builder, 'true' from a manual share).
+    // Anything else (absent, '0', 'false', garbage) means "default off".
+    const audioParam = (get('disableAudio') || '').toLowerCase();
+    setDisableAudio(audioParam === '1' || audioParam === 'true');
     const stripKeys = [...remixGateKeys, 'prompt', 'negativePrompt', 'w', 'h'];
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
@@ -338,7 +330,7 @@ export default function VideoGen() {
     // prompt: always set explicitly. Legacy entries can be missing `prompt`
     // (normalizeVideo surfaces them as '(no prompt)') — clear the form instead
     // of leaving whatever the user previously typed, matching the
-    // useImagePreviewActions.handleRemix '(no prompt)' filter.
+    // useMediaPreviewActions.handleRemix '(no prompt)' filter.
     const nextPrompt = item.prompt && item.prompt !== '(no prompt)' ? item.prompt : '';
     setPrompt(nextPrompt);
     // negativePrompt: always set explicitly so remixing a clip with no
@@ -365,10 +357,10 @@ export default function VideoGen() {
     setSteps(item.steps != null && item.steps !== '' ? String(item.steps) : '');
     const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
     setGuidanceScale(guidance != null && guidance !== '' ? String(guidance) : '');
-    // tiling must match the TILING_OPTIONS enum. Legacy sidecars sometimes
+    // tiling must match the VIDEO_TILING_OPTIONS enum. Legacy sidecars sometimes
     // store a boolean here — silently ignore unknown values so the <select>
     // stays valid and the next POST doesn't 400.
-    if (typeof item.tiling === 'string' && TILING_ENUM_SET.has(item.tiling)) setTiling(item.tiling);
+    if (typeof item.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(item.tiling)) setTiling(item.tiling);
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
@@ -1289,7 +1281,7 @@ export default function VideoGen() {
                 onChange={(e) => setTiling(e.target.value)}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
-                {TILING_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {VIDEO_TILING_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </div>
 

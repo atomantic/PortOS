@@ -9,7 +9,7 @@ import { computeImageVariantGroup } from './variants';
 //
 // MediaLightbox already gates SendToVideo / Clean on `!isVideo` and
 // Continue on `isVideo`. Remix works for both kinds — callers should
-// dispatch by `item.kind` inside their handler (see useImagePreviewActions).
+// dispatch by `item.kind` inside their handler (see useMediaPreviewActions).
 //
 // Nav props win over handlers (spread order) so a stray `onPrevious`/`onNext`
 // in a caller can't accidentally shadow the wrapper's navigation contract.
