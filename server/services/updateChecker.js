@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { readJSONFile, PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
+import { getOriginInfo, UPSTREAM_OWNER, UPSTREAM_REPO, UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import { execGh } from './github.js';
 
 const UPDATE_FILE = join(PATHS.data, 'update.json');
@@ -22,7 +23,8 @@ const defaultState = () => ({
   ignoredVersions: [],
   updateInProgress: false,
   updateStartedAt: null,
-  lastUpdateResult: null
+  lastUpdateResult: null,
+  lastForkSync: null
 });
 
 /**
@@ -106,14 +108,78 @@ async function saveState(state) {
 }
 
 /**
+ * Inspect the local git origin remote and return its classification.
+ * Pure read — never mutates state.
+ */
+export async function getRemoteInfo() {
+  return getOriginInfo();
+}
+
+/**
+ * Sync the user's GitHub fork from the upstream atomantic/PortOS repo via
+ * `gh repo sync owner/fork`. Default fast-forward only — `gh` refuses to
+ * overwrite divergent fork history unless `--force` is passed, so this is
+ * non-destructive by design.
+ *
+ * Returns { synced, alreadyUpToDate, fullName, source, mergedBranch, message }.
+ * Throws ServerError-shaped errors when the fork has diverged or `gh` is
+ * unavailable so the route can surface the message to the user.
+ */
+export async function syncFork({ branch } = {}) {
+  const info = await getRemoteInfo();
+  if (!info.hasOrigin) {
+    throw new Error('No git origin remote — cannot sync fork.');
+  }
+  if (!info.isGithub) {
+    throw new Error(`Origin remote is not on GitHub (host: ${info.host || 'unknown'}). Fork sync is GitHub-only.`);
+  }
+  if (info.isUpstream) {
+    throw new Error('Origin is already the upstream atomantic/PortOS — nothing to sync.');
+  }
+
+  const targetBranch = branch || 'main';
+  const args = ['repo', 'sync', info.fullName, '--source', UPSTREAM_FULL_NAME, '--branch', targetBranch];
+  const stdout = await execGh(args);
+
+  // `gh repo sync` prints e.g. "✓ Synced the "main" branch from atomantic/PortOS to owner/PortOS"
+  // or "✓ Repository is up to date with atomantic/PortOS"
+  const alreadyUpToDate = /up to date/i.test(stdout);
+
+  await withLock(async () => {
+    const state = await loadState();
+    state.lastForkSync = {
+      fullName: info.fullName,
+      source: UPSTREAM_FULL_NAME,
+      branch: targetBranch,
+      alreadyUpToDate,
+      syncedAt: new Date().toISOString(),
+      message: stdout.trim()
+    };
+    await saveState(state);
+  });
+
+  return {
+    synced: true,
+    alreadyUpToDate,
+    fullName: info.fullName,
+    source: UPSTREAM_FULL_NAME,
+    mergedBranch: targetBranch,
+    message: stdout.trim()
+  };
+}
+
+/**
  * Check GitHub for the latest release and compare to current version.
+ * Always polls the upstream atomantic/PortOS releases so users running
+ * from a fork still see upstream version availability. Pull/checkout
+ * behavior is unchanged — update.sh still pulls from origin.
  */
 export async function checkForUpdate() {
   return withLock(async () => {
     const state = await loadState();
     const currentVersion = await getCurrentVersion();
 
-    const raw = await execGh(['api', 'repos/atomantic/PortOS/releases/latest']);
+    const raw = await execGh(['api', `repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest`]);
     let data;
     try { data = JSON.parse(raw); } catch { throw new Error(`Failed to parse GitHub release response: ${raw.slice(0, 200)}`); }
     const release = {
@@ -156,6 +222,9 @@ export async function checkForUpdate() {
 
 /**
  * Get the current update status without checking GitHub.
+ * Includes `remoteInfo` so the UI can render fork-aware messaging.
+ * Remote inspection is best-effort — a failure (no git, no origin, etc.)
+ * never blocks the status response.
  */
 export async function getUpdateStatus() {
   const state = await loadState();
@@ -170,11 +239,14 @@ export async function getUpdateStatus() {
   const isIgnored = latestVersion
     ? state.ignoredVersions.includes(latestVersion)
     : false;
+  const remoteInfo = await getRemoteInfo().catch(() => null);
 
   return {
     currentVersion,
     ...state,
-    updateAvailable: isNewer && !isIgnored
+    updateAvailable: isNewer && !isIgnored,
+    remoteInfo,
+    upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME }
   };
 }
 

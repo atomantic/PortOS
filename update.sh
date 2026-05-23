@@ -68,6 +68,10 @@ safe_install() {
 # the update completes (we don't auto-pop because the rest of the script
 # needs to keep running with main's contents).
 step "git-pull" "running" "Pulling latest changes..."
+origin_url=$(git remote get-url origin 2>/dev/null || echo "")
+if [ -n "$origin_url" ]; then
+  log "🌐 Pulling from origin: $origin_url"
+fi
 current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
 stashed_for_branch=""
 stashed_for_commit=""

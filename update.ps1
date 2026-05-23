@@ -103,6 +103,10 @@ function Safe-Install {
 # the update completes (we don't auto-pop because the rest of the script
 # needs to keep running with main's contents).
 Step "git-pull" "running" "Pulling latest changes..."
+$originUrl = git remote get-url origin 2>$null
+if ($originUrl) {
+    Write-SafeHost "🌐 Pulling from origin: $originUrl"
+}
 $headRef = git symbolic-ref -q HEAD 2>$null
 $currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
 $stashedForBranch = ""
