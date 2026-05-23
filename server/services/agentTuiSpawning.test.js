@@ -71,7 +71,18 @@ vi.mock('./agentState.js', () => ({
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   appendFile: vi.fn().mockResolvedValue(undefined),
-  rm: vi.fn().mockResolvedValue(undefined)
+  readFile: vi.fn().mockResolvedValue(''),
+  rm: vi.fn().mockResolvedValue(undefined),
+  // raw.txt tail-read for failure analysis. The default stat → open/read
+  // chain reports a zero-byte file so non-tail-read tests don't accidentally
+  // exercise the read path. The two tail-read tests below override stat
+  // and open via mockResolvedValueOnce to assert the IO contract on the
+  // failure / success finalize branches.
+  stat: vi.fn().mockResolvedValue({ size: 0 }),
+  open: vi.fn().mockResolvedValue({
+    read: vi.fn().mockResolvedValue({ bytesRead: 0 }),
+    close: vi.fn().mockResolvedValue(undefined),
+  }),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -86,20 +97,21 @@ vi.mock('../lib/providerModels.js', () => ({
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
-// inputs. Real values (640 KB raw, 10 MB output) would force tests to push
-// millions of bytes through the spawner; the wiring under test is identical.
-// OUTPUT_BUFFER_HEADROOM is intentionally 1 byte so ANY appendLine call
-// trips it — otherwise the output-buffer overflow test would assert on the
-// byte count of the two spawn-startup string literals (which would silently
-// stop tripping if those strings change).
+// inputs. Real values (10MB output, 256MB raw spool) would force tests to
+// push millions of bytes through the spawner; the wiring under test is
+// identical at any cap. OUTPUT_BUFFER_HEADROOM is intentionally 1 byte so
+// ANY appendLine call trips it — otherwise the output-buffer overflow test
+// would assert on the byte count of the two spawn-startup string literals
+// (which would silently stop tripping if those strings change). The raw
+// spool cap is shrunk to 100 bytes so the disk-safety-valve test exercises
+// the truncation path without allocating hundreds of MB.
 vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     OUTPUT_BUFFER_HEADROOM: 1,
     OUTPUT_BUFFER_CAP: 1,
-    RAW_BUFFER_HEADROOM: 200,
-    RAW_BUFFER_CAP: 100,
+    RAW_SPOOL_MAX_BYTES: 100,
   };
 });
 
@@ -429,54 +441,45 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  // ── 6. Raw-buffer truncation warning + metadata flag ────────────────────────
-  // Mirrors `outputBufferTruncated` in tuiPromptRunner.js — long-running TUI
-  // agents whose raw PTY stream overflows RAW_BUFFER_HEADROOM silently dropped
-  // the head before this change; analyzeAgentFailure then operated on a slice
-  // missing the failure tail with no signal that anything was clipped.
-  it('rawBuffer overflow: warns once and writes rawBufferTruncated:true to agent metadata', async () => {
+  // ── 6. Raw PTY stream spools to disk (no in-memory cap, no in-memory warn) ─
+  // Raw chunks are written to raw.txt via the debounced flush pipeline so
+  // memory stays bounded regardless of run length. analyzeAgentFailure
+  // reads the file on failure. No "raw PTY buffer exceeded" warn and no
+  // rawBufferTruncated metadata flag — those were signals of the OLD
+  // in-memory cap. Disk-side truncation has its own warn / flag covered
+  // separately by test 8b.
+  it('raw PTY bytes spool to raw.txt without the old in-memory truncation signals', async () => {
+    const { appendFile } = await import('fs/promises');
     runSpawn();
     await flushMicrotasks();
 
-    // Feed a chunk larger than the mocked 200-byte HEADROOM in one go so the
-    // raw buffer trips on the first handleData call.
-    await capturedOnData(Buffer.from('x'.repeat(300)));
+    // Small chunks that stay under the mocked 100-byte raw-spool cap so this
+    // test exercises the normal appendFile path. The disk-safety-valve path
+    // (writeFile when over cap) is covered by test 8b.
+    await capturedOnData(Buffer.from('hello '));
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('world\n'));
     await flushMicrotasks();
 
-    // Second chunk: should NOT emit a second warn or metadata write — the
-    // flag is a once-per-run signal, not a per-overflow counter.
-    await capturedOnData(Buffer.from('x'.repeat(300)));
+    // Fire the 250ms debounced raw flush.
+    await vi.advanceTimersByTimeAsync(300);
     await flushMicrotasks();
 
-    const truncWarns = warnSpy.mock.calls.filter(args =>
+    const inMemTruncWarns = warnSpy.mock.calls.filter(args =>
       typeof args[0] === 'string' && args[0].includes('raw PTY buffer exceeded')
     );
-    expect(truncWarns).toHaveLength(1);
+    expect(inMemTruncWarns).toHaveLength(0);
 
-    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
+    const inMemTruncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
       ([_id, payload]) => payload?.metadata?.rawBufferTruncated === true
     );
-    expect(truncMetaCalls).toHaveLength(1);
-    expect(truncMetaCalls[0][0]).toBe('agent-1');
-  });
+    expect(inMemTruncMetaCalls).toHaveLength(0);
 
-  it('rawBuffer below threshold: no truncation warn or metadata flag', async () => {
-    runSpawn();
-    await flushMicrotasks();
-
-    // 150 bytes is under the mocked 200-byte HEADROOM.
-    await capturedOnData(Buffer.from('x'.repeat(150)));
-    await flushMicrotasks();
-
-    const truncWarns = warnSpy.mock.calls.filter(args =>
-      typeof args[0] === 'string' && args[0].includes('raw PTY buffer exceeded')
+    // raw.txt got the chunks via the batched appendFile flush.
+    const rawAppendCalls = vi.mocked(appendFile).mock.calls.filter(
+      ([path]) => typeof path === 'string' && path.endsWith('raw.txt')
     );
-    expect(truncWarns).toHaveLength(0);
-
-    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
-      ([_id, payload]) => payload?.metadata?.rawBufferTruncated === true
-    );
-    expect(truncMetaCalls).toHaveLength(0);
+    expect(rawAppendCalls.length).toBeGreaterThan(0);
   });
 
   // ── 7. Output-buffer truncation warning + metadata flag ─────────────────────
@@ -499,5 +502,127 @@ describe('spawnTuiAgent runtime', () => {
     );
     expect(truncMetaCalls).toHaveLength(1);
     expect(truncMetaCalls[0][0]).toBe('agent-1');
+  });
+
+  // ── 8. Failure-path tail-read of raw.txt ────────────────────────────────────
+  // analyzeAgentFailure needs the recent PTY tail; finalize MUST read it from
+  // raw.txt via readFileTail (NOT readFile, which would load the whole spool).
+  // This test wires stat to report a >1MB spool and asserts the tail-read
+  // pattern: stat → open → read at offset (size - RAW_TAIL_ANALYSIS_BYTES).
+  it('failure finalize: reads only the tail of raw.txt for analyzeAgentFailure', async () => {
+    const fsPromises = await import('fs/promises');
+    const RAW_TAIL_BYTES = 1024 * 1024;
+    const SPOOL_SIZE = 5 * 1024 * 1024;   // 5MB on disk
+
+    vi.mocked(fsPromises.stat).mockResolvedValueOnce({ size: SPOOL_SIZE });
+    const readMock = vi.fn().mockResolvedValue({ bytesRead: RAW_TAIL_BYTES });
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(fsPromises.open).mockResolvedValueOnce({ read: readMock, close: closeMock });
+
+    const spawnPromise = runSpawn();
+    await flushMicrotasks();
+
+    // Trigger a failure finalize via the shell-exit path.
+    await capturedOnExit({ exitCode: 1, killed: false });
+    await flushMicrotasks();
+    await spawnPromise;
+
+    const statCalls = vi.mocked(fsPromises.stat).mock.calls.filter(
+      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
+    );
+    expect(statCalls.length).toBeGreaterThan(0);
+
+    const openCalls = vi.mocked(fsPromises.open).mock.calls.filter(
+      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
+    );
+    expect(openCalls.length).toBeGreaterThan(0);
+
+    // read() must be called with offset = size - tailBytes (5MB - 1MB = 4MB)
+    // so analyzeAgentFailure sees only the most-recent 1MB, not the full spool.
+    expect(readMock).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      0,
+      RAW_TAIL_BYTES,
+      SPOOL_SIZE - RAW_TAIL_BYTES
+    );
+    expect(closeMock).toHaveBeenCalled();
+  });
+
+  // ── 8b. Disk safety valve ───────────────────────────────────────────────────
+  // The raw spool truncates rather than appends once it crosses
+  // RAW_SPOOL_MAX_BYTES so a runaway agent can't fill the volume. The mock
+  // above shrinks the cap to 100 bytes so we can trip it with two ~80-byte
+  // chunks instead of pushing hundreds of MB through the spawner. The wiring
+  // under test (Buffer.byteLength count, writeFile vs appendFile dispatch,
+  // once-per-run warn + metadata flag) is identical at any cap.
+  it('raw spool: truncates instead of appending once it crosses the cap', async () => {
+    const fsPromises = await import('fs/promises');
+    runSpawn();
+    await flushMicrotasks();
+
+    // First chunk (80 bytes) fits under the 100-byte cap → appendFile.
+    await capturedOnData(Buffer.alloc(80, 0x61));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+
+    // Second chunk (80 bytes) would push total to 160 > 100 → writeFile.
+    await capturedOnData(Buffer.alloc(80, 0x62));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+
+    const writeFileRawCalls = vi.mocked(fsPromises.writeFile).mock.calls.filter(
+      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
+    );
+    expect(writeFileRawCalls.length).toBeGreaterThan(0);
+
+    const truncWarns = warnSpy.mock.calls.filter(args =>
+      typeof args[0] === 'string' && args[0].includes('raw PTY spool reached')
+    );
+    expect(truncWarns).toHaveLength(1);
+
+    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
+      ([_id, payload]) => payload?.metadata?.rawSpoolTruncated === true
+    );
+    expect(truncMetaCalls).toHaveLength(1);
+    expect(truncMetaCalls[0][0]).toBe('agent-1');
+  });
+
+  // ── 9. Success-path skips the tail read ─────────────────────────────────────
+  // Successful finalize must not touch raw.txt — that's what makes the
+  // disk-spool's bounded-memory guarantee hold for healthy long runs.
+  it('success finalize: skips raw.txt tail read entirely', async () => {
+    const fsPromises = await import('fs/promises');
+
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn();
+    await flushMicrotasks();
+
+    // Drive the idle-complete success path (mirrors test 1).
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Agent post-paste activity\n'));
+    await vi.advanceTimersByTimeAsync(21000);
+    vi.useRealTimers();
+    await completeDone;
+
+    // No raw.txt stat / open should fire on the success path. (The mock
+    // for fs.promises.stat / open was reset between tests by clearAllMocks,
+    // so any calls here are from this run.)
+    const statCalls = vi.mocked(fsPromises.stat).mock.calls.filter(
+      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
+    );
+    expect(statCalls).toHaveLength(0);
+
+    const openCalls = vi.mocked(fsPromises.open).mock.calls.filter(
+      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
+    );
+    expect(openCalls).toHaveLength(0);
   });
 });

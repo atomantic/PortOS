@@ -14,7 +14,7 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
-import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   listVideoHistory, deleteVideoHistoryItem, stitchVideos,
@@ -150,11 +150,11 @@ export default function MediaHistory() {
 
   // Remix / SendToVideo / Continue / Clean all share a single implementation
   // with MediaCollectionDetail, ImageGen, and the Universe Builder lightbox
-  // via `useImagePreviewActions`. Only the post-clean side effect (splicing
+  // via `useMediaPreviewActions`. Only the post-clean side effect (splicing
   // the cleaned image to the top of the local list) is page-specific —
   // wired through `onCleanComplete` so the cleaned record lands in `items`
   // without a full gallery refetch.
-  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useImagePreviewActions({
+  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
     onCleanComplete: (cleaned) => {
       const normalized = normalizeImage(cleaned);
       setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);

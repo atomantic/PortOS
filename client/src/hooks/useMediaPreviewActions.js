@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
+import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
 /**
  * Shared MediaPreview / MediaLightbox action handlers. The same four
@@ -24,15 +25,46 @@ import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
  *
  * Returns the four handlers shaped for direct use as MediaPreview props.
  */
-export default function useImagePreviewActions({ onCleanComplete = null } = {}) {
+export default function useMediaPreviewActions({ onCleanComplete = null } = {}) {
   const navigate = useNavigate();
 
-  // Remix: hand the prompt + render settings to the Image Gen page so the
-  // user can iterate. `(no prompt)` is the metadata-sidecar placeholder for
-  // images that lost their prompt — skip it so the next render doesn't
+  // Remix: hand the prompt + render settings to the source-kind's gen page
+  // so the user can iterate. `(no prompt)` is the metadata-sidecar placeholder
+  // for items that lost their prompt — skip it so the next render doesn't
   // start with that literal as the user's prompt.
+  //
+  // Dispatches by item.kind: images go to /media/image (with image-shaped
+  // params), videos go to /media/video (with video-shaped params — frames,
+  // fps, tiling, etc.). Video remix lands the user in 'text' mode with all
+  // params filled; they can switch to image/extend mode and pick a source.
   const handleRemix = useCallback((item) => {
     if (!item) return;
+    if (item.kind === 'video') {
+      const params = new URLSearchParams();
+      if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
+      if (item.negativePrompt) params.set('negativePrompt', item.negativePrompt);
+      if (item.modelId) params.set('modelId', item.modelId);
+      if (item.width) params.set('w', String(item.width));
+      if (item.height) params.set('h', String(item.height));
+      if (item.numFrames) params.set('numFrames', String(item.numFrames));
+      if (item.fps) params.set('fps', String(item.fps));
+      const raw = item.raw || {};
+      const seed = raw.seed;
+      if (seed != null && seed !== '') params.set('seed', String(seed));
+      if (raw.steps != null && raw.steps !== '') params.set('steps', String(raw.steps));
+      const guidance = raw.guidanceScale ?? raw.guidance_scale ?? raw.guidance;
+      if (guidance != null && guidance !== '') params.set('guidanceScale', String(guidance));
+      // tiling must match the server's enum. Legacy sidecars sometimes store
+      // a boolean here — pass through only known-good string values so the
+      // remixed POST doesn't 400 on /api/video-gen validation.
+      if (typeof raw.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(raw.tiling)) {
+        params.set('tiling', raw.tiling);
+      }
+      const disableAudio = raw.disableAudio ?? raw.disable_audio;
+      if (disableAudio === true) params.set('disableAudio', '1');
+      navigate(`/media/video?${params}`);
+      return;
+    }
     const params = new URLSearchParams();
     if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
     if (item.negativePrompt) params.set('negativePrompt', item.negativePrompt);

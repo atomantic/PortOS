@@ -156,6 +156,8 @@ const createSchema = z.object({
   characters: canonArrayField,
   places: canonArrayField,
   objects: canonArrayField,
+  // Local-only "don't sync to peers" marker — see sanitizeRecordForWire.
+  ephemeral: z.boolean().optional(),
 });
 // `origin` is a share-bucket provenance block written by the importer + cleared
 // to null by the user; structurally an object or null.
@@ -185,6 +187,7 @@ const patchSchema = z.object({
   places: canonArrayField,
   objects: canonArrayField,
   origin: originField,
+  ephemeral: z.boolean().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 const expandSchema = z.object({

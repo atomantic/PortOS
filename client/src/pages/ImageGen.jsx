@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -44,8 +45,6 @@ import {
   buildFormData, listMediaJobs,
 } from '../services/api';
 import { safeParseJSON } from '../lib/genUtils';
-
-const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
 // uploaded File + a 0..1 strength weight. Slots are positional so the
@@ -132,7 +131,7 @@ export default function ImageGen() {
   const [availableBackends, setAvailableBackends] = useState([]);
 
   const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE);
+  const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE_PROMPT);
   const [stylePreset, setStylePreset] = useState(null);
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(1024);

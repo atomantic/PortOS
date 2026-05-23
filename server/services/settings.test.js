@@ -148,4 +148,146 @@ describe('settings.js', () => {
       expect(result).toEqual({ theme: 'dark' });
     });
   });
+
+  describe('MortalLoom store key pollution guard', () => {
+    it('strips MortalLoom-store top-level keys on read', async () => {
+      // Simulates the historical corruption: settings.json contains both
+      // legitimate settings and MortalLoom store arrays.
+      const polluted = {
+        theme: 'dark',
+        timezone: 'UTC',
+        alcoholDrinks: [{ id: 'A', name: 'beer' }],
+        bloodTests: [{ id: 'B' }],
+        goals: [{ id: 'G' }],
+        profile: { name: 'X' },
+        mortalloom: { enabled: true }
+      };
+      readFile.mockResolvedValue(JSON.stringify(polluted));
+
+      const result = await getSettings();
+
+      expect(result).toEqual({
+        theme: 'dark',
+        timezone: 'UTC',
+        mortalloom: { enabled: true }
+      });
+      expect(result.alcoholDrinks).toBeUndefined();
+      expect(result.goals).toBeUndefined();
+      expect(result.profile).toBeUndefined();
+    });
+
+    it('strips MortalLoom-store keys before writing', async () => {
+      const existing = { theme: 'dark' };
+      readFile.mockResolvedValue(JSON.stringify(existing));
+      writeFile.mockResolvedValue();
+
+      // Caller accidentally passes a payload with store keys.
+      await updateSettings({ alcoholDrinks: [], goals: [], voice: { enabled: true } });
+
+      const [, content] = writeFile.mock.calls[0];
+      const written = JSON.parse(content);
+      expect(written).toEqual({ theme: 'dark', voice: { enabled: true } });
+      expect(written.alcoholDrinks).toBeUndefined();
+      expect(written.goals).toBeUndefined();
+    });
+
+    it('auto-heals corrupted settings.json on next save', async () => {
+      // Polluted file on disk.
+      const polluted = {
+        theme: 'dark',
+        alcoholDrinks: [{ id: 'A' }],
+        bloodTests: [{ id: 'B' }],
+        habits: [{ id: 'H' }]
+      };
+      readFile.mockResolvedValue(JSON.stringify(polluted));
+      writeFile.mockResolvedValue();
+
+      // Any save (even unrelated) cleans up the file.
+      await updateSettings({ timezone: 'UTC' });
+
+      const [, content] = writeFile.mock.calls[0];
+      const written = JSON.parse(content);
+      expect(written).toEqual({ theme: 'dark', timezone: 'UTC' });
+    });
+
+    it('preserves legitimate mortalloom config key (not in store-key list)', async () => {
+      readFile.mockResolvedValue('{}');
+      writeFile.mockResolvedValue();
+
+      await updateSettings({ mortalloom: { enabled: true, path: '/foo' } });
+
+      const [, content] = writeFile.mock.calls[0];
+      const written = JSON.parse(content);
+      expect(written.mortalloom).toEqual({ enabled: true, path: '/foo' });
+    });
+
+    it('reads are silent but auto-heal write announces the strip', async () => {
+      // Pollution sitting on disk.
+      const polluted = {
+        theme: 'dark',
+        alcoholDrinks: [{ id: 'A' }]
+      };
+      readFile.mockResolvedValue(JSON.stringify(polluted));
+      writeFile.mockResolvedValue();
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Pure read — must NOT log (otherwise every GET /api/settings spams).
+      await getSettings();
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      // Write path — the auto-heal must surface a single warning so the
+      // operator sees the file is being cleaned.
+      await updateSettings({ timezone: 'UTC' });
+      expect(warnSpy).toHaveBeenCalled();
+      const firstCallArg = warnSpy.mock.calls[0][0];
+      expect(firstCallArg).toContain('alcoholDrinks');
+
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn when writeFile throws (no misleading log for a write that did not happen)', async () => {
+      readFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
+      writeFile.mockRejectedValue(new Error('EROFS'));
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(updateSettings({ timezone: 'UTC' })).rejects.toThrow('EROFS');
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+
+    it('emits exactly one warning per updateSettings even when both disk AND patch are polluted', async () => {
+      // Disk pollution: alcoholDrinks. Patch pollution: goals. Spec: one log line.
+      readFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
+      writeFile.mockResolvedValue();
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await updateSettings({ goals: [], timezone: 'UTC' });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = warnSpy.mock.calls[0][0];
+      expect(msg).toContain('alcoholDrinks');
+      expect(msg).toContain('goals');
+
+      warnSpy.mockRestore();
+    });
+
+    it('drops __proto__ / constructor / prototype keys instead of mutating Object.prototype', async () => {
+      // A `__proto__` own property arrives via JSON.parse of a payload like
+      // `{"__proto__":{"polluted":true}}`. Without the guard, the cleaned-object
+      // rebuild would invoke the __proto__ setter.
+      const malicious = JSON.parse('{"theme":"dark","__proto__":{"polluted":true},"constructor":{"polluted":true}}');
+      readFile.mockResolvedValue(JSON.stringify(malicious));
+      writeFile.mockResolvedValue();
+
+      const result = await getSettings();
+
+      expect(result).toEqual({ theme: 'dark' });
+      // Confirm no prototype pollution — a fresh object must not see `polluted`.
+      expect({}.polluted).toBeUndefined();
+    });
+  });
 });

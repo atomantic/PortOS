@@ -53,6 +53,11 @@ export const RAW_BUFFER_CAP = 512 * 1024;
 export const RAW_BUFFER_HEADROOM = 640 * 1024;
 export const OUTPUT_BUFFER_CAP = 8 * 1024 * 1024;
 export const OUTPUT_BUFFER_HEADROOM = 10 * 1024 * 1024;
+// Disk safety valve for the agent-mode raw.txt spool. Counted as UTF-8 bytes
+// actually written. Tests can override this via the same vi.mock pattern that
+// shrinks OUTPUT_BUFFER_HEADROOM, so the cap-overflow test doesn't have to
+// push hundreds of MB through the spawner to exercise the truncation path.
+export const RAW_SPOOL_MAX_BYTES = 256 * 1024 * 1024;
 
 // ─── Command + args helpers ───────────────────────────────────────────────
 

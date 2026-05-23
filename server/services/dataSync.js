@@ -11,9 +11,11 @@ import { stat } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { mergeUniversesFromSync } from './universeBuilder.js';
-import { mergeSeriesFromSync } from './pipeline/series.js';
+import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
+import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync } from './pipeline/issues.js';
+import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
+import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
 
@@ -27,6 +29,7 @@ const MEATSPACE_DIR = PATHS.meatspace;
 const PIPELINE_SERIES_FILE = join(PATHS.data, 'pipeline-series.json');
 const PIPELINE_ISSUES_FILE = join(PATHS.data, 'pipeline-issues.json');
 const UNIVERSE_BUILDER_FILE = join(PATHS.data, 'universe-builder.json');
+const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -346,11 +349,12 @@ async function applyMeatspaceRemote(remoteData) {
 // --- Category: Universe ---
 
 async function getUniverseSnapshot() {
-  const data = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
-  // Skip `runs[]` — that's local LLM run history (transcripts, ephemeral),
-  // not user-edited universe state. Each peer keeps its own history.
-  const universesOnly = { universes: data.universes || [] };
-  return { data: universesOnly, checksum: computeChecksum(universesOnly) };
+  const raw = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
+  // Wire-projection lives in `server/lib/syncWire.js` so the new per-record
+  // peer-sync push agrees on what to strip (currently: top-level `runs[]`,
+  // which is local LLM run history per peer).
+  const { data } = sanitizeStateForWire('universe', raw);
+  return { data, checksum: computeChecksum(data) };
 }
 
 async function applyUniverseRemote(remoteData) {
@@ -375,10 +379,11 @@ async function getPipelineSnapshot() {
     readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
     readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
   ]);
-  const data = {
-    series: seriesFile.series || [],
-    issues: issuesFile.issues || [],
-  };
+  // Wire-projection lives in `server/lib/syncWire.js` — see getUniverseSnapshot.
+  const { data } = sanitizeStateForWire('pipeline', {
+    series: seriesFile.series,
+    issues: issuesFile.issues,
+  });
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -413,6 +418,101 @@ async function applyPipelineRemote(remoteData) {
   };
 }
 
+// --- Category: Media Collections ---
+
+// Per-universe / per-series buckets of image + video refs. The collection
+// records carry the linkage (universeId / seriesId) and an items[] array of
+// `{ kind, ref, addedAt }` rows. We sync the JSON itself here (union of items
+// + LWW on scalars) so collection edits propagate even when the linked
+// universe / series record itself didn't move. The per-record push pipeline
+// (peerSync.js) ALSO bundles a record's linked collection in its push payload
+// so image bytes flow via the existing asset-pull worker — the snapshot path
+// covers the JSON, the push path covers the image bytes.
+
+async function getMediaCollectionsSnapshot() {
+  // listCollections re-reads + sanitizes from disk; we don't cache here since
+  // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
+  // circuits the I/O when the file hasn't moved.
+  const collections = await listCollections();
+  // Filter out collections whose linked record (universe or series) is marked
+  // ephemeral. Mirrors the per-record push pipeline's local-ephemeral guard
+  // (see peerSync.js applyIncomingPush) — without this filter, the
+  // mediaCollections snapshot category would still leak the collection name +
+  // item refs for records the user explicitly opted out of sync. Tombstoned
+  // ephemeral parents also drop their collection (sender wouldn't bundle them
+  // anyway, but the snapshot path is independent).
+  const ephemeralUniverseIds = new Set(
+    (await listUniverses({ includeDeleted: true }).catch(() => []))
+      .filter((u) => u?.ephemeral === true)
+      .map((u) => u.id),
+  );
+  const ephemeralSeriesIds = new Set(
+    (await listSeries({ includeDeleted: true }).catch(() => []))
+      .filter((s) => s?.ephemeral === true)
+      .map((s) => s.id),
+  );
+  const filtered = collections.filter((c) => {
+    if (c.universeId && ephemeralUniverseIds.has(c.universeId)) return false;
+    if (c.seriesId && ephemeralSeriesIds.has(c.seriesId)) return false;
+    return true;
+  });
+  // Canonicalize ordering for the wire so two peers holding identical sets
+  // produce identical checksums regardless of write history. Without this
+  // sort, on-disk order is insertion-order — peer A and peer B can land the
+  // same items in different orders and end up with permanently different
+  // checksums, which the UI's cursor-vs-remote comparison reads as "behind"
+  // forever. Sort collections by id (stable, unique) and each collection's
+  // items by `<kind>:<ref>` (the same key used for set membership in
+  // `mergeCollectionItems`).
+  const canonical = filtered
+    .map((c) => ({
+      ...c,
+      items: [...(c.items || [])].sort((a, b) => itemKey(a).localeCompare(itemKey(b))),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const data = { collections: canonical };
+  return { data, checksum: computeChecksum(data) };
+}
+
+async function applyMediaCollectionsRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+  // Symmetric receiver-side guard. The sender filters collections linked
+  // to local-ephemeral parents in getMediaCollectionsSnapshot, but a
+  // peer running an older PortOS (or any non-conformant client) could
+  // still ship them. Without this filter, an incoming snapshot could
+  // mutate item refs or scalars on a collection whose universe/series
+  // the user explicitly marked private.
+  const incoming = Array.isArray(remoteData.collections) ? remoteData.collections : [];
+  // Build two filter sets per kind: ephemeral parents (privacy) AND
+  // tombstoned parents (cleanup integrity). The delete cascade unlinks
+  // its collection by clearing the parent id — a peer that still has
+  // the parent live could otherwise ship a newer collection snapshot
+  // with the old parent id and re-link the collection to our tombstone,
+  // undoing the cleanup.
+  const allUniverses = await listUniverses({ includeDeleted: true }).catch(() => []);
+  const allSeries = await listSeries({ includeDeleted: true }).catch(() => []);
+  const refusedUniverseIds = new Set(
+    allUniverses.filter((u) => u?.ephemeral === true || u?.deleted === true).map((u) => u.id),
+  );
+  const refusedSeriesIds = new Set(
+    allSeries.filter((s) => s?.ephemeral === true || s?.deleted === true).map((s) => s.id),
+  );
+  const filtered = incoming.filter((c) => {
+    if (c?.universeId && refusedUniverseIds.has(c.universeId)) return false;
+    if (c?.seriesId && refusedSeriesIds.has(c.seriesId)) return false;
+    return true;
+  });
+  // Routes through `mergeMediaCollectionsFromSync` so the read-modify-write
+  // runs INSIDE `serializeFileWrite` (same tail as addItem / removeItem /
+  // bulkUpdateCollectionItems) — a sync-driven write can't interleave with a
+  // concurrent local mutation on the same JSON file.
+  const result = await mergeMediaCollectionsFromSync(filtered);
+  if (result.applied) {
+    console.log(`🔄 MediaCollections sync: merged ${result.count} collection(s)`);
+  }
+  return result;
+}
+
 // --- Public API ---
 
 // Files each category reads, used to keep the in-process checksum cache
@@ -431,6 +531,12 @@ const CHECKSUM_PATHS = {
   meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
   universe: [UNIVERSE_BUILDER_FILE],
   pipeline: [PIPELINE_SERIES_FILE, PIPELINE_ISSUES_FILE],
+  // mediaCollections invalidates on its own file AND on the parent record
+  // files — `getMediaCollectionsSnapshot` filters collections whose linked
+  // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
+  // must re-checksum the collections snapshot even though
+  // media-collections.json itself didn't move. Same goes for un-ephemeral.
+  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_FILE, PIPELINE_SERIES_FILE],
 };
 
 const CATEGORIES = {
@@ -439,7 +545,8 @@ const CATEGORIES = {
   digitalTwin: { getSnapshot: getDigitalTwinSnapshot, applyRemote: applyDigitalTwinRemote },
   meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote },
   universe: { getSnapshot: getUniverseSnapshot, applyRemote: applyUniverseRemote },
-  pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote }
+  pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote },
+  mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote }
 };
 
 // Per-category `{ fingerprints, checksum }` cache. The orchestrator hits

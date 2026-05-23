@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Anchor to the script's own directory so relative paths (e.g. the
+# `node -e import('./server/lib/tailscale.js')` detection below) work
+# regardless of where the user invokes ./setup.sh from.
+cd "$(dirname "$0")"
+
 echo "==================================="
 echo "  PortOS Setup"
 echo "==================================="
@@ -35,6 +40,39 @@ if ! npm run setup; then
 fi
 
 echo ""
+
+# macOS Tailscale.app CLI is sandboxed (`tailscale cert` can't write outside its
+# container → EPERM). Detection delegates to server/lib/tailscale.js so the
+# candidate path list stays a single source of truth.
+# --input-type=module is required: `node -e` defaults to CommonJS even when
+# the package.json declares "type":"module", so a top-level import() in the
+# command would be a syntax error and the detection would silently always
+# fail (suppressed by `2>/dev/null`). Without this flag the whole
+# auto-install branch never runs on macOS.
+if node --input-type=module -e "import('./server/lib/tailscale.js').then(m => process.exit(m.hasOnlySandboxedTailscale() ? 0 : 1)).catch(() => process.exit(1))" 2>/dev/null; then
+    echo "Detected Tailscale.app without the unsandboxed CLI."
+    echo "Installing tailscale via Homebrew so 'tailscale cert' can write to data/certs/..."
+    brewInstalled=0
+    if command -v brew &> /dev/null; then
+        if brew install tailscale; then
+            brewInstalled=1
+        else
+            echo "⚠️  brew install tailscale failed — HTTPS via Tailscale won't work until you install it manually."
+        fi
+    else
+        echo "⚠️  Homebrew not found. Install brew (https://brew.sh) then run: brew install tailscale"
+        echo "    Without it, the 'Enable HTTPS' button on the Instances page will fail with EPERM."
+    fi
+    # Re-run cert setup now that the unsandboxed CLI is available. `npm run
+    # setup` already ran setup-cert.js with only the sandboxed CLI, falling
+    # back to self-signed; without this re-run the instance stays on the
+    # fallback cert until the user manually invokes `npm run setup:cert`.
+    if [ "$brewInstalled" = "1" ]; then
+        echo "Re-running cert provisioning with the freshly-installed Tailscale CLI..."
+        npm run setup:cert || echo "⚠️  setup:cert failed — re-run manually if needed."
+    fi
+    echo ""
+fi
 
 # Install/update slash-do (project-level slash commands for Claude Code et al.)
 # via npx. Auto-detects the installed AI environments and lays down the latest

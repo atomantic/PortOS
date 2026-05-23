@@ -13,14 +13,59 @@ import { join } from 'path';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
+import { spawn } from 'child_process';
 import { safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { getSettings } from './settings.js';
+import { getSettings, settingsEvents } from './settings.js';
 
 const DEFAULT_ICLOUD_PATH = join(
   homedir(),
   'Library/Mobile Documents/iCloud~net~shadowpuppet~MeatSpaceTracker/Documents/MortalLoom.json'
 );
+
+// settings.json is shallow-merged and not schema-validated, so the path field
+// can land here as any JSON shape (number, array, object, …). Calling .trim()
+// on a non-string throws — and one of our call sites is an EventEmitter
+// listener where an unhandled throw crashes the process. Centralize the
+// "treat-as-string-or-fall-back" guard at every read.
+function normalizePath(rawPath) {
+  return (typeof rawPath === 'string' ? rawPath.trim() : '') || DEFAULT_ICLOUD_PATH;
+}
+
+// === Transient-error retry ===
+
+// iCloud's `bird` daemon takes brief exclusive coordination locks during sync
+// windows and on-demand materialization of evicted files. These surface as
+// EAGAIN (errno -11) or EDEADLK from Node's fs calls. 50ms + 100ms covers the
+// common sub-200ms coordination windows without making transients observable.
+// Exposed (not const) so tests can set it to `[0, 0]` to keep the retry path
+// covered without paying the backoff sleep. (An empty array would still work
+// — and run faster still — but it would disable the retry loop entirely,
+// which defeats the purpose of testing the retry behavior.)
+export let TRANSIENT_RETRY_DELAYS_MS = [50, 100];
+export function _setRetryDelaysForTest(delays) { TRANSIENT_RETRY_DELAYS_MS = delays; }
+
+function isTransientFsError(err) {
+  return !!err && (err.code === 'EAGAIN' || err.code === 'EDEADLK' || err.errno === -11);
+}
+
+/**
+ * Run `fn()` (a thunk returning a Promise) with retry on transient iCloud
+ * errors. Returns the resolved value on success; throws the original error on
+ * the final failure so callers' existing `.catch()` handlers see the same
+ * error shape as before. ENOENT and other non-transient errors bypass retry.
+ */
+async function withTransientRetry(fn) {
+  for (let attempt = 0; ; attempt++) {
+    let caught = null;
+    const result = await fn().catch((err) => { caught = err; });
+    if (!caught) return result;
+    if (!isTransientFsError(caught) || attempt >= TRANSIENT_RETRY_DELAYS_MS.length) {
+      throw caught;
+    }
+    await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAYS_MS[attempt]));
+  }
+}
 
 const APP_STORE_ID = '6760883701';
 export const MORTALLOOM_APP_STORE_URL = `https://apps.apple.com/app/id${APP_STORE_ID}`;
@@ -33,11 +78,138 @@ const ARRAY_KEYS = [
 
 export function defaultStorePath() { return DEFAULT_ICLOUD_PATH; }
 
+// === Eviction pinning ===
+
+// macOS Optimize-Mac-Storage can evict iCloud files. When that happens the
+// path still appears to exist (placeholder), but `readFile` returns EAGAIN
+// because the read triggers an async download that doesn't return inline.
+// `brctl download <path>` is the documented verb to materialize the file
+// now. It does NOT set a persistent retention flag against future eviction
+// (that requires Finder's "Keep Downloaded" or undocumented `brctl unevict`),
+// so re-eviction under future disk pressure is still possible — the retry-
+// on-EAGAIN path handles that case. Best-effort, fire-and-forget; on
+// non-macOS we never spawn brctl, and on macOS when brctl is unexpectedly
+// missing (sandboxed env, removed binary) we warn ONCE and then fall
+// through to the retry path silently — without the dedupe, every
+// settings:updated would re-warn.
+
+let lastPinnedPath = null;
+let brctlMissingWarned = false;
+
+function pinAgainstEviction(path) {
+  if (process.platform !== 'darwin') return;
+  if (!path || lastPinnedPath === path) return;
+  lastPinnedPath = path;
+
+  // detached + unref so a long-running `brctl download` (large evicted file,
+  // slow network) can't keep the Node process alive on shutdown. Matches the
+  // repo's fire-and-forget spawn pattern in server/routes/apps.js +
+  // server/routes/brain.js.
+  const child = spawn('brctl', ['download', path], { detached: true, stdio: 'ignore' });
+  child.unref();
+  // Capture `path` in each handler so a late-arriving error/exit from a stale
+  // child (one whose path has since been replaced by a newer pinAgainstEviction
+  // call) doesn't clear the dedupe cache for the *current* path. Without this
+  // capture, the stale exit would null out lastPinnedPath even though the new
+  // path's child is still in flight (or has already succeeded), defeating
+  // dedupe and causing repeated spawns on subsequent settings:updated events.
+  child.on('error', (err) => {
+    if (lastPinnedPath === path) lastPinnedPath = null;
+    if (err.code === 'ENOENT') {
+      // brctl isn't in PATH. On darwin this is extremely unusual; surface it
+      // once so operators in a sandbox aren't left wondering why pinning is
+      // a silent no-op, then dedupe so we don't spam on every settings change.
+      if (!brctlMissingWarned) {
+        brctlMissingWarned = true;
+        console.warn('⚠️ brctl not found on PATH; MortalLoom store pinning disabled (retry-on-EAGAIN path remains)');
+      }
+      return;
+    }
+    console.warn(`⚠️ brctl download failed for MortalLoom store: ${err.message}`);
+  });
+  child.on('exit', (code, signal) => {
+    if (code === 0) {
+      console.log(`📥 MortalLoom store pinned for download: ${path}`);
+      return;
+    }
+    // Non-zero exit OR signal-kill (code===null,signal set). Either way the
+    // pin didn't complete, so clear the dedupe cache to allow a retry on the
+    // next settings:updated event. Without this, a SIGTERM'd brctl would
+    // permanently mask its own retry. Guard with the captured `path` so a
+    // stale child can't clear cache for a path that has already moved on.
+    if (lastPinnedPath === path) lastPinnedPath = null;
+    if (code !== null) {
+      console.warn(`⚠️ brctl download exited ${code} for MortalLoom store: ${path}`);
+    } else {
+      console.warn(`⚠️ brctl download killed by ${signal} for MortalLoom store: ${path}`);
+    }
+  });
+}
+
+// Two flags, not one: the listener is durable (sync, idempotent) but the
+// initial-pin step does awaits that can reject transiently (settings.json
+// read failure). Coupling them under a single `initialized = true` set
+// BEFORE the await would mean a transient boot failure permanently disables
+// the initial pin — even though the listener got attached and a retry would
+// succeed. Splitting them lets a caller re-invoke initMortalLoomStore() to
+// retry the initial pin without duplicating the listener.
+let listenerAttached = false;
+let didInitialPin = false;
+
+export function _resetMortalLoomInitForTest() {
+  listenerAttached = false;
+  didInitialPin = false;
+  lastPinnedPath = null;
+  brctlMissingWarned = false;
+}
+
+/**
+ * Boot hook: pin the configured MortalLoom store against iCloud eviction when
+ * sync is enabled, and re-pin if the user later toggles sync on or changes the
+ * path. Safe to call multiple times — the durable listener attaches at most
+ * once, and the initial-pin step retries on subsequent calls if a prior call's
+ * await rejected.
+ */
+export async function initMortalLoomStore() {
+  // Attach the settings listener FIRST so even a transient failure in the
+  // immediate-pin step below doesn't leave the system without
+  // re-pin-on-settings-change. The listener has no async dependencies and is
+  // the durable half of this hook.
+  if (!listenerAttached) {
+    settingsEvents.on('settings:updated', (settings) => {
+      if (!settings?.mortalloom?.enabled) {
+        // Disable clears the dedup cache so a future re-enable (even with the
+        // same path) triggers another materialize attempt — otherwise toggling
+        // off → on with an unchanged path would silently no-op.
+        lastPinnedPath = null;
+        return;
+      }
+      pinAgainstEviction(normalizePath(settings.mortalloom.path));
+    });
+    listenerAttached = true;
+  }
+
+  if (didInitialPin) return;
+
+  // The await below can throw under transient disk pressure on settings.json.
+  // Only flip didInitialPin after it succeeds so a caller can retry the
+  // boot pin on a subsequent invocation without re-attaching the listener.
+  // Read settings ONCE and derive both enabled+path from the same snapshot —
+  // a prior split into isMortalLoomEnabled() + resolvePath() did two reads
+  // and could half-fail (first succeeds, second hits a transient and skips
+  // the boot pin even though sync was confirmed enabled).
+  const s = await getSettings();
+  if (s?.mortalloom?.enabled) {
+    pinAgainstEviction(normalizePath(s.mortalloom.path));
+  }
+  didInitialPin = true;
+}
+
 // === Core I/O ===
 
 async function resolvePath() {
   const s = await getSettings();
-  return s?.mortalloom?.path?.trim() || DEFAULT_ICLOUD_PATH;
+  return normalizePath(s?.mortalloom?.path);
 }
 
 export async function isMortalLoomEnabled() {
@@ -45,23 +217,95 @@ export async function isMortalLoomEnabled() {
   return Boolean(s?.mortalloom?.enabled);
 }
 
-export async function readStore() {
-  const path = await resolvePath();
-  if (!existsSync(path)) return null;
-  const raw = await readFile(path, 'utf-8');
-  return safeJSONParse(raw, null, { context: path });
+/**
+ * Single-read snapshot of {enabled, path} from settings — collapses the prior
+ * isMortalLoomEnabled() + readStore() → resolvePath() → getSettings() double-
+ * read in every runtime helper into one settings I/O. Without this, the half-
+ * fail window the boot-pin fix guards against (settings rejects transiently
+ * between the two calls) is still live in the read path — first call says
+ * "enabled", second call fails and the helper returns null even though sync
+ * is on. Returns `null` when sync is disabled OR the read fails.
+ */
+async function readEnabledStore() {
+  const s = await getSettings();
+  if (!s?.mortalloom?.enabled) return null;
+  const path = normalizePath(s.mortalloom.path);
+  if (!path) return null;
+  return readStoreAtPath(path);
 }
 
-async function writeStore(data) {
-  await writeFile(await resolvePath(), JSON.stringify(data, null, 2));
+/**
+ * Read + parse the store at `path`. Returns `null` for:
+ *  - file absent (ENOENT or `existsSync` false) — silently
+ *  - any other `readFile` failure (EAGAIN/EDEADLK/EACCES/unknown errno/etc.) —
+ *    with one warn. The intent is iCloud-ubiquity transients (mid-sync,
+ *    downloading, conflict resolution) but the catch is intentionally broad —
+ *    read consumers all treat null as "fall through to local data," and the
+ *    write side has its own overwrite guard, so suppressing a permission /
+ *    unexpected error here just loses the iCloud copy for one cycle, never
+ *    truncates the user's data.
+ *  - corrupt JSON — `safeJSONParse` falls back to null
+ *  - top-level JSON that isn't a plain object (array/string/number/boolean) —
+ *    every consumer treats the store as `{ alcoholDrinks: [...], goals: [...],
+ *    profile: {...}, … }` so an unexpected shape is just as "unavailable" as
+ *    a corrupt file. Returning null keeps callers from misreading an array as
+ *    a successful read and reporting empty counts to the UI.
+ */
+async function readStoreAtPath(path) {
+  if (!existsSync(path)) return null;
+  const raw = await withTransientRetry(() => readFile(path, 'utf-8')).catch((err) => {
+    // existsSync→readFile race: file disappeared between the two calls.
+    // Treat as "absent" silently — no warning noise.
+    if (err.code === 'ENOENT') return null;
+    console.warn(`⚠️ MortalLoom store unavailable (${err.code || err.errno || 'unknown'}): ${path}`);
+    return null;
+  });
+  if (raw === null || raw === undefined) return null;
+  const parsed = safeJSONParse(raw, null, { context: path });
+  return isPlainObject(parsed) ? parsed : null;
+}
+
+export async function readStore() {
+  return readStoreAtPath(await resolvePath());
+}
+
+async function writeStoreAtPath(path, data) {
+  await withTransientRetry(() => writeFile(path, JSON.stringify(data, null, 2)));
 }
 
 /** Atomic read → mutate → write. Ensures all array keys are initialized. */
 export async function updateStore(mutator) {
-  const store = (await readStore()) || {};
-  for (const k of ARRAY_KEYS) if (!Array.isArray(store[k])) store[k] = [];
-  const result = await mutator(store);
-  await writeStore(store);
+  // Resolve the path once and pass it through to both read and write — settings
+  // could change mid-call, so we'd otherwise risk reading from one path and
+  // writing to another (or the overwrite-guard's existsSync looking at a
+  // different file than the read).
+  const path = await resolvePath();
+  const store = await readStoreAtPath(path);
+  // The overwrite guard is based solely on post-read state, not a pre-read
+  // snapshot. readStoreAtPath returns null for four reasons; we only care
+  // about the *currently observable* state when deciding whether it's safe
+  // to write:
+  //   (1) file does not exist now → safe to seed a fresh store (whether it
+  //       was absent the whole time, disappeared mid-call, or never appeared
+  //       in the first place).
+  //   (2) file exists now but parsed to a non-plain-object value → unreadable
+  //       (transient iCloud read failure, corrupt JSON, or unexpected shape
+  //       like a top-level array which JSON.stringify would silently drop).
+  //       Refuse to overwrite the user's iCloud data.
+  // Without this guard, the iCloud transient-failure tolerance in
+  // readStoreAtPath would let updateStore silently truncate a momentarily
+  // unreadable iCloud file.
+  if (existsSync(path) && !isPlainObject(store)) {
+    // Log the resolved path server-side for diagnostics; keep the thrown
+    // message path-free so it doesn't get echoed back to the UI (route
+    // errors serialize as `error: error.message`).
+    console.error(`❌ MortalLoom store at ${path} is unreadable; refusing to overwrite`);
+    throw new Error('MortalLoom store is unreadable; refusing to overwrite');
+  }
+  const base = store || {};
+  for (const k of ARRAY_KEYS) if (!Array.isArray(base[k])) base[k] = [];
+  const result = await mutator(base);
+  await writeStoreAtPath(path, base);
   return result;
 }
 
@@ -102,8 +346,7 @@ export async function mlReplace(key, array) {
 
 /** Returns `store.profile` when MortalLoom sync is enabled, else null. */
 export async function mlGetProfileIfEnabled() {
-  if (!(await isMortalLoomEnabled())) return null;
-  const store = await readStore();
+  const store = await readEnabledStore();
   return (store && typeof store.profile === 'object') ? store.profile : null;
 }
 
@@ -154,7 +397,7 @@ export async function mlUpsertHealthMetricByDate(date, patch) {
  * Return the id of the N-th record in store[key] with the given date (in stored order).
  */
 export async function mlIdAtDateIndex(key, date, index) {
-  const store = await readStore();
+  const store = await readEnabledStore();
   if (!store || !Array.isArray(store[key])) return null;
   const sameDate = store[key].filter(r => r.date === date);
   return sameDate[index]?.id ?? null;
@@ -164,8 +407,7 @@ export async function mlIdAtDateIndex(key, date, index) {
 
 /** Returns an array for `key` from the store when enabled, else null (fall through to local). */
 export async function mlArrayIfEnabled(key) {
-  if (!(await isMortalLoomEnabled())) return null;
-  const store = await readStore();
+  const store = await readEnabledStore();
   if (!store || !Array.isArray(store[key])) return null;
   return store[key];
 }
@@ -202,8 +444,7 @@ export function buildDailyLogFromMortalLoom(store) {
 }
 
 export async function readDailyLogIfEnabled() {
-  if (!(await isMortalLoomEnabled())) return null;
-  const store = await readStore();
+  const store = await readEnabledStore();
   return store ? buildDailyLogFromMortalLoom(store) : null;
 }
 
@@ -211,20 +452,46 @@ export async function readDailyLogIfEnabled() {
 
 export async function getStatus() {
   const s = await getSettings();
-  const path = s?.mortalloom?.path?.trim() || DEFAULT_ICLOUD_PATH;
+  const path = normalizePath(s?.mortalloom?.path);
   const enabled = Boolean(s?.mortalloom?.enabled);
-  const exists = existsSync(path);
-  if (!exists) {
-    return { enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
-             exists: false, size: 0, mtime: null, summary: null, appStoreUrl: MORTALLOOM_APP_STORE_URL };
-  }
-  const st = await stat(path);
-  const data = safeJSONParse(await readFile(path, 'utf-8'), null);
+  const missingResponse = {
+    enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
+    exists: false, size: 0, mtime: null, summary: null, appStoreUrl: MORTALLOOM_APP_STORE_URL,
+  };
+  if (!existsSync(path)) return missingResponse;
+  // Same transient-iCloud-failure tolerance as readStoreAtPath() — surface a
+  // null summary instead of 500ing the Settings status page. ENOENT (file
+  // disappeared between existsSync and stat/readFile) collapses back to the
+  // "missing" response; only genuinely transient errors keep `exists:true`.
+  let statTransient = false;
+  const st = await withTransientRetry(() => stat(path)).catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    statTransient = true;
+    console.warn(`⚠️ MortalLoom status stat unavailable (${err.code || err.errno || 'unknown'}): ${path}`);
+    return null;
+  });
+  if (!st && !statTransient) return missingResponse;
+  let readEnoent = false;
+  const raw = st ? await withTransientRetry(() => readFile(path, 'utf-8')).catch((err) => {
+    if (err.code === 'ENOENT') { readEnoent = true; return null; }
+    console.warn(`⚠️ MortalLoom status read unavailable (${err.code || err.errno || 'unknown'}): ${path}`);
+    return null;
+  }) : null;
+  // readFile ENOENT after a successful stat means the file was deleted/moved
+  // between the two calls — collapse to the missing response so the endpoint
+  // doesn't advertise a phantom file with stale stat metadata.
+  if (readEnoent) return missingResponse;
+  const parsed = raw === null ? null : safeJSONParse(raw, null);
+  // Only compute a summary when the top-level JSON is a plain `{…}` shape.
+  // An unexpected top-level array would otherwise pass `typeof === 'object'`
+  // and we'd render a misleading 0-count summary instead of `null` (which
+  // the UI distinguishes as "store unavailable").
+  const data = isPlainObject(parsed) ? parsed : null;
   const count = k => Array.isArray(data?.[k]) ? data[k].length : 0;
   return {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,
-    exists: true, size: st.size, mtime: st.mtime.toISOString(),
-    summary: data && typeof data === 'object' ? {
+    exists: true, size: st?.size ?? 0, mtime: st?.mtime?.toISOString() ?? null,
+    summary: data ? {
       goals: count('goals'),
       alcoholDrinks: count('alcoholDrinks'),
       nicotineEntries: count('nicotineEntries'),

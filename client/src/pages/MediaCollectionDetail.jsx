@@ -16,7 +16,7 @@ import {
   listImageGallery, listVideoHistory,
   deleteImage, deleteVideoHistoryItem,
 } from '../services/api';
-import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 
 // Hydrate a collection's "<kind>:<ref>" pointer list into the same
@@ -243,11 +243,11 @@ export default function MediaCollectionDetail() {
 
   // Remix / SendToVideo / Continue / Clean share a single implementation
   // with MediaHistory, ImageGen, and the Universe Builder lightbox via
-  // `useImagePreviewActions`. The collection-specific post-clean step (add
+  // `useMediaPreviewActions`. The collection-specific post-clean step (add
   // the cleaned image to THIS collection + seed imagesByName so hydrate()
   // renders it immediately, no refresh round-trip) is wired through
   // `onCleanComplete`.
-  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useImagePreviewActions({
+  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
     onCleanComplete: async (cleaned) => {
       // The server's clean route auto-files the cleaned filename into every
       // collection that contained the source — including this one — so this

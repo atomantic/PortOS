@@ -1097,7 +1097,14 @@ describe('sharing round-trip', () => {
     // Both manifests point at the same blob path; only one on-disk blob file exists
     // (the dotfile `.index.json` is the per-bucket source→hash cache, not a blob).
     expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', hash))).toBe(true);
-    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs')).filter((f) => !f.startsWith('.'))).toEqual([hash]);
+    // Filter out: dotfiles (.index.json source-hash cache) AND .metadata.json
+    // sidecars (which mirror the source-side sidecars created by the new
+    // cross-transport SHA-256 cache in lib/assetHash.js). The point of the
+    // assertion is "only ONE actual blob exists for two manifests that share
+    // bytes" — the sidecar is provenance metadata, not a duplicate blob.
+    const blobs = fs.readdirSync(join(tempBucket, 'assets', 'blobs'))
+      .filter((f) => !f.startsWith('.') && !f.endsWith('.metadata.json'));
+    expect(blobs).toEqual([hash]);
 
     // Each manifest's assetRef carries the hash + its own original filename.
     const mA = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expA.filename), 'utf-8'));

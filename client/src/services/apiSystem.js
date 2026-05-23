@@ -111,7 +111,7 @@ export const navigateBrowser = (url) => request('/browser/navigate', {
 });
 
 // Instances (Federation)
-export const getInstances = () => request('/instances');
+export const getInstances = (options) => request('/instances', options);
 export const getSelfInstance = () => request('/instances/self');
 export const updateSelfInstance = (data) => request('/instances/self', { method: 'PUT', body: JSON.stringify(data) });
 export const addPeer = (data) => request('/instances/peers', { method: 'POST', body: JSON.stringify(data) });

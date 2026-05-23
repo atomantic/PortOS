@@ -7,7 +7,7 @@ import https from 'https';
 
 // Wraps https.request as fetch-compatible for self-signed cert support
 export function insecureFetch(agent) {
-  return async (url, { method = 'GET', headers = {}, body, signal } = {}) => {
+  return async (url, { method = 'GET', headers = {}, body, signal, maxBytes } = {}) => {
     const u = new URL(url);
     return new Promise((resolve, reject) => {
       // Declare cleanup before req so it can be called from res.on('end'),
@@ -23,20 +23,83 @@ export function insecureFetch(agent) {
         headers,
         agent
       }, (res) => {
+        // Streaming size cap. Without this, peer-sync asset pulls over HTTPS
+        // buffer the WHOLE response before the post-resolve content-length
+        // check fires — so an oversized or missing-header asset can exhaust
+        // memory before the cap kicks in. Two layers:
+        //   1. Early reject when the server-declared Content-Length already
+        //      exceeds the cap — no body bytes read.
+        //   2. Per-chunk accumulator that destroys the request if the actual
+        //      bytes-on-the-wire exceed the cap (server lied or omitted
+        //      header).
+        // Callers without a cap (everything except asset pull today) skip
+        // both layers — maxBytes only gates when provided.
+        if (typeof maxBytes === 'number' && maxBytes > 0) {
+          const declared = Number(res.headers['content-length']);
+          if (Number.isFinite(declared) && declared > maxBytes) {
+            cleanup();
+            req.destroy();
+            reject(new Error(`Response declared Content-Length ${declared} exceeds maxBytes ${maxBytes}`));
+            return;
+          }
+        }
         const chunks = [];
-        res.on('data', c => chunks.push(c));
+        let bytesSoFar = 0;
+        let capTripped = false;
+        res.on('data', c => {
+          // Once the cap is tripped we both destroy the request AND stop
+          // accumulating; the socket teardown isn't instantaneous and
+          // additional 'data' events can fire before 'close' / 'end'.
+          // Push-and-reject-on-every-chunk would otherwise (a) keep
+          // growing `chunks` past the cap and (b) call reject() multiple
+          // times (Promise resolves once; the dropped rejections are
+          // harmless but the unbounded buffering isn't).
+          if (capTripped) return;
+          if (typeof maxBytes === 'number' && maxBytes > 0) {
+            bytesSoFar += c.length;
+            if (bytesSoFar > maxBytes) {
+              capTripped = true;
+              cleanup();
+              req.destroy();
+              reject(new Error(`Response body exceeded maxBytes ${maxBytes} (got ${bytesSoFar})`));
+              return;
+            }
+          }
+          chunks.push(c);
+        });
         res.on('end', () => {
+          if (capTripped) return;
           cleanup();
-          const text = Buffer.concat(chunks).toString('utf-8');
+          // Concat as a raw Buffer so the response can be projected to text
+          // (UTF-8 decode), JSON (parse), or arrayBuffer (binary). Pre-
+          // decoding to a UTF-8 string up-front would corrupt binary
+          // responses — the peer-sync asset-pull worker uses this shim to
+          // download images / videos over HTTPS, and `Buffer.toString('utf-8')`
+          // silently replaces invalid byte sequences with U+FFFD.
+          const buffer = Buffer.concat(chunks);
           resolve({
             ok: res.statusCode >= 200 && res.statusCode < 300,
             status: res.statusCode,
-            headers: { get: n => res.headers[n.toLowerCase()] ?? null },
-            text: () => Promise.resolve(text),
-            json: () => Promise.resolve(JSON.parse(text))
+            headers: {
+              get: n => res.headers[n.toLowerCase()] ?? null,
+              // has() mirrors Fetch's Headers API so consumers (peerSync's
+              // asset-pull cap check) can distinguish "header missing" from
+              // "header is '0'" without branching on transport. Without this
+              // the asset-pull `res.headers.has('content-length')` throws
+              // TypeError on every HTTPS pull.
+              has: n => Object.prototype.hasOwnProperty.call(res.headers, n.toLowerCase()),
+            },
+            text: () => Promise.resolve(buffer.toString('utf-8')),
+            json: () => Promise.resolve(JSON.parse(buffer.toString('utf-8'))),
+            // ArrayBuffer view matching Fetch's Response so call sites can
+            // `Buffer.from(await res.arrayBuffer())` without branching on
+            // transport.
+            arrayBuffer: () => Promise.resolve(
+              buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+            ),
           });
         });
-        res.on('error', (err) => { cleanup(); reject(err); });
+        res.on('error', (err) => { if (capTripped) return; cleanup(); reject(err); });
       });
       req.on('error', (err) => { cleanup(); reject(err); });
       if (body) req.write(body);

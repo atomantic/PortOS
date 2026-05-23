@@ -86,6 +86,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `multipart.js` | Streaming multipart/form-data parser. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
 | `zipStream.js` | Streaming ZIP parser. |
+| `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. |
 
 ## Process execution
 
@@ -106,7 +107,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
-| `tailscale.js` | Common paths where the Tailscale CLI binary is found. |
+| `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
+| `tailscale.js` | Locate the Tailscale CLI binary and flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container). |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
 | `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |
 
@@ -160,7 +162,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
-| `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement) + `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads). |
+| `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers). |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
 | `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
 

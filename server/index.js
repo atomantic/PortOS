@@ -77,6 +77,7 @@ import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
 import meatspaceRoutes from './routes/meatspace.js';
 import mortallomRoutes from './routes/mortalloom.js';
+import { initMortalLoomStore } from './services/mortalLoomStore.js';
 import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
@@ -105,6 +106,7 @@ import lorasRoutes from './routes/loras.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
+import peerSyncRoutes from './routes/peerSync.js';
 import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
@@ -420,6 +422,7 @@ app.use('/api/loras', lorasRoutes);
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
+app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 
 // initMediaJobQueue is awaited as part of the startup chain below so that
@@ -512,15 +515,22 @@ startUpdateScheduler();
 // Restore any active loops from previous session
 restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.message}`));
 
-// Serve generated images from configured images directory
-app.use('/data/images', express.static(PATHS.images));
+// Asset static mounts. `acceptRanges: true` is the serve-static default
+// already, but we set it explicitly because the federated peer-sync receiver
+// (services/sharing/peerSync.js) background-pulls missing assets from these
+// URLs and relies on HTTP Range to resume partial downloads over flaky
+// Tailnet links — losing range support here would silently force every
+// retry to restart from byte 0 on a multi-MB PNG / video. Same posture for
+// every kind below (image, image-ref, video, video-thumbnail).
+const ASSET_STATIC_OPTS = { acceptRanges: true };
+app.use('/data/images', express.static(PATHS.images, ASSET_STATIC_OPTS));
 // Reference images (multi-ref upload inputs + generated character reference
 // sheets) — served read-only so the UI can render thumbnails by URL.
-app.use('/data/image-refs', express.static(PATHS.imageRefs));
+app.use('/data/image-refs', express.static(PATHS.imageRefs, ASSET_STATIC_OPTS));
 // Serve generated videos + thumbnails so the Media UI and tailnet clients
 // can pull them by URL without going through an explicit download route.
-app.use('/data/videos', express.static(PATHS.videos));
-app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails));
+app.use('/data/videos', express.static(PATHS.videos, ASSET_STATIC_OPTS));
+app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails, ASSET_STATIC_OPTS));
 // Voice-over WAVs rendered by the pipeline audio stage — the AudioStage UI
 // pulls them inline via <audio src="/data/audio/<filename>">.
 app.use('/data/audio', express.static(PATHS.audio));
@@ -590,6 +600,15 @@ ensureSelf()
     initComicPagesFilenameHook();
     initStoryboardsFilenameHook();
     initSeasonCoverFilenameHook();
+    // Best-effort pre-materialize the MortalLoom iCloud store so the
+    // dashboard's proactive-alerts poll (and other readers) don't trigger
+    // on-demand downloads that surface as EAGAIN. `brctl download` only
+    // materializes the file — it does not pin against future eviction, so
+    // the retry-on-EAGAIN path inside the store is what guarantees the
+    // hardening. Fire-and-forget — failures are logged.
+    initMortalLoomStore().catch((err) => {
+      console.warn(`⚠️ MortalLoom store init failed: ${err.message}`);
+    });
   })
   .then(() => {
     // Sharing: attach chokidar watchers to every registered share bucket so

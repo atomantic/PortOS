@@ -37,6 +37,7 @@ import {
   normalizeBibleName, isStr, trimTo,
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
+import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
 import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './mediaCollections.js';
 import {
@@ -728,6 +729,10 @@ const sanitizeTemplate = (raw) => {
     : { provider: null, model: null };
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  // Soft-delete fields — peer sync needs the tombstone in the record itself
+  // so LWW merge can resolve delete-vs-edit races by `updatedAt`. Existing
+  // records without these fields read as live (deleted=false, deletedAt=null).
+  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
   return {
     id: raw.id,
     name,
@@ -748,6 +753,14 @@ const sanitizeTemplate = (raw) => {
     origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
+    deleted,
+    deletedAt,
+    // Local-only "don't sync to peers" marker. Only persisted when true so
+    // every existing universe keeps the same on-disk shape — and so the wire
+    // checksum stays byte-stable for non-ephemeral records (see
+    // sanitizeRecordForWire). Mark a scratch universe ephemeral to keep it
+    // off the federation; test fixtures stamp this too.
+    ...(raw.ephemeral === true ? { ephemeral: true } : {}),
   };
 };
 
@@ -795,16 +808,18 @@ async function writeState(state) {
   await atomicWrite(statePath(), state);
 }
 
-export async function listUniverses() {
+export async function listUniverses({ includeDeleted = false } = {}) {
   const { universes } = await readState();
+  const filtered = includeDeleted ? universes : universes.filter((u) => !u.deleted);
   // Newest first — matches user expectation for a "your universes" list.
-  return [...universes].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
-export async function getUniverse(id) {
+export async function getUniverse(id, { includeDeleted = false } = {}) {
   const { universes } = await readState();
   const w = universes.find((x) => x.id === id);
   if (!w) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+  if (w.deleted && !includeDeleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
   return w;
 }
 
@@ -821,7 +836,7 @@ export async function needsEntryIdPersist(id) {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
   const rec = Array.isArray(raw.universes) ? raw.universes.find((u) => u?.id === id) : null;
-  if (!rec) return false;
+  if (!rec || rec.deleted) return false;
   const cats = rec.categories && typeof rec.categories === 'object' ? rec.categories : {};
   for (const cat of Object.values(cats)) {
     const vars = Array.isArray(cat?.variations) ? cat.variations : [];
@@ -839,7 +854,7 @@ export async function needsEntryIdPersist(id) {
 export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
-  return queueUniverseWrite(async () => {
+  const created = await queueUniverseWrite(async () => {
     const state = await readState();
     const now = new Date().toISOString();
     const next = sanitizeTemplate({
@@ -872,11 +887,31 @@ export async function createUniverse(input = {}) {
       llm: input.llm || {},
       createdAt: now,
       updatedAt: now,
+      // Optional local-only marker — when true, every sync transport
+      // (snapshot loop + per-record push) skips this universe (see
+      // sanitizeRecordForWire) and the auto-subscribe below short-circuits.
+      ephemeral: input.ephemeral === true,
     });
     state.universes.push(next);
     await writeState(state);
     return next;
   });
+  // Fire-and-forget auto-subscribe to every peer with universe-sync enabled.
+  // Skip the auto-subscribe entirely for ephemeral universes — the push
+  // would short-circuit anyway via sanitizeRecordForWire returning null, but
+  // not creating the subscription in the first place keeps peer_subscriptions.json
+  // free of orphan rows tied to records the user explicitly excluded.
+  // Dynamic import keeps peerSync.js OUT of the universeBuilder module-load
+  // graph — peerSync already imports getUniverse / mergeUniversesFromSync
+  // from here, so a static import would close a cycle.
+  if (!created.ephemeral) {
+    import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('universe', created.id)
+    ).catch((err) => {
+      console.log(`⚠️ universe: auto-subscribe after create failed: ${err.message}`);
+    });
+  }
+  return created;
 }
 
 /**
@@ -892,12 +927,24 @@ export async function insertUniverseWithId(input = {}) {
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
   return queueUniverseWrite(async () => {
     const state = await readState();
-    if (state.universes.some((u) => u.id === input.id)) {
+    // Tombstone-overwrite: a previously-deleted record with the same id is
+    // overwritten (effectively undeleted) — this keeps the share-bucket
+    // re-import flow idempotent (deleting then re-importing the same manifest
+    // restores the universe rather than 409ing). The peer-sync resurrection
+    // hazard is already prevented by `mergeUniversesFromSync`'s LWW check,
+    // which is the transport the federation uses.
+    const existingIdx = state.universes.findIndex((u) => u.id === input.id);
+    if (existingIdx >= 0 && !state.universes[existingIdx].deleted) {
       throw makeErr(`Universe id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const next = sanitizeTemplate({ ...input, name });
     if (!next) throw makeErr('Invalid universe payload', ERR_VALIDATION);
-    state.universes.push(next);
+    if (existingIdx >= 0) {
+      console.warn(`♻️  insertUniverseWithId: overwriting tombstone for ${input.id}`);
+      state.universes[existingIdx] = next;
+    } else {
+      state.universes.push(next);
+    }
     await writeState(state);
     return next;
   });
@@ -918,11 +965,12 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //     unchanged record (no `updatedAt` bump, no rename cascade, no
   //     `recordUpdated` emit).
   const isMutator = typeof patchOrMutator === 'function';
-  const { merged, nameChanged, skipped, removedCharacterIds } = await queueUniverseWrite(async () => {
+  const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await queueUniverseWrite(async () => {
     const state = await readState();
     const idx = state.universes.findIndex((w) => w.id === id);
     if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
     const cur = state.universes[idx];
+    if (cur.deleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
 
     let patch;
     if (isMutator) {
@@ -973,6 +1021,16 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       'characters', 'places', 'objects',
       // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
       'origin',
+      // Local-only "don't sync" marker — see sanitizeTemplate. The safety
+      // property is one-directional: ONLY a literal `true` marks the record
+      // ephemeral; every other value (`false`, `'true'`, `1`, etc.) is
+      // dropped at the sanitizer back to absent — i.e. sync-enabled. A
+      // mutator PATCH like `{ ephemeral: 'false' }` therefore CLEARS the
+      // flag (re-enabling sync), it does NOT mark the record ephemeral.
+      // The asymmetry is intentional: protecting "private by default" is
+      // not the goal — protecting "you can't accidentally truthy your way
+      // into ephemeral and never sync again" is.
+      'ephemeral',
     ];
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
@@ -1086,6 +1144,12 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       nameChanged: mergedRecord.name !== cur.name,
       skipped: false,
       removedCharacterIds,
+      // Surface the (prev, next) ephemeral pair so the post-queue side
+      // effects can wire subscribe / unsubscribe for the transition.
+      // Compare against `cur` (the pre-merge record) so transitions are
+      // detected regardless of patch shape (literal-object or mutator).
+      prevEphemeral: cur.ephemeral === true,
+      nextEphemeral: mergedRecord.ephemeral === true,
     };
   });
   if (skipped) return merged;
@@ -1102,19 +1166,59 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
     });
   }
+  // Ephemeral lifecycle wiring — fires AFTER the queued write so the on-disk
+  // state already reflects the transition before any peer-sync work runs.
+  // false→true: tear down every existing per-record sub for this universe
+  //             (peers keep their last-pushed copy on disk; we just stop
+  //             future pushes). Mirror of createUniverse's `if (!created.ephemeral)`
+  //             auto-subscribe-skip — both ends of the lifecycle keep
+  //             peer_subscriptions.json free of orphan rows.
+  // true→false: fire autoSubscribeRecordToAllPeers so the now-shareable
+  //             record reaches every peer with the universe category
+  //             enabled. The 60s snapshot loop is skipped for kinds covered
+  //             by per-record subs (see syncOrchestrator.categoriesCoveredByPeerSync),
+  //             so without this re-subscribe the record would be silently
+  //             invisible to those peers.
+  // Await the dynamic import — fire-and-forget .then() resolves on a
+  // microtask AFTER the synchronous emitRecordUpdated below, so the
+  // peerSync 'updated' listener would schedule pushes against subs the
+  // user just disabled. The await keeps the documented "BEFORE
+  // emitRecordUpdated" contract honest.
+  if (prevEphemeral && !nextEphemeral) {
+    await import('./sharing/peerSync.js')
+      .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('universe', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ universe: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+      });
+  } else if (!prevEphemeral && nextEphemeral) {
+    await import('./sharing/peerSync.js')
+      .then(({ unsubscribeAllForRecord }) => unsubscribeAllForRecord('universe', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
+      });
+  }
   emitRecordUpdated('universe', merged.id);
   return merged;
 }
 
 export async function deleteUniverse(id) {
-  // Queue covers only the universe-builder write; cross-file unlink runs
-  // after the queue releases so a slow media-collections write can't block
-  // subsequent universe mutators.
+  // Soft-delete: mark the record with `deleted: true` + `deletedAt` and bump
+  // `updatedAt` so federated peers learn about the deletion via the existing
+  // LWW merge (tombstone-as-state). The orchestrator's tombstone-cleanup
+  // sweep prunes the record entirely once every subscribed peer has acked.
+  //
+  // Cross-file side effects still run on the local delete: drop runs,
+  // unlink media collections, clear sheet slots. These cascades also run on
+  // the receiving peer when a soft-delete arrives via mergeUniversesFromSync
+  // so a synced delete doesn't leave orphan media-collection locks.
   await queueUniverseWrite(async () => {
     const state = await readState();
-    const before = state.universes.length;
-    state.universes = state.universes.filter((w) => w.id !== id);
-    if (state.universes.length === before) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    const idx = state.universes.findIndex((w) => w.id === id);
+    if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.universes[idx];
+    if (cur.deleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    const now = new Date().toISOString();
+    state.universes[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
     // Drop runs referencing the deleted universe — they're useless without it.
     state.runs = state.runs.filter((r) => r.universeId !== id);
     await writeState(state);
@@ -1123,7 +1227,7 @@ export async function deleteUniverse(id) {
   // the orphan collection's `universeId` stays stamped and the lock in
   // updateCollection blocks renames forever even though the universe is gone.
   // Best-effort: a failure here mustn't fail the delete (the universe is
-  // already gone from state). Runs OUTSIDE the universe-builder queue.
+  // already tombstoned). Runs OUTSIDE the universe-builder queue.
   await unlinkCollectionsForUniverse(id).catch((err) => {
     console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
   });
@@ -1131,6 +1235,21 @@ export async function deleteUniverse(id) {
   clearPendingSheetSlotsForUniverse(id);
   emitRecordDeleted('universe', id);
   return { id };
+}
+
+/**
+ * Cascade orphan cleanup for a universe whose soft-delete arrived via peer
+ * sync (mergeUniversesFromSync detected a deleted=false → deleted=true
+ * transition). Mirrors the post-queue cleanup in deleteUniverse so a synced
+ * delete on the receiver leaves the same orphan-free state as a local delete.
+ * Runs outside the universe-builder write queue.
+ */
+async function cascadeDeleteSideEffects(id) {
+  await unlinkCollectionsForUniverse(id).catch((err) => {
+    console.error(`❌ unlink media collections for synced-delete universe ${id} failed: ${err?.message || err}`);
+  });
+  clearPendingSheetSlotsForUniverse(id);
+  emitRecordDeleted('universe', id);
 }
 
 /**
@@ -1152,7 +1271,18 @@ export async function deleteUniverse(id) {
  */
 export async function mergeUniversesFromSync(remoteUniverses) {
   if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
-  return queueUniverseWrite(async () => {
+  // Records that transitioned to deleted via this merge get their orphan
+  // cascade fired after the write queue releases — matches the side-effect
+  // contract of locally-initiated `deleteUniverse`.
+  //
+  // Edit-merges (no delete-transition) DO NOT call `emitRecordUpdated` here.
+  // Unlike `updateUniverse`, the snapshot sync is meant to be silent — every
+  // 60s cycle would otherwise trigger a re-export storm in share-bucket
+  // subscriptions even when nothing user-visible changed. The Stage 2
+  // per-record peer-sync push pipeline will own the "edit arrived from
+  // peer" emit so subscribers fire exactly once per actual edit.
+  const transitionedToDeleted = [];
+  const result = await queueUniverseWrite(async () => {
     const state = await readState();
     const localById = new Map(state.universes.map((u) => [u.id, u]));
     let changed = 0;
@@ -1160,23 +1290,87 @@ export async function mergeUniversesFromSync(remoteUniverses) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
       const sanitized = sanitizeTemplate(remote);
       if (!sanitized) continue;
+      // `ephemeral` is a LOCAL-only marker — never trust the inbound value.
+      // sanitizeTemplate only persists a literal `{ ephemeral: true }` (any
+      // other value gets dropped at the sanitizer); strip even that here so
+      // a buggy/older/non-conformant peer (or the share-bucket importer's
+      // mutator-form path) can't plant a "dark" record on us that's
+      // permanently un-syncable. The on-disk-only contract is enforced on
+      // the receive boundary.
+      if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
       if (!local) {
+        // No local counterpart — accept the record (live OR tombstone) but
+        // do NOT cascade orphan-cleanup. A tombstone for a record we never
+        // had has nothing to clean up; firing `emitRecordDeleted` would spuriously
+        // tear down share-bucket subscriptions looking for a manifest that
+        // never existed.
         localById.set(sanitized.id, sanitized);
         changed++;
+      } else if (local.ephemeral === true) {
+        // Local-ephemeral records are IMMUNE to inbound merges. The user
+        // explicitly marked this record local-only — peer edits can't
+        // overwrite its content, peer deletes can't trigger our orphan
+        // cascade, and the post-merge asset-pull worker never gets the
+        // chance to download bytes for it. The sender may still have a
+        // reverse subscription on their side; we silently drop the push.
+        // Pre-ephemeral subs on OUR side are torn down by the
+        // updateUniverse PATCH transition (see "ephemeral lifecycle" wiring)
+        // so this branch should only fire for cross-peer fan-out or
+        // share-bucket import paths.
+        continue;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
           localById.set(sanitized.id, sanitized);
+          if (sanitized.deleted && !local.deleted) transitionedToDeleted.push(sanitized.id);
           changed++;
         }
       }
     }
     if (changed === 0) return { applied: false, count: 0 };
+    // Drop runs for any record that just transitioned to deleted — matches
+    // the local-delete contract that ditches now-orphan runs.
+    if (transitionedToDeleted.length) {
+      const tombstoned = new Set(transitionedToDeleted);
+      state.runs = state.runs.filter((r) => !tombstoned.has(r.universeId));
+    }
     state.universes = Array.from(localById.values());
     await writeState(state);
     return { applied: true, count: changed };
+  });
+  // Fire cascades after the queue releases (mirrors deleteUniverse ordering)
+  // so a slow media-collections write can't block other universe mutators.
+  for (const id of transitionedToDeleted) {
+    await cascadeDeleteSideEffects(id);
+  }
+  return result;
+}
+
+/**
+ * Garbage-collect universe tombstones older than `beforeMs`. Pure of GC
+ * policy — the caller (server/services/sharing/tombstoneGc.js) owns the
+ * ack-cursor + grace-period math and just tells us the cutoff timestamp.
+ *
+ * Tombstones whose `deletedAt` is a non-parseable string are conservatively
+ * KEPT — we'd rather leak a few garbled records than silently delete data.
+ * Returns `{ pruned }` with the count actually removed.
+ */
+export async function pruneTombstonedUniverses(beforeMs) {
+  if (!Number.isFinite(beforeMs)) return { pruned: 0 };
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const original = state.universes.length;
+    state.universes = state.universes.filter((u) => {
+      if (!u?.deleted) return true;
+      const t = Date.parse(u.deletedAt || '');
+      if (!Number.isFinite(t)) return true;
+      return t >= beforeMs;
+    });
+    const pruned = original - state.universes.length;
+    if (pruned > 0) await writeState(state);
+    return { pruned };
   });
 }
 

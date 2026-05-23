@@ -18,6 +18,7 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 
@@ -144,6 +145,13 @@ const sanitizeSeries = (raw) => {
     origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
+    // Soft-delete fields — peer sync needs the tombstone in the record itself
+    // so LWW merge can resolve delete-vs-edit races by `updatedAt`.
+    ...sanitizeSoftDeleteFields(raw),
+    // Local-only "don't sync to peers" marker. Persisted only when true so
+    // existing series keep their on-disk + wire-checksum shape. See
+    // syncWire.sanitizeRecordForWire for the wire-side enforcement.
+    ...(raw.ephemeral === true ? { ephemeral: true } : {}),
   };
 };
 
@@ -158,22 +166,24 @@ async function writeState(state) {
   await atomicWrite(statePath(), state);
 }
 
-export async function listSeries() {
+export async function listSeries({ includeDeleted = false } = {}) {
   const { series } = await readState();
-  return [...series].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const filtered = includeDeleted ? series : series.filter((s) => !s.deleted);
+  return [...filtered].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
-export async function getSeries(id) {
+export async function getSeries(id, { includeDeleted = false } = {}) {
   const { series } = await readState();
   const found = series.find((s) => s.id === id);
   if (!found) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+  if (found.deleted && !includeDeleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
 export async function createSeries(input = {}) {
   const name = trimTo(input.name, NAME_MAX);
   if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
-  return queueSeriesWrite(async () => {
+  const created = await queueSeriesWrite(async () => {
     const state = await readState();
     const now = new Date().toISOString();
     const next = sanitizeSeries({
@@ -196,11 +206,26 @@ export async function createSeries(input = {}) {
       llm: input.llm || null,
       createdAt: now,
       updatedAt: now,
+      ephemeral: input.ephemeral === true,
     });
     state.series.push(next);
     await writeState(state);
     return next;
   });
+  // Skip auto-subscribe for ephemeral series — wire-side push would short-
+  // circuit via sanitizeRecordForWire anyway, but not creating the sub up
+  // front keeps the subscription store clean.
+  if (!created.ephemeral) {
+    // Fire-and-forget auto-subscribe to every peer with pipeline-sync enabled.
+    // Dynamic import to dodge a static cycle (peerSync imports merge entry
+    // points from this module).
+    import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('series', created.id)
+    ).catch((err) => {
+      console.log(`⚠️ series: auto-subscribe after create failed: ${err.message}`);
+    });
+  }
+  return created;
 }
 
 /**
@@ -218,12 +243,21 @@ export async function insertSeriesWithId(input = {}) {
   if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
   return queueSeriesWrite(async () => {
     const state = await readState();
-    if (state.series.some((s) => s.id === input.id)) {
+    // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId —
+    // re-import undeletes; peer-sync resurrection is prevented at the merge
+    // path via LWW, not here.
+    const existingIdx = state.series.findIndex((s) => s.id === input.id);
+    if (existingIdx >= 0 && !state.series[existingIdx].deleted) {
       throw makeErr(`Series id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const next = sanitizeSeries({ ...input, name });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
-    state.series.push(next);
+    if (existingIdx >= 0) {
+      console.warn(`♻️  insertSeriesWithId: overwriting tombstone for ${input.id}`);
+      state.series[existingIdx] = next;
+    } else {
+      state.series.push(next);
+    }
     await writeState(state);
     return next;
   });
@@ -238,11 +272,12 @@ export async function updateSeries(id, patch = {}) {
   if (legacyFields.length > 0) {
     console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
   }
-  const { merged, nameChanged } = await queueSeriesWrite(async () => {
+  const { merged, nameChanged, prevEphemeral, nextEphemeral } = await queueSeriesWrite(async () => {
     const state = await readState();
     const idx = state.series.findIndex((s) => s.id === id);
     if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     const cur = state.series[idx];
+    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     // Per-field merge so `{ provider: 'codex' }` doesn't clobber an existing `model`.
     const mergedLlm = 'llm' in patch
       ? { ...(cur.llm || {}), ...(patch.llm || {}) }
@@ -266,15 +301,46 @@ export async function updateSeries(id, patch = {}) {
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
       ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
       ...('origin' in patch ? { origin: patch.origin } : {}),
+      // Local-only "don't sync" marker — sanitizer normalizes anything
+      // non-true back to absent.
+      ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
     state.series[idx] = next;
     await writeState(state);
-    emitRecordUpdated('series', next.id);
-    return { merged: next, nameChanged: next.name !== cur.name };
+    return {
+      merged: next,
+      nameChanged: next.name !== cur.name,
+      // See updateUniverse — surface the transition pair so the post-queue
+      // side effects can wire subscribe / unsubscribe.
+      prevEphemeral: cur.ephemeral === true,
+      nextEphemeral: next.ephemeral === true,
+    };
   });
+  // Ephemeral lifecycle wiring — see updateUniverse for the rationale. false→true
+  // tears down per-record subs; true→false re-auto-subscribes so the now-
+  // shareable series reaches every peer with the pipeline category enabled.
+  // Must run BEFORE emitRecordUpdated so the peerSync 'updated' listener
+  // doesn't schedule pushes against subs that are about to be torn down.
+  // The dynamic import is awaited (NOT fire-and-forget .then) — otherwise
+  // the unsubscribe resolves on a microtask after emitRecordUpdated has
+  // already fired the listener and pushes get scheduled against the
+  // about-to-be-deleted subs.
+  if (prevEphemeral && !nextEphemeral) {
+    await import('../sharing/peerSync.js')
+      .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('series', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ series: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+      });
+  } else if (!prevEphemeral && nextEphemeral) {
+    await import('../sharing/peerSync.js')
+      .then(({ unsubscribeAllForRecord }) => unsubscribeAllForRecord('series', merged.id))
+      .catch((err) => {
+        console.log(`⚠️ series: unsubscribe after ephemeralizing failed: ${err.message}`);
+      });
+  }
   // Cascade rename onto the linked per-series media collection (if any) —
   // log but don't fail the save. Runs OUTSIDE the queue so the media-
   // collections write tail can't stall subsequent series mutators. No-op
@@ -285,6 +351,7 @@ export async function updateSeries(id, patch = {}) {
       console.error(`❌ series-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
     });
   }
+  emitRecordUpdated('series', merged.id);
   return merged;
 }
 
@@ -297,6 +364,7 @@ export async function setArcFieldLock(id, field, locked) {
     const idx = state.series.findIndex((s) => s.id === id);
     if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     const cur = state.series[idx];
+    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     const arcFields = { ...(cur.locked?.arcFields || {}) };
     if (locked === true) arcFields[field] = true;
     else delete arcFields[field];
@@ -333,6 +401,7 @@ export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
     const idx = state.series.findIndex((s) => s.id === seriesId);
     if (idx < 0) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
     const cur = state.series[idx];
+    if (cur.deleted) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
     const seasons = Array.isArray(cur.seasons) ? cur.seasons : [];
     const seasonIdx = seasons.findIndex((s) => s.id === seasonId);
     if (seasonIdx < 0) {
@@ -367,11 +436,18 @@ export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
 }
 
 export async function deleteSeries(id) {
+  // Soft-delete: flip `deleted` + stamp `deletedAt`, bump `updatedAt` so the
+  // tombstone propagates via the existing LWW merge. Side effects (media-
+  // collection unlink + recordDeleted emit) still run locally and also fire
+  // on the receiving peer via mergeSeriesFromSync's transition detection.
   const result = await queueSeriesWrite(async () => {
     const state = await readState();
-    const before = state.series.length;
-    state.series = state.series.filter((s) => s.id !== id);
-    if (state.series.length === before) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    const idx = state.series.findIndex((s) => s.id === id);
+    if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.series[idx];
+    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    const now = new Date().toISOString();
+    state.series[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
     await writeState(state);
     // Any live share-bucket subscription for this series tears itself down via
     // the recordEvents listener instead of orphaning.
@@ -388,6 +464,18 @@ export async function deleteSeries(id) {
 }
 
 /**
+ * Cascade orphan cleanup for a series whose soft-delete arrived via peer
+ * sync. Mirrors the post-queue cleanup in deleteSeries so a synced delete on
+ * the receiver leaves the same orphan-free state as a local delete.
+ */
+async function cascadeDeleteSideEffects(id) {
+  await unlinkCollectionsForSeries(id).catch((err) => {
+    console.error(`❌ unlink media collections for synced-delete series ${id} failed: ${err?.message || err}`);
+  });
+  emitRecordDeleted('series', id);
+}
+
+/**
  * Sync-orchestrator entry point. Merges a remote peer's series array into
  * local state INSIDE `queueSeriesWrite`, so the read-modify-write window
  * can't clobber (or be clobbered by) a concurrent bible edit, season-metadata
@@ -398,7 +486,14 @@ export async function deleteSeries(id) {
  */
 export async function mergeSeriesFromSync(remoteSeries) {
   if (!Array.isArray(remoteSeries)) return { applied: false, count: 0 };
-  return queueSeriesWrite(async () => {
+  // Series IDs that transitioned to deleted via this merge — cascade fires
+  // after the write queue releases (mirrors local-delete contract).
+  //
+  // Edit-merges (no delete-transition) DO NOT call `emitRecordUpdated` here —
+  // see `mergeUniversesFromSync` for the rationale (the Stage 2 per-record
+  // peer-sync push owns sync-time edit emits).
+  const transitionedToDeleted = [];
+  const result = await queueSeriesWrite(async () => {
     const state = await readState();
     const localById = new Map(state.series.map((s) => [s.id, s]));
     let changed = 0;
@@ -406,15 +501,24 @@ export async function mergeSeriesFromSync(remoteSeries) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
       const sanitized = sanitizeSeries(remote);
       if (!sanitized) continue;
+      // Strip inbound `ephemeral` — see mergeUniversesFromSync.
+      if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
       if (!local) {
+        // See universeBuilder.mergeUniversesFromSync — no local means no
+        // cascade work, regardless of inbound tombstone state.
         localById.set(sanitized.id, sanitized);
         changed++;
+      } else if (local.ephemeral === true) {
+        // Local-ephemeral series are immune to inbound merges. See
+        // mergeUniversesFromSync for the contract.
+        continue;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
           localById.set(sanitized.id, sanitized);
+          if (sanitized.deleted && !local.deleted) transitionedToDeleted.push(sanitized.id);
           changed++;
         }
       }
@@ -423,5 +527,32 @@ export async function mergeSeriesFromSync(remoteSeries) {
     state.series = Array.from(localById.values());
     await writeState(state);
     return { applied: true, count: changed };
+  });
+  for (const id of transitionedToDeleted) {
+    await cascadeDeleteSideEffects(id);
+  }
+  return result;
+}
+
+/**
+ * Garbage-collect series tombstones older than `beforeMs`. See
+ * `pruneTombstonedUniverses` in universeBuilder.js for the contract — the
+ * caller owns the ack-cursor + grace-period math and just tells us the
+ * cutoff timestamp. Tombstones with unparseable `deletedAt` are kept.
+ */
+export async function pruneTombstonedSeries(beforeMs) {
+  if (!Number.isFinite(beforeMs)) return { pruned: 0 };
+  return queueSeriesWrite(async () => {
+    const state = await readState();
+    const original = state.series.length;
+    state.series = state.series.filter((s) => {
+      if (!s?.deleted) return true;
+      const t = Date.parse(s.deletedAt || '');
+      if (!Number.isFinite(t)) return true;
+      return t >= beforeMs;
+    });
+    const pruned = original - state.series.length;
+    if (pruned > 0) await writeState(state);
+    return { pruned };
   });
 }

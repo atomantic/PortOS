@@ -8,7 +8,7 @@
 
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { appendFile, readFile, rm } from 'fs/promises';
+import { appendFile, readFile, rm, open, stat as fsStat, writeFile } from 'fs/promises';
 import * as shellService from './shell.js';
 import { emitLog } from './cosEvents.js';
 import { appendAgentOutputLines, updateAgent } from './cosAgents.js';
@@ -29,10 +29,9 @@ import {
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   PASTE_DEADLINE_MS,
-  RAW_BUFFER_CAP,
-  RAW_BUFFER_HEADROOM,
   OUTPUT_BUFFER_CAP,
   OUTPUT_BUFFER_HEADROOM,
+  RAW_SPOOL_MAX_BYTES,
   inferTuiCommand,
   applyCommandDefaults,
 } from '../lib/tuiHandshake.js';
@@ -40,6 +39,54 @@ import {
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
 const DEFAULT_TUI_MIN_RUNTIME_MS = 15000;
+// Tail-read window for raw.txt at failure analysis. analyzeAgentFailure only
+// inspects the last ~200 lines, so reading the whole file (which has no upper
+// bound for long-running agents) would reintroduce the OOM risk the disk
+// spool was meant to avoid. 1MB easily contains the last 200 lines of any
+// realistic PTY stream while keeping peak finalize memory bounded.
+const RAW_TAIL_ANALYSIS_BYTES = 1024 * 1024;
+
+// RAW_SPOOL_MAX_BYTES lives in tuiHandshake.js so the test suite can shrink
+// the cap via the same vi.mock pattern that overrides the output-buffer
+// thresholds — saves the truncation test from having to push hundreds of MB
+// through the spawner. A misbehaving (or compromised) TUI agent could in
+// principle emit MB/sec forever and fill the volume; realistic agents idle
+// out at 180s and emit <10MB total. At this threshold the spool is truncated
+// (rewritten with the current batch) so the most-recent data remains, which
+// is what readFileTail at finalize needs anyway. Warn fires once per agent
+// run; the `rawSpoolTruncated` metadata flag persists in the agent record
+// so the operator can spot the affected runs after the fact.
+
+/**
+ * Read at most `maxBytes` from the end of a file. Returns null when the file
+ * doesn't exist or can't be opened; an empty string for a zero-byte file.
+ * Used to bound the memory footprint of failure-analysis reads against the
+ * uncapped raw PTY spool. Non-throwing — any failure surfaces as null so
+ * the caller's failure-analysis path can fall back to outputBuffer instead
+ * of aborting `finish()` before finalizeAgent runs.
+ */
+async function readFileTail(path, maxBytes) {
+  const st = await fsStat(path).catch(() => null);
+  if (!st) return null;
+  if (st.size === 0) return '';
+  const start = Math.max(0, st.size - maxBytes);
+  const length = st.size - start;
+  const fh = await open(path, 'r').catch(() => null);
+  if (!fh) return null;
+  try {
+    const buf = Buffer.alloc(length);
+    // Honour bytesRead — the file can shrink between stat and read, or the
+    // OS can return a short read; decoding the whole `buf` would otherwise
+    // append NULs to the returned string. Read failures surface as null so
+    // callers can distinguish "empty file" ('') from "read error" (null) —
+    // a `bytesRead: 0` fallback would conflate the two.
+    const readResult = await fh.read(buf, 0, length, start).catch(() => null);
+    if (readResult === null) return null;
+    return buf.toString('utf8', 0, readResult.bytesRead);
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
 // Debounce window for batching parsed output to disk + state. A chatty TUI can
 // emit hundreds of lines/sec; without batching, each line triggers a full
 // state load+save (see appendAgentOutput) and a small appendFile, which slows
@@ -125,12 +172,20 @@ export async function spawnTuiAgent({
   isTruthyMetaFn,
 }) {
   const outputFile = join(agentDir, 'output.txt');
+  // Raw PTY bytes spool to disk continuously rather than accumulate in-memory.
+  // A chatty TUI (token-tick repaints, status lines) emits hundreds of chunks
+  // /sec; a per-run in-memory buffer would grow without bound on long agents
+  // and the join-into-single-string at finalize would double peak RAM. The
+  // disk file is appended in 250ms-debounced batches (same pattern as
+  // `flushPendingLines` for parsed output — see CLAUDE.md "High-frequency
+  // state writes must batch"), and `analyzeAgentFailure` reads the file on
+  // failure so it gets the full PTY stream regardless of run length.
+  const rawFile = join(agentDir, 'raw.txt');
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : PATHS.root;
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
 
   let outputBuffer = '';
-  let rawBuffer = '';
   let finalized = false;
   let hasStartedWorking = false;
   let promptSentAt = null;
@@ -138,18 +193,27 @@ export async function spawnTuiAgent({
   let lastOutputAt = Date.now();
   let lastLine = '';
   let sessionId = null;
-  // True once the respective buffer crossed its HEADROOM and the head was
-  // dropped. Mirrors `outputBufferTruncated` in `tuiPromptRunner.js`: warn
-  // once per buffer and surface via agent metadata so the agent record
-  // distinguishes a long-run-with-overflow from a clean short run. The raw
-  // buffer feeds analyzeAgentFailure on failure, so a silent slice there can
-  // hide the actual failure tail behind chatty progress redraws.
+  // True once outputBuffer crossed its HEADROOM and the head was dropped.
+  // Mirrors `outputBufferTruncated` in `tuiPromptRunner.js`: warn once per
+  // buffer and surface via agent metadata so the agent record distinguishes
+  // a long-run-with-overflow from a clean short run.
   let outputBufferTruncated = false;
-  let rawBufferTruncated = false;
+
+  // Bounded post-paste accumulator. Lives only while pasteEnterTimer is
+  // running (a few seconds at most), so the in-memory cost is bounded by
+  // however much the TUI emits during the paste-marker window — typically
+  // a few KB. Set to '' when sendPrompt fires; nulled when paste detection
+  // resolves or the agent finalizes.
+  let postPasteBuffer = null;
 
   let pendingLines = [];
   let flushTimer = null;
   let flushing = null;
+  let pendingRawChunks = [];
+  let rawFlushTimer = null;
+  let rawFlushing = null;
+  let rawBytesWritten = 0;
+  let rawSpoolTruncationWarned = false;
   let pasteEnterTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
@@ -169,7 +233,81 @@ export async function spawnTuiAgent({
     if (flushTimer || flushing) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
-      flushing = flushPendingLines().finally(() => { flushing = null; });
+      flushing = flushPendingLines().finally(() => {
+        flushing = null;
+        // Catch chunks that arrived during the in-flight flush — without
+        // this, a producer that goes quiet right after the flush starts
+        // strands its last batch in pendingLines until finalize.
+        if (pendingLines.length > 0) scheduleFlush();
+      });
+    }, OUTPUT_FLUSH_INTERVAL_MS);
+  };
+
+  // Raw PTY flush pipeline. Parallel to flushPendingLines but appends the
+  // unprocessed chunks (no ANSI strip, no line semantics) to raw.txt.
+  // shellService surfaces node-pty output as already-decoded UTF-8 strings
+  // (node-pty's internal StringDecoder handles multi-byte boundaries before
+  // we see chunks), so queueing strings here is sufficient — no Buffer
+  // bookkeeping needed. pendingRawChunks holds whatever arrives during the
+  // 250ms debounce window AND while an appendFile is in-flight (the next
+  // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
+  // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
+  // window of TUI output (typically hundreds of KB on a chatty agent).
+  const flushPendingRawChunks = async () => {
+    if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
+    if (pendingRawChunks.length === 0) return;
+    const batch = pendingRawChunks.join('');
+    pendingRawChunks = [];
+    // Count UTF-8 bytes actually written to disk, NOT the UTF-16 code-unit
+    // length of the JS string — non-ASCII output would otherwise under-
+    // report and let the spool exceed the safety cap.
+    const batchBytes = Buffer.byteLength(batch, 'utf8');
+    if (rawBytesWritten + batchBytes > RAW_SPOOL_MAX_BYTES) {
+      // Safety valve: rewrite the file with just this batch instead of
+      // appending. The tail-read at finalize wants the MOST RECENT bytes,
+      // not the oldest, so truncating preserves what analyzeAgentFailure
+      // actually uses while bounding disk usage at ~RAW_SPOOL_MAX_BYTES.
+      // If a single debounce-window batch exceeds the cap (runaway producer
+      // emitting MB/sec), slice to the trailing RAW_SPOOL_MAX_BYTES bytes
+      // first — Buffer-slice to keep UTF-8 byte semantics correct (a
+      // string.slice would index by UTF-16 code units and produce torn
+      // multi-byte sequences at the boundary).
+      let writeBuf;
+      if (batchBytes > RAW_SPOOL_MAX_BYTES) {
+        const buf = Buffer.from(batch, 'utf8');
+        writeBuf = buf.subarray(buf.length - RAW_SPOOL_MAX_BYTES);
+      } else {
+        writeBuf = batch;
+      }
+      const writeBytes = typeof writeBuf === 'string' ? batchBytes : writeBuf.length;
+      if (!rawSpoolTruncationWarned) {
+        rawSpoolTruncationWarned = true;
+        console.warn(`⚠️ TUI agent ${agentId} raw PTY spool reached ${Math.round(RAW_SPOOL_MAX_BYTES / 1024 / 1024)}MB — truncating spool (oldest bytes dropped; tail-read still reflects most recent)`);
+        updateAgent(agentId, { metadata: { rawSpoolTruncated: true } })
+          .catch(err => console.error(`❌ TUI agent ${agentId} rawSpoolTruncated metadata write failed: ${err.message}`));
+      }
+      // Only update the byte counter on successful write — a failed write
+      // would otherwise inflate rawBytesWritten and make subsequent flush
+      // decisions race the actual on-disk state.
+      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch(() => false);
+      if (wrote) rawBytesWritten = writeBytes;
+      return;
+    }
+    const wrote = await appendFile(rawFile, batch).then(() => true).catch(() => false);
+    if (wrote) rawBytesWritten += batchBytes;
+  };
+
+  const scheduleRawFlush = () => {
+    if (rawFlushTimer || rawFlushing) return;
+    rawFlushTimer = setTimeout(() => {
+      rawFlushTimer = null;
+      rawFlushing = flushPendingRawChunks().finally(() => {
+        rawFlushing = null;
+        // Same re-schedule guard as scheduleFlush: chunks that arrived
+        // during the in-flight appendFile would otherwise sit until
+        // finalize if the producer goes quiet immediately after.
+        if (pendingRawChunks.length > 0) scheduleRawFlush();
+      });
     }, OUTPUT_FLUSH_INTERVAL_MS);
   };
 
@@ -204,11 +342,18 @@ export async function spawnTuiAgent({
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
     if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    // Release the post-paste accumulator even when finalize fires mid-paste-
+    // window. The pasteEnterTimer's own cleanup path nulls this too, but if
+    // finalize comes from elsewhere (shell-exit, command-not-found, user
+    // termination) the timer never gets a chance to run.
+    postPasteBuffer = null;
 
-    // Drain pending parsed lines before the final state writes so completion
-    // events don't beat the last output batch to disk.
+    // Drain pending parsed lines AND raw chunks before the final state
+    // writes so completion events don't beat the last output batch to disk.
     if (flushing) await flushing.catch(() => {});
     await flushPendingLines();
+    if (rawFlushing) await rawFlushing.catch(() => {});
+    await flushPendingRawChunks();
 
     const duration = Date.now() - (agentData?.startedAt || Date.now());
     const terminatedByUser = userTerminatedAgents.has(agentId);
@@ -235,8 +380,24 @@ export async function spawnTuiAgent({
     // do NOT writeFile() it from outputBuffer at finalize — outputBuffer is
     // capped at OUTPUT_BUFFER_CAP and would silently truncate the on-disk
     // record for long runs. The append-only stream is the authoritative copy.
-    const analysisBuffer = rawBuffer || outputBuffer;
-    const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
+    //
+    // For failure analysis: read only the tail of the raw PTY spool — the
+    // analyzer's window is the last ~200 lines, so reading the full file
+    // (potentially many MB on long agents) would defeat the disk-spool's
+    // memory-bound guarantee. Successful runs skip the read entirely.
+    // raw.txt stays in agentDir alongside output.txt as the persistent
+    // record of the agent's full PTY transcript.
+    const rawAnalysisText = finalSuccess
+      ? null
+      : await readFileTail(rawFile, RAW_TAIL_ANALYSIS_BYTES);
+    // `??` (not `||`) so an empty raw spool ('') stays distinguishable from
+    // a read failure (null) — readFileTail's contract. A zero-byte raw.txt
+    // (file was created but the PTY never emitted) lets failure analysis
+    // run against ''; both a missing file AND a read error return null and
+    // fall back to outputBuffer (which has the spawn-startup notices).
+    const errorAnalysis = finalSuccess
+      ? null
+      : analyzeAgentFailure(rawAnalysisText ?? outputBuffer, task, model);
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, worktree
@@ -283,43 +444,55 @@ export async function spawnTuiAgent({
   };
 
   const handleData = async (data) => {
-    const text = data.toString();
-    rawBuffer += text;
-    if (rawBuffer.length > RAW_BUFFER_HEADROOM) {
-      rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
-      if (!rawBufferTruncated) {
-        rawBufferTruncated = true;
-        console.warn(`⚠️ TUI agent ${agentId} raw PTY buffer exceeded ${Math.round(RAW_BUFFER_HEADROOM / 1024 / 1024)}MB — head dropped (failure analysis may miss earlier symptoms)`);
-        updateAgent(agentId, { metadata: { rawBufferTruncated: true } })
-          .catch(err => console.error(`❌ TUI agent ${agentId} rawBufferTruncated metadata write failed: ${err.message}`));
-      }
-    }
-    lastOutputAt = Date.now();
-    if (firstOutputAt === null) firstOutputAt = lastOutputAt;
+    // EventEmitter listeners run outside the request lifecycle — a rejection
+    // here on Node ≥15 will kill the process unless we catch locally. The
+    // outer try/catch routes failures through emitLog (best-effort log, no
+    // re-throw) and leaves the agent run intact.
+    // See skill: nodejs-async-event-listener-unhandled-rejection.
+    try {
+      // node-pty can deliver chunks between finalize starting and the shell
+      // session being killed in finalize's finally block. Once finalized, drop
+      // them — appending to the spool, growing the post-paste accumulator, or
+      // mutating timing state is all pointless after finish has settled.
+      if (finalized) return;
+      // node-pty surfaces output as already-decoded UTF-8 strings via
+      // shellService's onData hook (StringDecoder handles multi-byte
+      // boundaries internally), so `data` is a string here in normal use.
+      // The String(...) coerces defensively in case a future caller wires
+      // a Buffer-emitting encoding.
+      const text = typeof data === 'string' ? data : String(data);
+      pendingRawChunks.push(text);
+      scheduleRawFlush();
+      if (postPasteBuffer !== null) postPasteBuffer += text;
+      lastOutputAt = Date.now();
+      if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
-    if (!hasStartedWorking) {
-      hasStartedWorking = true;
-      await updateAgent(agentId, { metadata: { phase: 'working' } });
-      emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
-    }
-
-    // The TUI is a *screen*, not a log: every progress tick repaints the
-    // status line (`thinking with…`, token counters, footer) and gets
-    // re-captured if we parse it line-by-line. The attached shell session
-    // shows the live TUI faithfully — see-the-shell is the user-facing
-    // path. We still buffer the raw stream into rawBuffer for error
-    // analysis on failure, and we detect early "command not found" so a
-    // missing binary fails fast instead of idling.
-    if (!promptSentAt) {
-      const lowerStripped = streamingStrip(text).toLowerCase();
-      if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
-        await finish({
-          success: false,
-          exitCode: 127,
-          error: `TUI command not found: ${tuiConfig.command}`,
-          reason: 'command-not-found'
-        });
+      if (!hasStartedWorking) {
+        hasStartedWorking = true;
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
       }
+
+      // The TUI is a *screen*, not a log: every progress tick repaints the
+      // status line (`thinking with…`, token counters, footer) and gets
+      // re-captured if we parse it line-by-line. The attached shell session
+      // shows the live TUI faithfully — see-the-shell is the user-facing
+      // path. We still spool the raw stream to raw.txt for error analysis
+      // on failure, and we detect early "command not found" so a missing
+      // binary fails fast instead of idling.
+      if (!promptSentAt) {
+        const lowerStripped = streamingStrip(text).toLowerCase();
+        if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
+          await finish({
+            success: false,
+            exitCode: 127,
+            error: `TUI command not found: ${tuiConfig.command}`,
+            reason: 'command-not-found'
+          });
+        }
+      }
+    } catch (err) {
+      emitLog('error', `TUI agent ${agentId} handleData failed: ${err?.message || err}`, { agentId });
     }
   };
 
@@ -375,7 +548,11 @@ export async function spawnTuiAgent({
   const sendPrompt = (reason) => {
     if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
-    const rawBufferLenBeforePaste = rawBuffer.length;
+    // Start capturing post-paste output. Set BEFORE writing the paste so
+    // every chunk that arrives in response gets appended. Cleared the moment
+    // detection resolves (marker seen or fallback elapsed) so the accumulator
+    // never lives beyond the paste-marker window.
+    postPasteBuffer = '';
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
     appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
 
@@ -389,11 +566,13 @@ export async function spawnTuiAgent({
       if (finalized) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
+        postPasteBuffer = null;
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
-      const postPasteOutput = rawBuffer.slice(rawBufferLenBeforePaste);
-      const markerSeen = PASTE_MARKER_PATTERN.test(postPasteOutput);
+      const markerSeen = postPasteBuffer
+        ? PASTE_MARKER_PATTERN.test(postPasteBuffer)
+        : false;
       // Submit when EITHER the paste-commit marker appears (preferred) or
       // the fallback window elapses (covers small prompts that don't render
       // the marker).
@@ -401,6 +580,7 @@ export async function spawnTuiAgent({
         || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
+        postPasteBuffer = null;
         submitEnter();
       }
     }, PASTE_MARKER_POLL_MS);

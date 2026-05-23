@@ -44,6 +44,17 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
+// Stub instances.js so non-ephemeral createSeries/createUniverse paths
+// don't fan out to real peers via peerSync's autoSubscribeRecordToAllPeers
+// (instances.js uses `dataPath` whose closure points at the REAL PATHS,
+// bypassing our PATHS mock above). Defense-in-depth: even with explicit
+// ephemeral:true on the direct fixtures, downstream production code may
+// still create non-ephemeral records.
+vi.mock('./instances.js', async () => {
+  const actual = await vi.importActual('./instances.js');
+  return { ...actual, getPeers: () => Promise.resolve([]) };
+});
+
 // Mock runStagedLLM so tests never hit a real provider — every importer
 // LLM call resolves to a canned JSON shape we control per-test.
 const mockRunStagedLLM = vi.fn();
@@ -499,8 +510,15 @@ describe('classifyImportContent', () => {
 async function setupForCommit() {
   // Create the universe + series the analyze phase would have created, then
   // exercise commitImport directly with a hand-shaped payload.
-  const uni = await universeSvc.createUniverse({ name: 'Commit U' });
-  const ser = await seriesSvc.createSeries({ name: 'Commit S', universeId: uni.id });
+  //
+  // ephemeral:true keeps the fixtures out of peer-sync. Without it, the
+  // create*-time `autoSubscribeRecordToAllPeers` reads the LIVE peer
+  // registry (instances.json is NOT mocked by PATHS — only fileUtils.js
+  // PATHS is, and instances.js resolves its own file paths) and fans the
+  // fixture out to every actual peer, leaving "Commit U" / "Commit S"
+  // records on the user's null sync machine after every test run.
+  const uni = await universeSvc.createUniverse({ name: 'Commit U', ephemeral: true });
+  const ser = await seriesSvc.createSeries({ name: 'Commit S', universeId: uni.id, ephemeral: true });
   return { uni, ser };
 }
 

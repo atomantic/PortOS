@@ -72,6 +72,7 @@ export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './imageClean.js';
 export * from './multipart.js';
+export * from './assetHash.js';
 export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
 
@@ -90,6 +91,7 @@ export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
 export * from './sharingOrigin.js';
+export * from './syncWire.js';
 export * from './tailscale.js';
 
 // === Search & indexing ===

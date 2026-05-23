@@ -449,6 +449,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     height: h,
     numFrames: parsedNumFrames,
     fps: parsedFps,
+    // Persist the effective render settings so the lightbox Remix flow can
+    // round-trip them back into the form. Without these, Remix would only
+    // recover prompt/model/dims/frames/fps/seed and silently revert the
+    // other dials to defaults.
+    steps: actualSteps,
+    guidanceScale: actualGuidance,
+    tiling,
+    disableAudio,
     filename,
     createdAt: new Date().toISOString(),
     // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf

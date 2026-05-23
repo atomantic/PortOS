@@ -536,6 +536,268 @@ describe("universeBuilder service", () => {
     ).resolves.toMatchObject({ name: "User-Renamed" });
   });
 
+  describe("soft-delete (tombstones for peer sync)", () => {
+    it("deleteUniverse soft-deletes (record stays on disk with deleted=true)", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      // listUniverses hides it.
+      expect(await svc.listUniverses()).toEqual([]);
+      // includeDeleted exposes the tombstone with deletedAt + bumped updatedAt.
+      const all = await svc.listUniverses({ includeDeleted: true });
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({ id: w.id, deleted: true });
+      expect(all[0].deletedAt).toBeTruthy();
+      expect(all[0].updatedAt).toBe(all[0].deletedAt);
+    });
+
+    it("getUniverse returns 404 for tombstoned, includeDeleted exposes it", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      await expect(svc.getUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      const tombstone = await svc.getUniverse(w.id, { includeDeleted: true });
+      expect(tombstone).toMatchObject({ id: w.id, deleted: true });
+    });
+
+    it("updateUniverse on a tombstoned record throws 404 (no zombie edits)", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      await expect(svc.updateUniverse(w.id, { name: "Zombie" })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    it("deleteUniverse on an already-tombstoned record throws 404", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      await expect(svc.deleteUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("insertUniverseWithId overwrites a tombstoned record (re-import undeletes)", async () => {
+      const id = "550e8400-e29b-41d4-a716-44665544abcd";
+      await svc.insertUniverseWithId({ id, name: "First" });
+      await svc.deleteUniverse(id);
+      const restored = await svc.insertUniverseWithId({ id, name: "Restored" });
+      expect(restored).toMatchObject({ id, name: "Restored", deleted: false });
+      // listUniverses shows it (no longer hidden).
+      expect((await svc.listUniverses()).map((u) => u.id)).toContain(id);
+    });
+
+    it("insertUniverseWithId still rejects DUPLICATE on a LIVE record", async () => {
+      const id = "550e8400-e29b-41d4-a716-44665544abce";
+      await svc.insertUniverseWithId({ id, name: "First" });
+      await expect(
+        svc.insertUniverseWithId({ id, name: "Second" }),
+      ).rejects.toMatchObject({ code: svc.ERR_DUPLICATE });
+    });
+
+    describe("mergeUniversesFromSync", () => {
+      it("applies an inbound soft-delete from a peer", async () => {
+        const w = await seedWorld();
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(r).toEqual({ applied: true, count: 1 });
+        await expect(svc.getUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+        const tombstone = await svc.getUniverse(w.id, { includeDeleted: true });
+        expect(tombstone.deleted).toBe(true);
+      });
+
+      it("LWW: an inbound edit with later updatedAt wins over a local tombstone", async () => {
+        const w = await seedWorld();
+        await svc.deleteUniverse(w.id);
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          name: "Edited After Delete",
+          deleted: false,
+          deletedAt: null,
+          updatedAt: editTs,
+        }]);
+        expect(r.applied).toBe(true);
+        // Edit wins — record is live again with the new name.
+        const live = await svc.getUniverse(w.id);
+        expect(live).toMatchObject({ name: "Edited After Delete", deleted: false });
+      });
+
+      it("LWW: an inbound tombstone with later updatedAt wins over a local edit", async () => {
+        const w = await seedWorld();
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(r.applied).toBe(true);
+        await expect(svc.getUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      });
+
+      it("delete transition via sync drops orphan runs (mirrors local-delete contract)", async () => {
+        const w = await seedWorld();
+        await svc.recordRun({
+          id: "run-sync-1",
+          universeId: w.id,
+          collectionId: "col-x",
+          jobIds: ["j1"],
+          promptCount: 1,
+        });
+        expect(await svc.listRuns(w.id)).toHaveLength(1);
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(await svc.listRuns(w.id)).toEqual([]);
+      });
+
+      it("inbound tombstone for a NEVER-SEEN universe is accepted without firing the cascade (no orphan teardown for nothing)", async () => {
+        // Regression: the no-local branch previously included tombstones in
+        // `transitionedToDeleted`, firing `emitRecordDeleted` + the orphan
+        // cascade for a record we never had. Now the no-local branch accepts
+        // the record silently — the cascade only fires on real local
+        // transitions (deleted=false → deleted=true).
+        const ghostId = "550e8400-0000-0000-0000-000000000999";
+        const ts = new Date().toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          id: ghostId,
+          name: "Ghost",
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+        }]);
+        expect(r).toEqual({ applied: true, count: 1 });
+        // Tombstone is on disk via includeDeleted.
+        const all = await svc.listUniverses({ includeDeleted: true });
+        expect(all.find((u) => u.id === ghostId)).toMatchObject({ deleted: true });
+      });
+
+      it("delete transition via sync runs cascade — unlinks media collections", async () => {
+        const collections = await import("./mediaCollections.js");
+        const w = await seedWorld();
+        const linked = await collections.findOrCreateCollectionByName({
+          name: collections.universeCollectionNameFor(w.name),
+          universeId: w.id,
+        });
+        expect(linked.universeId).toBe(w.id);
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        const fresh = await collections.getCollection(linked.id);
+        expect(fresh.universeId).toBeNull();
+      });
+
+      it("local-ephemeral universes are IMMUNE to inbound merges (peer edits + tombstones both refused)", async () => {
+        // The user marks a universe ephemeral to fork it private. A peer
+        // that still has the pre-ephemeral version (or has a reverse
+        // subscription) must not be able to overwrite local content or
+        // trigger an orphan cascade by deleting their copy.
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, { ephemeral: true });
+        const localBefore = await svc.getUniverse(w.id);
+        // Inbound edit with NEWER updatedAt — would normally win via LWW.
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const editResult = await svc.mergeUniversesFromSync([{
+          ...w,
+          name: "Should Not Land",
+          updatedAt: editTs,
+        }]);
+        expect(editResult.applied).toBe(false);
+        const localAfterEdit = await svc.getUniverse(w.id);
+        expect(localAfterEdit.name).toBe(localBefore.name);
+        expect(localAfterEdit.ephemeral).toBe(true);
+        // Inbound tombstone with NEWER updatedAt — would normally tombstone.
+        const tombstoneTs = new Date(Date.now() + 120_000).toISOString();
+        const deleteResult = await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(deleteResult.applied).toBe(false);
+        const stillLive = await svc.getUniverse(w.id);
+        expect(stillLive.deleted).toBeFalsy();
+      });
+
+      it("strips inbound `ephemeral` field — peers cannot plant a 'dark' record on the receiver", async () => {
+        // The wire never carries `ephemeral`, but a buggy / older / non-
+        // conformant peer (or the share-bucket importer's mutator-form
+        // path) could ship a record with `ephemeral: true`. The receiver
+        // must NOT honor that — it's a local-only marker by contract.
+        const ghostId = "550e8400-0000-0000-0000-000000000aaa";
+        const ts = new Date().toISOString();
+        await svc.mergeUniversesFromSync([{
+          id: ghostId,
+          name: "Inbound Poison",
+          ephemeral: true, // attempt to plant a dark record
+          updatedAt: ts,
+        }]);
+        const inbound = await svc.getUniverse(ghostId);
+        expect(inbound.name).toBe("Inbound Poison");
+        // Receiver scrubs the field — record is normal-syncable.
+        expect(inbound.ephemeral).toBeUndefined();
+      });
+    });
+
+    describe("pruneTombstonedUniverses", () => {
+      it("removes tombstones older than the cutoff and leaves newer ones + live records", async () => {
+        const live = await seedWorld();
+        const oldTombstone = await seedWorld();
+        const newTombstone = await seedWorld();
+        await svc.deleteUniverse(oldTombstone.id);
+        await svc.deleteUniverse(newTombstone.id);
+        // Backdate the old tombstone's deletedAt directly via merge.
+        const oldDeletedAt = new Date(Date.now() - 100_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...(await svc.getUniverse(oldTombstone.id, { includeDeleted: true })),
+          deletedAt: oldDeletedAt,
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+
+        // Cutoff = now - 50s — old (100s ago) is past, new (just now) is not.
+        const cutoff = Date.now() - 50_000;
+        const result = await svc.pruneTombstonedUniverses(cutoff);
+        expect(result.pruned).toBe(1);
+        const remaining = await svc.listUniverses({ includeDeleted: true });
+        const ids = remaining.map((u) => u.id);
+        expect(ids).toContain(live.id);
+        expect(ids).toContain(newTombstone.id);
+        expect(ids).not.toContain(oldTombstone.id);
+      });
+
+      it("keeps tombstones with unparseable deletedAt (conservative)", async () => {
+        const w = await seedWorld();
+        await svc.deleteUniverse(w.id);
+        // Corrupt the deletedAt via merge — this can happen if a peer ships
+        // a malformed record. We refuse to prune anything we can't time-stamp.
+        await svc.mergeUniversesFromSync([{
+          ...(await svc.getUniverse(w.id, { includeDeleted: true })),
+          deletedAt: 'not-a-date',
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+        const result = await svc.pruneTombstonedUniverses(Date.now() + 60_000_000);
+        expect(result.pruned).toBe(0);
+        const remaining = await svc.listUniverses({ includeDeleted: true });
+        expect(remaining.find((u) => u.id === w.id)).toBeTruthy();
+      });
+
+      it("returns { pruned: 0 } for a non-finite cutoff (defensive)", async () => {
+        expect(await svc.pruneTombstonedUniverses(NaN)).toEqual({ pruned: 0 });
+        expect(await svc.pruneTombstonedUniverses(Infinity)).toEqual({ pruned: 0 });
+        expect(await svc.pruneTombstonedUniverses('not-a-number')).toEqual({ pruned: 0 });
+      });
+    });
+  });
+
   describe("synthesizeCanonPrompt", () => {
     it("hand-authored prompt wins over field synthesis", () => {
       expect(svc.synthesizeCanonPrompt("characters", {

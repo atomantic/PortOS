@@ -54,6 +54,7 @@ import {
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
+import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
@@ -64,12 +65,6 @@ import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 // see the hint under the Frames dropdown.
 const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481];
 const FPS_OPTIONS = [16, 24, 30];
-const TILING_OPTIONS = [
-  { value: 'auto', label: 'Auto (recommended)' },
-  { value: 'none', label: 'None (fastest, more VRAM)' },
-  { value: 'spatial', label: 'Spatial only' },
-  { value: 'temporal', label: 'Temporal only' },
-];
 
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
@@ -174,6 +169,55 @@ export default function VideoGen() {
     if (Number.isFinite(h) && h > 0) setHeight(h);
   }, [incomingWidth, incomingHeight]);
 
+  // Remix payload from MediaPreview (?modelId=…&numFrames=…&seed=…). Populate
+  // form state once on mount, then strip the params so a hot-reload or back-
+  // nav doesn't re-clobber edits the user has made since. Mirrors the
+  // ImageGen remix-prefill effect.
+  //
+  // Gating: presence of any remix-only key (modelId / numFrames / fps / seed
+  // / steps / guidanceScale / tiling / disableAudio) marks the URL as a Remix
+  // bundle — the Continue and SendToVideo paths set sourceImageFile +/-
+  // prompt/w/h but never the remix-only keys, so they keep their URL state.
+  // When it IS a remix, we ALSO strip prompt/negativePrompt/w/h from the URL.
+  // Note: prompt/negativePrompt are captured by initial useState (lines above);
+  // w/h are NOT in initial state (defaults are 768×512) and are instead applied
+  // by the separate incomingWidth/incomingHeight effect on first render —
+  // which runs BEFORE this strip-pass since effects fire in declaration order.
+  // The result is the same one-shot consumption, just via two effects.
+  useEffect(() => {
+    const remixGateKeys = ['modelId', 'numFrames', 'fps', 'seed', 'steps', 'guidanceScale', 'tiling', 'disableAudio'];
+    const present = remixGateKeys.filter((k) => searchParams.get(k) != null);
+    if (present.length === 0) return;
+    const get = (k) => searchParams.get(k);
+    if (get('modelId')) setModelId(get('modelId'));
+    const nf = Number(get('numFrames'));
+    if (Number.isFinite(nf) && nf > 0) setNumFrames(nf);
+    const f = Number(get('fps'));
+    if (Number.isFinite(f) && f > 0) setFps(f);
+    if (get('seed') != null) setSeed(get('seed'));
+    if (get('steps')) setSteps(get('steps'));
+    // guidanceScale=0 is a meaningful value (CFG off); test for presence,
+    // not truthiness, so "0" round-trips through Remix correctly.
+    if (get('guidanceScale') != null && get('guidanceScale') !== '') setGuidanceScale(get('guidanceScale'));
+    // tiling: URL params are user-controlled; only accept values defined in
+    // VIDEO_TILING_OPTIONS so a hand-edited URL or stale link can't push the
+    // <select> into an invalid state and 400 the next POST.
+    const urlTiling = get('tiling');
+    if (urlTiling && VIDEO_TILING_ENUM_SET.has(urlTiling)) setTiling(urlTiling);
+    // disableAudio is a boolean; accept the common encodings a hand-edited URL
+    // might carry ('1' from our own Remix builder, 'true' from a manual share).
+    // Anything else (absent, '0', 'false', garbage) means "default off".
+    const audioParam = (get('disableAudio') || '').toLowerCase();
+    setDisableAudio(audioParam === '1' || audioParam === 'true');
+    const stripKeys = [...remixGateKeys, 'prompt', 'negativePrompt', 'w', 'h'];
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      stripKeys.forEach((k) => n.delete(k));
+      return n;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [history, setHistory] = useState([]);
   // `preview` is URL-driven via `usePreviewRoute(previewItems)` — declared
   // after `previewItems` below so the resolver can match against it.
@@ -275,6 +319,69 @@ export default function VideoGen() {
     navigate(`/media/video?${params.toString()}`);
   };
 
+  // Remix a prior render: hand all its params back into the form so the user
+  // can iterate (tweak the prompt, swap seeds, etc.) without re-typing.
+  // Mirrors ImageGen.handleRemix — in-page state set so the form jumps to
+  // the new values without a navigation. The `item` is the raw video sidecar
+  // (not the normalized MediaPreview shape).
+  const handleRemixVideo = (item) => {
+    if (!item) return;
+    setStylePreset(null);
+    // prompt: always set explicitly. Legacy entries can be missing `prompt`
+    // (normalizeVideo surfaces them as '(no prompt)') — clear the form instead
+    // of leaving whatever the user previously typed, matching the
+    // useMediaPreviewActions.handleRemix '(no prompt)' filter.
+    const nextPrompt = item.prompt && item.prompt !== '(no prompt)' ? item.prompt : '';
+    setPrompt(nextPrompt);
+    // negativePrompt: always set explicitly so remixing a clip with no
+    // negative prompt clears any value the user previously typed. Skipping the
+    // else-branch would leave stale form text and break the "round-trip
+    // original settings" expectation.
+    const neg = item.negativePrompt || item.negative_prompt || '';
+    setNegativePrompt(neg);
+    // Set modelId unconditionally when present. If models hasn't loaded yet
+    // (race on initial mount), this avoids dropping the value silently — the
+    // post-load validation effect (`Validate modelId once models are loaded`)
+    // will fall back to defaultModel if the id doesn't end up in the catalog.
+    if (item.modelId) setModelId(item.modelId);
+    if (item.width) setWidth(item.width);
+    if (item.height) setHeight(item.height);
+    if (item.numFrames) setNumFrames(item.numFrames);
+    if (item.fps) setFps(item.fps);
+    if (item.seed != null) setSeed(String(item.seed));
+    // steps/guidanceScale: always set explicitly. Legacy entries (created
+    // before these were persisted) lack these fields — clear the form to the
+    // empty-string sentinel rather than leaving the prior render's value
+    // behind. The form treats '' as "use model default" so this is the
+    // faithful round-trip for missing fields.
+    setSteps(item.steps != null && item.steps !== '' ? String(item.steps) : '');
+    const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
+    setGuidanceScale(guidance != null && guidance !== '' ? String(guidance) : '');
+    // tiling must match the VIDEO_TILING_OPTIONS enum. Legacy sidecars sometimes
+    // store a boolean here — silently ignore unknown values so the <select>
+    // stays valid and the next POST doesn't 400.
+    if (typeof item.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(item.tiling)) setTiling(item.tiling);
+    // disableAudio: always set explicitly (true/false) so the toggle reliably
+    // matches the remixed render. Skipping the false branch would leave the
+    // toggle stuck ON when the user remixes a clip that had audio enabled.
+    const disableAudio = item.disableAudio ?? item.disable_audio;
+    setDisableAudio(disableAudio === true);
+    // Reset to text-to-video mode and clear any stale conditioning inputs from
+    // image / fflf / extend / a2v modes. Without this, clicking Remix while
+    // currently in (e.g.) image mode would carry the old source image into the
+    // next submit even though Remix is meant to faithfully reproduce the prior
+    // (text-to-video) render. Cross-page Remix already lands the user in text
+    // mode because /media/video without `sourceImageFile` defaults that way.
+    setMode('text');
+    setSourceImageFile(null);
+    setSourceImageUpload(null);
+    setLastImageFile(null);
+    setLastImageUpload(null);
+    setExtendFromVideoId('');
+    setAudioFile(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState(null);
   const [statusMsg, setStatusMsg] = useState('');
@@ -314,6 +421,19 @@ export default function VideoGen() {
     refreshStatus();
     return () => eventSourceRef.current?.close();
   }, [refreshStatus]);
+
+  // Validate `modelId` once models are loaded. A Remix URL (or hand-edited
+  // link) can carry a `modelId` that no longer exists in the catalog — that
+  // leaves <ModelSelect> showing nothing and `currentModel` undefined, which
+  // then breaks resolution suggestions and submit. When we detect that, fall
+  // back to status.defaultModel (preferred) or the first available model so
+  // the form stays in a usable state.
+  useEffect(() => {
+    if (!modelId || models.length === 0) return;
+    if (models.some((m) => m.id === modelId)) return;
+    const fallback = status?.defaultModel || models[0]?.id || '';
+    if (fallback) setModelId(fallback);
+  }, [modelId, models, status?.defaultModel]);
 
   const currentModel = models.find((m) => m.id === modelId);
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
@@ -1161,7 +1281,7 @@ export default function VideoGen() {
                 onChange={(e) => setTiling(e.target.value)}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
-                {TILING_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {VIDEO_TILING_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </div>
 
@@ -1251,7 +1371,7 @@ export default function VideoGen() {
           </div>
           <div className="aspect-video max-w-[420px] mx-auto bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
             {result ? (
-              <video src={result.path || `/data/videos/${result.filename}`} controls autoPlay loop preload="metadata" className="w-full h-full" />
+              <video src={result.path || `/data/videos/${result.filename}`} controls autoPlay loop playsInline preload="metadata" className="w-full h-full" />
             ) : generating ? (
               <div className="text-gray-500 text-xs flex flex-col items-center gap-1.5">
                 <BrailleSpinner />
@@ -1362,6 +1482,7 @@ export default function VideoGen() {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onContinue={(item) => handleContinueHistory(item.raw)}
+        onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">

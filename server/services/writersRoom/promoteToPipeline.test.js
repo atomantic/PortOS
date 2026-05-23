@@ -11,6 +11,15 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: () => tempRoot });
 });
 
+// Stub instances.js so promoteWorkToPipeline's non-ephemeral
+// createSeries/createIssue calls don't fan out to real peers via
+// peerSync's autoSubscribeRecordToAllPeers (which reads the live peer
+// registry through dataPath closure to the real PATHS).
+vi.mock('../instances.js', async () => {
+  const actual = await vi.importActual('../instances.js');
+  return { ...actual, getPeers: () => Promise.resolve([]) };
+});
+
 const wrLocal = await import('./local.js');
 const { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } = await import('./promoteToPipeline.js');
 const { createCharacter } = await import('./characters.js');
@@ -142,8 +151,14 @@ describe('promoteWorkToPipeline', () => {
     // Simulate a corrupted link: rewrite the work manifest to point at the
     // first series but a DIFFERENT (unrelated) series' issue. Mirrors a
     // manual edit, partial delete, or migration bug.
-    const strayerSeries = await seriesSvc.createSeries({ name: 'Strayer' });
-    const strayerIssue = await issuesSvc.createIssue({ seriesId: strayerSeries.id, title: 'Stray' });
+    // ephemeral:true is defense-in-depth here. The file-top vi.mock of
+    // ./instances.js already stubs getPeers to return []; without that
+    // mock, autosubscribe-on-create would initial-push 'Strayer' to every
+    // real peer in data/instances.json. The ephemeral flag protects the
+    // wire even if the mock ever regresses or a future production code
+    // path bypasses getPeers.
+    const strayerSeries = await seriesSvc.createSeries({ name: 'Strayer', ephemeral: true });
+    const strayerIssue = await issuesSvc.createIssue({ seriesId: strayerSeries.id, title: 'Stray', ephemeral: true });
     await wrLocal.linkToPipeline(work.id, { seriesId: first.series.id, issueId: strayerIssue.id });
 
     const second = await promoteWorkToPipeline(work.id);

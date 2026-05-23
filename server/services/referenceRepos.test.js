@@ -39,6 +39,16 @@ vi.mock('../lib/execGit.js', () => ({
   },
 }));
 
+// Stubs for CoS task queuing — used by triggerReferenceAnalysis.
+const addTaskMock = vi.fn(async (task) => task);
+vi.mock('./cos.js', () => ({
+  addTask: (...args) => addTaskMock(...args),
+}));
+const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewer}\n{referenceData}\n{planConstraint}');
+vi.mock('./taskSchedule.js', () => ({
+  getTaskPrompt: (...args) => getTaskPromptMock(...args),
+}));
+
 // existsSync is hit when the service decides whether the managed clone
 // already exists. Default to false so first-touch goes through clone path;
 // individual tests override.
@@ -56,6 +66,10 @@ beforeEach(async () => {
   vi.resetModules();
   mockApps.clear();
   execGitMock.mockReset();
+  addTaskMock.mockReset();
+  addTaskMock.mockImplementation(async (task) => task);
+  getTaskPromptMock.mockReset();
+  getTaskPromptMock.mockImplementation(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewer}\n{referenceData}\n{planConstraint}');
   existsMock.mockReset();
   existsMock.mockReturnValue(false);
   svc = await import('./referenceRepos.js');
@@ -334,5 +348,57 @@ describe('markReferenceRepoReviewed', () => {
       .rejects.toThrow(/not found in reference repo/);
     // SHA must NOT have been persisted on a failed verification.
     expect(mockApps.get('app-1').referenceRepos[0].lastReviewedSha).toBeNull();
+  });
+});
+
+describe('triggerReferenceAnalysis', () => {
+  const app = { id: 'app-1', name: 'TestApp', repoPath: '/mock/repo' };
+  const ref = { id: 'r1', name: 'phosphene', repoUrl: 'https://github.com/x/y.git', branch: 'main' };
+  const snapshot = { head: 'a'.repeat(40), headShort: 'aaaaaaaa', commitCount: 3, commits: [], cwd: '/mock/clone', branch: 'main' };
+
+  it('skips when snapshot has no new commits', async () => {
+    const result = await svc.triggerReferenceAnalysis(app, ref, { ...snapshot, commitCount: 0 });
+    expect(result).toEqual({ queued: false, reason: 'no-new-commits' });
+    expect(addTaskMock).not.toHaveBeenCalled();
+  });
+
+  it('skips when snapshot is null', async () => {
+    const result = await svc.triggerReferenceAnalysis(app, ref, null);
+    expect(result).toEqual({ queued: false, reason: 'no-new-commits' });
+  });
+
+  it('skips when app is null', async () => {
+    const result = await svc.triggerReferenceAnalysis(null, ref, snapshot);
+    expect(result).toEqual({ queued: false, reason: 'app-not-found' });
+  });
+
+  it('queues a task with single-line description and full prompt in metadata.context', async () => {
+    const result = await svc.triggerReferenceAnalysis(app, ref, snapshot);
+    expect(result.queued).toBe(true);
+    expect(result.taskId).toBeTruthy();
+    expect(addTaskMock).toHaveBeenCalledTimes(1);
+    const taskArg = addTaskMock.mock.calls[0][0];
+    // Task ID must use a known internal prefix so taskParser doesn't rewrite it
+    expect(taskArg.id).toMatch(/^sys-ref-analysis-/);
+    // Description must be single-line and contain ref + app identifiers
+    expect(taskArg.description).not.toContain('\n');
+    expect(taskArg.description).toContain('phosphene');
+    expect(taskArg.description).toContain('TestApp');
+    expect(taskArg.description).toContain('github.com/x/y.git');
+    // Full prompt stored in metadata.context for COS-TASKS.md round-trip safety
+    expect(taskArg.metadata.context).toContain('Analyze TestApp');
+    expect(taskArg.metadata.context).toContain('/mock/repo');
+    // Must set autoApproved so CoS dequeues automatically
+    expect(taskArg.autoApproved).toBe(true);
+    expect(taskArg.section).toBe('pending');
+    // Task type markers
+    expect(addTaskMock.mock.calls[0][1]).toBe('internal');
+    expect(addTaskMock.mock.calls[0][2]).toEqual({ raw: true });
+  });
+
+  it('returns duplicate when addTask signals a duplicate', async () => {
+    addTaskMock.mockResolvedValueOnce({ id: 'dup-1', duplicate: true });
+    const result = await svc.triggerReferenceAnalysis(app, ref, snapshot);
+    expect(result).toEqual({ queued: false, reason: 'duplicate', taskId: 'dup-1' });
   });
 });

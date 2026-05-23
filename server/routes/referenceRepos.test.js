@@ -12,6 +12,16 @@ vi.mock('../services/referenceRepos.js', () => ({
   deleteReferenceRepo: vi.fn(async () => ({ ok: true })),
   checkReferenceRepo: vi.fn(async () => ({ head: 'a'.repeat(40), commitCount: 2, commits: [] })),
   markReferenceRepoReviewed: vi.fn(async (_appId, refId, sha) => ({ id: refId, lastReviewedSha: sha })),
+  triggerReferenceAnalysis: vi.fn(async () => ({ queued: true, taskId: 'ref-analysis-1' })),
+}));
+
+vi.mock('../services/apps.js', () => ({
+  getAppById: vi.fn(async () => ({
+    id: 'app-1',
+    name: 'TestApp',
+    repoPath: '/mock/repo',
+    referenceRepos: [{ id: 'r1', name: 'phosphene', repoUrl: 'https://github.com/x/y.git' }],
+  })),
 }));
 
 import * as svc from '../services/referenceRepos.js';
@@ -115,6 +125,32 @@ describe('reference repos routes', () => {
       expect(r.status).toBe(200);
       expect(r.body).toMatchObject({ commitCount: 2 });
       expect(svc.checkReferenceRepo).toHaveBeenCalledWith('app-1', 'r1');
+    });
+
+    it('triggers analysis when new commits exist', async () => {
+      const r = await request(app).post('/api/apps/app-1/reference-repos/r1/check');
+      expect(r.status).toBe(200);
+      expect(r.body.analysis).toEqual({ queued: true, taskId: 'ref-analysis-1' });
+      expect(svc.triggerReferenceAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'app-1', name: 'TestApp' }),
+        expect.objectContaining({ id: 'r1' }),
+        expect.objectContaining({ commitCount: 2 }),
+      );
+    });
+
+    it('returns stable reason code when analysis trigger throws', async () => {
+      svc.triggerReferenceAnalysis.mockRejectedValueOnce(new Error('something internal'));
+      const r = await request(app).post('/api/apps/app-1/reference-repos/r1/check');
+      expect(r.status).toBe(200);
+      expect(r.body.analysis).toEqual({ queued: false, reason: 'analysis-trigger-failed' });
+    });
+
+    it('skips analysis when no new commits', async () => {
+      svc.checkReferenceRepo.mockResolvedValueOnce({ head: 'a'.repeat(40), commitCount: 0, commits: [] });
+      const r = await request(app).post('/api/apps/app-1/reference-repos/r1/check');
+      expect(r.status).toBe(200);
+      expect(r.body.analysis).toEqual({ queued: false, reason: 'no-new-commits' });
+      expect(svc.triggerReferenceAnalysis).not.toHaveBeenCalled();
     });
   });
 

@@ -29,6 +29,7 @@ import {
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../../lib/issueLength.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
@@ -410,6 +411,13 @@ const sanitizeIssue = (raw) => {
     origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
+    // Soft-delete fields — see universeBuilder.sanitizeTemplate.
+    ...sanitizeSoftDeleteFields(raw),
+    // Local-only "don't sync to peers" marker. Issues piggyback on their
+    // parent series' subscription, so marking an issue ephemeral keeps the
+    // series push payload from carrying it (sanitizeRecordForWire drops it
+    // and the series's bundled-issues filter discards the null entry).
+    ...(raw.ephemeral === true ? { ephemeral: true } : {}),
   };
 };
 
@@ -430,9 +438,11 @@ export async function listIssues({
   limit = ISSUES_PER_RESPONSE_MAX,
   paginated = false,
   withHistory = true,
+  includeDeleted = false,
 } = {}) {
   const { issues } = await readState();
-  const filtered = seriesId ? issues.filter((i) => i.seriesId === seriesId) : issues;
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
+  const filtered = seriesId ? live.filter((i) => i.seriesId === seriesId) : live;
   const sorted = [...filtered].sort((a, b) => {
     if (a.seriesId !== b.seriesId) return a.seriesId.localeCompare(b.seriesId);
     return (a.number || 0) - (b.number || 0);
@@ -459,8 +469,9 @@ export async function listIssues({
  * beyond 1000, so the sidebar's recent-issues view needs this dedicated
  * helper.
  */
-export async function listRecentIssues({ limit = 10, withHistory = true } = {}) {
+export async function listRecentIssues({ limit = 10, withHistory = true, includeDeleted = false } = {}) {
   const { issues } = await readState();
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   // Coerce in two passes so non-finite inputs ('abc', undefined) fall to
   // the default rather than letting JS's `0 || 10` short-circuit return
   // 10 for an explicit limit=0.
@@ -468,16 +479,17 @@ export async function listRecentIssues({ limit = 10, withHistory = true } = {}) 
   const fallback = Number.isFinite(raw) ? Math.floor(raw) : 10;
   const clamped = Math.max(1, Math.min(50, fallback));
   const project = withHistory ? (i) => i : stripRunHistoryFromIssue;
-  return [...issues]
+  return [...live]
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
     .slice(0, clamped)
     .map(project);
 }
 
-export async function getIssue(id) {
+export async function getIssue(id, { includeDeleted = false } = {}) {
   const { issues } = await readState();
   const found = issues.find((i) => i.id === id);
   if (!found) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+  if (found.deleted && !includeDeleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
@@ -487,40 +499,45 @@ export function createIssue(input = {}) {
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const next = sanitizeIssue({
-    id: `iss-${randomUUID()}`,
-    seriesId,
-    // Placeholder — `renumberInline` below derives the canonical number.
-    number: 0,
-    title,
-    status: 'draft',
-    // Phase 2: optional arc pointers passed by the season-episodes generator
-    // (and any future caller wiring an issue to a season at create time).
-    seasonId: 'seasonId' in input ? input.seasonId : null,
-    arcPosition: 'arcPosition' in input ? input.arcPosition : null,
-    arcRole: 'arcRole' in input ? input.arcRole : null,
-    lengthProfile: 'lengthProfile' in input ? input.lengthProfile : undefined,
-    pageTarget: 'pageTarget' in input ? input.pageTarget : null,
-    minutesTarget: 'minutesTarget' in input ? input.minutesTarget : null,
-    stages: input.stages || {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
-  if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-  state.issues.push(next);
-  await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
-  await writeState(state);
-  // New issue = series-level change for any active share subscription.
-  emitRecordUpdated('series', next.seriesId);
-  return next;
+    const state = await readState();
+    const next = sanitizeIssue({
+      id: `iss-${randomUUID()}`,
+      seriesId,
+      // Placeholder — `renumberInline` below derives the canonical number.
+      number: 0,
+      title,
+      status: 'draft',
+      // Phase 2: optional arc pointers passed by the season-episodes generator
+      // (and any future caller wiring an issue to a season at create time).
+      seasonId: 'seasonId' in input ? input.seasonId : null,
+      arcPosition: 'arcPosition' in input ? input.arcPosition : null,
+      arcRole: 'arcRole' in input ? input.arcRole : null,
+      lengthProfile: 'lengthProfile' in input ? input.lengthProfile : undefined,
+      pageTarget: 'pageTarget' in input ? input.pageTarget : null,
+      minutesTarget: 'minutesTarget' in input ? input.minutesTarget : null,
+      stages: input.stages || {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ephemeral: input.ephemeral === true,
+    });
+    if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+    state.issues.push(next);
+    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
+    await writeState(state);
+    // New issue = series-level change for any active share subscription.
+    emitRecordUpdated('series', next.seriesId);
+    return next;
   }); // end queueIssueWrite
 }
 
 async function renumberInline(state, seriesId, fromSeasonId = null) {
   const series = await seriesSvc.getSeries(seriesId).catch(() => null);
+  // Exclude tombstones from numbering — surviving issues should keep a
+  // contiguous sequence regardless of how many deletes happened.
+  // applyVolumeOrderedNumbers mutates each issue's `number` in place, so the
+  // filtered array still aliases the same objects in state.issues.
   return applyVolumeOrderedNumbers({
-    issues: state.issues,
+    issues: state.issues.filter((i) => !i.deleted),
     seriesId,
     seasons: series?.seasons || [],
     fromSeasonId,
@@ -578,6 +595,10 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
     for (let i = 0; i < state.issues.length; i += 1) {
       const iss = state.issues[i];
       if (iss.seriesId !== seriesId) continue;
+      // Skip tombstones — moving a soft-deleted issue would bump its
+      // `updatedAt`, which then loses LWW races with the originator's
+      // tombstone and can resurrect the record on every peer.
+      if (iss.deleted) continue;
       if ((iss.seasonId || null) !== (fromSeasonId || null)) continue;
       // Re-sanitize through the same pipeline updateIssue uses so the
       // in-memory rewrite gets the same shape guarantees as a route PATCH.
@@ -615,12 +636,19 @@ export function insertIssueWithId(input = {}) {
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueIssueWrite(async () => {
     const state = await readState();
-    if (state.issues.some((i) => i.id === input.id)) {
+    // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId.
+    const existingIdx = state.issues.findIndex((i) => i.id === input.id);
+    if (existingIdx >= 0 && !state.issues[existingIdx].deleted) {
       throw makeErr(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const next = sanitizeIssue({ ...input, seriesId, title });
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-    state.issues.push(next);
+    if (existingIdx >= 0) {
+      console.warn(`♻️  insertIssueWithId: overwriting tombstone for ${input.id}`);
+      state.issues[existingIdx] = next;
+    } else {
+      state.issues.push(next);
+    }
     // Imported `number` is a starting hint — local canonical numbering still
     // comes from (volume order, arcPosition) of the local state.
     await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
@@ -631,97 +659,102 @@ export function insertIssueWithId(input = {}) {
 
 export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const idx = state.issues.findIndex((i) => i.id === id);
-  if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const cur = state.issues[idx];
+    const state = await readState();
+    const idx = state.issues.findIndex((i) => i.id === id);
+    if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.issues[idx];
+    if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
 
-  // Per-stage merge: a stage patch carries only the fields the caller is
-  // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
-  // spread would replace the entire stage object and silently drop sibling
-  // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
-  // those back to empty arrays/null, erasing work the user (or LLM) just did.
-  // Callers that need stage-level changes without touching issue-level fields
-  // should use `updateStage`, which does a shallow merge of the patch over the
-  // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
-  // Note: `updateStage` still merges — omitted sibling stage fields are
-  // preserved. To clear a field explicitly, pass it as `null` or `""` in the
-  // patch.
-  //
-  // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
-  // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
-  // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
-  // just persisted. Passing `null` explicitly still clears the sub-object
-  // (intentional-clear semantics).
-  const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
-  let mergedStages = cur.stages;
-  if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
-    mergedStages = { ...cur.stages };
-    for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
-      const prev = cur.stages?.[stageId];
-      if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
-        const merged = { ...prev, ...stagePatch };
-        // Mirror the snapshot trigger from updateStageWithLatest so a
-        // route-level PATCH that swaps lastRunId (e.g. the restore endpoint)
-        // also produces a runHistory entry. No-op when the patch is a plain
-        // save-edit without lastRunId.
-        merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
-        for (const key of NESTED_DEEP_MERGE_KEYS) {
-          if (key in stagePatch
-              && stagePatch[key] && typeof stagePatch[key] === 'object'
-              && prev[key] && typeof prev[key] === 'object') {
-            merged[key] = { ...prev[key], ...stagePatch[key] };
+    // Per-stage merge: a stage patch carries only the fields the caller is
+    // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
+    // spread would replace the entire stage object and silently drop sibling
+    // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
+    // those back to empty arrays/null, erasing work the user (or LLM) just did.
+    // Callers that need stage-level changes without touching issue-level fields
+    // should use `updateStage`, which does a shallow merge of the patch over the
+    // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
+    // Note: `updateStage` still merges — omitted sibling stage fields are
+    // preserved. To clear a field explicitly, pass it as `null` or `""` in the
+    // patch.
+    //
+    // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
+    // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
+    // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
+    // just persisted. Passing `null` explicitly still clears the sub-object
+    // (intentional-clear semantics).
+    const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
+    let mergedStages = cur.stages;
+    if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
+      mergedStages = { ...cur.stages };
+      for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
+        const prev = cur.stages?.[stageId];
+        if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
+          const merged = { ...prev, ...stagePatch };
+          // Mirror the snapshot trigger from updateStageWithLatest so a
+          // route-level PATCH that swaps lastRunId (e.g. the restore endpoint)
+          // also produces a runHistory entry. No-op when the patch is a plain
+          // save-edit without lastRunId.
+          merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
+          for (const key of NESTED_DEEP_MERGE_KEYS) {
+            if (key in stagePatch
+                && stagePatch[key] && typeof stagePatch[key] === 'object'
+                && prev[key] && typeof prev[key] === 'object') {
+              merged[key] = { ...prev[key], ...stagePatch[key] };
+            }
           }
+          // Clear transient error fields when a content/status change implies
+          // the previous failure is no longer the active state. Mirrors the
+          // pre-per-stage-merge behavior, where a `{ status, input, output }`
+          // patch replaced the whole stage and implicitly wiped errorMessage.
+          if ('status' in stagePatch && stagePatch.status !== 'error'
+              && stagePatch.status !== 'generating'
+              && !('errorMessage' in stagePatch)) {
+            merged.errorMessage = '';
+          }
+          mergedStages[stageId] = merged;
+        } else {
+          mergedStages[stageId] = stagePatch;
         }
-        // Clear transient error fields when a content/status change implies
-        // the previous failure is no longer the active state. Mirrors the
-        // pre-per-stage-merge behavior, where a `{ status, input, output }`
-        // patch replaced the whole stage and implicitly wiped errorMessage.
-        if ('status' in stagePatch && stagePatch.status !== 'error'
-            && stagePatch.status !== 'generating'
-            && !('errorMessage' in stagePatch)) {
-          merged.errorMessage = '';
-        }
-        mergedStages[stageId] = merged;
-      } else {
-        mergedStages[stageId] = stagePatch;
       }
     }
-  }
 
-  const merged = sanitizeIssue({
-    ...cur,
-    ...('title' in patch ? { title: patch.title } : {}),
-    ...('number' in patch ? { number: patch.number } : {}),
-    ...('status' in patch ? { status: patch.status } : {}),
-    ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
-    ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
-    ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
-    ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
-    ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
-    ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
-    ...('origin' in patch ? { origin: patch.origin } : {}),
-    stages: mergedStages,
-    updatedAt: new Date().toISOString(),
-  });
-  if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-  state.issues[idx] = merged;
-  // A seasonId move affects both source and destination volumes, so full
-  // renumber. An arcPosition change only reorders within the current volume.
-  // `skipRenumber` lets bulk callers (e.g. deleteSeason) collapse N per-update
-  // renumbers into one final pass.
-  if (!skipRenumber) {
-    if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
-      await renumberInline(state, merged.seriesId, null);
-    } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
-      await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
+    const merged = sanitizeIssue({
+      ...cur,
+      ...('title' in patch ? { title: patch.title } : {}),
+      ...('number' in patch ? { number: patch.number } : {}),
+      ...('status' in patch ? { status: patch.status } : {}),
+      ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
+      ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
+      ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
+      ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
+      ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
+      ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
+      ...('origin' in patch ? { origin: patch.origin } : {}),
+      // Local-only "don't sync" marker. Issues piggyback on their parent
+      // series' subscription, so an ephemeral issue is dropped from the
+      // series push payload via sanitizeRecordForWire returning null.
+      ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
+      stages: mergedStages,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+    state.issues[idx] = merged;
+    // A seasonId move affects both source and destination volumes, so full
+    // renumber. An arcPosition change only reorders within the current volume.
+    // `skipRenumber` lets bulk callers (e.g. deleteSeason) collapse N per-update
+    // renumbers into one final pass.
+    if (!skipRenumber) {
+      if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
+        await renumberInline(state, merged.seriesId, null);
+      } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
+        await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
+      }
     }
-  }
-  await writeState(state);
-  // Issues are exported as part of their parent series — re-export the
-  // series so any active subscription picks up the issue change.
-  emitRecordUpdated('series', merged.seriesId);
-  return merged;
+    await writeState(state);
+    // Issues are exported as part of their parent series — re-export the
+    // series so any active subscription picks up the issue change.
+    emitRecordUpdated('series', merged.seriesId);
+    return merged;
   }); // end queueIssueWrite
 }
 
@@ -771,19 +804,25 @@ export function restoreStageFromHistory(issueId, stageId, runId) {
 }
 
 export function deleteIssue(id) {
+  // Soft-delete — same tombstone-in-record pattern as universes/series. The
+  // record stays on disk with `deleted: true` so the next sync propagates the
+  // delete to peers; the orchestrator's GC sweep prunes it once all peers ack.
+  // `renumberInline` filters tombstones, so surviving issues stay contiguous.
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const idx = state.issues.findIndex((i) => i.id === id);
-  if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const removed = state.issues[idx];
-  const seriesId = removed.seriesId;
-  state.issues.splice(idx, 1);
-  await renumberInline(state, seriesId, removed.seasonId || UNSCOPED_ANCHOR);
-  await writeState(state);
-  // Series export bundles every issue, so a deletion is an update on the
-  // parent series for any active share-bucket subscription.
-  emitRecordUpdated('series', seriesId);
-  return { id };
+    const state = await readState();
+    const idx = state.issues.findIndex((i) => i.id === id);
+    if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.issues[idx];
+    if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const seriesId = cur.seriesId;
+    const now = new Date().toISOString();
+    state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
+    await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
+    await writeState(state);
+    // Series export bundles every issue, so a deletion is an update on the
+    // parent series for any active share-bucket subscription.
+    emitRecordUpdated('series', seriesId);
+    return { id };
   }); // end queueIssueWrite
 }
 
@@ -805,44 +844,45 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
     return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const idx = state.issues.findIndex((i) => i.id === issueId);
-  if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-  const cur = state.issues[idx];
-  const isVisual = VISUAL_STAGE_IDS.includes(stageId);
-  const isAudio = AUDIO_STAGE_IDS.includes(stageId);
-  const currentStage = cur.stages[stageId];
-  const patch = computeFn(currentStage);
-  // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
-  // to write" signal (e.g. stale media-job completion against a re-rendered
-  // page). Skip the disk write + emitRecordUpdated so it doesn't trigger
-  // a re-export storm in share subscriptions for late no-op events.
-  if (isPlainObject(patch) && Object.keys(patch).length === 0) {
-    return { issue: cur, stage: currentStage };
-  }
-  // Snapshot the prior `{ runId, input, output }` into runHistory when this
-  // patch carries a fresh lastRunId (i.e. a generate just replaced prior
-  // content). Computed BEFORE the spread so it reads pre-merge state.
-  const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId);
-  const merged = {
-    ...currentStage,
-    ...patch,
-    runHistory: nextRunHistory,
-    updatedAt: new Date().toISOString(),
-  };
-  let next;
-  if (isVisual) next = sanitizeVisualStage(merged, stageId);
-  else if (isAudio) next = sanitizeAudioStage(merged);
-  else next = sanitizeStage(merged);
-  const mergedIssue = sanitizeIssue({
-    ...cur,
-    stages: { ...cur.stages, [stageId]: next },
-    updatedAt: new Date().toISOString(),
-  });
-  state.issues[idx] = mergedIssue;
-  await writeState(state);
-  emitRecordUpdated('series', mergedIssue.seriesId);
-  return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
+    const state = await readState();
+    const idx = state.issues.findIndex((i) => i.id === issueId);
+    if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+    const cur = state.issues[idx];
+    if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+    const isVisual = VISUAL_STAGE_IDS.includes(stageId);
+    const isAudio = AUDIO_STAGE_IDS.includes(stageId);
+    const currentStage = cur.stages[stageId];
+    const patch = computeFn(currentStage);
+    // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
+    // to write" signal (e.g. stale media-job completion against a re-rendered
+    // page). Skip the disk write + emitRecordUpdated so it doesn't trigger
+    // a re-export storm in share subscriptions for late no-op events.
+    if (isPlainObject(patch) && Object.keys(patch).length === 0) {
+      return { issue: cur, stage: currentStage };
+    }
+    // Snapshot the prior `{ runId, input, output }` into runHistory when this
+    // patch carries a fresh lastRunId (i.e. a generate just replaced prior
+    // content). Computed BEFORE the spread so it reads pre-merge state.
+    const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId);
+    const merged = {
+      ...currentStage,
+      ...patch,
+      runHistory: nextRunHistory,
+      updatedAt: new Date().toISOString(),
+    };
+    let next;
+    if (isVisual) next = sanitizeVisualStage(merged, stageId);
+    else if (isAudio) next = sanitizeAudioStage(merged);
+    else next = sanitizeStage(merged);
+    const mergedIssue = sanitizeIssue({
+      ...cur,
+      stages: { ...cur.stages, [stageId]: next },
+      updatedAt: new Date().toISOString(),
+    });
+    state.issues[idx] = mergedIssue;
+    await writeState(state);
+    emitRecordUpdated('series', mergedIssue.seriesId);
+    return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
   }); // end queueIssueWrite
 }
 
@@ -856,32 +896,124 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
  * `{ applied, count }` where `count` is the number of issues actually
  * changed/added.
  */
-export function mergeIssuesFromSync(remoteIssues) {
-  if (!Array.isArray(remoteIssues)) return Promise.resolve({ applied: false, count: 0 });
+export async function mergeIssuesFromSync(remoteIssues) {
+  if (!Array.isArray(remoteIssues)) return { applied: false, count: 0 };
+  // Series IDs whose issue set saw at least one delete-transition — drives a
+  // post-write renumber so the receiver's issue numbering catches up with the
+  // sender's (otherwise a synced tombstone would leave a gap).
+  //
+  // Edit-only merges (no delete-transitions) do NOT emit `recordUpdated` for
+  // the parent series — see `mergeUniversesFromSync` for the rationale (the
+  // Stage 2 per-record peer-sync push owns sync-time edit emits). Delete-
+  // transitions DO emit per series so subscribers know to drop the issue.
+  const seriesNeedingRenumber = new Set();
+  // Build the set of locally-ephemeral series ids BEFORE the queue. The
+  // per-record push pipeline (applyIncomingPush) already gates the bundled
+  // issues batch by parent-ephemeral, but the snapshot pipeline path
+  // (applyPipelineRemote → mergeIssuesFromSync) bypasses that check. Without
+  // this filter, a peer with `pipeline` sync enabled can create/update/
+  // tombstone issues under a locally-private series and overwrite the
+  // user's private fork.
+  const ephemeralSeriesIds = new Set(
+    (await seriesSvc.listSeries({ includeDeleted: true }).catch(() => []))
+      .filter((s) => s?.ephemeral === true)
+      .map((s) => s.id),
+  );
   return queueIssueWrite(async () => {
     const state = await readState();
     const localById = new Map(state.issues.map((i) => [i.id, i]));
     let changed = 0;
     for (const remote of remoteIssues) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      // Drop issues whose parent series is locally ephemeral, BEFORE any
+      // mutation. This covers create/update/tombstone uniformly — the
+      // sanitized.seriesId may be either the existing local series or a
+      // remote-only target; reject either way.
+      if (ephemeralSeriesIds.has(remote.seriesId)) continue;
       const sanitized = sanitizeIssue(remote);
       if (!sanitized) continue;
+      // Strip inbound `ephemeral` — see mergeUniversesFromSync.
+      if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
+      // Belt-and-suspenders: if the existing local issue belongs to an
+      // ephemeral series, refuse the merge even though the inbound
+      // sanitized.seriesId might point elsewhere (a peer could ship an
+      // issue id whose local copy is under a private series and try to
+      // move it).
+      if (local && ephemeralSeriesIds.has(local.seriesId)) continue;
       if (!local) {
+        // No local counterpart — accept the record but don't trigger a
+        // renumber pass. A tombstone for an issue we never had has nothing
+        // to compact; firing `emitRecordUpdated('series', …)` for a series
+        // we may not even own would spuriously re-export.
         localById.set(sanitized.id, sanitized);
         changed++;
+      } else if (local.ephemeral === true) {
+        // Local-ephemeral issues are immune to inbound merges. See
+        // mergeUniversesFromSync for the contract.
+        continue;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
           localById.set(sanitized.id, sanitized);
+          // Renumber on EITHER direction of the transition: a delete leaves
+          // a gap, a resurrection (deleted→live) reintroduces a previously-
+          // compacted number and can collide with live siblings until some
+          // unrelated edit triggers a renumber. Cover both here.
+          if (sanitized.deleted !== local.deleted) {
+            seriesNeedingRenumber.add(sanitized.seriesId);
+            // A resurrection may move from the OLD seriesId to a different
+            // one in the inbound record (rare, but possible) — renumber both.
+            if (local.seriesId && local.seriesId !== sanitized.seriesId) {
+              seriesNeedingRenumber.add(local.seriesId);
+            }
+          }
           changed++;
         }
       }
     }
     if (changed === 0) return { applied: false, count: 0 };
     state.issues = Array.from(localById.values());
+    // Compact issue numbers for each affected series — the merge may have
+    // tombstoned (gap) or resurrected (collision) an issue. renumberInline
+    // skips tombstones, so the resulting numbering is always contiguous
+    // across live issues. Single renumber per series, all inside the queue.
+    for (const seriesId of seriesNeedingRenumber) {
+      await renumberInline(state, seriesId, null);
+    }
     await writeState(state);
+    // Re-emit a series-updated for each touched series so any active share
+    // subscription re-exports the post-merge issue set.
+    for (const seriesId of seriesNeedingRenumber) {
+      emitRecordUpdated('series', seriesId);
+    }
     return { applied: true, count: changed };
+  });
+}
+
+/**
+ * Garbage-collect issue tombstones older than `beforeMs`. See
+ * `pruneTombstonedUniverses` for the contract — pure mechanical prune; the
+ * caller owns the policy. Tombstones with unparseable `deletedAt` are kept.
+ *
+ * Issue tombstones ride series pushes (the receiver bundles child issues
+ * with each series push) so the relevant ack horizon is "peers subscribed
+ * to the parent series." The caller resolves that.
+ */
+export async function pruneTombstonedIssues(beforeMs) {
+  if (!Number.isFinite(beforeMs)) return { pruned: 0 };
+  return queueIssueWrite(async () => {
+    const state = await readState();
+    const original = state.issues.length;
+    state.issues = state.issues.filter((i) => {
+      if (!i?.deleted) return true;
+      const t = Date.parse(i.deletedAt || '');
+      if (!Number.isFinite(t)) return true;
+      return t >= beforeMs;
+    });
+    const pruned = original - state.issues.length;
+    if (pruned > 0) await writeState(state);
+    return { pruned };
   });
 }

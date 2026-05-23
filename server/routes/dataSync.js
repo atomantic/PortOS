@@ -12,7 +12,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline']);
+const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections']);
 
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {

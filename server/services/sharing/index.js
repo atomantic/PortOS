@@ -12,6 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
+import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents } from './peerSync.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
@@ -57,9 +58,19 @@ export async function initSharing({ io: socketIo } = {}) {
     sharingEvents.on('annotation-updated', (payload) => {
       io.emit('media:annotation:updated', payload);
     });
+    // Peer-sync asset arrivals → broadcast so the UI can swap the
+    // <MediaImage> "syncing" placeholder for the live bytes the moment
+    // the receiver's background pull lands them on disk.
+    peerSyncEvents.on('asset-arrived', (payload) => {
+      io.emit('peerSync:asset-arrived', payload);
+    });
   }
 
   installSubscriptionListener();
+  // Federated peer-sync listener — installs alongside the share-bucket
+  // subscription listener so a single recordEvents `updated` fan-out drives
+  // both transports. No state until at least one peer subscription exists.
+  installPeerSyncListener();
   initAnnotationsSync();
   const result = await attachAllWatchers();
   console.log(`📡 sharing: initialized, watchers attached for ${result.attached} bucket(s)`);
@@ -69,6 +80,12 @@ export async function initSharing({ io: socketIo } = {}) {
 export async function shutdownSharing() {
   await shutdownAllWatchers();
   sharingEvents.removeAllListeners();
+  // Detach the recordEvents + instanceEvents listeners that
+  // installPeerSyncListener attached. Without this, the peer-sync service
+  // listeners stay attached after shutdown and pollute any subsequent
+  // re-init or test teardown.
+  uninstallPeerSyncListener();
+  peerSyncEvents.removeAllListeners();
   initialized = false;
   io = null;
 }

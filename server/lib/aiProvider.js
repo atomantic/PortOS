@@ -210,9 +210,13 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
 
 /**
  * Strip markdown code fences from LLM output before JSON.parse.
+ *
+ * Trims surrounding whitespace BEFORE the fence regex so common LLM shapes
+ * with trailing newlines/spaces around the closing fence (e.g. "```json\n{}\n```\n")
+ * still get the closing ``` stripped — the regex anchors on end-of-string.
  */
 export function stripCodeFences(raw) {
-  return raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+  return raw.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
 }
 
 /**

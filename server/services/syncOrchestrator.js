@@ -273,6 +273,38 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums)
 }
 
 /**
+ * For a given peerId, return the set of `dataSync` category names whose
+ * underlying record kind has at least one active peer subscription. Used by
+ * the per-peer sync loop to skip categories the per-record push pipeline
+ * already owns.
+ *
+ * Mapping:
+ *   - recordKind 'universe' → category 'universe'
+ *   - recordKind 'series'   → category 'pipeline' (covers series + issues)
+ *
+ * Series subscriptions bundle child issues in the push payload, so the
+ * 'pipeline' category (series + issues) is a single skip unit — same as
+ * how `dataSync.getPipelineSnapshot` produces them as one composite.
+ */
+async function categoriesCoveredByPeerSync(peerId) {
+  // Dynamic import keeps `sharing/peerSync.js` (which transitively pulls
+  // every merge*FromSync service + recordEvents) OUT of this orchestrator's
+  // module-load graph. Two reasons: (1) shaves the startup cost of evaluating
+  // those modules until the first sync cycle actually runs, (2) insurance
+  // against a future circular dep — peerSync's graph never needs the
+  // orchestrator today, but a top-level import here would manifest as a
+  // confusing "undefined" crash at boot the day that changes.
+  const { listPeerSubscriptions } = await import('./sharing/peerSync.js');
+  const subs = await listPeerSubscriptions({ peerId });
+  const skip = new Set();
+  for (const sub of subs) {
+    if (sub.recordKind === 'universe') skip.add('universe');
+    if (sub.recordKind === 'series') skip.add('pipeline');
+  }
+  return skip;
+}
+
+/**
  * Sync all data from a single peer
  */
 export async function syncWithPeer(peer) {
@@ -285,6 +317,8 @@ export async function syncWithPeer(peer) {
   syncingPeers.add(peerId);
 
   const categories = getEffectiveCategories(peer);
+  const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
+  console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
 
   // Read cursor snapshot outside lock so network I/O doesn't block other peers
   // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
@@ -311,7 +345,20 @@ export async function syncWithPeer(peer) {
 
     // --- Snapshot-based category syncs (parallel) ---
     const dataCategoryResults = {};
-    const enabledDataCats = dataSync.getSupportedCategories().filter(cat => categories[cat]);
+    // Drop any categories this peer is on the per-record peer-sync path for.
+    // When a peer has at least one peer subscription for the underlying
+    // record-kind (universe → 'universe' category; series → 'pipeline'
+    // category, which is series+issues bundled), the push pipeline is
+    // authoritative — keeping the 60s snapshot loop running on the same
+    // kind would re-apply the same records under a stale checksum and
+    // burn bandwidth for no gain. The snapshot path stays in place for
+    // non-subscribed peers and for kinds the peer hasn't subscribed yet
+    // (e.g. a peer subscribed to universes but not to any series still
+    // gets pipeline snapshots).
+    const skipCats = await categoriesCoveredByPeerSync(peerId).catch(() => new Set());
+    const enabledDataCats = dataSync.getSupportedCategories()
+      .filter(cat => categories[cat])
+      .filter(cat => !skipCats.has(cat));
     const cachedChecksums = cursor.checksums || {};
 
     if (enabledDataCats.length > 0) {
@@ -375,7 +422,27 @@ export async function syncAllPeers() {
   const peers = await getPeers();
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 
-  await Promise.allSettled(online.map(p => syncWithPeer(p)));
+  if (online.length > 0) {
+    const names = online.map(p => p.name || p.instanceId).join(', ');
+    console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
+  }
+
+  const settled = await Promise.allSettled(online.map(p => syncWithPeer(p)));
+
+  // Aggregate per-cycle change counts across peers so the heartbeat is loud
+  // about totals even when individual per-peer logs short-circuit on no-op.
+  let cycleChanges = 0;
+  for (const r of settled) {
+    if (r.status !== 'fulfilled' || !r.value) continue;
+    cycleChanges += (r.value.brain?.totalApplied || 0) + (r.value.memory?.totalApplied || 0);
+    for (const [k, v] of Object.entries(r.value)) {
+      if (k === 'brain' || k === 'memory') continue;
+      cycleChanges += v?.totalApplied || 0;
+    }
+  }
+  if (online.length > 0) {
+    console.log(`🔄 Sync cycle complete: ${cycleChanges} change${cycleChanges === 1 ? '' : 's'} applied across ${online.length} peer${online.length === 1 ? '' : 's'}`);
+  }
 
   // Compact sync log below the minimum peer cursor to bound log growth
   // Include all enabled peers with brain sync (not just online) so offline peers don't lose unsynced entries
@@ -407,14 +474,45 @@ export function initSyncOrchestrator() {
   };
   instanceEvents.on('peer:online', peerOnlineHandler);
 
-  // Background safety-net interval
+  // Background safety-net interval. The two side-cycle jobs (tombstone GC,
+  // future asset-orphan GC) ride the same interval rather than getting their
+  // own timer — once-per-minute is plenty given the 24h grace period, and
+  // sharing a tick keeps the wake-up cost flat.
   syncTimer = setInterval(() => {
     syncAllPeers().catch(err => {
       console.error(`❌ Periodic sync failed: ${err.message}`);
     });
+    // The outer `.catch` is non-optional — runTombstoneSweep is async and
+    // can reject BEFORE its inner .catch fires (e.g. if the dynamic import
+    // of tombstoneGc.js itself fails). An unhandled rejection on the
+    // interval tick would crash the Node process under default settings.
+    runTombstoneSweep().catch(err => {
+      console.error(`❌ Tombstone sweep tick failed: ${err.message}`);
+    });
   }, SYNC_INTERVAL_MS);
 
   console.log(`🔄 Sync orchestrator started (${SYNC_INTERVAL_MS / 1000}s interval)`);
+}
+
+/**
+ * Run a single tombstone GC sweep, fire-and-forget. Dynamic import keeps
+ * the GC module's universe / pipeline / sharing dependency graph off the
+ * orchestrator's module-load path (same reason as `categoriesCoveredByPeerSync`
+ * above). Logs a single-line summary only when something was actually
+ * pruned — quiet on no-op cycles.
+ */
+async function runTombstoneSweep() {
+  const { sweepTombstones } = await import('./sharing/tombstoneGc.js');
+  const result = await sweepTombstones().catch((err) => {
+    console.error(`❌ Tombstone sweep failed: ${err.message}`);
+    return null;
+  });
+  if (result && (result.universes > 0 || result.series > 0 || result.issues > 0)) {
+    // "series" is already its own plural so no s-suffix toggle needed there.
+    const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
+    const issues = `${result.issues} issue${result.issues === 1 ? '' : 's'}`;
+    console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}`);
+  }
 }
 
 /**

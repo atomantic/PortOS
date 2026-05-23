@@ -7,9 +7,9 @@ import { computeImageVariantGroup } from './variants';
 // page repeated by hand: open/close, prev/next nav, and the annotation
 // lookup/patch dance. Page-specific handlers pass through as-is.
 //
-// MediaLightbox already gates Remix / SendToVideo / Clean on `isVideo` and
-// Continue on `!isVideo`, so callers should pass handlers unconditionally
-// rather than pre-filtering by `preview.kind`.
+// MediaLightbox already gates SendToVideo / Clean on `!isVideo` and
+// Continue on `isVideo`. Remix works for both kinds — callers should
+// dispatch by `item.kind` inside their handler (see useMediaPreviewActions).
 //
 // Nav props win over handlers (spread order) so a stray `onPrevious`/`onNext`
 // in a caller can't accidentally shadow the wrapper's navigation contract.

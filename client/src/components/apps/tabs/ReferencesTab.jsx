@@ -1,10 +1,9 @@
 import ReferenceReposPanel from '../ReferenceReposPanel';
 
 /**
- * App-detail "References" tab — full CRUD over the app's reference repos.
- * The global summary at /reference-repos uses the same panel in `compact`
- * mode (read-and-check, no add/delete). Add/edit/remove always happens
- * here so the per-app context is unambiguous.
+ * App-detail "References" tab — the single surface for managing the
+ * app's reference repos. Reference repos are app-scoped only; there
+ * is no global summary page.
  */
 export default function ReferencesTab({ appId, appName }) {
   return (

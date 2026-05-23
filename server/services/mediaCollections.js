@@ -56,6 +56,20 @@ const sanitizeItem = (raw) => {
   // addressable via the REST surface — reject it here so persisted data
   // always round-trips.
   if (ref.includes(':')) return null;
+  // Path-traversal defense in depth. Refs persist to wire-syncable state
+  // (peer pushes carry collections via `linkedCollection`, snapshot sync
+  // carries the whole file), and downstream code joins the ref onto a
+  // PATHS dir to hash / pull the asset. A peer-supplied ref like
+  // `../etc/passwd` would otherwise let one peer make another peer hash
+  // (and leak the hash of) arbitrary local files.
+  //
+  // Reject separators and parent-directory PATH SEGMENTS (exact `.` or
+  // `..` between slashes, or as the whole basename). Do NOT reject the
+  // substring `..` in general — gallery filenames like `my..render.png`
+  // are valid basenames that the rest of the system stores and serves,
+  // and dropping them would silently disappear existing collection items.
+  if (ref.includes('/') || ref.includes('\\')) return null;
+  if (ref === '.' || ref === '..') return null;
   // A hand-edited or corrupted `addedAt` would feed NaN into the cover
   // resolver's Date sort — replace anything unparseable with now().
   const parsed = typeof raw.addedAt === 'string' ? Date.parse(raw.addedAt) : NaN;
@@ -546,6 +560,19 @@ const validateItemInput = (item) => {
   if (!ref || ref.length > REF_MAX_LENGTH || ref.includes(':')) {
     throw makeErr('item.ref invalid (empty, too long, or contains ":")', ERR_VALIDATION);
   }
+  // Mirror sanitizeItem's path-traversal rejection so the write path can't
+  // persist a ref that the next listCollections() read would silently drop
+  // (which would also churn coverKey/updatedAt for the dangling-cover guard).
+  // Reject separators and exact `.`/`..` segments only — `..` inside a
+  // basename (`my..render.png`) is a legitimate gallery filename. Must
+  // mirror sanitizeItem exactly or local addItem rejects refs that peer
+  // sync would accept (and vice versa).
+  if (ref.includes('/') || ref.includes('\\')) {
+    throw makeErr('item.ref invalid (contains path separators)', ERR_VALIDATION);
+  }
+  if (ref === '.' || ref === '..') {
+    throw makeErr('item.ref invalid (parent-directory segment)', ERR_VALIDATION);
+  }
   return { kind: item.kind, ref };
 };
 
@@ -688,4 +715,154 @@ export async function removeItem(id, key) {
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
   if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
   return merged;
+}
+
+/**
+ * Merge an incoming list of collections from a peer (snapshot sync OR the
+ * per-record push payload's `linkedCollection` field). Per-collection
+ * semantics:
+ *
+ *   - New (unseen id): inserted verbatim after sanitization.
+ *   - Existing id: top-level scalars (name, description, coverKey, universeId,
+ *     seriesId) follow LWW on `updatedAt`. Items[] is **union by `kind:ref`**
+ *     so neither side ever loses a render it knows about — collections are
+ *     append-mostly in normal use, and a divergence (peer-A added image-X
+ *     while peer-B added image-Y to the same collection on the same day)
+ *     should retain both rather than discard whichever has the older
+ *     collection-level updatedAt.
+ *
+ * Mutating writes go through the same `serializeFileWrite` tail as every
+ * other mediaCollections mutator so a concurrent local `addItem` and remote
+ * apply can't interleave on the JSON file.
+ */
+export async function mergeMediaCollectionsFromSync(remoteCollections) {
+  if (!Array.isArray(remoteCollections)) return { applied: false, count: 0 };
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const localById = new Map(all.map((c) => [c.id, c]));
+    let changed = 0;
+    for (const remote of remoteCollections) {
+      const sanitized = sanitizeCollection(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+        continue;
+      }
+      const mergedItems = mergeCollectionItems(local.items, sanitized.items);
+      // LWW on collection-level scalars. Parse to epoch ms (not lexicographic
+      // compare on the raw strings): `sanitizeCollection` accepts any
+      // Date.parse-able string for `updatedAt`, so a hand-edit or older peer
+      // writing a non-ISO format could otherwise lose to a "newer" string
+      // that's actually an older moment in time. Unparseable side LOSES (a
+      // corrupted timestamp can't claim to be newer); both unparseable
+      // breaks to local-wins (no signal to override). `localTs`/`remoteTs`
+      // keep the original strings so the winning side's `updatedAt`
+      // round-trips to disk verbatim — only the comparison is numeric.
+      const localTs = local.updatedAt || '';
+      const remoteTs = sanitized.updatedAt || '';
+      const remoteWins = compareNewerWins(remoteTs, localTs);
+      const scalarSource = remoteWins ? sanitized : local;
+      // Cover key: only adopt the scalar source's coverKey if it points at an
+      // item that survives the union — otherwise sanitizeCollection on next
+      // read would drop it back to null and we'd churn updatedAt forever.
+      const presentKeys = new Set(mergedItems.map(itemKey));
+      const coverKey = scalarSource.coverKey && presentKeys.has(scalarSource.coverKey)
+        ? scalarSource.coverKey
+        : null;
+      const next = {
+        ...local,
+        name: scalarSource.name,
+        description: scalarSource.description,
+        coverKey,
+        universeId: scalarSource.universeId,
+        seriesId: scalarSource.seriesId,
+        items: mergedItems,
+        updatedAt: remoteWins ? remoteTs : localTs,
+      };
+      if (collectionsEqual(local, next)) continue;
+      localById.set(sanitized.id, next);
+      changed++;
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    await writeAll(Array.from(localById.values()));
+    return { applied: true, count: changed };
+  });
+}
+
+function mergeCollectionItems(localItems, remoteItems) {
+  const byKey = new Map();
+  for (const it of localItems || []) byKey.set(itemKey(it), it);
+  for (const it of remoteItems || []) {
+    const k = itemKey(it);
+    const existing = byKey.get(k);
+    if (!existing) {
+      byKey.set(k, it);
+      continue;
+    }
+    // Earliest addedAt wins — a sync replay shouldn't bump the addedAt of
+    // an item already in the collection. Parse to epoch ms instead of
+    // lexicographic compare: `sanitizeItem` keeps any Date.parse-able
+    // string (not strictly ISO-8601), so two parseable-but-different-format
+    // timestamps could compare incorrectly as strings. Tie → existing wins
+    // (matches the previous `<=` behavior — sync replay shouldn't churn).
+    const cmp = compareEarlierWins(existing.addedAt, it.addedAt);
+    const earlier = cmp <= 0 ? existing : it;
+    byKey.set(k, earlier);
+  }
+  // Sort by canonical itemKey so the merged output is deterministic
+  // regardless of insertion order. Without this, the same set of items
+  // arriving in different orders from a peer (or replayed from snapshot
+  // vs. push) produces a different array order — and the downstream
+  // collectionsEqual() JSON.stringify equality check then sees a diff
+  // and triggers a redundant write + checksum churn. The dataSync
+  // snapshot path already sorts collections by id and items by key for
+  // wire stability; aligning the in-memory merge keeps reads and writes
+  // self-consistent.
+  return Array.from(byKey.values()).sort((a, b) => itemKey(a).localeCompare(itemKey(b)));
+}
+
+// Parse a timestamp string to epoch ms, or null when unparseable. The
+// "loses on null" semantics differ between the two LWW directions, so each
+// caller handles nulls explicitly rather than baking a polarity into this
+// helper (an Infinity / -Infinity fallback would invert behavior between
+// "earliest wins" and "newer wins").
+function parseTsMs(s) {
+  const n = typeof s === 'string' ? Date.parse(s) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+// "Earliest wins" tiebreak for two records of the same key. Used by
+// mergeCollectionItems when both sides claim to know an `addedAt` for the
+// same `<kind>:<ref>`. Returns -1 if `a` is earlier (a wins), 1 if `b` is
+// earlier, 0 on tie. Unparseable side LOSES — a corrupted timestamp can't
+// claim to be earliest; if both are unparseable the caller's default wins.
+function compareEarlierWins(a, b) {
+  const aMs = parseTsMs(a);
+  const bMs = parseTsMs(b);
+  if (aMs === null && bMs === null) return 0;
+  if (aMs === null) return 1;  // a unparseable → b wins
+  if (bMs === null) return -1; // b unparseable → a wins
+  if (aMs < bMs) return -1;
+  if (aMs > bMs) return 1;
+  return 0;
+}
+
+// "Newer wins" comparison: returns true iff `candidate` is strictly newer
+// than `incumbent`. Used by mergeMediaCollectionsFromSync to decide whether
+// remote overrides local on scalar fields. Same null-loses-to-valid rule
+// as `compareEarlierWins`. Ties → incumbent (local) wins.
+function compareNewerWins(candidate, incumbent) {
+  const cMs = parseTsMs(candidate);
+  const iMs = parseTsMs(incumbent);
+  if (cMs === null) return false;       // candidate unparseable → never overrides
+  if (iMs === null) return true;        // incumbent unparseable, candidate valid → take valid
+  return cMs > iMs;
+}
+
+function collectionsEqual(a, b) {
+  // Both sides come through sanitizeCollection so key order is canonical and
+  // JSON.stringify is sufficient for "did anything actually move".
+  return JSON.stringify(a) === JSON.stringify(b);
 }

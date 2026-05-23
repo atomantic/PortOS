@@ -26,6 +26,7 @@ const dataSync = await import('./dataSync.js');
 const SERIES_PATH = join(tempRoot, 'pipeline-series.json');
 const ISSUES_PATH = join(tempRoot, 'pipeline-issues.json');
 const UNIVERSE_PATH = join(tempRoot, 'universe-builder.json');
+const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
 
 function writeJSON(path, obj) {
   mkdirSync(tempRoot, { recursive: true });
@@ -260,5 +261,159 @@ describe('dataSync — getChecksum cache', () => {
     writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T11:00:00Z' }] });
     const after = await dataSync.getChecksum('pipeline');
     expect(after.checksum).not.toBe(before.checksum);
+  });
+});
+
+describe('dataSync — mediaCollections category', () => {
+  it('is registered alongside the other categories', () => {
+    expect(dataSync.getSupportedCategories()).toContain('mediaCollections');
+  });
+
+  it('snapshot returns sanitized collections array', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [{
+        id: 'c1',
+        name: 'Universe: Echoes',
+        description: '',
+        coverKey: null,
+        universeId: 'u1',
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    const snap = await dataSync.getSnapshot('mediaCollections');
+    expect(snap.data.collections).toHaveLength(1);
+    expect(snap.data.collections[0].id).toBe('c1');
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('snapshot checksum is stable across reads when state is unchanged', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [{
+        id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+        items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
+      }],
+    });
+    const a = await dataSync.getSnapshot('mediaCollections');
+    const b = await dataSync.getSnapshot('mediaCollections');
+    expect(a.checksum).toBe(b.checksum);
+  });
+
+  it('snapshot handles a missing file gracefully', async () => {
+    const snap = await dataSync.getSnapshot('mediaCollections');
+    expect(snap.data.collections).toEqual([]);
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('applyRemote inserts a new collection', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, { collections: [] });
+    const result = await dataSync.applyRemote('mediaCollections', {
+      collections: [{
+        id: 'c-new', name: 'Universe: New', description: '', coverKey: null,
+        universeId: 'u-new', seriesId: null,
+        items: [{ kind: 'image', ref: 'new.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    expect(result.applied).toBe(true);
+    expect(result.count).toBe(1);
+    const persisted = readJSON(MEDIA_COLLECTIONS_PATH);
+    expect(persisted.collections).toHaveLength(1);
+    expect(persisted.collections[0].id).toBe('c-new');
+  });
+
+  it('applyRemote unions items by kind:ref — never loses a render', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [{
+        id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+        items: [{ kind: 'image', ref: 'local.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    await dataSync.applyRemote('mediaCollections', {
+      collections: [{
+        id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+        items: [{ kind: 'image', ref: 'remote.png', addedAt: '2026-05-22T02:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+      }],
+    });
+    const persisted = readJSON(MEDIA_COLLECTIONS_PATH);
+    const refs = persisted.collections[0].items.map(i => i.ref).sort();
+    expect(refs).toEqual(['local.png', 'remote.png']);
+  });
+
+  it('checksum changes after applyRemote bumps file mtime', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [{
+        id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+        items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    const before = await dataSync.getChecksum('mediaCollections');
+    await dataSync.applyRemote('mediaCollections', {
+      collections: [{
+        id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T02:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+      }],
+    });
+    const after = await dataSync.getChecksum('mediaCollections');
+    expect(after.checksum).not.toBe(before.checksum);
+  });
+
+  it('snapshot checksum is order-insensitive for collections and items', async () => {
+    // Regression: two peers can hold identical sets but write them to disk
+    // in different orders (insertion-order persistence). Without
+    // canonicalization in getMediaCollectionsSnapshot, their checksums
+    // diverge permanently and the UI reads "behind" forever even though
+    // they're converged.
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [
+        {
+          id: 'c-b', name: 'B', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'image', ref: 'z.png', addedAt: '2026-05-22T03:00:00Z' },
+            { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T03:00:00Z',
+        },
+        {
+          id: 'c-a', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'video', ref: 'v1', addedAt: '2026-05-22T02:00:00Z' },
+            { kind: 'image', ref: 'x.png', addedAt: '2026-05-22T01:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        },
+      ],
+    });
+    const a = await dataSync.getSnapshot('mediaCollections');
+
+    // Same SET, reversed order at every level.
+    await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [
+        {
+          id: 'c-a', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'image', ref: 'x.png', addedAt: '2026-05-22T01:00:00Z' },
+            { kind: 'video', ref: 'v1', addedAt: '2026-05-22T02:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        },
+        {
+          id: 'c-b', name: 'B', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
+            { kind: 'image', ref: 'z.png', addedAt: '2026-05-22T03:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T03:00:00Z',
+        },
+      ],
+    });
+    const b = await dataSync.getSnapshot('mediaCollections');
+    expect(b.checksum).toBe(a.checksum);
   });
 });
