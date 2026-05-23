@@ -9,7 +9,10 @@ import {
   featureAgentUpdateSchema,
   validate,
   sanitizeTaskMetadata,
-  stageConfigUpdateSchema
+  stageConfigUpdateSchema,
+  normalizeReviewers,
+  buildReviewWithArgs,
+  createCosTaskSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -509,6 +512,79 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ reviewer: 42 })).toBeNull();
       expect(sanitizeTaskMetadata({ useWorktree: true, reviewer: 'bogus' }))
         .toEqual({ useWorktree: true });
+    });
+
+    it('should accept an ordered reviewers list, dedupe, and drop unknowns', () => {
+      expect(sanitizeTaskMetadata({ reviewers: ['codex', 'gemini', 'copilot'] }))
+        .toEqual({ reviewers: ['codex', 'gemini', 'copilot'] });
+      expect(sanitizeTaskMetadata({ reviewers: ['codex', 'codex', 'bogus', 'gemini'] }))
+        .toEqual({ reviewers: ['codex', 'gemini'] });
+      expect(sanitizeTaskMetadata({ reviewers: ['nope'] })).toBeNull();
+    });
+
+    it('should accept reviewStopMode and reviewerApplies', () => {
+      expect(sanitizeTaskMetadata({ reviewStopMode: 'on-clean' })).toEqual({ reviewStopMode: 'on-clean' });
+      expect(sanitizeTaskMetadata({ reviewStopMode: 'bogus' })).toBeNull();
+      expect(sanitizeTaskMetadata({ reviewerApplies: true })).toEqual({ reviewerApplies: true });
+      expect(sanitizeTaskMetadata({ reviewerApplies: 'yes' })).toBeNull();
+    });
+  });
+
+  describe('normalizeReviewers', () => {
+    it('defaults to [copilot] when absent/empty', () => {
+      expect(normalizeReviewers(undefined)).toEqual(['copilot']);
+      expect(normalizeReviewers({})).toEqual(['copilot']);
+      expect(normalizeReviewers({ reviewers: [] })).toEqual(['copilot']);
+      expect(normalizeReviewers({ reviewers: ['bogus'] })).toEqual(['copilot']);
+    });
+
+    it('prefers reviewers, falls back to legacy reviewer, preserves order + dedupes', () => {
+      expect(normalizeReviewers({ reviewer: 'codex' })).toEqual(['codex']);
+      expect(normalizeReviewers({ reviewers: ['gemini', 'codex', 'gemini'] })).toEqual(['gemini', 'codex']);
+      // `reviewers` wins over legacy `reviewer`.
+      expect(normalizeReviewers({ reviewers: ['claude'], reviewer: 'codex' })).toEqual(['claude']);
+    });
+  });
+
+  describe('buildReviewWithArgs', () => {
+    it('emits nothing for the lone default copilot', () => {
+      expect(buildReviewWithArgs(['copilot'])).toBe('');
+      expect(buildReviewWithArgs([])).toBe('');
+    });
+
+    it('emits the ordered comma list when not lone-default', () => {
+      expect(buildReviewWithArgs(['codex'])).toBe('--review-with codex');
+      expect(buildReviewWithArgs(['codex', 'gemini', 'copilot'])).toBe('--review-with codex,gemini,copilot');
+    });
+
+    it('adds stop-mode only for 2+ reviewers and reviewer-applies only with a CLI reviewer', () => {
+      expect(buildReviewWithArgs(['codex', 'copilot'], 'on-findings', true))
+        .toBe('--review-with codex,copilot --review-stop-on-findings --reviewer-applies');
+      // single reviewer → no stop-mode flag
+      expect(buildReviewWithArgs(['codex'], 'on-clean', true))
+        .toBe('--review-with codex --reviewer-applies');
+      // copilot-only → reviewer-applies suppressed (no-op on copilot)
+      expect(buildReviewWithArgs(['copilot'], 'all', true)).toBe('');
+    });
+  });
+
+  describe('createCosTaskSchema reviewers fields', () => {
+    it('accepts reviewers/reviewStopMode/reviewerApplies', () => {
+      const parsed = createCosTaskSchema.safeParse({
+        description: 'do a thing',
+        reviewers: ['codex', 'gemini', 'copilot'],
+        reviewStopMode: 'on-clean',
+        reviewerApplies: true
+      });
+      expect(parsed.success).toBe(true);
+      expect(parsed.data.reviewers).toEqual(['codex', 'gemini', 'copilot']);
+      expect(parsed.data.reviewStopMode).toBe('on-clean');
+      expect(parsed.data.reviewerApplies).toBe(true);
+    });
+
+    it('rejects an unknown reviewer or stop-mode', () => {
+      expect(createCosTaskSchema.safeParse({ description: 'x', reviewers: ['bogus'] }).success).toBe(false);
+      expect(createCosTaskSchema.safeParse({ description: 'x', reviewStopMode: 'nope' }).success).toBe(false);
     });
 
     it('should reject prototype pollution keys', () => {

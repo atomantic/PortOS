@@ -6,7 +6,8 @@ import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
 import { filterSelectableModels, isTuiProvider, isCliProvider } from '../../utils/providers';
-import { REVIEWER_OPTIONS, DEFAULT_REVIEWER } from './constants';
+import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE } from './constants';
+import ReviewerPicker from './ReviewerPicker';
 
 const isCodexProvider = (provider) => {
   if (!provider) return false;
@@ -24,7 +25,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [openPR, setOpenPR] = useState(false);
   const [simplify, setSimplify] = useState(true);
   const [reviewLoop, setReviewLoop] = useState(false);
-  const [reviewer, setReviewer] = useState(DEFAULT_REVIEWER);
+  const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
+  const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
+  const [reviewerApplies, setReviewerApplies] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -221,7 +224,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       openPR,
       simplify,
       reviewLoop,
-      reviewer: reviewLoop ? reviewer : undefined,
+      reviewers: reviewLoop ? reviewers : undefined,
+      reviewStopMode: reviewLoop ? reviewStopMode : undefined,
+      reviewerApplies: reviewLoop ? reviewerApplies : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -454,17 +459,18 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </span>
           </label>
           {reviewLoop && (
-            <select
-              value={reviewer}
-              onChange={(e) => setReviewer(e.target.value)}
-              className="px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px]"
-              title="Override the default reviewer for the review loop (--review-with)"
-              aria-label="Reviewer for review loop"
-            >
-              {REVIEWER_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value} title={opt.description}>{opt.label}</option>
-              ))}
-            </select>
+            <div className="basis-full mt-1">
+              <ReviewerPicker
+                reviewers={reviewers}
+                stopMode={reviewStopMode}
+                reviewerApplies={reviewerApplies}
+                onChange={({ reviewers: r, stopMode, reviewerApplies: ra }) => {
+                  setReviewers(r);
+                  setReviewStopMode(stopMode);
+                  setReviewerApplies(ra);
+                }}
+              />
+            </div>
           )}
           {appHasJira && (
             <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">

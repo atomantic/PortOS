@@ -284,9 +284,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
       expect(prompt).toMatch(/MERGED/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
-      // Default reviewer (copilot) — `--review-with copilot` should still be
-      // surfaced so the agent knows the explicit choice.
-      expect(prompt).toMatch(/--review-with copilot/);
+      // Default reviewer (copilot, lone) — names copilot but emits no `--review-with`
+      // (the lone default needs no flag).
+      expect(prompt).toMatch(/Reviewers \(in order\)\*\*: `copilot`/);
+      expect(prompt).not.toMatch(/--review-with/);
     });
 
     it('threads a non-default reviewer (claude) into the follow-up block via --review-with', () => {
@@ -298,7 +299,7 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRNumber: 9,
           reviewLoopPROwner: 'o',
           reviewLoopPRRepo: 'r',
-          reviewLoopReviewer: 'claude',
+          reviewLoopReviewers: ['claude'],
           sourceTaskId: 'task-src-2',
         }}),
         '/r',
@@ -306,12 +307,34 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/--review-with claude/);
       // The Copilot-specific pre-request wording must be replaced for CLI reviewers.
-      expect(prompt).toMatch(/CLI-based reviewer/);
+      expect(prompt).toMatch(/CLI-based/);
+    });
+
+    it('threads an ordered multi-reviewer list + flags into the follow-up block', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex', 'gemini', 'copilot'],
+          reviewLoopStopMode: 'on-clean',
+          reviewLoopReviewerApplies: true,
+          sourceTaskId: 'task-src-3',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with codex,gemini,copilot/);
+      expect(prompt).toMatch(/--review-stop-on-clean/);
+      expect(prompt).toMatch(/--reviewer-applies/);
+      // Ordered run instruction.
+      expect(prompt).toMatch(/For EACH reviewer in order/);
     });
 
     it('threads reviewer into the TUI Completion Workflow as `/do:pr --review-with <reviewer>`', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewer: 'gemini' } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewers: ['gemini'] } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         isTruthyMeta,

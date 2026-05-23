@@ -268,4 +268,35 @@ describe('stream error containment', () => {
     );
     expect(logged).toBe(true);
   });
+
+  it('threads the ordered reviewers list (not a stale singular `reviewer`) into worktree cleanup', async () => {
+    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
+    const args = {
+      ...minimalArgs,
+      task: {
+        id: 'task-rv',
+        description: 'do stuff',
+        metadata: { reviewers: ['codex', 'gemini'], reviewStopMode: 'on-clean', reviewerApplies: true },
+      },
+      cleanupWorktreeFn,
+      isTruthyMetaFn: (v) => v === true,
+    };
+
+    spawnDirectly(args);
+    await new Promise((r) => setTimeout(r, 10));
+    fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
+    await new Promise((r) => setTimeout(r, 50));
+    fakeProcess.emit('close', 0);
+    // The close handler is fire-and-forget (spawnDirectly returns agentId
+    // synchronously) — wait for the async handler's finally block to run.
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(cleanupWorktreeFn).toHaveBeenCalledTimes(1);
+    const opts = cleanupWorktreeFn.mock.calls[0][2];
+    expect(opts.reviewers).toEqual(['codex', 'gemini']);
+    expect(opts.reviewStopMode).toBe('on-clean');
+    expect(opts.reviewerApplies).toBe(true);
+    // The removed singular key must NOT be passed.
+    expect(opts.reviewer).toBeUndefined();
+  });
 });

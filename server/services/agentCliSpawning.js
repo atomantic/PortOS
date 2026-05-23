@@ -18,8 +18,8 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents, metaStringOr } from './agentState.js';
-import { DEFAULT_REVIEWER } from '../lib/validation.js';
+import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { normalizeReviewers, DEFAULT_REVIEW_STOP_MODE } from '../lib/validation.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
@@ -582,7 +582,9 @@ export async function spawnDirectly({
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
         requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-        reviewer: metaStringOr(task.metadata?.reviewer, DEFAULT_REVIEWER),
+        reviewers: normalizeReviewers(task.metadata),
+        reviewStopMode: task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE,
+        reviewerApplies: isTruthyMetaFn(task.metadata?.reviewerApplies),
         skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
         description: task.description,
         agentOutput: outputBuffer,

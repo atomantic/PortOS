@@ -16,9 +16,8 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { metaStringOr } from './agentState.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
 
@@ -214,51 +213,69 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const prOwner = metadata.reviewLoopPROwner ?? '';
   const prRepo = metadata.reviewLoopPRRepo ?? '';
   const sourceTaskId = metadata.sourceTaskId || 'unknown';
-  const reviewer = metaStringOr(metadata.reviewLoopReviewer, DEFAULT_REVIEWER);
-  const isCopilot = reviewer === DEFAULT_REVIEWER;
+  // Ordered reviewer list (back-compat: legacy single `reviewLoopReviewer`).
+  const reviewers = normalizeReviewers({
+    reviewers: Array.isArray(metadata.reviewLoopReviewers)
+      ? metadata.reviewLoopReviewers
+      : (metadata.reviewLoopReviewer ? [metadata.reviewLoopReviewer] : undefined)
+  });
+  const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
+  const reviewerApplies = metadata.reviewLoopReviewerApplies === true;
+  const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
+  const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER);
+  const multi = reviewers.length > 1;
+  const reviewerLabel = reviewers.map(r => `\`${r}\``).join(' → ');
+  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies);
+  const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
-  // Per-reviewer wording. The `copilot` flow waits on a GitHub Copilot review
-  // pre-requested by the system; non-Copilot flows invoke the chosen CLI
-  // (claude/gemini/codex) directly against the PR diff.
-  const initialReviewState = isCopilot
+  // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
+  // focused wording; for a list, dispatch each reviewer in order.
+  const waitOrInvokeStep = multi
+    ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. **copilot**: an initial Copilot review was pre-requested; wait for it (poll every 5–15s, max 5 min/round) and re-request on later rounds. **codex / gemini / claude**: invoke that CLI against the PR diff (\`gh pr diff ${prNumber || ''}\`) to produce a review.`
+    : (hasCopilot
+        ? 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.'
+        : `Invoke the ${reviewerLabel} CLI against the PR diff (\`gh pr diff ${prNumber || ''}\` or \`gh pr view ${prNumber || ''} --json files\`) to produce a code review. Capture its findings as concrete issues to address.`);
+
+  const stopModeNote = stopMode === 'on-findings'
+    ? '**Stop mode (on-findings):** stop after the FIRST reviewer whose findings you actually fixed and committed; skip the remaining reviewers.'
+    : stopMode === 'on-clean'
+      ? '**Stop mode (on-clean):** stop after the FIRST reviewer that reports zero findings; skip the remaining reviewers.'
+      : (multi ? '**Stop mode (all):** run every reviewer in the list, in order, before merging.' : '');
+
+  const applyNote = hasCli
+    ? (reviewerApplies
+        ? '**Reviewer applies:** let each CLI reviewer apply its own fixes to the working tree, then verify, run tests, and push.'
+        : "**Reviewer applies (off):** read each CLI reviewer's findings and apply the fixes yourself (default).")
+    : '';
+
+  const initialReviewState = hasCopilot
     ? 'The system has already requested an initial Copilot code review.'
-    : `The system did NOT pre-request a reviewer because \`${reviewer}\` is a CLI-based reviewer — you must invoke \`${reviewer}\` yourself against the PR diff.`;
-  const waitOrInvokeStep = isCopilot
-    ? 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round).'
-    : `Invoke the \`${reviewer}\` CLI against the PR diff (\`gh pr diff ${prNumber || ''}\` or \`gh pr view ${prNumber || ''} --json files\`) to produce a code review. Capture its findings as a list of concrete issues to address.`;
-  const rerequestStep = isCopilot
-    ? 'Re-request a Copilot review.'
-    : `Re-run the \`${reviewer}\` CLI against the latest PR diff to collect a fresh review.`;
-  const zeroCommentCondition = isCopilot
-    ? 'Copilot returns "0 comments" / no unresolved threads'
-    : `\`${reviewer}\` reports no further blocking findings (only nitpicks or approvals)`;
-  const repeatedCommentsNote = isCopilot
-    ? '**Repeated comments:** If a new Copilot round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on to merge.'
-    : `**Repeated comments:** If a new \`${reviewer}\` round only re-raises feedback you intentionally rejected, treat that round as clean and move on to merge.`;
+    : 'The system did NOT pre-request a reviewer because the configured reviewers are CLI-based — you must invoke them yourself against the PR diff.';
+  const repeatedCommentsNote = '**Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.';
+  const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
   if (verbose) {
     return `
 ## Review-Loop Follow-up (PRIMARY OBJECTIVE)
 A previous agent finished implementing the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on branch \`${prBranch}\`. ${initialReviewState} **Your job is to drive the review-and-fix loop to completion and merge the PR.**
 
-**Reviewer**: \`${reviewer}\` (equivalent to \`/do:rpr --review-with ${reviewer}\`).
-
-**Run this loop UNTIL the PR is clean per the reviewer OR you hit the iteration cap of 10:**
+**Reviewers (in order)**: ${reviewerLabel}${equiv}.
+${extraNotes.length ? '\n' + extraNotes.join('\n') + '\n' : ''}
+**Run this loop UNTIL all configured reviewers are satisfied (or the stop mode triggers), capped at 10 iterations per reviewer:**
 
 1. ${waitOrInvokeStep}
 2. If there are unresolved review findings, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and (for Copilot) resolve the addressed threads.
-3. ${rerequestStep}
-4. Repeat from step 1.
-5. When ${zeroCommentCondition}, merge the PR **immediately** with this exact command (flags: \`--squash --delete-branch\`, nothing else):
+3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
+4. When the reviewer list is exhausted (or the stop mode triggers), merge the PR **immediately** with this exact command (flags: \`--squash --delete-branch\`, nothing else):
    \`\`\`bash
    gh pr merge "${prUrl}" --squash --delete-branch
    \`\`\`
    ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : ''}
    You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.
-6. Confirm the PR is actually merged before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (a check is failing, a thread is still unresolved, or branch protection is blocking) — fix and retry the merge. Do NOT exit until state is \`MERGED\`.
-7. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit.
+5. Confirm the PR is actually merged before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (a check is failing, a thread is still unresolved, or branch protection is blocking) — fix and retry the merge. Do NOT exit until state is \`MERGED\`.
+6. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit.
 
-**Hard stop:** if the loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
+**Hard stop:** if a reviewer's loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
 
 ${repeatedCommentsNote}
 
@@ -268,31 +285,31 @@ PR Details:
 ${prNumber !== '' ? `- **Number**: ${prNumber}` : ''}
 ${prOwner && prRepo ? `- **Repo**: ${prOwner}/${prRepo}` : ''}
 - **Source task**: ${sourceTaskId}
-- **Reviewer**: \`${reviewer}\`
-${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the procedure below, substitute \`${reviewer}\` for any reference to Copilot — the loop structure is the same but the reviewer source differs.\n\n${rprBody}\n` : ''}`;
+- **Reviewers**: ${reviewerLabel}
+${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the procedure below, run it once per reviewer in the list (${reviewerLabel}); substitute the active reviewer for any reference to Copilot — the loop structure is the same but the reviewer source differs.\n\n${rprBody}\n` : ''}`;
   }
 
   // Compact light-path variant.
   return [
     '## Review-Loop Follow-up (PRIMARY OBJECTIVE)',
     `A previous agent finished task **${sourceTaskId}** and opened **PR ${prUrl}** on \`${prBranch}\`. ${initialReviewState} Drive the review-and-fix loop to completion and merge.`,
-    `**Reviewer**: \`${reviewer}\` (equivalent to \`/do:rpr --review-with ${reviewer}\`).`,
+    `**Reviewers (in order)**: ${reviewerLabel}${equiv}.`,
+    ...extraNotes,
     '',
-    '**Loop UNTIL the reviewer reports clean OR 10 iterations:**',
+    '**Loop UNTIL all reviewers are satisfied (or the stop mode triggers), capped at 10 iterations per reviewer:**',
     `1. ${waitOrInvokeStep}`,
-    '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push' + (isCopilot ? ', resolve threads.' : '.'),
-    `3. ${rerequestStep}`,
-    '4. Repeat.',
-    '5. When clean, merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
+    '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push' + (hasCopilot ? ', resolve threads.' : '.'),
+    '3. Re-review with the same reviewer until clean, then advance to the next reviewer in the list.',
+    '4. When the list is exhausted (or the stop mode triggers), merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
     '   ```bash',
     `   gh pr merge "${prUrl}" --squash --delete-branch`,
     '   ```',
     prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : null,
     '   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.',
-    `6. Confirm the merge happened before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection) — fix and retry. Do NOT exit until state is \`MERGED\`.`,
-    '7. Exit — do NOT run `/do:push` or open a new PR.',
+    `5. Confirm the merge happened before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection) — fix and retry. Do NOT exit until state is \`MERGED\`.`,
+    '6. Exit — do NOT run `/do:push` or open a new PR.',
     '',
-    '**Hard stop:** if not converged after 10 rounds, post a PR comment summarising blockers and exit.',
+    '**Hard stop:** if a reviewer is not converged after 10 rounds, post a PR comment summarising blockers and exit.',
     repeatedCommentsNote
   ].filter(Boolean).join('\n');
 }
@@ -433,10 +450,11 @@ Use the findings from the previous stage to inform your work. If the previous st
 After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
 
-  // Resolve the user's reviewer choice (`copilot` default; `claude`/`gemini`/`codex`
-  // route the review-loop follow-up through the named CLI). Declared up here so
-  // the TUI completion block can thread it down to `/do:pr --review-with …`.
-  const taskReviewer = metaStringOr(task.metadata?.reviewer, DEFAULT_REVIEWER);
+  // Resolve the user's ordered reviewer list + flags (default `[copilot]`). Declared
+  // up here so the TUI completion block can thread `--review-with …` into `/do:pr`.
+  const taskReviewers = normalizeReviewers(task.metadata);
+  const taskReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
+  const taskReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
 
   // TUI completion section — delegate to the shared light-path builder so
   // both prompt paths emit byte-identical workflows. (Background: TUI owns
@@ -448,7 +466,9 @@ After completing your work and before committing, run \`/simplify\` to review th
     ? buildTuiCompletionSection({
         willOpenPR, willReviewLoop, simplifyEnabled,
         sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
-        reviewer: taskReviewer
+        reviewers: taskReviewers,
+        reviewStopMode: taskReviewStopMode,
+        reviewerApplies: taskReviewerApplies
       })
     : '';
 
@@ -463,9 +483,9 @@ After completing your work and before committing, run \`/simplify\` to review th
   // review inline — the system-side post-exit handler never fires for TUI.
   const reviewLoopSection = willReviewLoop && willOpenPR && !isTui ? `
 ## Code Review
-After your task completes, the system will spawn a follow-up agent that runs the full review-and-fix loop until the reviewer reports zero comments and merges the PR. The follow-up uses **${taskReviewer}** as the reviewer (\`--review-with ${taskReviewer}\`). ${taskReviewer === DEFAULT_REVIEWER
+After your task completes, the system will spawn a follow-up agent that runs the review-and-fix loop until all configured reviewers are satisfied, then merges the PR. The follow-up uses **${taskReviewers.join(' → ')}** (in order). ${taskReviewers.includes(DEFAULT_REVIEWER)
     ? 'For GitHub PRs the system will also request a native Copilot review automatically (skipped for GitLab MRs and other non-GitHub forges).'
-    : `The follow-up agent will invoke the \`${taskReviewer}\` CLI directly to critique the PR diff, then iterate on its feedback.`} You do not need to open the PR, trigger the review, or address feedback yourself — focus on producing high-quality, well-tested code so the review pass goes cleanly.
+    : 'The follow-up agent will invoke the configured CLI reviewers directly to critique the PR diff, then iterate on their feedback.'} You do not need to open the PR, trigger the review, or address feedback yourself — focus on producing high-quality, well-tested code so the review passes go cleanly.
 ` : '';
 
   // Build review-loop follow-up section. This is the agent that addresses Copilot's
@@ -642,10 +662,11 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
-  // Reviewer choice for the Review Loop. Defaults to `copilot`; the form
-  // exposes `claude`/`gemini`/`codex` as alternatives that flow as
-  // `/do:pr --review-with <reviewer>` instructions to the agent.
-  const lightReviewer = metaStringOr(task.metadata?.reviewer, DEFAULT_REVIEWER);
+  // Ordered reviewer list + flags for the Review Loop (default `[copilot]`).
+  // Flows as `/do:pr --review-with a,b,c [--review-stop-on-*] [--reviewer-applies]`.
+  const lightReviewers = normalizeReviewers(task.metadata);
+  const lightReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
+  const lightReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
   // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
   // (the slashdo submodule mounts those as project-level slash commands).
   // Other CLI providers (codex, gemini) can't — they get the legacy
@@ -716,10 +737,10 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
       willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
-      reviewer: lightReviewer
+      reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo, simplifyEnabled, reviewer: lightReviewer }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   sections.push('Begin working on the task now.');
@@ -758,11 +779,11 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
  * The agent must drive the merge itself — `/do:pr` runs the review loop but
  * exits without merging, so without this step the PR sits open and the branch
  * leaks. Mirrors the merge contract in the review-loop follow-up section so
- * both agent flows converge on the same final state. `reviewer` only colors
+ * both agent flows converge on the same final state. `reviewers` only colors
  * the wording — the merge step itself is reviewer-agnostic.
  */
-function buildPostPRMergeSteps(startStep, { reviewer = DEFAULT_REVIEWER } = {}) {
-  const reviewerLabel = reviewer === DEFAULT_REVIEWER ? 'Copilot' : `\`${reviewer}\``;
+function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS } = {}) {
+  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot' : 'the';
   const lines = [
     `${startStep}. **Merge the PR immediately when the ${reviewerLabel} review loop reports \`clean\` (or \`too-large\`)** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, or \`guardrail\`; leave the PR open for human follow-up.`,
     '   ```bash',
@@ -777,17 +798,19 @@ function buildPostPRMergeSteps(startStep, { reviewer = DEFAULT_REVIEWER } = {}) 
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, reviewer = DEFAULT_REVIEWER }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
-  const reviewerArg = willOpenPR && willReviewLoop && reviewer !== DEFAULT_REVIEWER ? ` --review-with ${reviewer}` : '';
+  const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
+  const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
+  const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER;
   const reviewSuffix = willOpenPR && willReviewLoop
-    ? (reviewer === DEFAULT_REVIEWER
-        ? ' — after the PR opens, request a Copilot review (e.g. via `gh`).'
-        : ` — after the PR opens, invoke the \`${reviewer}\` CLI against the PR diff for review instead of Copilot.`)
+    ? (copilotOnly
+        ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
+        : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
     : '';
   const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
-  const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewer }) : { lines: [], nextStep: 3 };
+  const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers }) : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
   const quitStep = sentinelStep + 1;
 
@@ -825,19 +848,20 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = false, simplifyEnabled = false, reviewer = DEFAULT_REVIEWER }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (hasSlashdo && worktreeInfo && willOpenPR) {
     const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
-    const reviewerArg = reviewer !== DEFAULT_REVIEWER ? ` --review-with ${reviewer}` : '';
-    const reviewerNote = reviewer === DEFAULT_REVIEWER
+    const reviewArgs = buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies);
+    const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
+    const reviewerNote = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER)
       ? 'Copilot review loop'
-      : `\`${reviewer}\`-CLI review loop (\`--review-with ${reviewer}\`)`;
+      : `review loop for ${reviewers.join(', ')} in order`;
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, opens a pull request against the default branch, and drives the ${reviewerNote} until clean.`);
-    const merge = buildPostPRMergeSteps(step, { reviewer });
+    const merge = buildPostPRMergeSteps(step, { reviewers });
     lines.push(...merge.lines);
     step = merge.nextStep;
     return lines.join('\n');

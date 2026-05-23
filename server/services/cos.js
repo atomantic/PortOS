@@ -37,7 +37,7 @@ import { generateProactiveTasks as generateMissionTasks, getStats as getMissionS
 import { generateTaskFromJob, recordJobExecution, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
 import { ensureDir, formatDuration, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, DEFAULT_REVIEWER } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isRecoveryTask } from './recoveryTasks.js';
@@ -1952,7 +1952,7 @@ async function generateManagedAppImprovementTask(app, state) {
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(nextType, 0)
     : await taskSchedule.getTaskPrompt(nextType);
-  const reviewer = metadata.reviewer || DEFAULT_REVIEWER;
+  const reviewer = normalizeReviewers(metadata).join(',');
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
@@ -2098,7 +2098,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     return null;
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-  const reviewer = metadata.reviewer || DEFAULT_REVIEWER;
+  const reviewer = normalizeReviewers(metadata).join(',');
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
@@ -2384,7 +2384,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
     else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
-    if (typeof taskData.reviewer === 'string' && taskData.reviewer) metadata.reviewer = taskData.reviewer;
+    // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).
+    if (Array.isArray(taskData.reviewers) || (typeof taskData.reviewer === 'string' && taskData.reviewer)) {
+      metadata.reviewers = normalizeReviewers(taskData);
+    }
+    if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
+    if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;
+    else if (taskData.reviewerApplies === false) metadata.reviewerApplies = false;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;

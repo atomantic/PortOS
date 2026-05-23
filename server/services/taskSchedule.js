@@ -527,12 +527,12 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 
 ## Phase 6 — Review and ship
 
-The configured reviewer for this task is \`{reviewer}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique via \`/do:rpr --review-with <reviewer>\`.
+The configured reviewers for this task, in order, are \`{reviewer}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging (equivalent to \`/do:pr --review-with {reviewer}\`).
 
 1. Run \`/simplify\` (three-agent reuse/quality/efficiency review) against your own diff and fix findings in the same diff. BEFORE opening the PR, not retroactively.
 2. Push the branch: \`git push -u origin claim/<slug>\`
 3. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
-4. **Wait for the configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Branch on \`{reviewer}\`:
+4. **Wait for each configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Run the reviewers in the listed order (\`{reviewer}\`); for each one, apply the matching handling below before advancing to the next:
 
    - **\`copilot\`** — This repo has GitHub Copilot Code Review configured to auto-run on every new PR. Poll until Copilot's review lands or a 10-minute timeout fires:
      \`\`\`bash
@@ -558,7 +558,7 @@ The configured reviewer for this task is \`{reviewer}\`. \`copilot\` waits for G
      \`\`\`
      Leave the local \`claim/<slug>\` branch and the open PR alone. Do NOT run Phase 7 — that phase assumes a merged PR. PLAN.md and \`.changelog/NEXT.md\` were already updated in Phase 5, and that's fine even though the merge didn't happen: the next \`plan-task\` run will see the slug as in-flight via the open PR and pick a different item.
 
-   - **\`claude\` / \`codex\` / \`gemini\`** — Invoke slashdo's \`/do:rpr --review-with {reviewer}\` against the PR. \`/do:rpr\` runs the chosen CLI in headless mode to critique the diff, applies fixes, and re-pushes. It owns its own iteration cap and clean-vs-dirty merge gate; on a clean status it returns control here for the merge.
+   - **\`claude\` / \`codex\` / \`gemini\`** — Invoke that CLI in headless mode against the PR diff to critique it, apply the fixes, run tests, and re-push. Iterate until the CLI reports no further blocking findings (cap at 3 rounds), then advance to the next configured reviewer (or merge if it's the last).
 
 5. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\` into main or any other branch. The repo may allow only one of \`--merge\` / \`--squash\` / \`--rebase\`, so don't hardcode a method. Try in this order and use the first one that succeeds:
    \`\`\`bash

@@ -552,6 +552,48 @@ export const searchQuerySchema = z.object({
 // client/src/components/cos/constants.js → REVIEWER_OPTIONS.
 export const REVIEWER_VALUES = ['copilot', 'claude', 'gemini', 'codex'];
 export const DEFAULT_REVIEWER = 'copilot';
+export const DEFAULT_REVIEWERS = ['copilot'];
+// Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
+export const REVIEW_STOP_MODES = ['all', 'on-findings', 'on-clean'];
+export const DEFAULT_REVIEW_STOP_MODE = 'all';
+
+/**
+ * Resolve task metadata to an ordered, deduped reviewer list. Prefers the new
+ * `reviewers` array; falls back to the legacy single `reviewer` string; defaults
+ * to `['copilot']`. Filters to known reviewers and preserves first-occurrence order.
+ */
+export function normalizeReviewers(meta) {
+  const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  const source = Array.isArray(raw.reviewers)
+    ? raw.reviewers
+    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
+  const seen = new Set();
+  const out = [];
+  for (const r of source) {
+    if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); out.push(r); }
+  }
+  return out.length ? out : [...DEFAULT_REVIEWERS];
+}
+
+/**
+ * Build the slashdo review flag string for an ordered reviewer list.
+ * - `--review-with a,b,c` only when the list isn't the lone default copilot.
+ * - `--review-stop-on-*` only when 2+ reviewers (stop-mode is meaningless for one).
+ * - `--reviewer-applies` only when a non-copilot reviewer is present (no-op on copilot).
+ */
+export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false) {
+  const list = normalizeReviewers({ reviewers });
+  const isDefaultOnly = list.length === 1 && list[0] === DEFAULT_REVIEWER;
+  const hasNonCopilot = list.some(r => r !== DEFAULT_REVIEWER);
+  const parts = [];
+  if (!isDefaultOnly) parts.push(`--review-with ${list.join(',')}`);
+  if (list.length >= 2) {
+    if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
+    else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');
+  }
+  if (reviewerApplies && hasNonCopilot) parts.push('--reviewer-applies');
+  return parts.join(' ');
+}
 
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
@@ -590,6 +632,12 @@ export const createCosTaskSchema = z.object({
   reviewer: z.preprocess(
     v => v === '' ? undefined : v,
     z.enum(REVIEWER_VALUES).optional()
+  ),
+  reviewers: z.array(z.enum(REVIEWER_VALUES)).optional(),
+  reviewStopMode: z.enum(REVIEW_STOP_MODES).optional(),
+  reviewerApplies: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
   ),
 });
 
@@ -1077,9 +1125,26 @@ export function sanitizeTaskMetadata(raw) {
       hasKeys = true;
     }
   }
-  // `reviewer` is a constrained string (copilot/claude/gemini/codex), not a boolean.
+  // `reviewer` is a legacy single constrained string (copilot/claude/gemini/codex).
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && REVIEWER_VALUES.includes(raw.reviewer)) {
     clean.reviewer = raw.reviewer;
+    hasKeys = true;
+  }
+  // `reviewers` is the ordered multi-reviewer list — filter to known values, dedupe, preserve order.
+  if (Array.isArray(raw.reviewers)) {
+    const seen = new Set();
+    const list = [];
+    for (const r of raw.reviewers) {
+      if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); list.push(r); }
+    }
+    if (list.length) { clean.reviewers = list; hasKeys = true; }
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {
+    clean.reviewStopMode = raw.reviewStopMode;
+    hasKeys = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewerApplies') && typeof raw.reviewerApplies === 'boolean') {
+    clean.reviewerApplies = raw.reviewerApplies;
     hasKeys = true;
   }
   // Pass through pipeline config (validated shape: object with stages array)

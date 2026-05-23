@@ -1,0 +1,1 @@
+../../../lib/slashdo/commands/do/scan.md
