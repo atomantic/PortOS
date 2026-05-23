@@ -529,7 +529,7 @@ describe('fileUtils', () => {
   //   2. Cleanup goes in `afterAll`, NOT a recursive remove of the root —
   //      the data/ roots hold the user's universe content and shipped templates.
   describe('resolveImageInputPath', () => {
-    const sampleTemplate = join(__dirname_test, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
+    const sampleTemplate = join(__dirname_test, '..', '..', 'data.reference', 'templates', 'character-reference-sheet.png');
     const galleryName = 'fileutils-test-gallery.png';
     const refsName = 'fileutils-test-refs.png';
     const templateName = 'fileutils-test-template.png';

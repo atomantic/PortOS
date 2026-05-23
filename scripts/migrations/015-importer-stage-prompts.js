@@ -41,12 +41,12 @@ export default {
     await mkdir(stagesDir, { recursive: true });
     for (const filename of FILENAMES) {
       const dataPath = join(stagesDir, filename);
-      const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', filename);
+      const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', filename);
 
       const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
       if (exists) { present++; continue; }
 
-      // Validate the source exists before copy — if `data.sample/` was
+      // Validate the source exists before copy — if `data.reference/` was
       // trimmed in a later release or this migration runs against a sparse
       // checkout, we'd otherwise abort the whole migration batch mid-loop.
       const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
@@ -76,10 +76,10 @@ export default {
     // above but no stage-config entries, so `getStage()` can't resolve
     // them and the importer LLM calls fail or fall back to a wrong tier.
     const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
-    const sampleConfigPath = join(rootDir, 'data.sample', 'prompts', 'stage-config.json');
+    const sampleConfigPath = join(rootDir, 'data.reference', 'prompts', 'stage-config.json');
     const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
     if (!sampleConfigExists) {
-      console.warn('⚠️  importer-stage-prompts: data.sample stage-config.json missing — cannot resolve importer entries; skipping config write');
+      console.warn('⚠️  importer-stage-prompts: data.reference stage-config.json missing — cannot resolve importer entries; skipping config write');
       return;
     }
     try {

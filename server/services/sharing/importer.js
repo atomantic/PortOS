@@ -29,6 +29,7 @@ import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
+import { PORTOS_SCHEMA_VERSIONS, compareSchemaVersions, formatVersionGap } from '../../lib/schemaVersions.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
@@ -38,6 +39,7 @@ import { adoptImportedSubscription, withReexportSuppressed } from './subscriptio
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
 import { isStr } from '../../lib/storyBible.js';
+import { isPlainObject } from '../../lib/objects.js';
 
 function isSelfAuthored(senderInstanceId, localInstanceId) {
   return !!localInstanceId
@@ -724,6 +726,46 @@ export async function processManifest(bucketId, manifestFilename) {
     });
     console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} schemaVersion=${remoteVersion} > local=${SHARING_SCHEMA_VERSION} — refusing import (peer producedBy=${manifest.producedByVersion || 'unknown'})`);
     return { skipped: true, reason: 'incompatible-version', remoteVersion, localVersion: SHARING_SCHEMA_VERSION };
+  }
+  // PORTOS SCHEMA-VERSION GATE — even when the share-protocol schemaVersion
+  // is compatible, the manifest's per-category storage layout versions
+  // (`portosSchemaVersions`, e.g. `{ universes: 5 }`) may exceed what this
+  // PortOS can apply. We refuse the import AND mark it processed (see the
+  // dedup rationale in the branch below) — so retry-after-upgrade is NOT
+  // automatic; the user clears the bucket cursor (or unshare/reshares) once
+  // they've upgraded. Emits a `portos-schema-ahead` event the UI uses to
+  // render a persistent "Update PortOS to import this share" badge.
+  const senderSchemaVersions = isPlainObject(manifest.portosSchemaVersions)
+    ? manifest.portosSchemaVersions
+    : {};
+  const portosDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  if (portosDiff.ahead.length > 0) {
+    // Mark processed so subsequent chokidar fan-outs (every asset/record
+    // file landing under the bucket triggers a backlog scan that re-walks
+    // every manifest) don't re-fire this event 100× per bundle. Mirrors
+    // the sibling `incompatible-version` branch above. Trade-off: when the
+    // user upgrades PortOS, they must clear the cursor entry to retry the
+    // import (or unshare/reshare from the sender side). Without this dedup,
+    // the event spams logs + the socket channel on every receive cycle.
+    await markProcessed(bucketId, manifestFilename, manifest.id);
+    sharingEvents.emit('portos-schema-ahead', {
+      bucketId, manifestId: manifest.id, manifestFilename,
+      ahead: portosDiff.ahead,
+      behind: portosDiff.behind,
+      producedByVersion: manifest.producedByVersion || 'unknown',
+      source: manifest.source || 'unknown',
+    });
+    console.log(
+      `⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} — ${formatVersionGap(portosDiff)} ` +
+      `(producedBy=${manifest.producedByVersion || 'unknown'}). Update PortOS to import; clear the bucket cursor after upgrade to retry.`,
+    );
+    return {
+      skipped: true,
+      reason: 'portos-schema-ahead',
+      ahead: portosDiff.ahead,
+      behind: portosDiff.behind,
+      producedByVersion: manifest.producedByVersion || 'unknown',
+    };
   }
   // Annotation manifests bypass the records/assets/applyMerge pipeline — they
   // carry a per-instance annotation snapshot at records/media-annotations/<id>.json

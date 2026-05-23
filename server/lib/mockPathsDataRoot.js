@@ -63,7 +63,7 @@ export function createTempDataRoot(prefix = 'portos-test-') {
  *   - a function `(dataRoot) => overridesObject` — for cases where the
  *     extra keys are derived (e.g. `images: join(dataRoot, 'images')`).
  */
-export function makePathsProxy(actual, { dataRoot, extraOverrides = null } = {}) {
+export function makePathsProxy(actual, { dataRoot, extraOverrides = null, overrides = null } = {}) {
   const resolveRoot = typeof dataRoot === 'function' ? dataRoot : () => dataRoot;
   const buildOverrides = () => {
     const root = resolveRoot();
@@ -75,6 +75,10 @@ export function makePathsProxy(actual, { dataRoot, extraOverrides = null } = {})
   return new Proxy(actual, {
     get(target, prop) {
       if (prop === 'PATHS') return buildOverrides();
+      // Top-level export overrides (e.g. a delegating spy for atomicWrite).
+      // Served through the get trap so callers never vi.spyOn a read-only
+      // ESM namespace export — see mockPathsDataRoot's wrapExports option.
+      if (overrides && prop in overrides) return overrides[prop];
       return target[prop];
     },
   });
@@ -94,12 +98,42 @@ export function makePathsProxy(actual, { dataRoot, extraOverrides = null } = {})
  *       return makeProxy(actual);
  *     });
  *     afterAll(cleanup);
+ *
+ * To inspect call counts on a fileUtils export (e.g. atomicWrite) WITHOUT
+ * `vi.spyOn`-ing a read-only ESM namespace export, pass `wrapExports` plus
+ * `makeSpy: vi.fn` (the test owns vitest; this module stays vitest-free since
+ * it's barrel-exported and runtime-loaded). The wrapped exports are exposed
+ * on the returned `spies` map, each a vi.fn delegating to the real impl:
+ *
+ *     const { makeProxy, spies, cleanup } = mockPathsDataRoot({
+ *       wrapExports: ['atomicWrite'], makeSpy: vi.fn,
+ *     });
+ *     // ...later: spies.atomicWrite.mock.calls
  */
-export function mockPathsDataRoot({ prefix = 'portos-test-', extraOverrides = null } = {}) {
+export function mockPathsDataRoot({
+  prefix = 'portos-test-',
+  extraOverrides = null,
+  wrapExports = [],
+  makeSpy = null,
+} = {}) {
   const tempRoot = createTempDataRoot(prefix);
+  const spies = {};
   return {
     tempRoot,
-    makeProxy: (actual) => makePathsProxy(actual, { dataRoot: tempRoot, extraOverrides }),
+    spies,
+    makeProxy: (actual) => {
+      const overrides = {};
+      if (wrapExports.length) {
+        if (typeof makeSpy !== 'function') {
+          throw new Error('mockPathsDataRoot: wrapExports requires a makeSpy (pass vi.fn)');
+        }
+        for (const name of wrapExports) {
+          spies[name] = makeSpy((...args) => actual[name](...args));
+          overrides[name] = spies[name];
+        }
+      }
+      return makePathsProxy(actual, { dataRoot: tempRoot, extraOverrides, overrides });
+    },
     cleanup: () => rmSync(tempRoot, { recursive: true, force: true }),
   };
 }

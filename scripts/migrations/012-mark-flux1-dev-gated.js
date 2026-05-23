@@ -1,10 +1,10 @@
 /**
  * Mark FLUX.1-dev as a gated HuggingFace model in existing installs.
  *
- * `data.sample/media-models.json` now carries `requiresHfToken: true` +
+ * `data.reference/media-models.json` now carries `requiresHfToken: true` +
  * `licenseUrl` on the `dev` entry so the Image Gen page can surface the
  * inline HF-token banner (same pattern FLUX.2-klein already used). Fresh
- * installs pick this up via the data.sample → data copy in setup-data.js,
+ * installs pick this up via the data.reference → data copy in setup-data.js,
  * but `media-models.json` is not in JSON_MERGE_TARGETS so existing installs
  * keep their pre-flip entry. This migration patches the two fields onto an
  * unmodified `dev` entry without touching anything else.
@@ -26,7 +26,7 @@ export default {
       throw err;
     });
     if (raw == null) {
-      console.log(`📄 ${REL_PATH} not present — skipping (fresh install will copy from data.sample)`);
+      console.log(`📄 ${REL_PATH} not present — skipping (fresh install will copy from data.reference)`);
       return;
     }
 

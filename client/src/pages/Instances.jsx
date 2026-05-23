@@ -18,6 +18,7 @@ import {
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
+import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import { timeAgo } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
@@ -835,7 +836,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
     }
     let cancelled = false;
     setPeerSubsLoaded(false);
-    listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
+    const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {
         if (!cancelled) setPeerSubs(r?.subscriptions || []);
       })
@@ -845,7 +846,27 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
       .finally(() => {
         if (!cancelled) setPeerSubsLoaded(true);
       });
-    return () => { cancelled = true; };
+    refetch();
+    // When a per-record schema block is persisted server-side, the
+    // subscription's `blockedBySchema` field changes inside
+    // peer_subscriptions.json. The parent Instances component already
+    // refetches `peers` on this event, but its refresh doesn't re-run this
+    // card's `peerSubs` effect (deps are `peer.instanceId` only). Without
+    // a local subscription here, SchemaGapBadge keeps rendering the stale
+    // `blockedBySchema` value until a full page reload.
+    // The event carries `peerId` so only the affected card refetches —
+    // every card listens, but skips events for other peers.
+    const handleSchemaSubChange = (payload) => {
+      if (payload?.peerId && payload.peerId !== peer.instanceId) return;
+      refetch();
+    };
+    socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
+    socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
+    return () => {
+      cancelled = true;
+      socket.off('peerSync:subscription-blocked', handleSchemaSubChange);
+      socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
+    };
   }, [peer.instanceId]);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
@@ -981,6 +1002,8 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
         </div>
       )}
 
+      <SchemaGapBadge peer={peer} peerSubs={peerSubs} />
+
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
       <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} />
@@ -1026,6 +1049,11 @@ export default function Instances() {
       setPeers(updatedPeers);
     };
     socket.on('instances:peers:updated', handlePeersUpdated);
+    // NOTE: `peerSync:subscription-blocked/unblocked` is intentionally NOT
+    // handled here. Those events only mutate per-record subscription state
+    // (`blockedBySchema`), which each PeerCard refetches for its own peer via
+    // its peerSubs effect. A page-level fetchData() on every such event would
+    // refetch all peers + syncStatus for a change that touches only one card.
 
     return () => {
       socket.emit('instances:unsubscribe');

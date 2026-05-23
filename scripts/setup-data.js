@@ -8,7 +8,7 @@ import { md5 } from './migrations/_lib.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 const dataDir = join(rootDir, 'data');
-const sampleDir = join(rootDir, 'data.sample');
+const referenceDir = join(rootDir, 'data.reference');
 
 console.log('📁 Setting up data directory...');
 
@@ -31,9 +31,9 @@ if (existsSync(legacyMigrationsDir) && readdirSync(legacyMigrationsDir).length =
 }
 
 if (!existsSync(dataDir)) {
-  console.log('📁 Creating data directory from data.sample...');
+  console.log('📁 Creating data directory from data.reference...');
   mkdirSync(dataDir, { recursive: true });
-  cpSync(sampleDir, dataDir, { recursive: true });
+  cpSync(referenceDir, dataDir, { recursive: true });
 
   // Replace __PORTOS_ROOT__ placeholder with actual install path in apps.json
   const appsFile = join(dataDir, 'apps.json');
@@ -68,15 +68,15 @@ if (!existsSync(dataDir)) {
     }
   };
 
-  ensureSampleContent(sampleDir, dataDir);
+  ensureSampleContent(referenceDir, dataDir);
 
   console.log('✅ Data directory already exists, ensured subdirectories and files');
 }
 
-// Merge new top-level entries from data.sample's structured JSON files into
+// Merge new top-level entries from data.reference's structured JSON files into
 // the user's existing copies, leaving customized entries untouched. Without
 // this, only file-level "missing → copy" propagation runs above, so a new
-// prompt stage or shared variable added to data.sample/prompts/ never
+// prompt stage or shared variable added to data.reference/prompts/ never
 // reaches an existing install whose stage-config.json or variables.json
 // already exists. Each merge target points at one top-level dict-shaped key
 // (`stages` for stage-config.json, `variables` for variables.json) and the
@@ -90,7 +90,7 @@ const JSON_MERGE_TARGETS = [
 ];
 
 const mergeJsonStarter = (relPath, mergeKey) => {
-  const samplePath = join(sampleDir, relPath);
+  const samplePath = join(referenceDir, relPath);
   const dataPath = join(dataDir, relPath);
   if (!existsSync(samplePath) || !existsSync(dataPath)) return;
   let sample, data;
@@ -123,7 +123,7 @@ for (const { relPath, mergeKey } of JSON_MERGE_TARGETS) {
   mergeJsonStarter(relPath, mergeKey);
 }
 
-// Drift detection — warn when a data.sample/prompts/stages/*.md differs from
+// Drift detection — warn when a data.reference/prompts/stages/*.md differs from
 // the installed data/prompts/stages/*.md copy. Only fires on existing installs
 // (fresh installs already got a full copy above). Prompt templates drift when
 // a PortOS update adds new template variables (e.g. {{lengthTargets.*}}) that
@@ -225,7 +225,7 @@ const SHIPPED_PARTIAL_FILES = Object.keys(SHIPPED_PARTIAL_OLD_MD5);
 // customized (hash matches neither old nor new). Used twice — once for
 // stage prompts, once for partial fragments.
 const collectDrift = ({ sampleSubdir, dataSubdir, files, oldMap, newMap }) => {
-  const sampleSubpath = join(sampleDir, ...sampleSubdir);
+  const sampleSubpath = join(referenceDir, ...sampleSubdir);
   const dataSubpath   = join(dataDir,   ...dataSubdir);
   if (!existsSync(sampleSubpath) || !existsSync(dataSubpath)) {
     return { autoUpdatable: [], customized: [] };
@@ -268,8 +268,8 @@ const autoUpdatable = [
   ...partialDrift.autoUpdatable.map((f) => ({ file: f, relDir: 'data/prompts/_partials' })),
 ];
 const customized = [
-  ...stageDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/stages', sampleDir: 'data.sample/prompts/stages' })),
-  ...partialDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/_partials', sampleDir: 'data.sample/prompts/_partials' })),
+  ...stageDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/stages', referenceDir: 'data.reference/prompts/stages' })),
+  ...partialDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/_partials', referenceDir: 'data.reference/prompts/_partials' })),
 ];
 
 if (autoUpdatable.length > 0) {
@@ -283,7 +283,7 @@ if (customized.length > 0) {
   console.warn(
     `\n⚠️  ${customized.length} pipeline prompt(s) are customized and cannot be auto-updated.\n` +
     `   Manually merge the new template variables into each file:\n` +
-    customized.map(({ file, relDir, sampleDir: sd }) =>
+    customized.map(({ file, relDir, referenceDir: sd }) =>
       `   • ${relDir}/${file}\n` +
       `     Compare with: ${sd}/${file}`,
     ).join('\n') + '\n',

@@ -63,6 +63,37 @@ describe('sharing/manifest', () => {
     expect(() => manifest.buildManifest({ kind: 'bogus' })).toThrow(/invalid kind/);
   });
 
+  it('buildManifest stores a plain portosSchemaVersions object', () => {
+    const m = manifest.buildManifest({
+      kind: 'series', source: 'me', bucketId: 'b1', bucketName: 'c',
+      recordIds: [], assetRefs: [],
+      portosSchemaVersions: { universes: 5 },
+    });
+    expect(m.portosSchemaVersions).toEqual({ universes: 5 });
+  });
+
+  it('buildManifest normalizes an array portosSchemaVersions to null', () => {
+    // `typeof === 'object'` alone accepts arrays; spreading one would produce
+    // `{ "0": ... }` numeric-keyed garbage the importer's comparator can't
+    // read. Arrays (the realistic junk) must collapse to null.
+    for (const bad of [[5], [{ universes: 5 }], []]) {
+      const m = manifest.buildManifest({
+        kind: 'series', source: 'me', bucketId: 'b1', bucketName: 'c',
+        recordIds: [], assetRefs: [],
+        portosSchemaVersions: bad,
+      });
+      expect(m.portosSchemaVersions).toBeNull();
+    }
+  });
+
+  it('buildManifest defaults portosSchemaVersions to null when omitted', () => {
+    const m = manifest.buildManifest({
+      kind: 'series', source: 'me', bucketId: 'b1', bucketName: 'c',
+      recordIds: [], assetRefs: [],
+    });
+    expect(m.portosSchemaVersions).toBeNull();
+  });
+
   it('manifestFilename is sortable + slug-safe', () => {
     const m = manifest.buildManifest({
       kind: 'series',

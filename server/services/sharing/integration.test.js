@@ -1779,4 +1779,61 @@ describe('sharing round-trip', () => {
     expect(idx[keyA]).toBe(sha256Hex('PARALLEL_A'));
     expect(idx[keyB]).toBe(sha256Hex('PARALLEL_B'));
   });
+
+  // ---------------------------------------------------------------------------
+  // SCHEMA-VERSION GATING — share-bucket transport
+  // ---------------------------------------------------------------------------
+  describe('portos-schema-ahead manifest gate', () => {
+    it('manifest is stamped with the sender\'s PORTOS_SCHEMA_VERSIONS', async () => {
+      const bucket = await buckets.createBucket({ name: 'GateBucket', path: tempBucket, mode: 'inbox' });
+      const s = await series.createSeries({ name: 'Stamp Test', logline: 'x' });
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      const manifest = JSON.parse(readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
+      expect(manifest.portosSchemaVersions).toBeDefined();
+      expect(manifest.portosSchemaVersions.universes).toBe(5);
+    });
+
+    it('importer rejects a manifest whose portosSchemaVersions.universes is AHEAD of local', async () => {
+      const bucket = await buckets.createBucket({ name: 'AheadBucket', path: tempBucket, mode: 'auto-merge' });
+      const s = await series.createSeries({ name: 'Future', logline: 'x' });
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      // Mutate the written manifest to stamp a future portos schema. This
+      // simulates a manifest exported by a NEWER PortOS instance landing in
+      // an OLDER instance's bucket.
+      const manifestPath = join(tempBucket, 'manifests', exp.filename);
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      manifest.portosSchemaVersions = { universes: 99 };
+      manifest.producedByVersion = '99.0.0';
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      // Delete the local series so the auto-merge would normally re-create it.
+      await series.deleteSeries(s.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+      const result = await importer.processManifest(bucket.id, exp.filename);
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toBe('portos-schema-ahead');
+      expect(result.ahead).toEqual([{ category: 'universes', senderV: 99, receiverV: 5 }]);
+      expect(result.producedByVersion).toBe('99.0.0');
+      // Series stayed tombstoned (or absent) — apply was refused.
+      await expect(series.getSeries(s.id)).rejects.toThrow();
+    });
+
+    it('importer falls through for manifests with no portosSchemaVersions (legacy peer)', async () => {
+      // A manifest produced by a pre-this-PR PortOS won't have the field;
+      // the comparator treats it as no-contract, so the merge proceeds.
+      const bucket = await buckets.createBucket({ name: 'LegacyBucket', path: tempBucket, mode: 'auto-merge' });
+      const s = await series.createSeries({ name: 'Legacy Test', logline: 'x' });
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      const manifestPath = join(tempBucket, 'manifests', exp.filename);
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      delete manifest.portosSchemaVersions;
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      await series.deleteSeries(s.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+      const result = await importer.processManifest(bucket.id, exp.filename);
+      expect(result.processed).toBe(true);
+      expect(result.outcome.mode).toBe('auto-merge');
+      const restored = await series.getSeries(s.id);
+      expect(restored.id).toBe(s.id);
+    });
+  });
 });

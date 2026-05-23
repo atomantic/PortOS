@@ -28,7 +28,7 @@ export default {
       throw err;
     });
     if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install will copy from data.sample with the new default already applied)`);
+      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install will copy from data.reference with the new default already applied)`);
       return;
     }
 

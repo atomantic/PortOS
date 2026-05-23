@@ -30,7 +30,7 @@ Client (React)                    Server (Express)                   Storage (./
 **Files to create:**
 - `server/lib/brainValidation.js` - Zod schemas for all Brain entities
 - `server/services/brainStorage.js` - JSONL file operations
-- `data.sample/brain/` - Sample data directory with all files
+- `data.reference/brain/` - Sample data directory with all files
 
 **Schemas:**
 
@@ -366,7 +366,7 @@ export default function Brain() {
 
 ### Phase 6: Sample Data & Tests
 
-**Sample data files (./data.sample/brain/):**
+**Sample data files (./data.reference/brain/):**
 - `meta.json` - Default settings
 - `inbox_log.jsonl` - 10-15 sample entries (mix of statuses)
 - `people.jsonl` - 5 sample people
@@ -422,7 +422,7 @@ data/prompts/stages/
   brain-daily-digest.md
   brain-weekly-review.md
 
-data.sample/brain/
+data.reference/brain/
   meta.json
   inbox_log.jsonl
   people.jsonl

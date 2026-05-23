@@ -34,7 +34,7 @@ const md5 = (text) => createHash('md5')
 export default {
   async up({ rootDir }) {
     const installedPath = join(rootDir, 'data', 'prompts', 'stages', FILENAME);
-    const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', FILENAME);
+    const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', FILENAME);
 
     const installedExists = await access(installedPath, constants.F_OK).then(() => true, () => false);
     if (!installedExists) {
@@ -50,13 +50,13 @@ export default {
       return;
     }
     if (installedHash !== OLD_SHIPPED_MD5) {
-      console.warn(`⚠️  importer-screenplay-user-requested-count: ${FILENAME} is customized — leaving as-is. Merge the new screenplay-block gating manually from data.sample if needed.`);
+      console.warn(`⚠️  importer-screenplay-user-requested-count: ${FILENAME} is customized — leaving as-is. Merge the new screenplay-block gating manually from data.reference if needed.`);
       return;
     }
 
     const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
     if (!sampleExists) {
-      console.warn(`⚠️  importer-screenplay-user-requested-count: data.sample for ${FILENAME} missing — cannot update`);
+      console.warn(`⚠️  importer-screenplay-user-requested-count: data.reference for ${FILENAME} missing — cannot update`);
       return;
     }
     const sample = await readFile(samplePath, 'utf8');

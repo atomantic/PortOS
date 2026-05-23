@@ -31,6 +31,7 @@ import { getJob } from '../mediaJobQueue/index.js';
 import { getInstanceId } from '../instances.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { isStr, listSheetPointers } from '../../lib/storyBible.js';
 import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
 
@@ -390,6 +391,7 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
     senderInstanceId,
     source, sourceBio,
     producedByVersion,
+    portosSchemaVersions: PORTOS_SCHEMA_VERSIONS,
     subscription: opts.subscription || null,
     collection: linkedCollection,
     bucketId: bucket.id,
@@ -475,6 +477,7 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
     senderInstanceId,
     source, sourceBio,
     producedByVersion,
+    portosSchemaVersions: PORTOS_SCHEMA_VERSIONS,
     subscription: opts.subscription || null,
     collection: linkedCollection,
     bucketId: bucket.id,
@@ -539,6 +542,7 @@ export async function exportMedia(items, bucketId) {
     senderInstanceId,
     source, sourceBio,
     producedByVersion,
+    portosSchemaVersions: PORTOS_SCHEMA_VERSIONS,
     bucketId: bucket.id,
     bucketName: bucket.name,
     recordIds: [],

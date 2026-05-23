@@ -13,6 +13,7 @@ import { ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { listBuckets } from './buckets.js';
 import { buildManifest, writeManifest, annotationManifestFilename, readManifest, listManifestFilenames } from './manifest.js';
 import { getProducedByVersion } from './version.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { resolveBucketSourceName } from './annotationIdentity.js';
 import { onLocalAnnotationChange, listLocalAuthorAnnotations } from '../mediaAnnotations.js';
@@ -186,6 +187,7 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
     bucketId: bucket.id,
     bucketName: bucket.name,
     producedByVersion,
+    portosSchemaVersions: PORTOS_SCHEMA_VERSIONS,
   });
   const filename = await writeManifest(bucket.path, manifest);
   // The annotation manifest we just wrote bumps the manifests-dir mtime, but

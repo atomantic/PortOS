@@ -3,7 +3,7 @@
  * and pipe {{speechAccent}} / {{speechPattern}} through character renders.
  *
  * Mirrors migration 019's test scaffolding — temp-dir fixtures, the same
- * drift-catch assertion against the live data.sample bodies, and an
+ * drift-catch assertion against the live data.reference bodies, and an
  * OLD→NEW upgrade branch driven by synthetic hash tables so the test
  * doesn't depend on git history.
  *
@@ -25,7 +25,7 @@ const md5 = (str) => createHash('md5')
 
 const repoRoot = join(import.meta.dirname || dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sampleBody = (filename) =>
-  readFileSync(join(repoRoot, 'data.sample', 'prompts', 'stages', filename), 'utf-8');
+  readFileSync(join(repoRoot, 'data.reference', 'prompts', 'stages', filename), 'utf-8');
 
 const customizedBody = (filename) => `# CUSTOMIZED ${filename}\n\nuser-modified content not matching any shipped hash\n`;
 
@@ -37,7 +37,7 @@ describe('migration 027 — text-stage prompts entities-summary + speechPattern'
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), 'migration-027-'));
     stagesDir = join(rootDir, 'data', 'prompts', 'stages');
-    sampleDir = join(rootDir, 'data.sample', 'prompts', 'stages');
+    sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     mkdirSync(stagesDir, { recursive: true });
     mkdirSync(sampleDir, { recursive: true });
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
@@ -75,7 +75,7 @@ describe('migration 027 — text-stage prompts entities-summary + speechPattern'
     }
   });
 
-  it('NEW_SHIPPED_MD5 matches the live data.sample bodies (drift catch)', () => {
+  it('NEW_SHIPPED_MD5 matches the live data.reference bodies (drift catch)', () => {
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
       const liveHash = md5(sampleBody(filename));
       expect(liveHash).toBe(NEW_SHIPPED_MD5[filename]);

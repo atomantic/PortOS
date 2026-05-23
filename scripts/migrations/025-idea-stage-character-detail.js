@@ -32,7 +32,7 @@ export const ACCEPTED_OLD_MD5 = {
   ],
 };
 
-// New shipped hash — what data.sample carries post-migration.
+// New shipped hash — what data.reference carries post-migration.
 export const NEW_SHIPPED_MD5 = {
   'pipeline-idea-expansion.md': '1f3c5d077a5ef9a4b610335d5e3edd9c',
 };
@@ -44,7 +44,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   customizedHint: (filename) =>
     `   To pick up the new {{#series.characters}} role/physicalDescription/personality/background\n` +
     `   plumbing manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and replace the character iteration block with the new shape.`,
@@ -52,7 +52,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
     `⚠️  ${count} idea-stage prompt could not be auto-updated because it was customized.\n` +
     `   The idea / beat-sheet expansion will keep working but won't see character\n` +
     `   \`role\`, \`physicalDescription\`, \`personality\`, or \`background\` from the bible.\n` +
-    `   See data.sample/prompts/stages/pipeline-idea-expansion.md.`,
+    `   See data.reference/prompts/stages/pipeline-idea-expansion.md.`,
 });
 
 export { applyMigration };

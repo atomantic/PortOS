@@ -9,7 +9,7 @@ build/
 # directory-level `data/` rule from the global ~/.gitignore so git descends
 # into data/ and evaluates the negation below; then re-exclude everything
 # inside except the .gitkeep that pins the empty directory. Seed/template
-# content lives in data.sample/ and is copied in by scripts/setup-data.js;
+# content lives in data.reference/ and is copied in by scripts/setup-data.js;
 # migration scripts live in scripts/migrations/.
 !data/
 data/*
@@ -29,7 +29,7 @@ npm-debug.log*
 *.png
 !client/public/portos-logo.png
 !docs/media/portos-logo.png
-!data.sample/templates/*.png
+!data.reference/templates/*.png
 
 # OS files
 .DS_Store

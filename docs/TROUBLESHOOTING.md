@@ -39,7 +39,7 @@ pm2 logs portos-server --lines 100
 **Solution**:
 ```bash
 # Copy sample data files
-cp -r data.sample/* data/
+cp -r data.reference/* data/
 ```
 
 ## Connection Issues

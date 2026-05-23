@@ -30,12 +30,32 @@ router.get('/:category/snapshot', asyncHandler(async (req, res) => {
   res.json(snapshot);
 }));
 
-// POST /api/sync/:category/apply — apply remote data with merge
+// POST /api/sync/:category/apply — apply remote data with merge.
+// Forwards `portosMeta` to `applyRemote` so the schema-version gate fires for
+// this transport too. Without the forward, a caller hitting this REST path
+// (manual debug, future client transport) would silently bypass the gate
+// because `applyRemote` defaults the option object to `{}` and the gate
+// reads `options.portosMeta` — absent → comparator skips the ahead check.
+// `portosMeta` is intentionally `.passthrough()` so newer-PortOS callers
+// adding fields don't get 400'd before the gate has a chance to diagnose.
+const applyBodySchema = z.object({
+  data: z.unknown(),
+  portosMeta: z.object({
+    portosVersion: z.string().trim().min(1).max(40).optional(),
+    schemaVersions: z.record(z.string().min(1).max(60), z.number().int().min(0).max(1_000_000)).optional(),
+  }).passthrough().optional(),
+});
 router.post('/:category/apply', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
-  const { data } = req.body;
-  if (!data) throw new ServerError('Missing data field', { status: 400 });
-  const result = await dataSync.applyRemote(category, data);
+  const parsed = applyBodySchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const { data, portosMeta } = parsed.data;
+  // `z.unknown()` accepts falsy-but-present payloads (0, false, ''); only
+  // reject genuinely missing/null so we don't 400 a valid empty-ish snapshot.
+  if (data == null) throw new ServerError('Missing data field', { status: 400 });
+  const result = await dataSync.applyRemote(category, data, { portosMeta });
   res.json(result);
 }));
 

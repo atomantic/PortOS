@@ -1,22 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { rmSync, mkdirSync } from 'fs';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-// In-memory file store mirrors universeBuilder.test.js / universeCanon.test.js
-// so a single readState/writeState path roundtrips through the same code the
-// real service uses (no live file I/O).
-const fileStore = new Map();
+// `wrapExports: ['atomicWrite']` exposes a delegating vi.fn at
+// `spies.atomicWrite` so the atomicity test can count writes WITHOUT
+// vi.spyOn-ing the read-only ESM export (which throws in Vitest).
+const { tempRoot, makeProxy, cleanup, spies } = mockPathsDataRoot({
+  prefix: 'portos-universe-promote-',
+  wrapExports: ['atomicWrite'],
+  makeSpy: vi.fn,
+});
+afterAll(cleanup);
 
-vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: '/mock/data' },
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
-  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
-}));
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return makeProxy(actual);
+});
 
 let uuidCounter = 0;
+const mockUuid = (n) => `uuid-${String(n).padStart(8, '0')}`;
 vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
-  return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
+  return { ...actual, randomUUID: () => mockUuid(++uuidCounter) };
 });
 
 // Stub the LLM dispatch so tests don't need a live runner. The
@@ -42,7 +47,6 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
 // the mock chain.
 const svc = await import('./universeBuilder.js');
 const promoteSvc = await import('./universeBuilderPromote.js');
-const fileUtils = await import('../lib/fileUtils.js');
 
 const seedUniverseWithBucket = async (categories, canon = {}) => {
   const w = await svc.createUniverse({
@@ -64,7 +68,8 @@ const mockLlm = (entry) => {
 };
 
 beforeEach(() => {
-  fileStore.clear();
+  rmSync(tempRoot, { recursive: true, force: true });
+  mkdirSync(tempRoot, { recursive: true });
   uuidCounter = 0;
   resolveProviderAndModelMock.mockReset();
   runPromptThroughProviderMock.mockReset();
@@ -436,16 +441,25 @@ describe('universeBuilderPromote — atomicity', () => {
       },
     });
     mockLlm({ name: 'Place A', description: 'place a', prompt: 'a' });
-    const callsBefore = fileUtils.atomicWrite.mock.calls.length;
+    // Spy on the real atomicWrite so we can count the writes that this single
+    // promote operation triggers. Filter to per-record writes (the universe's
+    // index.json) — saveTypeIndex writes that happen elsewhere in the test's
+    // setup are excluded.
+    const recordIndexPath = `${tempRoot}/universes/${w.id}/index.json`;
+    const beforeCalls = spies.atomicWrite.mock.calls.length;
     await promoteSvc.promoteVariationToCanon(w.id, {
       category: 'landscapes',
       label: 'A',
     });
+    const recordWrites = spies.atomicWrite.mock.calls
+      .slice(beforeCalls)
+      .filter(([path]) => path === recordIndexPath);
     // Canon append AND variation removal must land in one persistence write
     // — not two. A two-write split would expose a half-state window where a
     // crash leaves the variation gone but the canon entry never written
-    // (or vice versa). updateUniverse writes once, so the call delta is 1.
-    expect(fileUtils.atomicWrite.mock.calls.length - callsBefore).toBe(1);
+    // (or vice versa). updateUniverse writes once, so the per-record write
+    // count is 1.
+    expect(recordWrites).toHaveLength(1);
     // Re-read from the persistence layer (mirrors what a sibling tab would
     // see): canon has the new entry AND the bucket has lost the variation.
     const reread = (await svc.listUniverses())[0];

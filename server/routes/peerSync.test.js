@@ -10,6 +10,7 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   applyIncomingPush: vi.fn(),
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
+  ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
 }));
 
 import * as svc from '../services/sharing/peerSync.js';
@@ -128,6 +129,35 @@ describe('peer-sync routes', () => {
           sourceInstanceId: '',
         });
       expect(res.status).toBe(400);
+    });
+
+    it('maps the service-layer ERR_SCHEMA_VERSION_AHEAD to a 409 with the diff in body.context.details', async () => {
+      // Sender is on a newer storage layout. The route must return 409 (NOT
+      // 400 or 500) and the JSON body must surface the diff so the sender's
+      // pushRecordToPeer can persist the gap on the subscription.
+      const details = {
+        ahead: [{ category: 'universes', senderV: 6, receiverV: 5 }],
+        behind: [],
+        senderPortosVersion: '99.0.0',
+        receiverSchemaVersions: { universes: 5 },
+      };
+      const err = Object.assign(new Error('schema ahead'), {
+        code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+        details,
+      });
+      svc.applyIncomingPush.mockRejectedValue(err);
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'universe',
+          record: { id: 'u1' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+        });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+      expect(res.body.context.details).toEqual(details);
     });
 
     it('maps the service-layer ERR_VALIDATION to a 400 (service-side guards beyond Zod)', async () => {

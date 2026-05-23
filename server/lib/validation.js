@@ -1218,10 +1218,31 @@ const peerWireRecordSchema = z.object({
 // unbounded. `sourceInstanceId` is required + must be a real instance id
 // (the receiver rejects "unknown" at the service layer; here we just enforce
 // non-empty + length cap).
+// `portosMeta` envelope — every outbound payload built by `buildPushPayload`
+// stamps the sender's PortOS version + schemaVersions map so the receiver
+// can detect a version mismatch before applying the record. Optional on
+// the wire so legacy peers (no portosMeta) still validate; the receiver's
+// version-gate treats absent meta as "no contract" and falls through to
+// the existing merge path.
+//
+// CRITICAL: uses `.passthrough()` (not `.strict()`). The whole point of
+// the envelope is to enable graceful version negotiation. If a future
+// PortOS adds a new field to `portosMeta` (e.g. `clientName`,
+// `capabilities`, `regionCode`), `.strict()` would 400-reject every push
+// from that version at Zod validation BEFORE the receiver's schema-version
+// gate runs — surfacing as a generic 400 with no `blockedBySchema`
+// persistence, no cooldown, no SchemaGapBadge surfacing. `.passthrough()`
+// lets unknown fields flow through to the gate, which is the actual
+// compat decision point.
+const portosMetaSchema = z.object({
+  portosVersion: z.string().trim().min(1).max(40).optional(),
+  schemaVersions: z.record(z.string().min(1).max(60), z.number().int().min(0).max(1_000_000)).optional(),
+}).passthrough().optional();
 const peerSyncPushBase = {
   record: peerWireRecordSchema,
   assetManifest: z.array(peerAssetManifestEntrySchema).max(2000),
   sourceInstanceId: z.string().trim().min(1).max(120),
+  portosMeta: portosMetaSchema,
   // Optional bundled media collection — Stage 5 media-collections sync
   // attaches the universe / series's linked collection so collection-only
   // edits propagate via the per-record push pipeline. Same shape as a

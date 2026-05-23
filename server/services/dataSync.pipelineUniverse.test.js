@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { writeFileSync, mkdirSync, readFileSync, rmSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -25,7 +25,7 @@ const dataSync = await import('./dataSync.js');
 
 const SERIES_PATH = join(tempRoot, 'pipeline-series.json');
 const ISSUES_PATH = join(tempRoot, 'pipeline-issues.json');
-const UNIVERSE_PATH = join(tempRoot, 'universe-builder.json');
+const UNIVERSES_DIR = join(tempRoot, 'universes');
 const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
 
 function writeJSON(path, obj) {
@@ -35,6 +35,40 @@ function writeJSON(path, obj) {
 
 function readJSON(path) {
   return JSON.parse(readFileSync(path, 'utf-8'));
+}
+
+// Write the universes split layout (migration 034's output): one
+// `universes/<id>/index.json` per record + a type-level `universes/index.json`
+// whose `config.runs` carries the cross-record runs[] log.
+function writeUniverseState({ universes = [], runs = [] } = {}) {
+  mkdirSync(UNIVERSES_DIR, { recursive: true });
+  for (const u of universes) {
+    const dir = join(UNIVERSES_DIR, u.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'index.json'), JSON.stringify(u, null, 2));
+  }
+  writeFileSync(join(UNIVERSES_DIR, 'index.json'), JSON.stringify({
+    schemaVersion: 5, type: 'universes', updatedAt: new Date().toISOString(),
+    config: { runs },
+  }, null, 2));
+}
+
+// Read it back as the legacy `{ universes, runs }` shape so existing
+// assertions don't need rewiring.
+function readUniverseState() {
+  if (!existsSync(UNIVERSES_DIR)) return { universes: [], runs: [] };
+  const entries = readdirSync(UNIVERSES_DIR);
+  const universes = [];
+  for (const name of entries) {
+    if (name === 'index.json' || name.startsWith('.')) continue;
+    const p = join(UNIVERSES_DIR, name, 'index.json');
+    if (existsSync(p)) universes.push(JSON.parse(readFileSync(p, 'utf-8')));
+  }
+  const typeIdx = existsSync(join(UNIVERSES_DIR, 'index.json'))
+    ? JSON.parse(readFileSync(join(UNIVERSES_DIR, 'index.json'), 'utf-8'))
+    : null;
+  const runs = typeIdx?.config?.runs || [];
+  return { universes, runs };
 }
 
 beforeEach(() => {
@@ -51,7 +85,7 @@ describe('dataSync — universe category', () => {
   });
 
   it('snapshot returns just `universes` (not `runs`)', async () => {
-    writeJSON(UNIVERSE_PATH, {
+    writeUniverseState({
       universes: [{ id: 'u1', name: 'Salt', updatedAt: '2026-05-17T10:00:00Z' }],
       runs: [{ id: 'r1', logs: ['ephemeral'] }]
     });
@@ -62,8 +96,48 @@ describe('dataSync — universe category', () => {
     expect(snap.checksum).toBeTruthy();
   });
 
+  it('snapshot envelope carries portosMeta { portosVersion, schemaVersions } so receivers can gate', async () => {
+    const snap = await dataSync.getSnapshot('universe');
+    expect(snap.portosMeta).toBeDefined();
+    expect(typeof snap.portosMeta.portosVersion).toBe('string');
+    expect(snap.portosMeta.schemaVersions.universes).toBe(5);
+  });
+
+  it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
+    writeUniverseState({ universes: [], runs: [] });
+    const result = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } } });
+    expect(result.applied).toBe(false);
+    expect(result.count).toBe(0);
+    expect(result.blockedBySchema).toBeDefined();
+    expect(result.blockedBySchema.ahead).toEqual([
+      { category: 'universes', senderV: 6, receiverV: 5 },
+    ]);
+    expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
+    // Nothing was written.
+    expect(readUniverseState().universes).toEqual([]);
+  });
+
+  it('applyRemote falls through when sender is BEHIND (sanitizer backfills)', async () => {
+    writeUniverseState({ universes: [], runs: [] });
+    const result = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-old', name: 'Legacy', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T10:00:00Z' }],
+    }, { portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 4 } } });
+    expect(result.applied).toBe(true);
+    expect(result.count).toBe(1);
+  });
+
+  it('applyRemote falls through for legacy senders that send NO portosMeta at all', async () => {
+    writeUniverseState({ universes: [], runs: [] });
+    const result = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-legacy', name: 'Pre-Versioning', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T10:00:00Z' }],
+    });
+    expect(result.applied).toBe(true);
+  });
+
   it('snapshot checksum is stable across reads when state is unchanged', async () => {
-    writeJSON(UNIVERSE_PATH, { universes: [{ id: 'u1', updatedAt: '2026-05-17T10:00:00Z' }] });
+    writeUniverseState({ universes: [{ id: 'u1', updatedAt: '2026-05-17T10:00:00Z' }] });
     const a = await dataSync.getSnapshot('universe');
     const b = await dataSync.getSnapshot('universe');
     expect(a.checksum).toBe(b.checksum);
@@ -76,13 +150,13 @@ describe('dataSync — universe category', () => {
   });
 
   it('applyRemote inserts a new universe', async () => {
-    writeJSON(UNIVERSE_PATH, { universes: [], runs: [] });
+    writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }]
     });
     expect(result.applied).toBe(true);
     expect(result.count).toBe(1);
-    const persisted = readJSON(UNIVERSE_PATH);
+    const persisted = readUniverseState();
     expect(persisted.universes).toHaveLength(1);
     expect(persisted.universes[0].id).toBe('u-new');
     // Local-only `runs` must survive the merge.
@@ -90,21 +164,21 @@ describe('dataSync — universe category', () => {
   });
 
   it('applyRemote LWW: newer remote wins, older remote is dropped', async () => {
-    writeJSON(UNIVERSE_PATH, {
+    writeUniverseState({
       universes: [{ id: 'u1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]
     });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u1', name: 'New', updatedAt: '2026-05-17T11:00:00Z' }]
     });
     expect(result.applied).toBe(true);
-    expect(readJSON(UNIVERSE_PATH).universes[0].name).toBe('New');
+    expect(readUniverseState().universes[0].name).toBe('New');
 
     // Replay older — should NOT clobber.
     const replay = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]
     });
     expect(replay.applied).toBe(false);
-    expect(readJSON(UNIVERSE_PATH).universes[0].name).toBe('New');
+    expect(readUniverseState().universes[0].name).toBe('New');
   });
 
   it('applyRemote preserves local-only `runs[]` when only universes change', async () => {
@@ -115,11 +189,11 @@ describe('dataSync — universe category', () => {
       id: 'r1', universeId: 'u-local', collectionId: null,
       jobIds: [], promptCount: 0, createdAt: '2026-05-17T09:00:00Z',
     };
-    writeJSON(UNIVERSE_PATH, { universes: [], runs: [localRun] });
+    writeUniverseState({ universes: [], runs: [localRun] });
     await dataSync.applyRemote('universe', {
-      universes: [{ id: 'u1', name: 'X', updatedAt: '2026-05-17T10:00:00Z' }]
+      universes: [{ id: 'u1', name: 'A', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T10:00:00Z' }]
     });
-    const persisted = readJSON(UNIVERSE_PATH);
+    const persisted = readUniverseState();
     expect(persisted.runs).toHaveLength(1);
     expect(persisted.runs[0].id).toBe('r1');
     expect(persisted.runs[0].universeId).toBe('u-local');
@@ -228,8 +302,8 @@ describe('dataSync — pipeline category', () => {
 
 describe('dataSync — getChecksum cache', () => {
   it('returns the same checksum across consecutive calls and matches getSnapshot', async () => {
-    writeJSON(UNIVERSE_PATH, {
-      universes: [{ id: 'u1', name: 'A', updatedAt: '2026-05-17T10:00:00Z' }],
+    writeUniverseState({
+      universes: [{ id: 'u1', name: 'A', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T10:00:00Z' }],
     });
     const c1 = await dataSync.getChecksum('universe');
     const c2 = await dataSync.getChecksum('universe');
@@ -239,8 +313,8 @@ describe('dataSync — getChecksum cache', () => {
   });
 
   it('invalidates the cache after applyRemote bumps the underlying file mtime', async () => {
-    writeJSON(UNIVERSE_PATH, {
-      universes: [{ id: 'u1', name: 'A', updatedAt: '2026-05-17T10:00:00Z' }],
+    writeUniverseState({
+      universes: [{ id: 'u1', name: 'A', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T10:00:00Z' }],
     });
     const before = await dataSync.getChecksum('universe');
     await dataSync.applyRemote('universe', {

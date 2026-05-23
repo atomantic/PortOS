@@ -62,7 +62,7 @@ export const PATHS = {
   // Visual template assets (e.g. the character reference-sheet layout PNG used
   // as the init-image anchor by the universe-builder character sheet renderer).
   // Distinct from `templates` above, which is the legacy prompt-template dir.
-  // Files here are shipped via data.sample/templates/ on first install.
+  // Files here are shipped via data.reference/templates/ on first install.
   visualTemplates: join(__lib_dirname, '../../data/templates'),
   settings: join(__lib_dirname, '../../data/settings'),
   missions: join(__lib_dirname, '../../data/cos/missions'),

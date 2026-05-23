@@ -328,7 +328,7 @@ Local/private only:
 - `data/openclaw/config.json` (git-ignored or machine-local)
 
 Optional public-safe sample:
-- `data.sample/openclaw/config.json` with placeholders only
+- `data.reference/openclaw/config.json` with placeholders only
 
 ## 13. MVP endpoint sketch
 
