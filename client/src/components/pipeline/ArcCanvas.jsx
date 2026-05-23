@@ -113,15 +113,17 @@ function VerifyScopeHint({ scope }) {
 
 // Hover-revealed tooltip variant — anchors below a parent with the `group`
 // class. Use this when the scope hint should sit on the button itself
-// instead of taking up vertical space in the layout.
-function VerifyScopeTooltip({ scope, label = 'What this checks' }) {
+// instead of taking up vertical space in the layout. The `id` is exposed so
+// the triggering button can wire `aria-describedby` for screen readers.
+function VerifyScopeTooltip({ scope, id }) {
   return (
     <div
+      id={id}
       role="tooltip"
       className="absolute top-full right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-port-card border border-port-border rounded-lg shadow-lg p-3 z-30 opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity pointer-events-none text-left normal-case tracking-normal"
     >
       <p className="text-[10px] text-gray-300 font-medium mb-1 flex items-center gap-1">
-        <Info size={10} /> {label}
+        <Info size={10} /> What this checks
       </p>
       <p className="text-[10px] text-gray-400 italic mb-2">{scope.depth}</p>
       <ul className="list-disc pl-4 space-y-0.5 text-[10px] text-gray-400">
@@ -367,12 +369,13 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
                 type="button"
                 onClick={runVerify}
                 disabled={!!running}
+                aria-describedby="verify-arc-scope-tooltip"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
               >
                 {running === 'verify' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
                 Verify arc
               </button>
-              <VerifyScopeTooltip scope={VERIFY_ARC_SCOPE} />
+              <VerifyScopeTooltip scope={VERIFY_ARC_SCOPE} id="verify-arc-scope-tooltip" />
             </div>
           ) : null}
         </div>
