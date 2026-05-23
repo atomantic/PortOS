@@ -15,6 +15,7 @@ export * from './universeStylePreset.js';
 export * from './bibleLimits.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';
+export * from './imageGenDefaults.js';
 export * from './imageGenResolutions.js';
 export * from './issueLength.js';
 export * from './pipelineImageDefaults.js';

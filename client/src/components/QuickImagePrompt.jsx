@@ -1,6 +1,9 @@
 import { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Pencil } from 'lucide-react';
+import { generateImage } from '../services/api';
+import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
+import toast from './ui/Toast';
 
 export default function QuickImagePrompt() {
   const [prompt, setPrompt] = useState('');
@@ -8,7 +11,7 @@ export default function QuickImagePrompt() {
   const submittingRef = useRef(false);
   const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleGenerate = async (e) => {
     e?.preventDefault();
     const text = prompt.trim();
     if (!text || submittingRef.current) return;
@@ -17,10 +20,30 @@ export default function QuickImagePrompt() {
     setIsSubmitting(true);
     setPrompt('');
 
-    // ImageGen page's remix-param effect reads ?prompt=… on mount and
-    // strips it from the URL, so the widget can hand off a one-shot
-    // prompt without us coupling to its internal form state.
-    navigate(`/media/image?prompt=${encodeURIComponent(text)}`);
+    // Omit `mode` so the server falls back to the user's saved
+    // `settings.imageGen.mode` default. Async backends (local/codex) respond
+    // with { jobId, status, position } — sync external responds with the
+    // generation result. Toast wording covers both cases without inspecting
+    // backend internals.
+    const result = await generateImage({
+      prompt: text,
+      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
+    }).catch(() => null);
+
+    submittingRef.current = false;
+    setIsSubmitting(false);
+    if (result) {
+      toast.success(result.status === 'queued' || result.status === 'running' ? 'Image queued' : 'Image generated');
+    }
+  };
+
+  const handleOpenInEditor = (e) => {
+    e?.preventDefault();
+    const text = prompt.trim();
+    // ImageGen page's remix-param effect reads ?prompt=… on mount and strips
+    // it from the URL, so the widget can hand off a one-shot prompt without
+    // coupling to the form's internal state.
+    navigate(`/media/image${text ? `?prompt=${encodeURIComponent(text)}` : ''}`);
   };
 
   return (
@@ -31,7 +54,7 @@ export default function QuickImagePrompt() {
           Image Gen &rarr;
         </Link>
       </div>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-2 flex-1 min-h-0">
+      <form onSubmit={handleGenerate} className="flex flex-col gap-2 flex-1 min-h-0">
         <label htmlFor="quick-image-prompt" className="sr-only">Image prompt</label>
         <textarea
           id="quick-image-prompt"
@@ -39,19 +62,32 @@ export default function QuickImagePrompt() {
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit(e);
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleGenerate(e);
           }}
           rows={3}
           className="flex-1 min-h-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
         />
-        <button
-          type="submit"
-          disabled={!prompt.trim() || isSubmitting}
-          className="flex items-center justify-center gap-2 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
-        >
-          <Sparkles size={14} />
-          Generate
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="submit"
+            disabled={!prompt.trim() || isSubmitting}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
+            title="Generate with default settings"
+          >
+            <Sparkles size={14} />
+            {isSubmitting ? 'Submitting…' : 'Generate'}
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenInEditor}
+            disabled={isSubmitting}
+            className="flex items-center justify-center gap-2 px-3 py-2 border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
+            title="Open in editor with this prompt"
+          >
+            <Pencil size={14} />
+            Edit
+          </button>
+        </div>
       </form>
     </div>
   );
