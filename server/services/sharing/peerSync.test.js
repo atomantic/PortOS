@@ -121,11 +121,14 @@ beforeEach(async () => {
   // so any callsite that doesn't override (e.g. the receiver-side
   // `isLocalRecordEphemeral` lookup in maybeCreateReverseSubscription)
   // doesn't blow up on `.catch` against a `vi.fn()` non-Promise return.
-  // Real getUniverse / getSeries are `async` so they always return Promises;
-  // production code can assume this, but the test mock has to match.
+  // Real getUniverse / getSeries / listIssues are `async` so they always
+  // return Promises; production code can assume this, but the test mock
+  // has to match — including the per-call default for listIssues so a
+  // buildPushPayload path that bundles child issues doesn't choke on an
+  // un-overridden mock.
   vi.mocked(getUniverse).mockReset().mockResolvedValue(undefined);
   vi.mocked(getSeries).mockReset().mockResolvedValue(undefined);
-  vi.mocked(listIssues).mockReset();
+  vi.mocked(listIssues).mockReset().mockResolvedValue([]);
 
   await __resetForTests();
 });

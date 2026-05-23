@@ -861,8 +861,19 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   const existing = await findPeerSubscription(peerId, recordKind, recordId);
   if (existing) return false;
 
-  // Skip if the local record is ephemeral — auto-creating a reverse sub
-  // for a local-only record would accumulate orphan rows in
+  // Cheap in-memory checks FIRST. Honor the per-peer `directions` flag — a
+  // peer marked inbound-only is one we accept pushes FROM but never push
+  // back TO — auto-creating a reverse subscription would break that
+  // explicit configuration. Doing this BEFORE the ephemeral-record disk
+  // read means inbound-only / unknown peers don't trigger an extra
+  // getUniverse / getSeries on every incoming push.
+  const peer = await findPeerById(peerId);
+  if (!peer) return false;
+  const directions = Array.isArray(peer.directions) ? peer.directions : [];
+  if (directions.length > 0 && !directions.includes('outbound')) return false;
+
+  // Now the disk read: skip if the local record is ephemeral — auto-creating
+  // a reverse sub for a local-only record would accumulate orphan rows in
   // peer_subscriptions.json. Every future edit on the local side fires
   // recordEvents.updated → triggerPushForRecord → pushRecordToPeer →
   // buildPushPayload → sanitizeRecordForWire returns null (ephemeral
@@ -873,14 +884,6 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   // so the sender's record state isn't reflected locally anyway — there's
   // nothing meaningful to push back even if we did create the sub.
   if (await isLocalRecordEphemeral(recordKind, recordId)) return false;
-
-  // Honor the per-peer `directions` flag. A peer marked inbound-only is one
-  // we accept pushes FROM but never push back TO — auto-creating a reverse
-  // subscription would break that explicit configuration.
-  const peer = await findPeerById(peerId);
-  if (!peer) return false;
-  const directions = Array.isArray(peer.directions) ? peer.directions : [];
-  if (directions.length > 0 && !directions.includes('outbound')) return false;
 
   await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
   return true;
