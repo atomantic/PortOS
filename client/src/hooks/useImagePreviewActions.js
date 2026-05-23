@@ -53,7 +53,14 @@ export default function useImagePreviewActions({ onCleanComplete = null } = {}) 
       if (raw.steps != null && raw.steps !== '') params.set('steps', String(raw.steps));
       const guidance = raw.guidanceScale ?? raw.guidance_scale ?? raw.guidance;
       if (guidance != null && guidance !== '') params.set('guidanceScale', String(guidance));
-      if (raw.tiling) params.set('tiling', String(raw.tiling));
+      // tiling must match the server's enum (auto|none|spatial|temporal).
+      // Legacy sidecars sometimes store a boolean here — pass through only
+      // known-good string values so the remixed POST doesn't 400 on
+      // /api/video-gen validation.
+      const TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
+      if (typeof raw.tiling === 'string' && TILING_ENUM.has(raw.tiling)) {
+        params.set('tiling', raw.tiling);
+      }
       const disableAudio = raw.disableAudio ?? raw.disable_audio;
       if (disableAudio === true) params.set('disableAudio', '1');
       navigate(`/media/video?${params}`);

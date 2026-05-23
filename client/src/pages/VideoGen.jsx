@@ -178,9 +178,18 @@ export default function VideoGen() {
   // form state once on mount, then strip the params so a hot-reload or back-
   // nav doesn't re-clobber edits the user has made since. Mirrors the
   // ImageGen remix-prefill effect.
+  //
+  // Gating: presence of any remix-only key (modelId / numFrames / fps / seed
+  // / steps / guidanceScale / tiling / disableAudio) marks the URL as a Remix
+  // bundle — the Continue and SendToVideo paths set sourceImageFile +/-
+  // prompt/w/h but never the remix-only keys, so they keep their URL state.
+  // When it IS a remix, we ALSO strip prompt/negativePrompt/w/h from the URL
+  // so back-nav / refresh doesn't re-sync those via the standalone
+  // incomingPrompt / incomingWidth effects (initial useState already captured
+  // their values on first mount, which is the one-shot we want).
   useEffect(() => {
-    const remixKeys = ['modelId', 'numFrames', 'fps', 'seed', 'steps', 'guidanceScale', 'tiling', 'disableAudio'];
-    const present = remixKeys.filter((k) => searchParams.get(k) != null);
+    const remixGateKeys = ['modelId', 'numFrames', 'fps', 'seed', 'steps', 'guidanceScale', 'tiling', 'disableAudio'];
+    const present = remixGateKeys.filter((k) => searchParams.get(k) != null);
     if (present.length === 0) return;
     const get = (k) => searchParams.get(k);
     if (get('modelId')) setModelId(get('modelId'));
@@ -190,12 +199,18 @@ export default function VideoGen() {
     if (Number.isFinite(f) && f > 0) setFps(f);
     if (get('seed') != null) setSeed(get('seed'));
     if (get('steps')) setSteps(get('steps'));
-    if (get('guidanceScale')) setGuidanceScale(get('guidanceScale'));
+    // guidanceScale=0 is a meaningful value (CFG off); test for presence,
+    // not truthiness, so "0" round-trips through Remix correctly.
+    if (get('guidanceScale') != null && get('guidanceScale') !== '') setGuidanceScale(get('guidanceScale'));
     if (get('tiling')) setTiling(get('tiling'));
-    if (get('disableAudio') === '1') setDisableAudio(true);
+    // disableAudio is a boolean; explicitly set to false when the URL says so
+    // (or omits the key, which means "default off"). Without this, the toggle
+    // sticks ON across remixes of clips that had audio.
+    setDisableAudio(get('disableAudio') === '1');
+    const stripKeys = [...remixGateKeys, 'prompt', 'negativePrompt', 'w', 'h'];
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
-      remixKeys.forEach((k) => n.delete(k));
+      stripKeys.forEach((k) => n.delete(k));
       return n;
     }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -323,8 +338,11 @@ export default function VideoGen() {
     const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
     if (guidance != null && guidance !== '') setGuidanceScale(String(guidance));
     if (item.tiling) setTiling(item.tiling);
+    // disableAudio: always set explicitly (true/false) so the toggle reliably
+    // matches the remixed render. Skipping the false branch would leave the
+    // toggle stuck ON when the user remixes a clip that had audio enabled.
     const disableAudio = item.disableAudio ?? item.disable_audio;
-    if (disableAudio === true) setDisableAudio(true);
+    setDisableAudio(disableAudio === true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
