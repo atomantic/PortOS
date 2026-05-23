@@ -39,7 +39,11 @@ export const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArr
 // helper is shared across three routes and a future caller could hand it
 // `req.body` directly or an LLM tool-call payload — defense in depth is
 // cheap. Reflects no behavioral change for valid input.
-const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+//
+// Exported so other sanitizers (e.g. server/services/settings.js
+// stripStoreKeys) can share one canonical denylist instead of redefining
+// it (drift risk on security-relevant constants).
+export const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export const deepMerge = (base, patch) => {
   if (!isPlainObject(patch)) return patch === undefined ? base : patch;

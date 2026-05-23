@@ -2,14 +2,13 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { isPlainObject } from '../lib/objects.js';
+import { isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 
-// Prototype-pollution guard: when JSON.parse / PUT /api/settings hands us a
-// payload with a `__proto__` (or `constructor`/`prototype`) own property,
-// rebuilding the object via `cleaned[k] = v` would invoke the prototype
-// setter and mutate Object.prototype. Skip these keys defensively — settings
-// never legitimately uses them. Mirrors POLLUTING_KEYS in server/lib/objects.js.
-const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+// POLLUTING_KEYS (`__proto__`/`constructor`/`prototype`) is the project-wide
+// prototype-pollution denylist (defined in server/lib/objects.js). Without it,
+// rebuilding the cleaned object via `cleaned[k] = v` against a payload that
+// JSON.parse exposed those names on would invoke the prototype setter and
+// mutate Object.prototype. Settings never legitimately uses these keys.
 
 const SETTINGS_FILE = join(PATHS.data, 'settings.json');
 
@@ -57,9 +56,15 @@ export const settingsEvents = new EventEmitter();
 settingsEvents.setMaxListeners(50);
 
 // Reads are always silent — a polluted file would otherwise spam logs on
-// every GET /api/settings. The single source of warning is `save()`, which
-// fires exactly once per successful write (after the writeFile resolves),
-// covering both auto-heal of disk pollution and rejected patch pollution.
+// every GET /api/settings. `save()` warns based on what it's HANDED, so:
+// - `updateSettings(patch)` exposes both disk pollution (via the unstripped
+//   raw snapshot) AND patch pollution to save(), yielding one consolidated
+//   warning per successful write.
+// - Manual `getSettings() → modify → saveSettings(...)` flows hand save() an
+//   already-stripped object, so no warning fires — but those flows also
+//   can't reintroduce store-key pollution, so silence is correct.
+// - A direct `saveSettings(badObject)` with store keys warns once after the
+//   write resolves.
 const loadRaw = async () => {
   const raw = await readFile(SETTINGS_FILE, 'utf-8').catch(() => '{}');
   return safeJSONParse(raw, {});
