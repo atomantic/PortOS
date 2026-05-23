@@ -13,6 +13,7 @@ import {
   parseGitRemoteUrl,
   getOriginInfo,
   readOriginRemoteUrl,
+  redactRemoteUrlCredentials,
   UPSTREAM_OWNER,
   UPSTREAM_REPO,
   UPSTREAM_FULL_NAME
@@ -201,6 +202,73 @@ describe('getOriginInfo', () => {
     expect(info.fullName).toBeNull();
     expect(info.isFork).toBe(false);
     expect(info.isUpstream).toBe(false);
+  });
+});
+
+describe('redactRemoteUrlCredentials', () => {
+  it('strips https://user:token@ prefix', () => {
+    expect(redactRemoteUrlCredentials('https://user:ghp_secret@github.com/alice/PortOS.git'))
+      .toBe('https://***@github.com/alice/PortOS.git');
+  });
+
+  it('strips https://token@ prefix (no password)', () => {
+    expect(redactRemoteUrlCredentials('https://ghp_token@github.com/alice/PortOS.git'))
+      .toBe('https://***@github.com/alice/PortOS.git');
+  });
+
+  it('strips credentials from ssh:// URLs', () => {
+    expect(redactRemoteUrlCredentials('ssh://git:secret@github.com/alice/PortOS.git'))
+      .toBe('ssh://***@github.com/alice/PortOS.git');
+  });
+
+  it('leaves SCP-style remotes untouched (no embedded secret)', () => {
+    expect(redactRemoteUrlCredentials('git@github.com:alice/PortOS.git'))
+      .toBe('git@github.com:alice/PortOS.git');
+  });
+
+  it('leaves URLs without credentials untouched', () => {
+    expect(redactRemoteUrlCredentials('https://github.com/alice/PortOS.git'))
+      .toBe('https://github.com/alice/PortOS.git');
+  });
+
+  it('returns non-string input unchanged', () => {
+    expect(redactRemoteUrlCredentials(null)).toBeNull();
+    expect(redactRemoteUrlCredentials(undefined)).toBeUndefined();
+  });
+});
+
+describe('getOriginInfo credential leak regression', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('never returns credentials in originUrl when the remote embeds a PAT', async () => {
+    execGit.mockResolvedValue({
+      stdout: 'https://alice:ghp_secret_abc123@github.com/alice/PortOS.git\n',
+      stderr: '',
+      exitCode: 0
+    });
+    const info = await getOriginInfo();
+    expect(info.originUrl).toBe('https://***@github.com/alice/PortOS.git');
+    // Belt-and-suspenders: the secret must not appear anywhere in the result
+    const serialized = JSON.stringify(info);
+    expect(serialized).not.toContain('ghp_secret_abc123');
+    expect(serialized).not.toContain('alice:'); // user:pass prefix
+    // Classification should still work — credentials don't break the parser
+    expect(info.isGithub).toBe(true);
+    expect(info.isFork).toBe(true);
+    expect(info.fullName).toBe('alice/PortOS');
+  });
+
+  it('also redacts when the URL is unparseable', async () => {
+    execGit.mockResolvedValue({
+      stdout: 'https://user:tok@somethingweirdwithoutslash',
+      stderr: '',
+      exitCode: 0
+    });
+    const info = await getOriginInfo();
+    expect(info.originUrl).not.toContain('tok');
+    expect(info.originUrl).toContain('***@');
   });
 });
 

@@ -6,6 +6,17 @@ export const UPSTREAM_REPO = 'PortOS';
 export const UPSTREAM_FULL_NAME = `${UPSTREAM_OWNER}/${UPSTREAM_REPO}`;
 
 /**
+ * Strip any `://user:token@` credentials from a URL so a PAT embedded in an
+ * https remote can't leak into API responses, logs, or telemetry. SCP-style
+ * remotes (`user@host:path`) carry only a username (no secret) so we leave
+ * those alone — redacting them would corrupt the URL.
+ */
+export function redactRemoteUrlCredentials(url) {
+  if (typeof url !== 'string') return url;
+  return url.replace(/:\/\/[^@/\s]+@/, '://***@');
+}
+
+/**
  * Parse a git remote URL (SSH or HTTPS) into { host, owner, repo }.
  * Host-agnostic — accepts GitHub, GitLab, enterprise hosts, etc. Returns null
  * when the URL doesn't match an "owner/repo" shape (exactly two path segments
@@ -103,11 +114,15 @@ export async function getOriginInfo(cwd = PATHS.root) {
     };
   }
 
+  // The URL surfaces to the client via getUpdateStatus(); scrub any embedded
+  // PAT/basic-auth credentials so they don't leak into API responses or logs.
+  const safeUrl = redactRemoteUrlCredentials(originUrl);
+
   const parsed = parseGitRemoteUrl(originUrl);
   if (!parsed) {
     return {
       hasOrigin: true,
-      originUrl,
+      originUrl: safeUrl,
       host: null,
       owner: null,
       repo: null,
@@ -126,7 +141,7 @@ export async function getOriginInfo(cwd = PATHS.root) {
 
   return {
     hasOrigin: true,
-    originUrl,
+    originUrl: safeUrl,
     host: parsed.host,
     owner: parsed.owner,
     repo: parsed.repo,
