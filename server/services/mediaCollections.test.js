@@ -626,3 +626,217 @@ describe('mediaCollections service', () => {
     expect(all[0].coverKey).toBeNull();
   });
 });
+
+describe('mergeMediaCollectionsFromSync', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+  });
+
+  it('returns {applied:false,count:0} for empty / non-array input', async () => {
+    expect(await svc.mergeMediaCollectionsFromSync(null)).toEqual({ applied: false, count: 0 });
+    expect(await svc.mergeMediaCollectionsFromSync('nope')).toEqual({ applied: false, count: 0 });
+    expect(await svc.mergeMediaCollectionsFromSync([])).toEqual({ applied: false, count: 0 });
+  });
+
+  it('inserts a previously-unseen collection', async () => {
+    const remote = {
+      id: 'c-remote',
+      name: 'From Peer',
+      description: '',
+      coverKey: null,
+      universeId: 'u-1',
+      seriesId: null,
+      items: [{ kind: 'image', ref: 'peer.png', addedAt: '2026-05-22T01:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T01:00:00Z',
+    };
+    const result = await svc.mergeMediaCollectionsFromSync([remote]);
+    expect(result).toEqual({ applied: true, count: 1 });
+    const all = await svc.listCollections();
+    expect(all).toHaveLength(1);
+    expect(all[0].id).toBe('c-remote');
+    expect(all[0].items).toHaveLength(1);
+    expect(all[0].items[0].ref).toBe('peer.png');
+  });
+
+  it('unions items by kind:ref so neither side ever loses a render', async () => {
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1',
+        name: 'A',
+        description: '',
+        coverKey: null,
+        universeId: null,
+        seriesId: null,
+        items: [
+          { kind: 'image', ref: 'local-only.png', addedAt: '2026-05-22T01:00:00Z' },
+          { kind: 'image', ref: 'shared.png', addedAt: '2026-05-22T01:00:00Z' },
+        ],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    const remote = {
+      id: 'c1',
+      name: 'A',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [
+        { kind: 'image', ref: 'remote-only.png', addedAt: '2026-05-22T02:00:00Z' },
+        { kind: 'image', ref: 'shared.png', addedAt: '2026-05-22T02:00:00Z' },
+      ],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T02:00:00Z',
+    };
+    const result = await svc.mergeMediaCollectionsFromSync([remote]);
+    expect(result.applied).toBe(true);
+    const all = await svc.listCollections();
+    const refs = all[0].items.map(i => i.ref).sort();
+    expect(refs).toEqual(['local-only.png', 'remote-only.png', 'shared.png']);
+    // Shared item keeps the EARLIER addedAt (sync replay shouldn't bump it)
+    const shared = all[0].items.find(i => i.ref === 'shared.png');
+    expect(shared.addedAt).toBe('2026-05-22T01:00:00Z');
+  });
+
+  it('LWW: newer remote wins on top-level scalars (name, description, coverKey)', async () => {
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1',
+        name: 'Old Name',
+        description: 'old',
+        coverKey: null,
+        universeId: null,
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    const remote = {
+      id: 'c1',
+      name: 'New Name',
+      description: 'new',
+      coverKey: 'image:a.png',
+      universeId: null,
+      seriesId: null,
+      items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T03:00:00Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([remote]);
+    const [merged] = await svc.listCollections();
+    expect(merged.name).toBe('New Name');
+    expect(merged.description).toBe('new');
+    expect(merged.coverKey).toBe('image:a.png');
+    expect(merged.updatedAt).toBe('2026-05-22T03:00:00Z');
+  });
+
+  it('LWW: older remote loses on scalars, but items still union', async () => {
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1',
+        name: 'Local',
+        description: 'local',
+        coverKey: null,
+        universeId: null,
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'local.png', addedAt: '2026-05-22T02:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T03:00:00Z',
+      }],
+    });
+    const remote = {
+      id: 'c1',
+      name: 'Remote',
+      description: 'remote',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [{ kind: 'image', ref: 'remote.png', addedAt: '2026-05-22T01:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T01:00:00Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([remote]);
+    const [merged] = await svc.listCollections();
+    // Newer local wins on scalars
+    expect(merged.name).toBe('Local');
+    expect(merged.description).toBe('local');
+    expect(merged.updatedAt).toBe('2026-05-22T03:00:00Z');
+    // But items still union — that's the entire point of the merge
+    expect(merged.items.map(i => i.ref).sort()).toEqual(['local.png', 'remote.png']);
+  });
+
+  it('reports count:0 when nothing actually changes (no-op no-op)', async () => {
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1',
+        name: 'A',
+        description: '',
+        coverKey: null,
+        universeId: null,
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    const same = {
+      id: 'c1',
+      name: 'A',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T01:00:00Z',
+    };
+    const result = await svc.mergeMediaCollectionsFromSync([same]);
+    expect(result).toEqual({ applied: false, count: 0 });
+  });
+
+  it('drops dangling coverKey that points at an item missing post-union', async () => {
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1',
+        name: 'A',
+        description: '',
+        coverKey: null,
+        universeId: null,
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'local.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    const remote = {
+      id: 'c1',
+      name: 'A',
+      description: '',
+      coverKey: 'image:nope.png', // points at an item that doesn't exist
+      universeId: null,
+      seriesId: null,
+      items: [{ kind: 'image', ref: 'remote.png', addedAt: '2026-05-22T02:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T03:00:00Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([remote]);
+    const [merged] = await svc.listCollections();
+    expect(merged.coverKey).toBeNull();
+  });
+
+  it('skips records that fail sanitization (missing id, empty name)', async () => {
+    const result = await svc.mergeMediaCollectionsFromSync([
+      { name: 'no-id', items: [] },
+      { id: 'has-id', name: '', items: [] },
+      { id: 'good', name: 'Real', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+    ]);
+    expect(result).toEqual({ applied: true, count: 1 });
+    const all = await svc.listCollections();
+    expect(all).toHaveLength(1);
+    expect(all[0].id).toBe('good');
+  });
+});

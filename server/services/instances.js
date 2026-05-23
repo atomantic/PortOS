@@ -165,7 +165,8 @@ const DEFAULT_SYNC_CATEGORIES = {
   digitalTwin: false,
   meatspace: false,
   universe: false,
-  pipeline: false
+  pipeline: false,
+  mediaCollections: false
 };
 
 export { DEFAULT_SYNC_CATEGORIES };

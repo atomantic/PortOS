@@ -689,3 +689,92 @@ export async function removeItem(id, key) {
   if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
   return merged;
 }
+
+/**
+ * Merge an incoming list of collections from a peer (snapshot sync OR the
+ * per-record push payload's `linkedCollection` field). Per-collection
+ * semantics:
+ *
+ *   - New (unseen id): inserted verbatim after sanitization.
+ *   - Existing id: top-level scalars (name, description, coverKey, universeId,
+ *     seriesId) follow LWW on `updatedAt`. Items[] is **union by `kind:ref`**
+ *     so neither side ever loses a render it knows about — collections are
+ *     append-mostly in normal use, and a divergence (peer-A added image-X
+ *     while peer-B added image-Y to the same collection on the same day)
+ *     should retain both rather than discard whichever has the older
+ *     collection-level updatedAt.
+ *
+ * Mutating writes go through the same `serializeFileWrite` tail as every
+ * other mediaCollections mutator so a concurrent local `addItem` and remote
+ * apply can't interleave on the JSON file.
+ */
+export async function mergeMediaCollectionsFromSync(remoteCollections) {
+  if (!Array.isArray(remoteCollections)) return { applied: false, count: 0 };
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const localById = new Map(all.map((c) => [c.id, c]));
+    let changed = 0;
+    for (const remote of remoteCollections) {
+      const sanitized = sanitizeCollection(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+        continue;
+      }
+      const mergedItems = mergeCollectionItems(local.items, sanitized.items);
+      const localTs = local.updatedAt || '';
+      const remoteTs = sanitized.updatedAt || '';
+      const remoteWins = remoteTs > localTs;
+      const scalarSource = remoteWins ? sanitized : local;
+      // Cover key: only adopt the scalar source's coverKey if it points at an
+      // item that survives the union — otherwise sanitizeCollection on next
+      // read would drop it back to null and we'd churn updatedAt forever.
+      const presentKeys = new Set(mergedItems.map(itemKey));
+      const coverKey = scalarSource.coverKey && presentKeys.has(scalarSource.coverKey)
+        ? scalarSource.coverKey
+        : null;
+      const next = {
+        ...local,
+        name: scalarSource.name,
+        description: scalarSource.description,
+        coverKey,
+        universeId: scalarSource.universeId,
+        seriesId: scalarSource.seriesId,
+        items: mergedItems,
+        updatedAt: remoteWins ? remoteTs : localTs,
+      };
+      if (collectionsEqual(local, next)) continue;
+      localById.set(sanitized.id, next);
+      changed++;
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    await writeAll(Array.from(localById.values()));
+    return { applied: true, count: changed };
+  });
+}
+
+function mergeCollectionItems(localItems, remoteItems) {
+  const byKey = new Map();
+  for (const it of localItems || []) byKey.set(itemKey(it), it);
+  for (const it of remoteItems || []) {
+    const k = itemKey(it);
+    const existing = byKey.get(k);
+    if (!existing) {
+      byKey.set(k, it);
+      continue;
+    }
+    // Earliest addedAt wins — a sync replay shouldn't bump the addedAt of an
+    // item already in the collection.
+    const earlier = (existing.addedAt || '') <= (it.addedAt || '') ? existing : it;
+    byKey.set(k, earlier);
+  }
+  return Array.from(byKey.values());
+}
+
+function collectionsEqual(a, b) {
+  // Both sides come through sanitizeCollection so key order is canonical and
+  // JSON.stringify is sufficient for "did anything actually move".
+  return JSON.stringify(a) === JSON.stringify(b);
+}

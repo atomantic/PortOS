@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info, Sparkles, Film
+  Lock, Globe, Info, Sparkles, Film, Images
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -414,7 +414,8 @@ const SYNC_CATEGORY_META = [
   { key: 'digitalTwin', label: 'Digital Twin', icon: Fingerprint, description: 'Identity, chronotype, longevity, feedback' },
   { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' },
   { key: 'universe', label: 'Universe', icon: Sparkles, description: 'Universe Builder canon: characters, places, objects' },
-  { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' }
+  { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' },
+  { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' }
 ];
 
 // Snapshot categories (excludes delta-based brain/memory)
@@ -505,8 +506,15 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
-function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum }) {
-  // Only compare when remote reports checksums — local fallback is misleading
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered }) {
+  // `livePushCovered` is true when this peer has at least one per-record
+  // peer-sync subscription for a record kind that maps to this category
+  // (universe-subs → 'universe', series-subs → 'pipeline'). The orchestrator
+  // intentionally SKIPS the 60s snapshot loop for those categories — the push
+  // pipeline is authoritative — so cursor.checksums[cat] stays frozen at
+  // whatever it was when peer-subs took over and the cursor-vs-remote diff
+  // would always read "behind" even when the records are actually converged.
+  // Render a distinct "live-push" state instead so the badge stops lying.
   const synced = cursorChecksum && remoteChecksum && cursorChecksum === remoteChecksum;
   const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
 
@@ -514,7 +522,14 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum }
     <div className="flex items-center gap-1.5 text-xs">
       <Icon size={12} className="text-gray-500" />
       <span className="text-gray-500">{label}:</span>
-      {synced ? (
+      {livePushCovered ? (
+        <>
+          <ArrowLeftRight size={11} className="text-port-accent" />
+          <span className="text-port-accent" title="Per-record push pipeline owns this category; snapshot cursor is intentionally stale">
+            live-push
+          </span>
+        </>
+      ) : synced ? (
         <>
           <CheckCircle2 size={11} className="text-port-success" />
           <span className="text-port-success">synced</span>
@@ -546,35 +561,12 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum }
  * record) never get reverse subscriptions auto-created — see
  * services/sharing/peerSync.js `maybeCreateReverseSubscription`.
  */
-function PeerSyncSubscriptionsSection({ peer }) {
-  const [subs, setSubs] = useState([]);
-  const [loading, setLoading] = useState(true);
+function PeerSyncSubscriptionsSection({ peer, peerSubs, peerSubsLoaded, setPeerSubs }) {
   const [busyId, setBusyId] = useState(null);
 
-  useEffect(() => {
-    if (!peer.instanceId) {
-      setSubs([]);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
-      .then((r) => {
-        if (!cancelled) setSubs(r?.subscriptions || []);
-      })
-      .catch(() => {
-        if (!cancelled) setSubs([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [peer.instanceId]);
-
   if (!peer.instanceId) return null;
-  if (loading) return null;
-  if (subs.length === 0) return null;
+  if (!peerSubsLoaded) return null;
+  if (peerSubs.length === 0) return null;
 
   const handleUnsubscribe = async (sub) => {
     setBusyId(sub.id);
@@ -583,14 +575,14 @@ function PeerSyncSubscriptionsSection({ peer }) {
       return null;
     });
     if (ok) {
-      setSubs((prev) => prev.filter((s) => s.id !== sub.id));
+      setPeerSubs((prev) => prev.filter((s) => s.id !== sub.id));
       toast.success(`Stopped syncing ${sub.recordKind} ${sub.recordId.slice(0, 8)} with ${peer.name}`);
     }
     setBusyId(null);
   };
 
-  const universeSubs = subs.filter((s) => s.recordKind === 'universe');
-  const seriesSubs = subs.filter((s) => s.recordKind === 'series');
+  const universeSubs = peerSubs.filter((s) => s.recordKind === 'universe');
+  const seriesSubs = peerSubs.filter((s) => s.recordKind === 'series');
 
   return (
     <div className="mt-2 pt-2 border-t border-port-border/50">
@@ -631,7 +623,7 @@ function PeerSyncSubscriptionsSection({ peer }) {
   );
 }
 
-function SyncStatusSection({ peer, syncStatus }) {
+function SyncStatusSection({ peer, syncStatus, peerSubs = [] }) {
   if (!syncStatus || !peer.instanceId) return null;
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
@@ -648,6 +640,19 @@ function SyncStatusSection({ peer, syncStatus }) {
   // Show snapshot category sync status for all enabled snapshot categories
   const cursorChecksums = cursor?.checksums || {};
   const remoteChecksums = remoteSyncSeqs?.checksums || {};
+
+  // Derive the set of snapshot categories that are "covered" by the
+  // per-record peer-sync push pipeline. Mirrors the inverse mapping in
+  // `server/services/sharing/peerSync.js` KIND_TO_CATEGORY — universe-subs
+  // cover 'universe', series-subs cover 'pipeline' (which bundles series +
+  // issues). The orchestrator skips snapshot pulls for these, so the
+  // cursor checksum stays stale and the cursor-vs-remote diff is a lie.
+  // Render those categories as "live-push" instead.
+  const livePushCovered = new Set();
+  for (const s of peerSubs) {
+    if (s.recordKind === 'universe') livePushCovered.add('universe');
+    if (s.recordKind === 'series') livePushCovered.add('pipeline');
+  }
 
   const enabledSnapshots = SNAPSHOT_CATEGORIES
     .map(m => m.key)
@@ -693,6 +698,7 @@ function SyncStatusSection({ peer, syncStatus }) {
               icon={meta.icon}
               cursorChecksum={cursorChecksums[cat]}
               remoteChecksum={remoteChecksums[cat]}
+              livePushCovered={livePushCovered.has(cat)}
             />
           );
         })}
@@ -811,6 +817,35 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
   const [probing, setProbing] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // Peer subs are loaded once at this level and shared with both
+  // PeerSyncSubscriptionsSection (renders the per-record list) and
+  // SyncStatusSection (uses the sub set to decide which snapshot badges
+  // should render as "live-push" instead of misleading "behind"). Without
+  // sharing, every card would issue two identical /sharing/peer-subs
+  // fetches.
+  const [peerSubs, setPeerSubs] = useState([]);
+  const [peerSubsLoaded, setPeerSubsLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!peer.instanceId) {
+      setPeerSubs([]);
+      setPeerSubsLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    setPeerSubsLoaded(false);
+    listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
+      .then((r) => {
+        if (!cancelled) setPeerSubs(r?.subscriptions || []);
+      })
+      .catch(() => {
+        if (!cancelled) setPeerSubs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPeerSubsLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [peer.instanceId]);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
   const isInboundOnly = peer.directions?.includes('inbound') && !peer.directions?.includes('outbound');
@@ -947,9 +982,9 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
 
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
-      <SyncStatusSection peer={peer} syncStatus={syncStatus} />
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} />
 
-      <PeerSyncSubscriptionsSection peer={peer} />
+      <PeerSyncSubscriptionsSection peer={peer} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} setPeerSubs={setPeerSubs} />
 
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (

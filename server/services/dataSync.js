@@ -14,6 +14,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { mergeUniversesFromSync } from './universeBuilder.js';
 import { mergeSeriesFromSync } from './pipeline/series.js';
 import { mergeIssuesFromSync } from './pipeline/issues.js';
+import { mergeMediaCollectionsFromSync, listCollections } from './mediaCollections.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
@@ -28,6 +29,7 @@ const MEATSPACE_DIR = PATHS.meatspace;
 const PIPELINE_SERIES_FILE = join(PATHS.data, 'pipeline-series.json');
 const PIPELINE_ISSUES_FILE = join(PATHS.data, 'pipeline-issues.json');
 const UNIVERSE_BUILDER_FILE = join(PATHS.data, 'universe-builder.json');
+const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -416,6 +418,39 @@ async function applyPipelineRemote(remoteData) {
   };
 }
 
+// --- Category: Media Collections ---
+
+// Per-universe / per-series buckets of image + video refs. The collection
+// records carry the linkage (universeId / seriesId) and an items[] array of
+// `{ kind, ref, addedAt }` rows. We sync the JSON itself here (union of items
+// + LWW on scalars) so collection edits propagate even when the linked
+// universe / series record itself didn't move. The per-record push pipeline
+// (peerSync.js) ALSO bundles a record's linked collection in its push payload
+// so image bytes flow via the existing asset-pull worker — the snapshot path
+// covers the JSON, the push path covers the image bytes.
+
+async function getMediaCollectionsSnapshot() {
+  // listCollections re-reads + sanitizes from disk; we don't cache here since
+  // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
+  // circuits the I/O when the file hasn't moved.
+  const collections = await listCollections();
+  const data = { collections };
+  return { data, checksum: computeChecksum(data) };
+}
+
+async function applyMediaCollectionsRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+  // Routes through `mergeMediaCollectionsFromSync` so the read-modify-write
+  // runs INSIDE `serializeFileWrite` (same tail as addItem / removeItem /
+  // bulkUpdateCollectionItems) — a sync-driven write can't interleave with a
+  // concurrent local mutation on the same JSON file.
+  const result = await mergeMediaCollectionsFromSync(remoteData.collections || []);
+  if (result.applied) {
+    console.log(`🔄 MediaCollections sync: merged ${result.count} collection(s)`);
+  }
+  return result;
+}
+
 // --- Public API ---
 
 // Files each category reads, used to keep the in-process checksum cache
@@ -434,6 +469,7 @@ const CHECKSUM_PATHS = {
   meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
   universe: [UNIVERSE_BUILDER_FILE],
   pipeline: [PIPELINE_SERIES_FILE, PIPELINE_ISSUES_FILE],
+  mediaCollections: [MEDIA_COLLECTIONS_FILE],
 };
 
 const CATEGORIES = {
@@ -442,7 +478,8 @@ const CATEGORIES = {
   digitalTwin: { getSnapshot: getDigitalTwinSnapshot, applyRemote: applyDigitalTwinRemote },
   meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote },
   universe: { getSnapshot: getUniverseSnapshot, applyRemote: applyUniverseRemote },
-  pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote }
+  pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote },
+  mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote }
 };
 
 // Per-category `{ fingerprints, checksum }` cache. The orchestrator hits

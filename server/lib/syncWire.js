@@ -90,6 +90,14 @@ export function sanitizeRecordForWire(kind, record) {
       const { deleted: _deleted, deletedAt: _deletedAt, ephemeral: _ephemeral, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
+    case 'mediaCollection': {
+      // Collections have no `ephemeral` / `deleted` semantics today — the
+      // record shape is already wire-safe as produced by sanitizeCollection.
+      // The case exists so future per-record push fan-out for collections has
+      // a single sanitizer to extend (e.g. stripping a future local-only
+      // field like a UI sort preference) without forking the wire contract.
+      return record;
+    }
     default:
       return null;
   }
@@ -129,6 +137,14 @@ export function sanitizeStateForWire(kind, state) {
             .filter(Boolean)
         : [];
       return { kind, data: { series, issues } };
+    }
+    case 'mediaCollections': {
+      const collections = Array.isArray(state.collections)
+        ? state.collections
+            .map((c) => sanitizeRecordForWire('mediaCollection', c))
+            .filter(Boolean)
+        : [];
+      return { kind, data: { collections } };
     }
     default:
       return { kind, data: null };

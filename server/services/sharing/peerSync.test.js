@@ -38,6 +38,12 @@ vi.mock('../pipeline/issues.js', async () => ({
   mergeIssuesFromSync: vi.fn(),
 }));
 
+vi.mock('../mediaCollections.js', async () => ({
+  findCollectionByUniverseId: vi.fn(),
+  findCollectionBySeriesId: vi.fn(),
+  mergeMediaCollectionsFromSync: vi.fn(),
+}));
+
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
   peerSocketOptions: {},
@@ -65,6 +71,11 @@ import { getInstanceId, getPeers } from '../instances.js';
 import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
+import {
+  findCollectionByUniverseId,
+  findCollectionBySeriesId,
+  mergeMediaCollectionsFromSync,
+} from '../mediaCollections.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 
@@ -129,6 +140,11 @@ beforeEach(async () => {
   vi.mocked(getUniverse).mockReset().mockResolvedValue(undefined);
   vi.mocked(getSeries).mockReset().mockResolvedValue(undefined);
   vi.mocked(listIssues).mockReset().mockResolvedValue([]);
+  // Default: no linked collection for any record. Tests that exercise the
+  // bundle path override these per-call.
+  vi.mocked(findCollectionByUniverseId).mockReset().mockResolvedValue(null);
+  vi.mocked(findCollectionBySeriesId).mockReset().mockResolvedValue(null);
+  vi.mocked(mergeMediaCollectionsFromSync).mockReset().mockResolvedValue({ applied: false, count: 0 });
 
   await __resetForTests();
 });
@@ -932,6 +948,97 @@ describe('peerSync', () => {
       expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i2']);
     });
 
+    it('bundles the linked media collection with a universe push so collection-only edits propagate', async () => {
+      // Regression: collection items[] adds emit recordEvents.updated('universe', id)
+      // but the universe record content itself doesn't change, so the
+      // lastPushedHash short-circuit treated the push as 'unchanged' and the
+      // receiver's collection diverged permanently. Including the linked
+      // collection in both the payload AND the hash defeats the short-circuit.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe' });
+      vi.mocked(findCollectionByUniverseId).mockResolvedValueOnce({
+        id: 'col-1',
+        name: 'Universe: U',
+        description: '',
+        coverKey: null,
+        universeId: 'u1',
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(captured.kind).toBe('universe');
+      expect(captured.linkedCollection).toBeTruthy();
+      expect(captured.linkedCollection.id).toBe('col-1');
+      expect(captured.linkedCollection.items).toHaveLength(1);
+    });
+
+    it('re-pushes when only the linked collection items change (universe record byte-identical)', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe' });
+      vi.mocked(findCollectionByUniverseId)
+        .mockResolvedValueOnce({
+          id: 'col-1', name: 'Universe: U', description: '', coverKey: null,
+          universeId: 'u1', seriesId: null,
+          items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' }],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+        })
+        .mockResolvedValueOnce({
+          id: 'col-1', name: 'Universe: U', description: '', coverKey: null,
+          universeId: 'u1', seriesId: null,
+          items: [
+            { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
+            { kind: 'image', ref: 'b.png', addedAt: '2026-05-22T02:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      const first = await pushRecordToPeer(sub);
+      expect(first.pushed).toBe(true);
+
+      vi.mocked(peerFetch).mockClear();
+      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
+      const second = await pushRecordToPeer(refreshed);
+      expect(second.pushed).toBe(true);
+      expect(second.reason).not.toBe('unchanged');
+      expect(peerFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT bundle a linked collection when the universe is a tombstone', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({
+        id: 'u1', name: 'Gone', deleted: true, deletedAt: '2026-05-22T03:00:00Z',
+      });
+      // If buildPushPayload still called findCollectionByUniverseId for a
+      // tombstoned record, we'd see this mock invoked. Guard against the
+      // bundle path firing for soft-deletes.
+      vi.mocked(findCollectionByUniverseId).mockResolvedValue({
+        id: 'col-1', name: 'Universe: U', description: '', coverKey: null,
+        universeId: 'u1', seriesId: null, items: [],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(captured.kind).toBe('universe');
+      expect(captured.linkedCollection).toBeUndefined();
+      expect(captured.assetManifest).toEqual([]);
+    });
+
     it('drops ephemeral child issues from both the bundled issues AND the asset manifest', async () => {
       // Regression: an earlier version filtered ephemeral issues out of
       // `sanitizedIssues` but still walked the unfiltered `childIssues`
@@ -1080,6 +1187,32 @@ describe('peerSync', () => {
       expect(mergeUniversesFromSync).toHaveBeenCalledWith([
         expect.objectContaining({ id: 'u1' }),
       ]);
+    });
+
+    it('routes a bundled linkedCollection through mergeMediaCollectionsFromSync', async () => {
+      const linkedCollection = {
+        id: 'col-1', name: 'Universe: U', items: [
+          { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
+        ],
+      };
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
+        linkedCollection,
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([linkedCollection]);
+    });
+
+    it('skips mergeMediaCollectionsFromSync when no linkedCollection is bundled', async () => {
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
     });
 
     it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {

@@ -53,6 +53,11 @@ import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import {
+  findCollectionByUniverseId,
+  findCollectionBySeriesId,
+  mergeMediaCollectionsFromSync,
+} from '../mediaCollections.js';
+import {
   initCursor,
   ackDeletesUpTo,
   removeCursor as removeTombstoneCursor,
@@ -594,16 +599,18 @@ export async function pushRecordToPeer(sub) {
   if (!payload) return { pushed: false, reason: 'record-not-found' };
 
   // No-op short-circuit: don't re-push bytes we already pushed. Hash the
-  // FULL logical payload (record + bundled issues + asset manifest) — not
-  // just the record — so an issue-only edit, an asset-only re-render, or a
-  // new image landing under the same series still propagates instead of
-  // collapsing to "unchanged" because the parent series didn't move.
+  // FULL logical payload (record + bundled issues + linked collection +
+  // asset manifest) — not just the record — so an issue-only edit, an
+  // asset-only re-render, a collection-only item add, or a new image
+  // landing under the same series still propagates instead of collapsing
+  // to "unchanged" because the parent series didn't move.
   // sourceInstanceId is intentionally excluded: it's an envelope field, not
   // a content field, and hashing it would force a re-push every time we
   // bumped instance metadata.
   const hash = simplePayloadHash({
     record: payload.record,
     issues: payload.issues ?? null,
+    linkedCollection: payload.linkedCollection ?? null,
     assetManifest: payload.assetManifest ?? [],
   });
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
@@ -669,6 +676,17 @@ async function buildPushPayload(sub, sourceInstanceId) {
     if (!record) return null;
     const sanitized = sanitizeRecordForWire('universe', record);
     if (!sanitized) return null;
+    // Look up the linked media collection (auto-managed "Universe: X" bucket)
+    // and bundle it in the payload. Without this, collection-only edits (a
+    // new image added to the universe's gallery) wouldn't move the universe
+    // record itself, so the lastPushedHash short-circuit would treat the
+    // push as "unchanged" and the receiver's collection would diverge
+    // permanently. Tombstone pushes skip the collection bundle — a deleted
+    // universe's collection gets unlinked + orphaned locally, and shipping
+    // it would re-create an empty bucket on the receiver.
+    const linkedCollection = record.deleted === true
+      ? null
+      : await findCollectionByUniverseId(sub.recordId).catch(() => null);
     // Tombstone push: deleted records carry no on-disk assets the receiver
     // should pull. Sending an empty manifest avoids triggering
     // pullMissingAssetsFromPeer for a record we're telling the peer to
@@ -676,8 +694,16 @@ async function buildPushPayload(sub, sourceInstanceId) {
     // immediately orphan) and privacy-sensitive (e.g. a record deleted
     // BECAUSE the user wanted the assets off-peer would otherwise still
     // ship them with the tombstone push).
-    const assetManifest = record.deleted === true ? [] : await buildAssetManifest(record);
-    return { kind: 'universe', record: sanitized, assetManifest, sourceInstanceId };
+    const assetManifest = record.deleted === true
+      ? []
+      : await buildAssetManifestWithCollection(record, linkedCollection);
+    return {
+      kind: 'universe',
+      record: sanitized,
+      assetManifest,
+      sourceInstanceId,
+      ...(linkedCollection ? { linkedCollection } : {}),
+    };
   }
   if (sub.recordKind === 'series') {
     const record = await getSeries(sub.recordId, { includeDeleted: true }).catch(() => null);
@@ -709,24 +735,32 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const manifestIssues = childIssues.filter(
       (i) => i?.deleted !== true && i?.ephemeral !== true,
     );
+    // Same collection-bundle reasoning as the universe branch: a "Series: X"
+    // collection's item changes don't move the series record, so without
+    // bundling the collection here the per-record push would short-circuit
+    // and the receiver's collection would diverge.
+    const linkedCollection = record.deleted === true
+      ? null
+      : await findCollectionBySeriesId(sub.recordId).catch(() => null);
     // Tombstone push at the series level: same reasoning as universe above.
     // When the series itself is deleted, send an empty asset manifest so
     // the receiver doesn't pull bytes for a record it's about to tombstone.
     const assetManifest = record.deleted === true
       ? []
-      : await buildAssetManifestForSeries(record, manifestIssues);
+      : await buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
     return {
       kind: 'series',
       record: sanitized,
       issues: sanitizedIssues,
       assetManifest,
       sourceInstanceId,
+      ...(linkedCollection ? { linkedCollection } : {}),
     };
   }
   return null;
 }
 
-async function buildAssetManifestForSeries(series, issues) {
+async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
   const seriesAssets = await buildAssetManifest(series);
   const dedup = new Map(seriesAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   for (const issue of issues) {
@@ -735,7 +769,62 @@ async function buildAssetManifestForSeries(series, issues) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
   }
+  if (linkedCollection) {
+    const collectionAssets = await buildAssetManifestForCollection(linkedCollection);
+    for (const a of collectionAssets) {
+      dedup.set(`${a.kind}:${a.filename}`, a);
+    }
+  }
   return [...dedup.values()];
+}
+
+/**
+ * Combined record + collection asset manifest for the universe push. Same
+ * dedup-by-`<kind>:<filename>` semantics as the series path so a render that
+ * lives in both the universe's canon (`imageRefs`) and the collection's
+ * `items[]` only ships once.
+ */
+async function buildAssetManifestWithCollection(record, linkedCollection) {
+  const recordAssets = await buildAssetManifest(record);
+  const dedup = new Map(recordAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
+  if (linkedCollection) {
+    const collectionAssets = await buildAssetManifestForCollection(linkedCollection);
+    for (const a of collectionAssets) {
+      dedup.set(`${a.kind}:${a.filename}`, a);
+    }
+  }
+  return [...dedup.values()];
+}
+
+/**
+ * Hash each item in a media collection so the receiver can pull missing
+ * bytes from `/data/images/` (or `/data/videos/`) via the existing asset-pull
+ * worker. Collections are append-mostly and items refer to filenames the
+ * sender has on disk; an item whose file is missing (e.g. half-imported
+ * from another peer) is skipped silently — including a null-hash entry
+ * would make every receiver re-request bytes the sender can't fulfill.
+ *
+ * Items with `kind: 'video'` route through the video PATHS dir; other kinds
+ * (today only 'image') route through the image PATHS dir. This mirrors
+ * `collectAssetReferences` and the `directoryForAssetKind` map.
+ */
+async function buildAssetManifestForCollection(collection) {
+  const out = [];
+  for (const it of collection?.items || []) {
+    if (!it || typeof it.ref !== 'string') continue;
+    if (it.kind === 'video') {
+      const entry = await hashSimpleAsset(it.ref, 'video', PATHS.videos);
+      if (entry) out.push(entry);
+    } else {
+      // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
+      // image — the receiver's diff path will only accept entries whose kind
+      // maps to a known directory in `directoryForAssetKind`, so a junk kind
+      // gets filtered there without polluting disk.
+      const entry = await hashImageForManifest(it.ref);
+      if (entry) out.push(entry);
+    }
+  }
+  return out;
 }
 
 // Tiny stable-string hash for the push short-circuit. NOT a cryptographic
@@ -774,7 +863,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, assetManifest, sourceInstanceId } = payload;
+  const { kind, record, issues, linkedCollection, assetManifest, sourceInstanceId } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -798,6 +887,18 @@ export async function applyIncomingPush(payload) {
     if (Array.isArray(issues) && issues.length > 0) {
       await mergeIssuesFromSync(issues);
     }
+  }
+
+  // Apply the bundled collection (if any) — same LWW + union-of-items
+  // semantics as the snapshot-sync mediaCollections category. Failures here
+  // don't fail the push: the record itself is already merged and the next
+  // snapshot-sync cycle will reconcile the collection if it diverged. The
+  // sanitizer in mediaCollections strips a peer-supplied `id` that isn't a
+  // string, so a bogus payload can't plant a malformed row.
+  if (linkedCollection && typeof linkedCollection === 'object') {
+    await mergeMediaCollectionsFromSync([linkedCollection]).catch((err) => {
+      console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
+    });
   }
 
   // Diff incoming asset manifest against local disk. We (the receiver) are
