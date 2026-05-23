@@ -1357,12 +1357,15 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
  * Clean up a worktree for a completed agent.
  * Reads worktree metadata from the agent's registered state and removes the worktree.
  * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
- * When requestCopilotReview is also true, requests an initial Copilot review on the new
- * PR and spawns a follow-up internal task that runs the full /do:rpr loop and merges
- * once the review is clean — that follow-up is the part the user expects to "keep
- * looping until ready to merge." `reviewer` selects which reviewer the follow-up uses
- * (default `copilot` requests a native GitHub Copilot review; `claude`/`gemini`/`codex`
- * skip the GH reviewer-API call and let the follow-up agent drive the CLI-based review).
+ * When requestCopilotReview is also true, spawns a follow-up internal task that drives
+ * the multi-reviewer loop and merges once the review chain is clean — that follow-up is
+ * the part the user expects to "keep looping until ready to merge."
+ * `reviewers` is the ordered reviewer list (e.g. `[codex, gemini, copilot]`); the native
+ * GitHub Copilot review is pre-requested here only when copilot LEADS the list (otherwise
+ * the follow-up requests it at its turn so Copilot sees the post-fix diff). `reviewStopMode`
+ * (`all`/`on-findings`/`on-clean`) and `reviewerApplies` are threaded into the follow-up's
+ * metadata. CLI reviewers (claude/gemini/codex) are always driven by the follow-up agent,
+ * which works on any forge; copilot is GitHub-only and dropped on non-GitHub remotes.
  * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
