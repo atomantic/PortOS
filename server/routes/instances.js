@@ -47,7 +47,13 @@ const syncCategoriesSchema = z.object({
   digitalTwin: z.boolean().optional(),
   meatspace: z.boolean().optional(),
   universe: z.boolean().optional(),
-  pipeline: z.boolean().optional()
+  pipeline: z.boolean().optional(),
+  // Default Zod object parsing strips unknown keys, so every key in
+  // DEFAULT_SYNC_CATEGORIES (server/services/instances.js) MUST appear
+  // here — otherwise PATCH/PUT updates from the Instances UI silently
+  // no-op for the missing category. Same regression class as the
+  // universe + pipeline omission tracked in .changelog/NEXT.md.
+  mediaCollections: z.boolean().optional()
 }).optional();
 
 const updatePeerSchema = z.object({
