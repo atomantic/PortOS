@@ -8,4 +8,6 @@
 
 ## Fixed
 
+- Providers (`/ai`) and Prompts (`/prompts`) pages now render the same Settings sub-nav tabbed header as the other settings pages, so users can hop between Backup / Database / General / MortalLoom / Prompts / Providers / Sharing / Telegram / Voice without going back to the sidebar. Extracted a shared `SettingsTabsHeader` component used by `Settings.jsx`, `AIProviders.jsx`, and `PromptManager.jsx`.
+
 ## Removed

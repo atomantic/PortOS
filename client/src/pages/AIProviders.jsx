@@ -10,6 +10,7 @@ import {
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
 } from '../utils/formatters';
+import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -185,14 +186,27 @@ export default function AIProviders() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400">Loading providers...</div>
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-3 p-4 border-b border-port-border">
+          <h1 className="text-2xl font-bold text-white">Settings</h1>
+        </div>
+        <SettingsTabsHeader activeTab="providers" />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-gray-400">Loading providers...</div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 p-4 border-b border-port-border">
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+      </div>
+
+      <SettingsTabsHeader activeTab="providers" />
+
+      <div className="flex-1 overflow-auto p-4 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-white">AI Providers</h1>
         <div className="flex flex-wrap gap-2">
@@ -565,6 +579,7 @@ export default function AIProviders() {
           onSave={() => { setShowForm(false); setEditingProvider(null); loadData(); }}
         />
       )}
+      </div>
     </div>
   );
 }
