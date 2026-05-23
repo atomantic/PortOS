@@ -337,7 +337,12 @@ export default function VideoGen() {
     if (item.steps != null && item.steps !== '') setSteps(String(item.steps));
     const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
     if (guidance != null && guidance !== '') setGuidanceScale(String(guidance));
-    if (item.tiling) setTiling(item.tiling);
+    // tiling must match the server enum (auto|none|spatial|temporal). Legacy
+    // sidecars sometimes store a boolean here — silently ignore unknown values
+    // so the <select> stays valid and the next POST doesn't 400. Mirrors the
+    // guard in useImagePreviewActions.handleRemix.
+    const TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
+    if (typeof item.tiling === 'string' && TILING_ENUM.has(item.tiling)) setTiling(item.tiling);
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
