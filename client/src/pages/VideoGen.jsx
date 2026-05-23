@@ -183,10 +183,12 @@ export default function VideoGen() {
   // / steps / guidanceScale / tiling / disableAudio) marks the URL as a Remix
   // bundle — the Continue and SendToVideo paths set sourceImageFile +/-
   // prompt/w/h but never the remix-only keys, so they keep their URL state.
-  // When it IS a remix, we ALSO strip prompt/negativePrompt/w/h from the URL
-  // so back-nav / refresh doesn't re-sync those via the standalone
-  // incomingPrompt / incomingWidth effects (initial useState already captured
-  // their values on first mount, which is the one-shot we want).
+  // When it IS a remix, we ALSO strip prompt/negativePrompt/w/h from the URL.
+  // Note: prompt/negativePrompt are captured by initial useState (lines above);
+  // w/h are NOT in initial state (defaults are 768×512) and are instead applied
+  // by the separate incomingWidth/incomingHeight effect on first render —
+  // which runs BEFORE this strip-pass since effects fire in declaration order.
+  // The result is the same one-shot consumption, just via two effects.
   useEffect(() => {
     const remixGateKeys = ['modelId', 'numFrames', 'fps', 'seed', 'steps', 'guidanceScale', 'tiling', 'disableAudio'];
     const present = remixGateKeys.filter((k) => searchParams.get(k) != null);
@@ -357,6 +359,19 @@ export default function VideoGen() {
     // toggle stuck ON when the user remixes a clip that had audio enabled.
     const disableAudio = item.disableAudio ?? item.disable_audio;
     setDisableAudio(disableAudio === true);
+    // Reset to text-to-video mode and clear any stale conditioning inputs from
+    // image / fflf / extend / a2v modes. Without this, clicking Remix while
+    // currently in (e.g.) image mode would carry the old source image into the
+    // next submit even though Remix is meant to faithfully reproduce the prior
+    // (text-to-video) render. Cross-page Remix already lands the user in text
+    // mode because /media/video without `sourceImageFile` defaults that way.
+    setMode('text');
+    setSourceImageFile(null);
+    setSourceImageUpload(null);
+    setLastImageFile(null);
+    setLastImageUpload(null);
+    setExtendFromVideoId('');
+    setAudioFile(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -399,6 +414,19 @@ export default function VideoGen() {
     refreshStatus();
     return () => eventSourceRef.current?.close();
   }, [refreshStatus]);
+
+  // Validate `modelId` once models are loaded. A Remix URL (or hand-edited
+  // link) can carry a `modelId` that no longer exists in the catalog — that
+  // leaves <ModelSelect> showing nothing and `currentModel` undefined, which
+  // then breaks resolution suggestions and submit. When we detect that, fall
+  // back to status.defaultModel (preferred) or the first available model so
+  // the form stays in a usable state.
+  useEffect(() => {
+    if (!modelId || models.length === 0) return;
+    if (models.some((m) => m.id === modelId)) return;
+    const fallback = status?.defaultModel || models[0]?.id || '';
+    if (fallback) setModelId(fallback);
+  }, [modelId, models, status?.defaultModel]);
 
   const currentModel = models.find((m) => m.id === modelId);
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
