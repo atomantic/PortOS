@@ -1077,21 +1077,29 @@ async function getIssueSeriesId(issueId) {
  * edit) gets another attempt.
  */
 export async function retryPendingPushesForPeer(peerId) {
-  if (!isNonEmptyStr(peerId)) return { retried: 0 };
+  if (!isNonEmptyStr(peerId)) return { walked: 0, pushed: 0 };
   const subs = await listPeerSubscriptions({ peerId });
-  if (subs.length === 0) return { retried: 0 };
+  if (subs.length === 0) return { walked: 0, pushed: 0 };
   // Separate counter for the log line — only count subs that were never
   // pushed (genuine retries) so steady-state convergence runs stay quiet.
   const neverPushedCount = subs.filter(s => !s.lastPushedAt).length;
   if (neverPushedCount > 0) {
     console.log(`🔄 peerSync: retrying ${neverPushedCount} pending push${neverPushedCount === 1 ? '' : 'es'} → ${peerId}`);
   }
+  // Track `walked` (subs we iterated) and `pushed` (HTTP call landed)
+  // separately. `walked === pushed` would be misleading at steady state
+  // because the lastPushedHash short-circuit inside pushRecordToPeer skips
+  // the network call for any sub whose content is unchanged — we still
+  // "walked" the sub but never pushed it.
+  let pushed = 0;
   for (const sub of subs) {
-    await pushRecordToPeer(sub).catch((err) => {
+    const result = await pushRecordToPeer(sub).catch((err) => {
       console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
+      return null;
     });
+    if (result?.pushed) pushed += 1;
   }
-  return { retried: subs.length };
+  return { walked: subs.length, pushed };
 }
 
 let onUpdated = null;

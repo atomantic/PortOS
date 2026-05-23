@@ -550,7 +550,8 @@ describe('peerSync', () => {
       // Peer comes back — retry must succeed and stamp lastPushedAt.
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       const result = await retryPendingPushesForPeer('peer-a');
-      expect(result.retried).toBe(1);
+      expect(result.walked).toBe(1);
+      expect(result.pushed).toBe(1); // network call landed
       const updated = await findPeerSubscription('peer-a', 'universe', 'u1');
       expect(updated.lastPushedAt).toBeTruthy();
       // Subsequent retry now walks every sub regardless of lastPushedAt
@@ -561,20 +562,21 @@ describe('peerSync', () => {
       // re-propagate via peer:online without needing a per-record edit.
       vi.mocked(peerFetch).mockClear();
       const second = await retryPendingPushesForPeer('peer-a');
-      expect(second.retried).toBe(1); // walked, not skipped by the helper
+      expect(second.walked).toBe(1); // walked, not skipped by the helper
+      expect(second.pushed).toBe(0); // hash short-circuited, no HTTP call
       // The hash short-circuit inside pushRecordToPeer prevents the actual
       // HTTP call because the record content is unchanged since the first push.
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
 
-    it('returns {retried: 0} when the peer has no subscriptions', async () => {
+    it('returns {walked: 0, pushed: 0} when the peer has no subscriptions', async () => {
       const result = await retryPendingPushesForPeer('peer-without-subs');
-      expect(result).toEqual({ retried: 0 });
+      expect(result).toEqual({ walked: 0, pushed: 0 });
     });
 
-    it('returns {retried: 0} for invalid peerId', async () => {
-      expect(await retryPendingPushesForPeer('')).toEqual({ retried: 0 });
-      expect(await retryPendingPushesForPeer(null)).toEqual({ retried: 0 });
+    it('returns {walked: 0, pushed: 0} for invalid peerId', async () => {
+      expect(await retryPendingPushesForPeer('')).toEqual({ walked: 0, pushed: 0 });
+      expect(await retryPendingPushesForPeer(null)).toEqual({ walked: 0, pushed: 0 });
     });
   });
 
