@@ -70,7 +70,10 @@ safe_install() {
 step "git-pull" "running" "Pulling latest changes..."
 origin_url=$(git remote get-url origin 2>/dev/null || echo "")
 if [ -n "$origin_url" ]; then
-  log "🌐 Pulling from origin: $origin_url"
+  # Redact any embedded credentials (https://user:token@host/...) before logging
+  # so PATs don't leak into data/update.log or the update UI step output.
+  origin_url_safe=$(printf '%s' "$origin_url" | sed -E 's|://[^@/]+@|://***@|')
+  log "🌐 Pulling from origin: $origin_url_safe"
 fi
 current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
 stashed_for_branch=""

@@ -85,6 +85,25 @@ describe('parseGitRemoteUrl', () => {
     // ssh:// with extra
     expect(parseGitRemoteUrl('ssh://git@github.com/owner/repo/extra.git')).toBeNull();
   });
+
+  it('strips ports from host so github.com:443 still classifies as GitHub', () => {
+    // ssh:// with explicit port
+    expect(parseGitRemoteUrl('ssh://git@github.com:443/atomantic/PortOS.git')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS'
+    });
+    // HTTPS with explicit port
+    expect(parseGitRemoteUrl('https://github.com:443/atomantic/PortOS.git')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS'
+    });
+  });
+
+  it('accepts the SCP `host:port/owner/repo` GitHub variant', () => {
+    // GitHub publishes `git@ssh.github.com:443/owner/repo.git` for users
+    // tunneling SSH over 443 — must classify the same as the standard form.
+    expect(parseGitRemoteUrl('git@ssh.github.com:443/atomantic/PortOS.git')).toEqual({
+      host: 'ssh.github.com', owner: 'atomantic', repo: 'PortOS'
+    });
+  });
 });
 
 describe('readOriginRemoteUrl', () => {
@@ -146,6 +165,14 @@ describe('getOriginInfo', () => {
     expect(info.isFork).toBe(true);
     expect(info.isUpstream).toBe(false);
     expect(info.fullName).toBe('alice/PortOS');
+  });
+
+  it('classifies upstream even when origin URL carries a port', async () => {
+    execGit.mockResolvedValue({ stdout: 'ssh://git@github.com:443/atomantic/PortOS.git\n', stderr: '', exitCode: 0 });
+    const info = await getOriginInfo();
+    expect(info.host).toBe('github.com');
+    expect(info.isGithub).toBe(true);
+    expect(info.isUpstream).toBe(true);
   });
 
   it('does not flag non-github remotes as fork even when owner/repo differ', async () => {

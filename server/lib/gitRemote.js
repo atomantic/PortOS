@@ -13,33 +13,45 @@ export const UPSTREAM_FULL_NAME = `${UPSTREAM_OWNER}/${UPSTREAM_REPO}`;
  *
  * Handles:
  *   git@github.com:owner/repo.git
+ *   git@ssh.github.com:443/owner/repo.git           (SCP variant with leading port)
  *   ssh://git@github.com/owner/repo.git
+ *   ssh://git@github.com:443/owner/repo.git         (URL form with port)
  *   https://github.com/owner/repo.git
  *   https://github.com/owner/repo
  *   git@github.enterprise.com:org/repo.git
  *
+ * The returned `host` is always normalized (no trailing `:port`) so callers
+ * comparing against e.g. `github.com` don't have to special-case ports.
  * Rejects URLs with extra path segments (e.g. `git@host:owner/repo/extra`)
  * since those would produce a `fullName` like `owner/repo/extra` that breaks
  * `gh repo sync` and fork classification.
  */
 export function parseGitRemoteUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return null;
-  const trimmed = url.trim();
+  // Strip a single trailing slash so `…/owner/repo/` parses, but
+  // `…/owner/repo/extra` (extra path segment) still fails the regex.
+  const trimmed = url.trim().replace(/\/$/, '');
 
   // Strip a trailing .git for both SSH and HTTPS variants
   const stripGit = (s) => s.replace(/\.git$/i, '');
+  // Normalize host — strip an optional `:port` suffix so `github.com:443`
+  // and `github.com` compare equal.
+  const stripPort = (h) => h.replace(/:\d+$/, '');
 
-  // SCP-style SSH: git@host:owner/repo(.git) — repo segment cannot contain '/'
-  const scpMatch = trimmed.match(/^[a-zA-Z0-9._-]+@([^:]+):([^/]+)\/([^/]+)$/);
+  // SCP-style SSH: git@host:[port/]owner/repo(.git). repo segment cannot
+  // contain '/'. The optional `(?:\d+\/)?` matches the GitHub-specific variant
+  // `git@ssh.github.com:443/OWNER/REPO.git` where `443/` is a path-prefix
+  // hop port.
+  const scpMatch = trimmed.match(/^[a-zA-Z0-9._-]+@([^:]+):(?:\d+\/)?([^/]+)\/([^/]+)$/);
   if (scpMatch) {
-    return { host: scpMatch[1], owner: scpMatch[2], repo: stripGit(scpMatch[3]) };
+    return { host: stripPort(scpMatch[1]), owner: scpMatch[2], repo: stripGit(scpMatch[3]) };
   }
 
-  // URL-style: scheme://[user@]host/owner/repo(.git) — repo segment cannot
-  // contain '/'; an optional single trailing '/' is tolerated.
-  const urlMatch = trimmed.match(/^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)\/?$/);
+  // URL-style: scheme://[user@]host(:port)/owner/repo(.git) — repo segment
+  // cannot contain '/'.
+  const urlMatch = trimmed.match(/^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/);
   if (urlMatch) {
-    return { host: urlMatch[1], owner: urlMatch[2], repo: stripGit(urlMatch[3]) };
+    return { host: stripPort(urlMatch[1]), owner: urlMatch[2], repo: stripGit(urlMatch[3]) };
   }
 
   return null;

@@ -54,7 +54,12 @@ router.delete('/ignore', asyncHandler(async (req, res) => {
 // (gh missing, network, etc.) bubble as 502 FORK_SYNC_FAILED.
 router.post('/sync-fork', asyncHandler(async (req, res) => {
   const { branch } = validateRequest(syncForkSchema, req.body || {});
-  const info = await updateChecker.getRemoteInfo();
+  // Surface git-binary/spawn failures as a structured 502 instead of an
+  // unclassified 500 — the UI banner relies on err.message for guidance.
+  const info = await updateChecker.getRemoteInfo().catch(err => {
+    throw new ServerError(`Could not inspect git origin remote: ${err.message}`,
+      { status: 502, code: 'GIT_UNAVAILABLE' });
+  });
   if (!info?.hasOrigin) {
     throw new ServerError('No git origin remote found — fork sync requires a GitHub remote.',
       { status: 400, code: 'NO_ORIGIN' });
