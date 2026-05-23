@@ -669,7 +669,14 @@ async function buildPushPayload(sub, sourceInstanceId) {
     if (!record) return null;
     const sanitized = sanitizeRecordForWire('universe', record);
     if (!sanitized) return null;
-    const assetManifest = await buildAssetManifest(record);
+    // Tombstone push: deleted records carry no on-disk assets the receiver
+    // should pull. Sending an empty manifest avoids triggering
+    // pullMissingAssetsFromPeer for a record we're telling the peer to
+    // delete — both wasteful (network + disk for bytes the receiver will
+    // immediately orphan) and privacy-sensitive (e.g. a record deleted
+    // BECAUSE the user wanted the assets off-peer would otherwise still
+    // ship them with the tombstone push).
+    const assetManifest = record.deleted === true ? [] : await buildAssetManifest(record);
     return { kind: 'universe', record: sanitized, assetManifest, sourceInstanceId };
   }
   if (sub.recordKind === 'series') {
@@ -692,14 +699,22 @@ async function buildPushPayload(sub, sourceInstanceId) {
     // appear in the manifest the receiver pulls. The user-visible effect:
     // private/scratch image bytes for an issue the user said "don't sync"
     // would land on every peer's disk via pullMissingAssetsFromPeer.
-    // Tombstoned ephemeral issues (deleted=true + ephemeral=true) DO stay
-    // in the manifest input — matching sanitizeRecordForWire's same
-    // exception, so the tombstone propagates and the peer can finish
-    // cleaning up.
+    // ALSO drop deleted child issues from the manifest input — their
+    // tombstones still ride along in `sanitizedIssues` (so the receiver
+    // can finish its delete cascade), but shipping the deleted issues'
+    // asset filenames would trigger needless / privacy-sensitive pulls
+    // for bytes that are about to be orphaned on the receiver.
+    // Tombstoned ephemeral issues (deleted=true + ephemeral=true) ALSO
+    // stay out of the manifest input by this filter.
     const manifestIssues = childIssues.filter(
-      (i) => !(i?.ephemeral === true && i?.deleted !== true),
+      (i) => i?.deleted !== true && i?.ephemeral !== true,
     );
-    const assetManifest = await buildAssetManifestForSeries(record, manifestIssues);
+    // Tombstone push at the series level: same reasoning as universe above.
+    // When the series itself is deleted, send an empty asset manifest so
+    // the receiver doesn't pull bytes for a record it's about to tombstone.
+    const assetManifest = record.deleted === true
+      ? []
+      : await buildAssetManifestForSeries(record, manifestIssues);
     return {
       kind: 'series',
       record: sanitized,
