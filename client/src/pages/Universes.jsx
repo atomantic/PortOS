@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Globe2, Trash2, Users, Workflow as WorkflowIcon } from 'lucide-react';
+import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
@@ -49,6 +49,9 @@ export default function Universes() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Guard setState against a navigate-away before the fetch resolves —
+    // mirrors the editor's load effect (UniverseBuilder.jsx).
+    let cancelled = false;
     Promise.all([
       listUniverses().catch((err) => {
         toast.error(err.message || 'Failed to load universes');
@@ -58,10 +61,12 @@ export default function Universes() {
       // render the universe list (counts just show 0). Silent on failure.
       listPipelineSeries().catch(() => []),
     ]).then(([u, s]) => {
+      if (cancelled) return;
       setUniverses(Array.isArray(u) ? u : []);
       setSeries(Array.isArray(s) ? s : []);
       setLoading(false);
     });
+    return () => { cancelled = true; };
   }, []);
 
   // universeId → linked-series count. Reverse of the join Pipeline.jsx does
@@ -97,7 +102,7 @@ export default function Universes() {
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <Globe2 className="w-6 h-6 text-port-accent" />
+          <Globe className="w-6 h-6 text-port-accent" />
           <h1 className="text-2xl font-bold text-white">Universes</h1>
         </div>
         <Link
