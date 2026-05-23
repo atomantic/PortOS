@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { writeFile, rm, mkdir } from 'fs/promises';
+import { readFile, writeFile, rm, mkdir } from 'fs/promises';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -12,6 +12,9 @@ import {
   safeJSONLParse,
   readJSONFile,
   readJSONLFile,
+  appendJSONLine,
+  readJSONLines,
+  writeJSONLines,
   formatDuration,
   sha256File,
   resolveImageInputPath,
@@ -314,6 +317,52 @@ describe('fileUtils', () => {
 
       const result = await readJSONLFile(filePath);
       expect(result).toEqual([{ valid: 1 }, { also: 'valid' }]);
+    });
+  });
+
+  describe('JSONL write helpers', () => {
+    let testDir;
+
+    beforeEach(async () => {
+      testDir = mkdtempSync(join(tmpdir(), 'fileutils-jsonl-write-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    it('appendJSONLine creates parent dirs and appends one record per line', async () => {
+      const filePath = join(testDir, 'nested', 'events.jsonl');
+      await appendJSONLine(filePath, { id: 'a', n: 1 });
+      await appendJSONLine(filePath, { id: 'b', n: 2 });
+
+      expect(await readFile(filePath, 'utf-8')).toBe('{"id":"a","n":1}\n{"id":"b","n":2}\n');
+      expect(await readJSONLines(filePath)).toEqual([{ id: 'a', n: 1 }, { id: 'b', n: 2 }]);
+    });
+
+    it('readJSONLines supports offset and limit', async () => {
+      const filePath = join(testDir, 'events.jsonl');
+      await writeFile(filePath, '{"id":"a"}\n{"id":"b"}\n{"id":"c"}\n');
+
+      expect(await readJSONLines(filePath, { from: 1, limit: 1 })).toEqual([{ id: 'b' }]);
+      expect(await readJSONLines(filePath, { from: 2 })).toEqual([{ id: 'c' }]);
+      expect(await readJSONLines(filePath, { limit: 0 })).toEqual([]);
+    });
+
+    it('writeJSONLines atomically replaces the file', async () => {
+      const filePath = join(testDir, 'events.jsonl');
+      await appendJSONLine(filePath, { id: 'old' });
+      await writeJSONLines(filePath, [{ id: 'new-1' }, { id: 'new-2' }]);
+
+      expect(await readFile(filePath, 'utf-8')).toBe('{"id":"new-1"}\n{"id":"new-2"}\n');
+      expect(await readJSONLines(filePath)).toEqual([{ id: 'new-1' }, { id: 'new-2' }]);
+    });
+
+    it('rejects non-serializable values', async () => {
+      await expect(appendJSONLine(join(testDir, 'bad.jsonl'), undefined))
+        .rejects.toThrow(/JSON-serializable/);
+      await expect(writeJSONLines(join(testDir, 'bad.jsonl'), [undefined]))
+        .rejects.toThrow(/JSON-serializable/);
     });
   });
 

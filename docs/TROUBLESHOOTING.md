@@ -222,7 +222,7 @@ cat data/apps.json | jq .
 **Symptom**: Action history clears on restart.
 
 **Solution**:
-- Check `data/history.json` exists and is writable
+- Check `data/history.jsonl` exists and is writable
 - Verify disk space available
 
 ## Performance Issues

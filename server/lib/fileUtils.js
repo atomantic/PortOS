@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { appendFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -382,6 +382,66 @@ export async function readJSONLFile(filePath, { logErrors = false } = {}) {
     return [];
   }
   return safeJSONLParse(content, { logErrors, context: filePath });
+}
+
+/**
+ * Append one JSON-serializable value to a JSON Lines file.
+ * Creates the parent directory as needed and writes exactly one trailing
+ * newline so readers can stream or split the file without special-casing the
+ * final record.
+ *
+ * @param {string} filePath - Path to JSONL file
+ * @param {*} value - JSON-serializable value to append
+ * @returns {Promise<void>}
+ */
+export async function appendJSONLine(filePath, value) {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new TypeError('appendJSONLine value must be JSON-serializable');
+  }
+  await ensureDir(dirname(filePath));
+  await appendFile(filePath, serialized + '\n');
+}
+
+/**
+ * Read JSON Lines with optional offset/limit slicing.
+ *
+ * @param {string} filePath - Path to JSONL file
+ * @param {Object} options - Options
+ * @param {number} [options.from=0] - Zero-based record offset
+ * @param {number} [options.limit] - Maximum number of records to return
+ * @param {boolean} [options.logErrors=false] - Log malformed JSONL lines
+ * @returns {Promise<Array>} Parsed records
+ */
+export async function readJSONLines(filePath, { from = 0, limit, logErrors = false } = {}) {
+  const entries = await readJSONLFile(filePath, { logErrors });
+  const start = Number.isFinite(from) && from > 0 ? Math.floor(from) : 0;
+  if (limit === undefined || limit === null) return entries.slice(start);
+  const count = Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : 0;
+  return entries.slice(start, start + count);
+}
+
+/**
+ * Replace a JSON Lines file with the supplied records.
+ * Intended for compaction/retention and delete/clear flows; hot append paths
+ * should use appendJSONLine().
+ *
+ * @param {string} filePath - Path to JSONL file
+ * @param {Array} values - JSON-serializable records
+ * @returns {Promise<void>}
+ */
+export async function writeJSONLines(filePath, values) {
+  if (!Array.isArray(values)) {
+    throw new TypeError('writeJSONLines values must be an array');
+  }
+  const lines = values.map((value) => {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw new TypeError('writeJSONLines values must be JSON-serializable');
+    }
+    return serialized;
+  });
+  await atomicWrite(filePath, lines.length > 0 ? `${lines.join('\n')}\n` : '');
 }
 
 /**

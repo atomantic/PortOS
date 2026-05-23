@@ -1,16 +1,17 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { appendJSONLine, ensureDir, PATHS, readJSONLines, writeJSONLines } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DATA_DIR = PATHS.data;
-const HISTORY_FILE = join(DATA_DIR, 'history.json');
+const HISTORY_FILE = join(DATA_DIR, 'history.jsonl');
 const MAX_ENTRIES = 500;
 
 // In-memory cache with TTL
 let historyCache = null;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 2000; // 2 second cache TTL
+const queueHistoryWrite = createFileWriteQueue();
 
 async function loadHistory() {
   // Return cached data if still valid
@@ -21,7 +22,7 @@ async function loadHistory() {
 
   await ensureDir(DATA_DIR);
 
-  historyCache = await readJSONFile(HISTORY_FILE, { entries: [] });
+  historyCache = { entries: await readJSONLines(HISTORY_FILE, { logErrors: true }) };
   cacheTimestamp = now;
   return historyCache;
 }
@@ -29,36 +30,47 @@ async function loadHistory() {
 async function saveHistory(data) {
   await ensureDir(DATA_DIR);
   // Trim to max entries
-  if (data.entries.length > MAX_ENTRIES) {
-    data.entries = data.entries.slice(-MAX_ENTRIES);
-  }
-  // Update cache with new data
-  historyCache = data;
+  const nextData = {
+    entries: data.entries.length > MAX_ENTRIES
+      ? data.entries.slice(-MAX_ENTRIES)
+      : data.entries,
+  };
+  await writeJSONLines(HISTORY_FILE, nextData.entries);
+  // Update cache only after the disk write succeeds.
+  historyCache = nextData;
   cacheTimestamp = Date.now();
-  await writeFile(HISTORY_FILE, JSON.stringify(data, null, 2));
 }
 
 /**
  * Log an action to history
  */
 export async function logAction(action, target, targetName, details = {}, success = true, error = null) {
-  const data = await loadHistory();
+  return queueHistoryWrite(async () => {
+    const data = await loadHistory();
 
-  const entry = {
-    id: uuidv4(),
-    action,
-    target,
-    targetName,
-    details,
-    success,
-    error,
-    timestamp: new Date().toISOString()
-  };
+    const entry = {
+      id: uuidv4(),
+      action,
+      target,
+      targetName,
+      details,
+      success,
+      error,
+      timestamp: new Date().toISOString()
+    };
 
-  data.entries.push(entry);
-  await saveHistory(data);
+    const entries = [...data.entries, entry];
 
-  return entry;
+    if (entries.length > MAX_ENTRIES) {
+      await saveHistory({ entries });
+    } else {
+      await appendJSONLine(HISTORY_FILE, entry);
+      historyCache = { entries };
+      cacheTimestamp = Date.now();
+    }
+
+    return entry;
+  });
 }
 
 /**
@@ -100,34 +112,38 @@ export async function getActionTypes() {
  * Delete a single history entry by ID
  */
 export async function deleteEntry(id) {
-  const data = await loadHistory();
-  const index = data.entries.findIndex(e => e.id === id);
+  return queueHistoryWrite(async () => {
+    const data = await loadHistory();
+    const index = data.entries.findIndex(e => e.id === id);
 
-  if (index === -1) {
-    return { deleted: false, error: 'Entry not found' };
-  }
+    if (index === -1) {
+      return { deleted: false, error: 'Entry not found' };
+    }
 
-  data.entries.splice(index, 1);
-  await saveHistory(data);
-  return { deleted: true };
+    await saveHistory({
+      entries: data.entries.filter((entry) => entry.id !== id),
+    });
+    return { deleted: true };
+  });
 }
 
 /**
  * Clear history (optionally older than days)
  */
 export async function clearHistory(olderThanDays = null) {
-  const data = await loadHistory();
+  return queueHistoryWrite(async () => {
+    const data = await loadHistory();
 
-  if (olderThanDays === null) {
-    data.entries = [];
-  } else {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - olderThanDays);
-    data.entries = data.entries.filter(e => new Date(e.timestamp) >= cutoff);
-  }
+    let entries = [];
+    if (olderThanDays !== null) {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - olderThanDays);
+      entries = data.entries.filter(e => new Date(e.timestamp) >= cutoff);
+    }
 
-  await saveHistory(data);
-  return { cleared: true };
+    await saveHistory({ entries });
+    return { cleared: true };
+  });
 }
 
 /**
