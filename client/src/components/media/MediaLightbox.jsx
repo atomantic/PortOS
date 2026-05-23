@@ -233,7 +233,7 @@ export default function MediaLightbox({
             <img src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} />
           )}
           {/* Fail-safe close — the SettingsPane's X is hidden in fullscreen
-              and unreachable if iOS Safari mis-lays-out the page. */}
+              and unreachable if iOS Safari mis-lays out the page. */}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClose(); }}
