@@ -246,6 +246,35 @@ describe('settings.js', () => {
       warnSpy.mockRestore();
     });
 
+    it('does not warn when writeFile throws (no misleading log for a write that did not happen)', async () => {
+      readFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
+      writeFile.mockRejectedValue(new Error('EROFS'));
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(updateSettings({ timezone: 'UTC' })).rejects.toThrow('EROFS');
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+
+    it('emits exactly one warning per updateSettings even when both disk AND patch are polluted', async () => {
+      // Disk pollution: alcoholDrinks. Patch pollution: goals. Spec: one log line.
+      readFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
+      writeFile.mockResolvedValue();
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await updateSettings({ goals: [], timezone: 'UTC' });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = warnSpy.mock.calls[0][0];
+      expect(msg).toContain('alcoholDrinks');
+      expect(msg).toContain('goals');
+
+      warnSpy.mockRestore();
+    });
+
     it('drops __proto__ / constructor / prototype keys instead of mutating Object.prototype', async () => {
       // A `__proto__` own property arrives via JSON.parse of a payload like
       // `{"__proto__":{"polluted":true}}`. Without the guard, the cleaned-object

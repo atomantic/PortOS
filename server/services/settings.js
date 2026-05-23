@@ -29,25 +29,19 @@ const MORTALLOOM_STORE_KEYS = new Set([
   'profile', 'genomeScanRecord'
 ]);
 
-// `warn` only emits the console warning when set — write paths pass true so
-// the operator sees pollution being persisted-out/incoming, reads stay silent
-// so a single polluted file doesn't spam logs on every GET /api/settings.
+// Pure rebuild — drops MortalLoom store keys and prototype-pollution keys.
 // Non-plain-object inputs (arrays, null, primitives) pass through unchanged;
 // rebuilding them as `{}` would silently coerce-then-lose the original value.
-const stripStoreKeys = (settings, { warn = false } = {}) => {
+// Warning emission is the caller's responsibility (see `save()`) so a single
+// updateSettings call produces at most one log line, tied to a successful
+// persisted write.
+const stripStoreKeys = (settings) => {
   if (!isPlainObject(settings)) return settings;
   const cleaned = {};
-  const polluted = [];
   for (const [k, v] of Object.entries(settings)) {
     if (POLLUTING_KEYS.has(k)) continue;
-    if (MORTALLOOM_STORE_KEYS.has(k)) {
-      polluted.push(k);
-      continue;
-    }
+    if (MORTALLOOM_STORE_KEYS.has(k)) continue;
     cleaned[k] = v;
-  }
-  if (warn && polluted.length > 0) {
-    console.warn(`⚠️ settings.json: stripping MortalLoom store keys: ${polluted.join(', ')}`);
   }
   return cleaned;
 };
@@ -62,28 +56,39 @@ export const settingsEvents = new EventEmitter();
 // default-10-listeners warning.
 settingsEvents.setMaxListeners(50);
 
-// `warn` defaults to false so the public `getSettings()` read path stays
-// silent (a single polluted file would otherwise spam logs on every GET).
-// `updateSettings` passes `warn: true` because it's part of a write/heal
-// path — the operator should see the one-line "stripping…" notice that
-// announces the auto-heal write that's about to happen.
-const load = async ({ warn = false } = {}) => {
+// Reads are always silent — a polluted file would otherwise spam logs on
+// every GET /api/settings. The single source of warning is `save()`, which
+// fires exactly once per successful write (after the writeFile resolves),
+// covering both auto-heal of disk pollution and rejected patch pollution.
+const loadRaw = async () => {
   const raw = await readFile(SETTINGS_FILE, 'utf-8').catch(() => '{}');
-  return stripStoreKeys(safeJSONParse(raw, {}), { warn });
+  return safeJSONParse(raw, {});
 };
 
 const save = async (settings) => {
-  const cleaned = stripStoreKeys(settings, { warn: true });
+  const cleaned = stripStoreKeys(settings);
   await writeFile(SETTINGS_FILE, JSON.stringify(cleaned, null, 2) + '\n');
+  // Warn AFTER the successful write so a thrown writeFile never produces
+  // a misleading "stripped" log line for a write that didn't happen.
+  if (isPlainObject(settings)) {
+    const polluted = Object.keys(settings).filter((k) => MORTALLOOM_STORE_KEYS.has(k));
+    if (polluted.length > 0) {
+      console.warn(`⚠️ settings.json: stripped MortalLoom store keys: ${polluted.join(', ')}`);
+    }
+  }
   settingsEvents.emit('settings:updated', cleaned);
+  return cleaned;
 };
 
-export const getSettings = () => load();
+export const getSettings = async () => stripStoreKeys(await loadRaw());
 export const saveSettings = save;
 
+// Merge against the unstripped on-disk snapshot so save() sees every
+// MortalLoom store key in one place — guaranteeing exactly one warning
+// per updateSettings call, only when the write succeeds.
 export const updateSettings = async (patch) => {
-  const current = await load({ warn: true });
-  const merged = { ...current, ...stripStoreKeys(patch, { warn: true }) };
-  await save(merged);
-  return merged;
+  const raw = await loadRaw();
+  const incoming = isPlainObject(patch) ? patch : {};
+  const merged = { ...raw, ...incoming };
+  return save(merged);
 };
