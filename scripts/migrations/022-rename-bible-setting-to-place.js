@@ -88,12 +88,12 @@ const OLD_PROMPTS_DEFERENCE_MD5 = '218f0e85643609ed85a12b1ccc7b5a8d';
 const NEW_PROMPTS_DEFERENCE_MD5 = 'a4681348c27776e414acf6e0be566a99';
 
 // Each template has a sample twin at the same relative path under
-// `data.sample/…`. When an installed copy still hashes to the pre-rename
+// `data.reference/…`. When an installed copy still hashes to the pre-rename
 // baseline (`oldHash`), the migration prefers copying the bundled
-// `data.sample` file verbatim — that picks up *every* string the rename
+// `data.reference` file verbatim — that picks up *every* string the rename
 // touched (`## Existing settings` → `## Existing places`, etc.) without
 // enumerating the full prose diff. If the bundled sample is missing
-// (distributions that strip `data.sample/`, or tests that point `rootDir`
+// (distributions that strip `data.reference/`, or tests that point `rootDir`
 // at a relocated data tree), we fall back to a surgical replace covering
 // the rename-critical substitutions so the prompt's runtime contract
 // (`{{existingPlacesJson}}` envelope variable + `"places":` LLM output
@@ -117,13 +117,13 @@ const RENAME_SUBSTITUTIONS = [
 const PROMPT_TEMPLATES = [
   {
     rel: 'data/prompts/stages/writers-room-places.md',
-    sampleRel: 'data.sample/prompts/stages/writers-room-places.md',
+    sampleRel: 'data.reference/prompts/stages/writers-room-places.md',
     oldHash: OLD_PROMPTS_PLACES_MD5,
     newHash: NEW_PROMPTS_PLACES_MD5,
   },
   {
     rel: 'data/prompts/_partials/bible-deference.md',
-    sampleRel: 'data.sample/prompts/_partials/bible-deference.md',
+    sampleRel: 'data.reference/prompts/_partials/bible-deference.md',
     oldHash: OLD_PROMPTS_DEFERENCE_MD5,
     newHash: NEW_PROMPTS_DEFERENCE_MD5,
   },
@@ -267,12 +267,12 @@ const migratePromptTemplate = async (rootDir, { rel, sampleRel, oldHash, newHash
     return;
   }
   if (currentHash !== oldHash) {
-    console.log(`⚠️ ${rel}: customized (hash ${currentHash.slice(0, 8)}) — not auto-updating. Diff against data.sample to pick up the {{existingPlacesJson}} rename.`);
+    console.log(`⚠️ ${rel}: customized (hash ${currentHash.slice(0, 8)}) — not auto-updating. Diff against data.reference to pick up the {{existingPlacesJson}} rename.`);
     return;
   }
-  // Pre-rename baseline. Prefer copying the bundled `data.sample` twin
+  // Pre-rename baseline. Prefer copying the bundled `data.reference` twin
   // verbatim — it carries every prose substitution the rename touched.
-  // When `data.sample` is missing (stripped distribution, relocated
+  // When `data.reference` is missing (stripped distribution, relocated
   // rootDir), fall back to a surgical replace covering the
   // rename-critical substitutions enumerated in RENAME_SUBSTITUTIONS,
   // so the prompt's runtime contract still works even if some prose
@@ -286,7 +286,7 @@ const migratePromptTemplate = async (rootDir, { rel, sampleRel, oldHash, newHash
   });
   if (sample != null) {
     await writeFile(path, sample);
-    console.log(`📝 ${rel}: replaced pre-rename shipped default with current data.sample bundle`);
+    console.log(`📝 ${rel}: replaced pre-rename shipped default with current data.reference bundle`);
     return;
   }
   const next = RENAME_SUBSTITUTIONS.reduce((acc, [from, to]) => acc.replace(from, to), raw);

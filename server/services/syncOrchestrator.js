@@ -11,7 +11,7 @@ import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, DEFAULT_SYNC_CATEGORIES } from './instances.js';
+import { getPeers, DEFAULT_SYNC_CATEGORIES, updatePeer } from './instances.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -262,15 +262,82 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums)
   const snapshot = await fetchPeer(peer, `/api/sync/${category}/snapshot`);
   if (!snapshot?.data) return { totalApplied: 0, checksum: null };
 
-  const result = await dataSync.applyRemote(category, snapshot.data);
+  // Forward the sender's portosMeta envelope so applyRemote can run the
+  // schema-version gate BEFORE merging. A blocked-by-schema result returns
+  // applied=false + the diff payload — we persist the gap on the peer record
+  // (instances.json) so the Instances UI surfaces "Peer X is on PortOS vN,
+  // can't sync universes" and the user knows what to do.
+  const result = await dataSync.applyRemote(category, snapshot.data, {
+    portosMeta: snapshot.portosMeta,
+  });
+  if (result.blockedBySchema) {
+    await recordPeerSchemaGap(peerId, category, result.blockedBySchema)
+      .catch((err) => console.log(`⚠️ syncOrchestrator: persist schema gap failed: ${err.message}`));
+    // Don't advance the cached checksum — when the user upgrades, the
+    // category will look "changed" again and we'll re-try the apply.
+    return { totalApplied: 0, checksum: null, blockedBySchema: result.blockedBySchema };
+  }
 
   // After character sync, fetch avatar image if we don't have it locally
   if (category === 'character' && snapshot.data?.avatarPath) {
     await syncImageFromPeer(peer, snapshot.data.avatarPath);
   }
 
+  // Clear any prior schema-version gap on this (peer, category) — sender
+  // either upgraded or the older check was transient. Best-effort; failures
+  // don't fail the apply (we already merged successfully).
+  await clearPeerSchemaGap(peerId, category)
+    .catch((err) => console.log(`⚠️ syncOrchestrator: clear schema gap failed: ${err.message}`));
+
   return { totalApplied: result.applied ? result.count : 0, checksum: snapshot.checksum };
 }
+
+/**
+ * Persist a per-(peer, category) schema-version gap on the peer record.
+ * Stored under `peer.schemaGaps[category]` as `{ detectedAt, ahead, behind,
+ * senderPortosVersion }`. The Instances UI reads it to render a "Peer is
+ * on PortOS vN, you can't sync universes until they upgrade" badge.
+ *
+ * NOTE: a future PR will move this to a dedicated peer-status file so
+ * peers.json stays a pure config surface. For now we co-locate on the peer
+ * record because that's the entity the Instances page already renders.
+ */
+// Look up the local peer row by remote instanceId (the only id we have at
+// the orchestrator level) and resolve to the LOCAL `peer.id` that updatePeer
+// keys by. Passing `peer.instanceId` straight to updatePeer would silently
+// return null because instances.js matches on `p.id === id`.
+async function recordPeerSchemaGap(peerId, category, gap) {
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find((p) => p.instanceId === peerId);
+  if (!peer) return;
+  const existingGaps = isPlainObjectShallow(peer.schemaGaps) ? peer.schemaGaps : {};
+  await updatePeer(peer.id, {
+    schemaGaps: {
+      ...existingGaps,
+      [category]: {
+        detectedAt: new Date().toISOString(),
+        ahead: Array.isArray(gap.ahead) ? gap.ahead : [],
+        behind: Array.isArray(gap.behind) ? gap.behind : [],
+        senderPortosVersion: typeof gap.senderPortosVersion === 'string' ? gap.senderPortosVersion : null,
+      },
+    },
+  });
+}
+
+async function clearPeerSchemaGap(peerId, category) {
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find((p) => p.instanceId === peerId);
+  if (!peer) return;
+  const existingGaps = isPlainObjectShallow(peer.schemaGaps) ? peer.schemaGaps : null;
+  if (!existingGaps || !(category in existingGaps)) return;
+  const next = { ...existingGaps };
+  delete next[category];
+  await updatePeer(peer.id, {
+    schemaGaps: Object.keys(next).length > 0 ? next : null,
+  });
+}
+
+const isPlainObjectShallow = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
  * For a given peerId, return the set of `dataSync` category names whose

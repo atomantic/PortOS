@@ -308,7 +308,7 @@ UI contract.
 Add `server/services/writersRoom/evaluator.js`.
 
 Use existing provider and prompt infrastructure instead of hardcoding prompts in
-the route. Recommended prompt stages under `data.sample/prompts/stages/`:
+the route. Recommended prompt stages under `data.reference/prompts/stages/`:
 
 - `writers-room-summary.md`
 - `writers-room-characters.md`

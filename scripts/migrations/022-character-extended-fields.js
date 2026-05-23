@@ -9,7 +9,7 @@
  * git-pull + pm2 restart, without re-running `npm run install:all` /
  * `scripts/setup-data.js`, still has everything the runtime expects):
  *
- *  1. Copies `data.sample/prompts/stages/universe-character-expand.md` →
+ *  1. Copies `data.reference/prompts/stages/universe-character-expand.md` →
  *     `data/prompts/stages/universe-character-expand.md` for the
  *     `expandUniverseCharacter` LLM stage.
  *  2. Merges the `universe-character-expand` entry into the installed
@@ -39,7 +39,7 @@ export default {
       const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
       await mkdir(stagesDir, { recursive: true });
       const dataPath = join(stagesDir, PROMPT_FILENAME);
-      const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', PROMPT_FILENAME);
+      const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', PROMPT_FILENAME);
       const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
       if (exists) {
         console.log(`📝 ${PROMPT_FILENAME}: already present`);
@@ -62,10 +62,10 @@ export default {
     //    universe-character-expand stage and the expand route 500s.
     {
       const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
-      const sampleConfigPath = join(rootDir, 'data.sample', 'prompts', 'stage-config.json');
+      const sampleConfigPath = join(rootDir, 'data.reference', 'prompts', 'stage-config.json');
       const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
       if (!sampleConfigExists) {
-        console.warn(`⚠️ universe-character-expand: data.sample stage-config.json missing — skipping config write`);
+        console.warn(`⚠️ universe-character-expand: data.reference stage-config.json missing — skipping config write`);
         return;
       }
       try {

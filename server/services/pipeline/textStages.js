@@ -3,8 +3,8 @@
  *
  * Runs a single text stage (idea / prose / comicScript / teleplay) against the
  * active LLM provider. Builds the prompt via promptService.buildPrompt — each
- * stage has its own template in data.sample/prompts/stages/pipeline-*.md and
- * is registered in data.sample/prompts/stage-config.json.
+ * stage has its own template in data.reference/prompts/stages/pipeline-*.md and
+ * is registered in data.reference/prompts/stage-config.json.
  *
  * The render context includes the series bible (logline, premise, characters,
  * styleNotes) plus every *prior* stage's output, so downstream stages can

@@ -46,7 +46,7 @@
 
 **Data Persistence:**
 - Purpose: Store application state in JSON files
-- Location: `data/` directory (runtime), `data.sample/` (template)
+- Location: `data/` directory (runtime), `data.reference/` (template)
 - Contains: apps.json, providers.json, runs/, prompts/, cos/, agents/, brain/, digital-twin/, meatspace/
 - Accessed by: Services via fileUtils and custom loaders
 

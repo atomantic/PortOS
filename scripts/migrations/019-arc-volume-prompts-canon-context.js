@@ -68,7 +68,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'arc-prompt canon-context',
   customizedHint: (filename) =>
     `   To pick up {{worldCanonText}} manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and add the new "World canon" block in the same position as in the sample template.`,
@@ -76,7 +76,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
     `⚠️  ${count} arc/volume prompt(s) could not be auto-updated because they were customized.\n` +
     `   The {{worldCanonText}} block will not render character names in arc-overview/\n` +
     `   arc-verify/arc-resolve/volume-verify until the files are merged manually. See\n` +
-    `   data.sample/prompts/stages/.`,
+    `   data.reference/prompts/stages/.`,
 });
 
 export { applyMigration };

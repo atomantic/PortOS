@@ -3,7 +3,7 @@
  * variables.
  *
  * `pipeline-tv-script.md` was retired (renamed to `pipeline-teleplay.md`) so
- * it has no `data.sample/` counterpart; the standard fixture loop in
+ * it has no `data.reference/` counterpart; the standard fixture loop in
  * `_testHelpers.js` reads the live sample to seed each fixture, which would
  * ENOENT on the retired entry. Filter it out of the test-facing maps — the
  * retire-on-missing branch is exercised end-to-end by `scripts/run-migrations.js`

@@ -471,7 +471,7 @@ async function initJobs() {
 
 async function syncSkillTemplatesFromSample() {
   if (!PATHS.root) return
-  const sampleDir = join(PATHS.root, 'data.sample', 'prompts', 'skills', 'jobs')
+  const sampleDir = join(PATHS.root, 'data.reference', 'prompts', 'skills', 'jobs')
   if (!existsSync(sampleDir)) return
   await ensureDir(JOBS_SKILLS_DIR)
   const shippedDir = join(JOBS_SKILLS_DIR, '.shipped')
@@ -510,7 +510,7 @@ async function syncSkillTemplatesFromSample() {
       // history. We choose preservation: the user's file (whether intentional
       // customization or a stale shipped copy) stays in place. Users who want the
       // new template can delete the file and restart so the seeder re-creates it
-      // from data.sample/.
+      // from data.reference/.
       console.log(`ℹ️ Preserving user-modified skill template: ${file}`)
     }
   }

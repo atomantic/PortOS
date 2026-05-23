@@ -1425,4 +1425,215 @@ describe('peerSync', () => {
       expect(all).toHaveLength(1);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // SCHEMA-VERSION GATING — sender side (handle 409 / cooldown / clear)
+  // + receiver side (reject when sender ahead / pass through legacy + behind)
+  // -------------------------------------------------------------------------
+  describe('schema-version gating', () => {
+    beforeEach(() => {
+      // Earlier tests in this file accumulate calls on the merge mocks (the
+      // file's outer beforeEach does mockResolvedValue but not mockClear).
+      // Clear history so `expect(...).not.toHaveBeenCalled()` reflects only
+      // calls made in the current test.
+      vi.mocked(mergeUniversesFromSync).mockClear();
+      vi.mocked(mergeSeriesFromSync).mockClear();
+      vi.mocked(mergeIssuesFromSync).mockClear();
+    });
+
+    describe('receiver — applyIncomingPush', () => {
+      it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
+        // Local code is at universes:5 (see server/lib/schemaVersions.js).
+        // A push from a sender on universes:6 must NOT touch local state.
+        await expect(applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+        })).rejects.toMatchObject({
+          code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+          details: {
+            ahead: [{ category: 'universes', senderV: 6, receiverV: 5 }],
+            senderPortosVersion: '99.0.0',
+          },
+        });
+        // mergeUniversesFromSync MUST NOT have been called — the gate runs
+        // before the merge dispatch.
+        expect(mergeUniversesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('passes through when sender schemaVersions are EQUAL to local', async () => {
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 5 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1' }),
+        ]);
+      });
+
+      it('passes through when sender is BEHIND local (sanitizer handles the backfill)', async () => {
+        // Older peer pushes a v4-shape universe. Receiver is on v5 but the
+        // record-shape sanitizer can backfill, so we apply rather than reject.
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 4 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1' }),
+        ]);
+      });
+
+      it('passes through legacy peers that send NO portosMeta at all', async () => {
+        // Backwards compat — pre-this-PR peers don't know to include the
+        // envelope. The comparator treats absent sender versions as 0, which
+        // either matches (receiver also 0 for the category) or surfaces as
+        // "behind" (which we DON'T gate on).
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalled();
+      });
+    });
+
+    describe('sender — pushRecordToPeer', () => {
+      it('stamps portosMeta on the outbound push payload', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+        await pushRecordToPeer({
+          id: 's-meta', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        });
+        const call = vi.mocked(peerFetch).mock.calls.at(-1);
+        expect(call).toBeDefined();
+        const body = JSON.parse(call[1].body);
+        expect(body.portosMeta).toBeDefined();
+        expect(body.portosMeta.schemaVersions.universes).toBe(5);
+        expect(typeof body.portosMeta.portosVersion).toBe('string');
+      });
+
+      it('records a blockedBySchema marker on the subscription when the peer responds 409', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        // Receiver claims it's on universes:4 + PortOS 2.5.0; sender is at 5.
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: 'sender schema is ahead',
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: {
+              details: {
+                ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }],
+                behind: [],
+                senderPortosVersion: '2.5.0',
+                receiverSchemaVersions: { universes: 4 },
+              },
+            },
+          }),
+        });
+        // Subscribe first so we have a sub record to assert against.
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('peer-schema-behind');
+        expect(result.blockedBySchema).toBe(true);
+        // Block persisted on the subscription.
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeDefined();
+        expect(after.blockedBySchema.ahead).toEqual([{ category: 'universes', senderV: 5, receiverV: 4 }]);
+        expect(after.blockedBySchema.peerPortosVersion).toBe('2.5.0');
+        expect(typeof after.blockedBySchema.detectedAt).toBe('string');
+        // lastPushedHash must NOT have advanced — the record didn't land.
+        expect(after.lastPushedHash).toBeFalsy();
+      });
+
+      it('short-circuits subsequent pushes for blocked subs within the cooldown window', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        // First push gets the 409.
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: {
+              details: {
+                ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }],
+                senderPortosVersion: '2.5.0',
+              },
+            },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const fetchCallsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        // Re-load the sub with the persisted block, then push again with NO
+        // bypass — should not hit the network.
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        const result = await pushRecordToPeer(blocked);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('peer-schema-behind-cooldown');
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(fetchCallsAfterFirst);
+      });
+
+      it('bypassSchemaCooldown=true re-probes regardless of recent block', async () => {
+        // Simulates the peer:online path: retryPendingPushesForPeer passes
+        // bypassSchemaCooldown so the next probe actually hits the wire even
+        // if a recent 409 set the cooldown.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false, status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: { details: { ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }] } },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const callsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        await pushRecordToPeer(blocked, { bypassSchemaCooldown: true });
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(callsAfterFirst + 1);
+      });
+
+      it('clears blockedBySchema once a subsequent push succeeds (peer upgraded)', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        // First push: 409.
+        vi.mocked(peerFetch).mockResolvedValueOnce({
+          ok: false, status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: { details: { ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }], senderPortosVersion: '2.5.0' } },
+          }),
+        });
+        // Second push: peer upgraded, accepts.
+        vi.mocked(peerFetch).mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        expect((await findPeerSubscription('peer-a', 'universe', 'u1')).blockedBySchema).toBeDefined();
+        // Bypass cooldown to simulate a peer:online retry.
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        await pushRecordToPeer(blocked, { bypassSchemaCooldown: true });
+        const cleared = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(cleared.blockedBySchema).toBeUndefined();
+        expect(cleared.lastPushedHash).toBeTruthy(); // succeeded → hash recorded
+      });
+    });
+  });
 });

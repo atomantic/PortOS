@@ -47,6 +47,12 @@ import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { recordEvents } from './recordEvents.js';
+import {
+  PORTOS_SCHEMA_VERSIONS,
+  buildPortosMeta,
+  compareSchemaVersions,
+  formatVersionGap,
+} from '../../lib/schemaVersions.js';
 import { getInstanceId, getPeers, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { instanceEvents } from '../instanceEvents.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
@@ -77,7 +83,18 @@ peerSyncEvents.setMaxListeners(100);
 
 export const ERR_NOT_FOUND = 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND';
 export const ERR_VALIDATION = 'PEER_SYNC_SUBSCRIPTION_VALIDATION';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
+// Receiver-side rejection — the incoming payload's `portosMeta.schemaVersions`
+// is ahead of our local PORTOS_SCHEMA_VERSIONS for one or more categories,
+// so applying the record would corrupt local state. The HTTP route maps this
+// to 409 + a structured body { ahead, behind, senderPortosVersion } so the
+// sender can persist the gap on the subscription and surface it in the UI.
+export const ERR_SCHEMA_VERSION_AHEAD = 'PEER_SYNC_SCHEMA_VERSION_AHEAD';
+const makeErr = (message, code, details = null) => {
+  const err = new Error(message);
+  err.code = code;
+  if (details) err.details = details;
+  return err;
+};
 
 const STATE_PATH = () => join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 const DEBOUNCE_MS = 3000;
@@ -582,7 +599,14 @@ function sanitizeAssetFilename(name) {
  * atomically per merge cycle. Issue records are filtered through
  * `sanitizeRecordForWire('issue', ...)` too.
  */
-export async function pushRecordToPeer(sub) {
+// Cool-down between re-probes when a peer has rejected our push for schema-
+// version reasons. Without it, every local edit would HTTP-roundtrip a 409
+// while the peer is on the older PortOS, spamming the network. The retry
+// loop on `peer:online` bypasses this — that's the canonical "did the peer
+// upgrade?" probe point.
+const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
+
+export async function pushRecordToPeer(sub, options = {}) {
   if (
     !isPlainObject(sub)
     || !isNonEmptyStr(sub.peerId)
@@ -590,6 +614,18 @@ export async function pushRecordToPeer(sub) {
     || !isNonEmptyStr(sub.recordId)
   ) {
     return { pushed: false, reason: 'invalid-subscription' };
+  }
+  // SCHEMA-BLOCK COOLDOWN — if the peer rejected our last push for being
+  // schema-ahead, hold off re-probing on every local edit. Re-probes happen
+  // on the next `peer:online` (where `retryPendingPushesForPeer` passes
+  // `bypassSchemaCooldown: true`) or after the cooldown elapses.
+  if (sub.blockedBySchema && !options.bypassSchemaCooldown) {
+    const detectedAtMs = Date.parse(sub.blockedBySchema.detectedAt || '');
+    const stillCooling = Number.isFinite(detectedAtMs)
+      && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
+    if (stillCooling) {
+      return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
+    }
   }
   const peer = await findPeerById(sub.peerId);
   if (!peer) return { pushed: false, reason: 'peer-not-found' };
@@ -647,10 +683,44 @@ export async function pushRecordToPeer(sub) {
     console.log(`⚠️ peerSync: push to ${peer.name || peer.instanceId} failed: ${err.message}`);
     return null;
   }).finally(() => clearTimeout(timeoutId));
+  // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
+  // PortOS and can't parse our newer storage layout. Persist the gap on the
+  // subscription so the Instances UI can surface "Peer X needs to update
+  // PortOS to receive your updates" — and short-circuit retries to that
+  // peer for the affected record kind. We don't tear down the subscription;
+  // when the peer upgrades and reconnects, `peer:online` will re-fire
+  // pushRecordToPeer and the next response either clears the block (success)
+  // or refreshes the gap info (still behind).
+  if (res && res.status === 409) {
+    const body = await res.json().catch(() => null);
+    if (body?.code === ERR_SCHEMA_VERSION_AHEAD) {
+      // The global error handler nests our `err.details` under `context.details`
+      // (see server/routes/peerSync.js `mapAndRethrow`), so reach in two levels
+      // to get the original payload from the peerSync service.
+      const details = isPlainObject(body.context?.details) ? body.context.details : {};
+      await persistSchemaVersionBlock(sub.id, {
+        ahead: Array.isArray(details.ahead) ? details.ahead : [],
+        behind: Array.isArray(details.behind) ? details.behind : [],
+        peerPortosVersion: typeof details.senderPortosVersion === 'string' ? details.senderPortosVersion : null,
+        peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
+      });
+      console.warn(
+        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
+        `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead: details.ahead || [], behind: details.behind || [] })}`,
+      );
+      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
+    }
+  }
   if (!res || !res.ok) {
     return { pushed: false, reason: res ? `http-${res.status}` : 'network' };
   }
   const body = await res.json().catch(() => null);
+
+  // Push succeeded — clear any prior schema-version block so the sub goes
+  // back to normal. Either the peer upgraded or the gap was transient.
+  if (sub.blockedBySchema) {
+    await clearSchemaVersionBlock(sub.id);
+  }
 
   // Persist push metadata to peer_subscriptions.json, then advance the
   // tombstone cursor in peer_tombstone_cursors.json if the receiver acked
@@ -694,11 +764,55 @@ async function persistPushSuccess(subId, hash) {
     sub.lastPushedAt = now;
     sub.lastPushedHash = hash;
     sub.updatedAt = now;
+    // A successful push (or even a no-asset-stranded push) clears any prior
+    // schema-version block — the peer can receive again.
+    if (sub.blockedBySchema) delete sub.blockedBySchema;
     await writeState(state);
   });
 }
 
+/**
+ * Persist a `blockedBySchema` field on the subscription so subsequent pushes
+ * short-circuit until the peer upgrades. Stored on the same record as
+ * `lastPushedAt` / `lastPushedHash` so the Instances UI can read everything
+ * from a single subscription fetch. We capture both directions of the gap
+ * (`ahead` = what the PEER needs to gain to receive our pushes; `behind` =
+ * what the peer has that we don't — informational) along with the peer's
+ * PortOS version string for the user-visible message.
+ */
+async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions }) {
+  await withStateLock(async () => {
+    const state = await readState();
+    const sub = state.subscriptions.find((s) => s.id === subId);
+    if (!sub) return;
+    const now = new Date().toISOString();
+    sub.blockedBySchema = {
+      detectedAt: now,
+      ahead: Array.isArray(ahead) ? ahead : [],
+      behind: Array.isArray(behind) ? behind : [],
+      peerPortosVersion: peerPortosVersion || null,
+      peerSchemaVersions: peerSchemaVersions || null,
+    };
+    sub.updatedAt = now;
+    await writeState(state);
+  });
+  peerSyncEvents.emit('subscription-blocked', { subId });
+}
+
+async function clearSchemaVersionBlock(subId) {
+  await withStateLock(async () => {
+    const state = await readState();
+    const sub = state.subscriptions.find((s) => s.id === subId);
+    if (!sub || !sub.blockedBySchema) return;
+    delete sub.blockedBySchema;
+    sub.updatedAt = new Date().toISOString();
+    await writeState(state);
+  });
+  peerSyncEvents.emit('subscription-unblocked', { subId });
+}
+
 async function buildPushPayload(sub, sourceInstanceId) {
+  const portosMeta = await buildPortosMeta();
   if (sub.recordKind === 'universe') {
     const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
     if (!record) return null;
@@ -730,6 +844,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       record: sanitized,
       assetManifest,
       sourceInstanceId,
+      portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
     };
   }
@@ -782,6 +897,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       issues: sanitizedIssues,
       assetManifest,
       sourceInstanceId,
+      portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
     };
   }
@@ -909,18 +1025,60 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, assetManifest, sourceInstanceId } = payload;
+  const { kind, record, issues, linkedCollection, assetManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
-  // sourceInstanceId is the key we hang the per-peer tombstone cursor on;
-  // empty / "unknown" would poison the cursor table with a synthetic entry
-  // that never gets cleaned up.
+  // Identity + record-shape checks happen BEFORE the schema-version gate.
+  // The gate's 409 body includes `receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS`
+  // — a (mild) version-fingerprint disclosure — and we don't want to surface
+  // it to callers that haven't even identified themselves correctly. Move
+  // the cheap shape validation first so unidentified or malformed requests
+  // get a clean 400 with no version information.
   if (!isNonEmptyStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
     throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
   }
   if (!isPlainObject(record) || !isNonEmptyStr(record.id)) {
     throw makeErr('record must be an object with a string id', ERR_VALIDATION);
+  }
+
+  // SCHEMA-VERSION GATE — runs BEFORE any merge so a sender on a newer
+  // storage layout can't corrupt local state. Legacy senders without
+  // `portosMeta` pass through (comparator treats absent as zero/no-contract;
+  // their record went through the same v0 → vN sanitizer chain we already
+  // run). When the sender is AHEAD on any category, we reject with a
+  // structured error the route layer maps to HTTP 409 + body so the sender
+  // can persist the gap on the subscription and surface it in the UI.
+  //
+  // We do NOT reject on "sender behind" here — the sanitizer's existing
+  // backfill chain handles older inputs in-place. A future forward-only
+  // contract (e.g. a required field that the sanitizer can't synthesize)
+  // can opt into a behind-gate; the comparator already surfaces both
+  // directions for that purpose.
+  const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
+  const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
+  const versionDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  // Tombstone payloads carry only id+deleted+deletedAt+updatedAt — fields
+  // that exist at EVERY schema version and cannot corrupt local state. Gating
+  // them on the schema-version comparator would strand federated deletes
+  // whenever any peer upgrades faster than another (sender writes
+  // blockedBySchema → edit-triggered pushes go into cooldown → delete never
+  // reaches receivers until both peers reconnect AND the receiver upgrades).
+  // Exempt tombstones from the gate so soft-deletes always converge.
+  if (versionDiff.ahead.length > 0 && record.deleted !== true) {
+    console.warn(
+      `⚠️ peerSync: rejecting push from ${sourceInstanceId} — ${formatVersionGap(versionDiff)} (sender PortOS ${senderPortosVersion || 'unknown'})`,
+    );
+    throw makeErr(
+      `sender's schema is ahead — receiver cannot apply (${formatVersionGap(versionDiff)})`,
+      ERR_SCHEMA_VERSION_AHEAD,
+      {
+        ahead: versionDiff.ahead,
+        behind: versionDiff.behind,
+        senderPortosVersion,
+        receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS,
+      },
+    );
   }
 
   // Look up the LOCAL record state BEFORE merging so we can detect the
@@ -1404,7 +1562,10 @@ export async function retryPendingPushesForPeer(peerId) {
   // "walked" the sub but never pushed it.
   let pushed = 0;
   for (const sub of subs) {
-    const result = await pushRecordToPeer(sub).catch((err) => {
+    // peer:online fired — re-probe schema-blocked subs immediately (peer
+    // may have upgraded since the last 409). Edit-triggered pushes still
+    // respect the cooldown.
+    const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
       console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
       return null;
     });

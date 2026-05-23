@@ -28,7 +28,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'idea-expansion context',
   customizedHint: (filename) =>
     `   To pick up the new arc / volume / neighbor-issue context blocks, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and merge the {{#arc}}, {{#volume}}, {{#priorIssue}}, {{#nextIssue}},\n` +

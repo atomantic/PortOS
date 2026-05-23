@@ -36,6 +36,7 @@ import {
   applyIncomingPush,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
+  ERR_SCHEMA_VERSION_AHEAD,
 } from '../services/sharing/peerSync.js';
 
 const router = Router();
@@ -43,12 +44,26 @@ const router = Router();
 const PEER_SYNC_ERROR_STATUS = {
   [ERR_NOT_FOUND]: 404,
   [ERR_VALIDATION]: 400,
+  // 409 Conflict — receiver's schema is behind the sender's; sender must
+  // wait for the receiver to upgrade PortOS. The body's `details` carries
+  // the ahead/behind diff + the receiver's schemaVersions so the sender
+  // can surface a precise "Peer X needs to update PortOS" message and
+  // pause retries for that subscription.
+  [ERR_SCHEMA_VERSION_AHEAD]: 409,
 };
 
 function mapAndRethrow(err) {
   const status = PEER_SYNC_ERROR_STATUS[err?.code];
   if (status) {
-    throw new ServerError(err.message, { status, code: err.code });
+    // Preserve `err.details` (set by `makeErr` in peerSync.js for the
+    // schema-ahead path) — surface it as the ServerError's `context` so the
+    // global error handler includes it in the JSON response body. Sender-
+    // side parses `body.context` for `ahead` / `behind` / `senderPortosVersion`.
+    throw new ServerError(err.message, {
+      status,
+      code: err.code,
+      context: err.details ? { details: err.details } : undefined,
+    });
   }
   throw err;
 }

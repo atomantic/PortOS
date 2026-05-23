@@ -4,7 +4,7 @@
  * Commit d802eb18 ("feat(pipeline): issue back covers + volume covers +
  * trade-paperback PDF") shipped the per-season cover-concept LLM step
  * (`arcPlanner.generateVolumeCoverConcepts` → `runStagedLLM('pipeline-volume-cover-concepts', …)`)
- * and added `data.sample/prompts/stages/pipeline-volume-cover-concepts.md`
+ * and added `data.reference/prompts/stages/pipeline-volume-cover-concepts.md`
  * but forgot two things existing installs need:
  *
  *   1. A `stage-config.json` entry — `setup-data.js` only merges
@@ -31,7 +31,7 @@ export default {
     await mkdir(stagesDir, { recursive: true });
 
     const dataPath = join(stagesDir, FILENAME);
-    const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', FILENAME);
+    const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', FILENAME);
 
     const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
     if (exists) {
@@ -51,10 +51,10 @@ export default {
     }
 
     const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
-    const sampleConfigPath = join(rootDir, 'data.sample', 'prompts', 'stage-config.json');
+    const sampleConfigPath = join(rootDir, 'data.reference', 'prompts', 'stage-config.json');
     const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
     if (!sampleConfigExists) {
-      console.warn('⚠️  volume-cover-concepts: data.sample stage-config.json missing — cannot resolve entry; skipping config write');
+      console.warn('⚠️  volume-cover-concepts: data.reference stage-config.json missing — cannot resolve entry; skipping config write');
       return;
     }
     try {

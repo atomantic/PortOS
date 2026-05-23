@@ -2,7 +2,7 @@
  * Seed the `pipeline-comic-cover-concepts` stage into existing installs.
  *
  * Mirrors `017-volume-cover-concepts-stage.js`: copies the `.md` template
- * from `data.sample/prompts/stages/` and merges the stage-config entry
+ * from `data.reference/prompts/stages/` and merges the stage-config entry
  * into `data/prompts/stage-config.json` so upgrades that skip re-running
  * `setup-data.js` still get the new per-issue cover-concept LLM step.
  */
@@ -19,7 +19,7 @@ export default {
     await mkdir(stagesDir, { recursive: true });
 
     const dataPath = join(stagesDir, FILENAME);
-    const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', FILENAME);
+    const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', FILENAME);
 
     const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
     if (exists) {
@@ -39,10 +39,10 @@ export default {
     }
 
     const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
-    const sampleConfigPath = join(rootDir, 'data.sample', 'prompts', 'stage-config.json');
+    const sampleConfigPath = join(rootDir, 'data.reference', 'prompts', 'stage-config.json');
     const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
     if (!sampleConfigExists) {
-      console.warn('⚠️  comic-cover-concepts: data.sample stage-config.json missing — cannot resolve entry; skipping config write');
+      console.warn('⚠️  comic-cover-concepts: data.reference stage-config.json missing — cannot resolve entry; skipping config write');
       return;
     }
     try {

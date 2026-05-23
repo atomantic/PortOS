@@ -68,7 +68,7 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it('upgrades the data.sample 4-item legacy shape to the new trio + opus-4-7 default', async () => {
+  it('upgrades the data.reference 4-item legacy shape to the new trio + opus-4-7 default', async () => {
     writeJson(providersPath, { providers: { 'claude-code': dataSampleLegacy() } });
 
     await migration.up({ rootDir });

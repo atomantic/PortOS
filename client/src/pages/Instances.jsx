@@ -18,6 +18,7 @@ import {
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
+import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import { timeAgo } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
@@ -981,6 +982,8 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
         </div>
       )}
 
+      <SchemaGapBadge peer={peer} peerSubs={peerSubs} />
+
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
       <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} />
@@ -1026,10 +1029,20 @@ export default function Instances() {
       setPeers(updatedPeers);
     };
     socket.on('instances:peers:updated', handlePeersUpdated);
+    // Per-record peer-sync subscription blocked / unblocked → re-fetch so
+    // the SchemaGapBadge picks up the new `blockedBySchema` field. The server
+    // mutates the subscription state directly; the only cross-tab signal is
+    // the socket event, so we refetch peers + their sub lists. Cheap because
+    // it's already throttled by the user's edit cadence.
+    const handleSchemaSubChange = () => { fetchData(); };
+    socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
+    socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
 
     return () => {
       socket.emit('instances:unsubscribe');
       socket.off('instances:peers:updated', handlePeersUpdated);
+      socket.off('peerSync:subscription-blocked', handleSchemaSubChange);
+      socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
     };
   }, [fetchData]);
 

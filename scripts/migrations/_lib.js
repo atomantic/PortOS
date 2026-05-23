@@ -31,7 +31,7 @@ export const md5 = (str) => {
  *
  * - `createIfMissing` — when the data-side file is absent, copy the sample
  *   file in. Used by migration 005, whose `pipeline-arc-resolve.md` may not
- *   have shipped in `data.sample/` yet at the time it was authored.
+ *   have shipped in `data.reference/` yet at the time it was authored.
  *
  * - `retireOnSampleMissing` — when the sample-side file is absent (the prompt
  *   was renamed or retired by a later commit), treat it as a soft delete:
@@ -51,7 +51,7 @@ export async function applyPromptReplaceMigration({
   retireOnSampleMissing = false,
 }) {
   const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
-  const sampleDir = join(rootDir, 'data.sample', 'prompts', 'stages');
+  const sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
 
   let updated = 0;
   let alreadyCurrent = 0;
@@ -105,7 +105,7 @@ export async function applyPromptReplaceMigration({
         } else {
           console.warn(
             `⚠️  ${label} ${filename} was renamed/retired upstream but your local copy has been customized.\n` +
-            `   Check data.sample/prompts/stages/ for the replacement file and merge any custom edits manually.`,
+            `   Check data.reference/prompts/stages/ for the replacement file and merge any custom edits manually.`,
           );
           skipped++;
         }

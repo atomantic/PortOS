@@ -33,7 +33,7 @@ export const ACCEPTED_OLD_MD5 = {
   ],
 };
 
-// New shipped hash — what data.sample carries post-migration.
+// New shipped hash — what data.reference carries post-migration.
 export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-resolve.md': '5b340885c6e8f8afc63424d6b5bc7eb7',
 };
@@ -44,7 +44,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'resolve-prompt',
   customizedHint: (filename) =>
     `   To pick up the new "anchor in per-episode synopses" guidance manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and add the new bullet 1 in the "How to resolve" list.`,
@@ -52,7 +52,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
     `⚠️  ${count} resolve prompt could not be auto-updated because it was customized.\n` +
     `   The auto-resolve pass will keep working but won't be explicitly told to anchor\n` +
     `   volume-synopsis edits in the per-episode \`synopsis\` entries from\n` +
-    `   \`seasonsTreeJson.episodes[].synopsis\`. See data.sample/prompts/stages/.`,
+    `   \`seasonsTreeJson.episodes[].synopsis\`. See data.reference/prompts/stages/.`,
 });
 
 export { applyMigration };

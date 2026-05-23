@@ -145,6 +145,7 @@ export function hasBeenProcessed(cursor, manifestFilename, manifestId = null) {
 export function buildManifest({
   kind, senderInstanceId, source, sourceBio, recordIds, assetRefs,
   bucketId, bucketName, note, producedByVersion, subscription, collection,
+  portosSchemaVersions,
 }) {
   if (!MANIFEST_KIND.includes(kind)) throw new Error(`buildManifest: invalid kind '${kind}'`);
   return {
@@ -152,6 +153,15 @@ export function buildManifest({
     schemaVersion: SHARING_SCHEMA_VERSION,
     sharingSchemaVersion: SHARING_SCHEMA_VERSION,
     producedByVersion: producedByVersion || 'unknown',
+    // Per-category storage layout versions the sender's code expected at
+    // export time. The importer compares against its own
+    // `PORTOS_SCHEMA_VERSIONS` and refuses to apply a manifest that's
+    // ahead — the user is told to upgrade PortOS before the import can
+    // proceed. Optional on the wire so legacy manifests (no field) still
+    // validate; absent treated as "no contract" by the comparator.
+    portosSchemaVersions: portosSchemaVersions && typeof portosSchemaVersions === 'object'
+      ? { ...portosSchemaVersions }
+      : null,
     createdAt: new Date().toISOString(),
     kind,                              // 'series' | 'universe' | 'media'
     subscription: subscription && subscription.recordKind && subscription.recordId

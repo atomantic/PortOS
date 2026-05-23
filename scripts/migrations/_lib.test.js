@@ -35,7 +35,7 @@ describe('applyPromptReplaceMigration opt-ins', () => {
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), 'migration-lib-'));
     stagesDir = join(rootDir, 'data', 'prompts', 'stages');
-    sampleDir = join(rootDir, 'data.sample', 'prompts', 'stages');
+    sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     mkdirSync(stagesDir, { recursive: true });
     mkdirSync(sampleDir, { recursive: true });
   });

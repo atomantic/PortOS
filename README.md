@@ -285,7 +285,7 @@ PortOS/
 ├── client/              # React + Vite frontend (Vite dev on :5554)
 ├── server/              # Express.js API (always serves on :5555)
 ├── data/                # Runtime data (apps, providers, history, brain, pipeline, …)
-├── data.sample/         # Sample configurations to copy on first install
+├── data.reference/         # Sample configurations to copy on first install
 ├── docs/                # Documentation and screenshots
 ├── lib/slashdo/         # Slashdo submodule (provides /do:* slash commands)
 ├── scripts/             # Setup, migration, and maintenance scripts

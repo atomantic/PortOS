@@ -10,7 +10,7 @@ const { ROOT } = vi.hoisted(() => {
   const { tmpdir } = require('os')
   const { join } = require('path')
   const root = mkdtempSync(join(tmpdir(), 'portos-sync-skill-'))
-  mkdirSync(join(root, 'data.sample', 'prompts', 'skills', 'jobs'), { recursive: true })
+  mkdirSync(join(root, 'data.reference', 'prompts', 'skills', 'jobs'), { recursive: true })
   mkdirSync(join(root, 'data', 'prompts', 'skills', 'jobs'), { recursive: true })
   return { ROOT: root }
 })
@@ -38,7 +38,7 @@ vi.mock('./eventScheduler.js', () => ({ parseCronToNextRun: vi.fn() }))
 
 import { syncSkillTemplatesFromSample } from './autonomousJobs.js'
 
-const SAMPLE_DIR = join(ROOT, 'data.sample', 'prompts', 'skills', 'jobs')
+const SAMPLE_DIR = join(ROOT, 'data.reference', 'prompts', 'skills', 'jobs')
 const DEST_DIR = join(ROOT, 'data', 'prompts', 'skills', 'jobs')
 const SHIPPED_DIR = join(DEST_DIR, '.shipped')
 

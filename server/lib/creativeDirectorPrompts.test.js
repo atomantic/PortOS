@@ -9,12 +9,12 @@ import { applyTemplate } from './promptTemplate.js';
 // mistyped section name, the test catches it.
 //
 // data/ is gitignored (populated on first boot via `npm run setup:data`),
-// so on a fresh CI checkout only data.sample/ exists. Prefer the runtime
+// so on a fresh CI checkout only data.reference/ exists. Prefer the runtime
 // copy (catches drift from local edits) and fall back to the committed
 // seed so CI works without running setup first.
 const __HERE = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_STAGES_DIR = join(__HERE, '..', '..', 'data', 'prompts', 'stages');
-const SAMPLE_STAGES_DIR = join(__HERE, '..', '..', 'data.sample', 'prompts', 'stages');
+const SAMPLE_STAGES_DIR = join(__HERE, '..', '..', 'data.reference', 'prompts', 'stages');
 const loadStage = async (stageName) => {
   const runtimePath = join(RUNTIME_STAGES_DIR, `${stageName}.md`);
   return readFile(runtimePath, 'utf-8').catch((err) => {

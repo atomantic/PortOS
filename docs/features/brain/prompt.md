@@ -65,7 +65,7 @@ Everything must work offline and be self-contained.
 - Use PortOS’s existing AI Provider/Model config + prompt templates system:
   - Default Brain to LM Studio with model `openai/gpt-oss-20b`.
   - Allow runtime override per request (provider/model).
-- Local persistence under **./data/brain/** (gitignored), with sample data under **./data.sample/brain/**.
+- Local persistence under **./data/brain/** (gitignored), with sample data under **./data.reference/brain/**.
 
 # 4) Data model (schemas + file layout)
 Use JSON Lines (preferred) for append-only audit and easy diffs. Keep records human-readable.
@@ -359,7 +359,7 @@ Include:
 - Add a small queue processor to retry classification when AI becomes available.
 
 # 12) Testing + sample data
-- Provide sample data under ./data.sample/brain to demo UI instantly.
+- Provide sample data under ./data.reference/brain to demo UI instantly.
 - Add minimal tests for:
   - capture flow creates inbox log always
   - confidence threshold gating
