@@ -7,11 +7,13 @@ const SETTINGS_FILE = join(PATHS.data, 'settings.json');
 
 // Keys that belong to the MortalLoom iCloud store (MortalLoom.json), NOT to
 // PortOS settings (data/settings.json). A historical bug or hand-edit can pollute
-// settings.json with these top-level arrays, which then bloats every
+// settings.json with these top-level arrays/objects, which then bloats every
 // `GET /api/settings` response and rides forward through every
 // `saveSettings({ ...current, x: y })` mutation. Strip them on both read and
 // write so the corruption auto-heals on the next save and can't propagate.
-// Keep this list in sync with ARRAY_KEYS in mortalLoomStore.js.
+// Superset of ARRAY_KEYS in mortalLoomStore.js — also includes the non-array
+// store objects `profile` and `genomeScanRecord` observed in the actual
+// corruption. Keep both sides in sync when MortalLoom adds new store keys.
 const MORTALLOOM_STORE_KEYS = new Set([
   'alcoholDrinks', 'alcoholPresets', 'bloodTests', 'bodyEntries',
   'epigeneticTests', 'eyeExams', 'goals', 'habits', 'healthMetrics',
@@ -19,7 +21,10 @@ const MORTALLOOM_STORE_KEYS = new Set([
   'profile', 'genomeScanRecord'
 ]);
 
-const stripStoreKeys = (settings) => {
+// `warn` only emits the console warning when set — write paths pass true so
+// the operator sees pollution being persisted-out/incoming, reads stay silent
+// so a single polluted file doesn't spam logs on every GET /api/settings.
+const stripStoreKeys = (settings, { warn = false } = {}) => {
   if (!settings || typeof settings !== 'object') return settings;
   const cleaned = {};
   const polluted = [];
@@ -30,7 +35,7 @@ const stripStoreKeys = (settings) => {
     }
     cleaned[k] = v;
   }
-  if (polluted.length > 0) {
+  if (warn && polluted.length > 0) {
     console.warn(`⚠️ settings.json: stripping MortalLoom store keys: ${polluted.join(', ')}`);
   }
   return cleaned;
@@ -52,7 +57,7 @@ const load = async () => {
 };
 
 const save = async (settings) => {
-  const cleaned = stripStoreKeys(settings);
+  const cleaned = stripStoreKeys(settings, { warn: true });
   await writeFile(SETTINGS_FILE, JSON.stringify(cleaned, null, 2) + '\n');
   settingsEvents.emit('settings:updated', cleaned);
 };
@@ -62,7 +67,7 @@ export const saveSettings = save;
 
 export const updateSettings = async (patch) => {
   const current = await load();
-  const merged = { ...current, ...stripStoreKeys(patch) };
+  const merged = { ...current, ...stripStoreKeys(patch, { warn: true }) };
   await save(merged);
   return merged;
 };
