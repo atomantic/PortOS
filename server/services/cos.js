@@ -1952,12 +1952,12 @@ async function generateManagedAppImprovementTask(app, state) {
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(nextType, 0)
     : await taskSchedule.getTaskPrompt(nextType);
-  const reviewer = normalizeReviewers(metadata).join(',');
+  const reviewersCsv = normalizeReviewers(metadata).join(',');
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewers\}/g, reviewer)
+    .replace(/\{reviewers\}/g, reviewersCsv)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);
 
   applyAppWorktreeDefault(metadata, app);
@@ -2098,13 +2098,13 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     return null;
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-  const reviewer = normalizeReviewers(metadata).join(',');
+  const reviewersCsv = normalizeReviewers(metadata).join(',');
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewers\}/g, reviewer)
+    .replace(/\{reviewers\}/g, reviewersCsv)
     // Use a replacer function — String.replace with a replacement STRING
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and

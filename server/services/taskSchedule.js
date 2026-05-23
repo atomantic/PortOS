@@ -558,7 +558,7 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. \`copilot
      \`\`\`
      Leave the local \`claim/<slug>\` branch and the open PR alone. Do NOT run Phase 7 — that phase assumes a merged PR. PLAN.md and \`.changelog/NEXT.md\` were already updated in Phase 5, and that's fine even though the merge didn't happen: the next \`plan-task\` run will see the slug as in-flight via the open PR and pick a different item.
 
-   - **\`claude\` / \`codex\` / \`gemini\`** — Invoke that CLI in headless mode against the PR diff to critique it, apply the fixes, run tests, and re-push. Iterate until the CLI reports no further blocking findings (cap at 3 rounds), then advance to the next configured reviewer (or merge if it's the last).
+   - **\`claude\` / \`codex\` / \`gemini\`** — Invoke that CLI in headless mode against the PR diff to critique it, apply the fixes, run tests, and re-push. Iterate until the CLI reports no further blocking findings, then advance to the next configured reviewer (or merge if it's the last). Cap at **3 rounds** here — this inline claim flow is intentionally more conservative than the dedicated CoS-spawned review-loop follow-up (which allows up to 10 iterations per reviewer); after 3 rounds, leave the PR for human follow-up.
 
 5. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\` into main or any other branch. The repo may allow only one of \`--merge\` / \`--squash\` / \`--rebase\`, so don't hardcode a method. Try in this order and use the first one that succeeds:
    \`\`\`bash
