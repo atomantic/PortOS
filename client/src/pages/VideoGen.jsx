@@ -70,6 +70,10 @@ const TILING_OPTIONS = [
   { value: 'spatial', label: 'Spatial only' },
   { value: 'temporal', label: 'Temporal only' },
 ];
+// Derive the valid-enum set from TILING_OPTIONS so adding a new option in one
+// place automatically flows through the remix-prefill / handleRemixVideo
+// guards. Keeps client and server (videoGen.js z.enum) in sync via the UI.
+const TILING_ENUM_SET = new Set(TILING_OPTIONS.map((o) => o.value));
 
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
@@ -204,12 +208,11 @@ export default function VideoGen() {
     // guidanceScale=0 is a meaningful value (CFG off); test for presence,
     // not truthiness, so "0" round-trips through Remix correctly.
     if (get('guidanceScale') != null && get('guidanceScale') !== '') setGuidanceScale(get('guidanceScale'));
-    // tiling: URL params are user-controlled; only accept known enum strings
-    // (auto|none|spatial|temporal) so a hand-edited URL or stale link can't
-    // push the <select> into an invalid state and 400 the next POST.
-    const TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
+    // tiling: URL params are user-controlled; only accept values defined in
+    // TILING_OPTIONS so a hand-edited URL or stale link can't push the <select>
+    // into an invalid state and 400 the next POST.
     const urlTiling = get('tiling');
-    if (urlTiling && TILING_ENUM.has(urlTiling)) setTiling(urlTiling);
+    if (urlTiling && TILING_ENUM_SET.has(urlTiling)) setTiling(urlTiling);
     // disableAudio is a boolean; explicitly set to false when the URL says so
     // (or omits the key, which means "default off"). Without this, the toggle
     // sticks ON across remixes of clips that had audio.
@@ -344,7 +347,11 @@ export default function VideoGen() {
     // original settings" expectation.
     const neg = item.negativePrompt || item.negative_prompt || '';
     setNegativePrompt(neg);
-    if (item.modelId && models.some((m) => m.id === item.modelId)) setModelId(item.modelId);
+    // Set modelId unconditionally when present. If models hasn't loaded yet
+    // (race on initial mount), this avoids dropping the value silently — the
+    // post-load validation effect (`Validate modelId once models are loaded`)
+    // will fall back to defaultModel if the id doesn't end up in the catalog.
+    if (item.modelId) setModelId(item.modelId);
     if (item.width) setWidth(item.width);
     if (item.height) setHeight(item.height);
     if (item.numFrames) setNumFrames(item.numFrames);
@@ -353,12 +360,10 @@ export default function VideoGen() {
     if (item.steps != null && item.steps !== '') setSteps(String(item.steps));
     const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
     if (guidance != null && guidance !== '') setGuidanceScale(String(guidance));
-    // tiling must match the server enum (auto|none|spatial|temporal). Legacy
-    // sidecars sometimes store a boolean here — silently ignore unknown values
-    // so the <select> stays valid and the next POST doesn't 400. Mirrors the
-    // guard in useImagePreviewActions.handleRemix.
-    const TILING_ENUM = new Set(['auto', 'none', 'spatial', 'temporal']);
-    if (typeof item.tiling === 'string' && TILING_ENUM.has(item.tiling)) setTiling(item.tiling);
+    // tiling must match the TILING_OPTIONS enum. Legacy sidecars sometimes
+    // store a boolean here — silently ignore unknown values so the <select>
+    // stays valid and the next POST doesn't 400.
+    if (typeof item.tiling === 'string' && TILING_ENUM_SET.has(item.tiling)) setTiling(item.tiling);
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
