@@ -358,10 +358,11 @@ describe('readStore — EAGAIN retry', () => {
 describe('initMortalLoomStore — brctl pinning', () => {
   const makeFakeChild = () => {
     const handlers = {};
-    return {
-      on: vi.fn((evt, cb) => { handlers[evt] = cb; return this; }),
+    const child = {
+      on: vi.fn(function (evt, cb) { handlers[evt] = cb; return child; }),
       _emit: (evt, ...args) => handlers[evt]?.(...args),
     };
+    return child;
   };
 
   beforeEach(() => {
@@ -443,6 +444,31 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // fires pinAgainstEviction.
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
     expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('re-pins after a disable → re-enable cycle with the same path', async () => {
+    // Without resetting the dedup cache on disable, toggling sync off then
+    // back on (without changing the path) silently no-ops. Settings.json
+    // listeners must clear `lastPinnedPath` on disable so a subsequent
+    // enable with the same path materializes again.
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // User disables sync — no spawn, but the dedup cache must clear.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: false, path: '/icloud/MortalLoom.json' } });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // Re-enable with the SAME path — should re-spawn brctl, not be deduped.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenLastCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
 
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });

@@ -600,10 +600,12 @@ ensureSelf()
     initComicPagesFilenameHook();
     initStoryboardsFilenameHook();
     initSeasonCoverFilenameHook();
-    // Pin the MortalLoom iCloud store against eviction so the dashboard's
-    // proactive-alerts poll (and other readers) don't trigger on-demand
-    // downloads that surface as EAGAIN. Fire-and-forget — failures are logged
-    // and the retry-on-EAGAIN path inside the store still masks transients.
+    // Best-effort pre-materialize the MortalLoom iCloud store so the
+    // dashboard's proactive-alerts poll (and other readers) don't trigger
+    // on-demand downloads that surface as EAGAIN. `brctl download` only
+    // materializes the file — it does not pin against future eviction, so
+    // the retry-on-EAGAIN path inside the store is what guarantees the
+    // hardening. Fire-and-forget — failures are logged.
     initMortalLoomStore().catch((err) => {
       console.warn(`⚠️ MortalLoom store init failed: ${err.message}`);
     });

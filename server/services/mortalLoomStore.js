@@ -133,9 +133,14 @@ export async function initMortalLoomStore() {
   // doesn't leave the system without re-pin-on-settings-change. The listener
   // has no async dependencies and is the durable half of this hook.
   settingsEvents.on('settings:updated', (settings) => {
-    if (settings?.mortalloom?.enabled) {
-      pinAgainstEviction(settings.mortalloom.path?.trim() || DEFAULT_ICLOUD_PATH);
+    if (!settings?.mortalloom?.enabled) {
+      // Disable clears the dedup cache so a future re-enable (even with the
+      // same path) triggers another materialize attempt — otherwise toggling
+      // off → on with an unchanged path would silently no-op.
+      lastPinnedPath = null;
+      return;
     }
+    pinAgainstEviction(settings.mortalloom.path?.trim() || DEFAULT_ICLOUD_PATH);
   });
 
   if (await isMortalLoomEnabled()) {
