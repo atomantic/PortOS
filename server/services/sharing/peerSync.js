@@ -658,7 +658,22 @@ export async function pushRecordToPeer(sub) {
   // leaves the cursor un-advanced for one push cycle, which is safe —
   // `ackDeletesUpTo` is monotonic + idempotent, so the receiver re-acks
   // the same deletedAt on the next push and the cursor catches up.
-  await persistPushSuccess(sub.id, hash);
+  //
+  // ASSETS-STRANDED GUARD: don't save lastPushedHash when the receiver
+  // reported missing assets. The receiver pulls them asynchronously,
+  // and any pull failure (transient Tailnet flake, rejected
+  // Content-Length, receiver restart mid-pull) would otherwise be
+  // permanently masked — the next `peer:online` retry would short-
+  // circuit on `unchanged` and never re-POST the manifest, so the
+  // receiver never gets a fresh asset list to retry against. The
+  // record itself still landed (mergeXxxFromSync ran on the receiver),
+  // so we just advance `lastPushedAt` without the hash, and the next
+  // push cycle will re-send with the same asset manifest until pulls
+  // complete (manifest hash-equal pushes are no-ops on the receiver's
+  // merge LWW path; only cost is one redundant POST per push cycle
+  // until the receiver finishes pulling).
+  const missingCount = Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0;
+  await persistPushSuccess(sub.id, missingCount > 0 ? null : hash);
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
