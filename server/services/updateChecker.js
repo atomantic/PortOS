@@ -10,6 +10,14 @@ const UPDATE_FILE = join(PATHS.data, 'update.json');
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const STARTUP_DELAY_MS = 10 * 1000; // 10 seconds
 
+/**
+ * How long a `lastForkSync` record counts as "fresh enough" to skip the
+ * fork-sync gate on /api/update/execute. Exported so the route + UI agree on
+ * a single number — the UI doesn't need to re-implement the time math; it
+ * reads `status.forkSyncFresh` directly.
+ */
+export const FORK_SYNC_FRESHNESS_MS = 10 * 60 * 1000;
+
 export const updateEvents = new EventEmitter();
 
 const withLock = createMutex();
@@ -135,8 +143,11 @@ export async function getRemoteInfo() {
  *     to distinguish the gh diverged-fork case (409 FORK_DIVERGED) from other
  *     gh failures (502 FORK_SYNC_FAILED).
  */
-export async function syncFork({ branch } = {}) {
-  const info = await getRemoteInfo();
+export async function syncFork({ branch, remoteInfo } = {}) {
+  // Accept a pre-fetched remoteInfo from the route so we don't spawn `git
+  // remote get-url origin` twice per /sync-fork call (and so a TOCTOU race
+  // between the route's gate and ours can't surface as confusing messaging).
+  const info = remoteInfo || await getRemoteInfo();
   if (!info.hasOrigin) {
     throw new Error('No git origin remote — cannot sync fork.');
   }
@@ -260,12 +271,24 @@ export async function getUpdateStatus() {
     : false;
   const remoteInfo = await getRemoteInfo().catch(() => null);
 
+  // Single source of truth for the freshness check — the UI reads this
+  // directly instead of re-implementing the time math + fullName match.
+  const lastSync = state.lastForkSync;
+  const forkSyncFresh = !!(
+    lastSync &&
+    remoteInfo?.fullName &&
+    lastSync.fullName === remoteInfo.fullName &&
+    (Date.now() - new Date(lastSync.syncedAt).getTime()) < FORK_SYNC_FRESHNESS_MS
+  );
+
   return {
     currentVersion,
     ...state,
     updateAvailable: isNewer && !isIgnored,
     remoteInfo,
-    upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME }
+    upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME },
+    forkSyncFresh,
+    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS
   };
 }
 

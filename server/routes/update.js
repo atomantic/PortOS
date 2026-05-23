@@ -81,7 +81,7 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
     );
   }
 
-  const result = await updateChecker.syncFork({ branch }).catch(err => {
+  const result = await updateChecker.syncFork({ branch, remoteInfo: info }).catch(err => {
     const msg = err.message || 'Fork sync failed';
     // gh's "would not be a fast forward" / "diverged" error → 409 so client
     // can show the "you have local customizations" guidance
@@ -119,10 +119,9 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // user knows they're updating from their own origin.
   const remote = status.remoteInfo;
   if (remote?.isFork && !acknowledgeFork) {
-    const lastSync = status.lastForkSync;
-    const syncIsFresh = lastSync && lastSync.fullName === remote.fullName &&
-      (Date.now() - new Date(lastSync.syncedAt).getTime()) < 10 * 60 * 1000; // 10 min window
-    if (!syncIsFresh) {
+    // Reuse the freshness boolean the service already computed so the route
+    // and `status.forkSyncFresh` agree by construction (no duplicate math).
+    if (!status.forkSyncFresh) {
       throw new ServerError(
         `Running from a fork (${remote.fullName}). Sync your fork from ${status.upstream.fullName} ` +
         `first, or re-submit with acknowledgeFork: true to update from your fork's origin as-is.`,

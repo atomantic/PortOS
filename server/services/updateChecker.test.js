@@ -495,6 +495,67 @@ describe('getUpdateStatus remoteInfo', () => {
     expect(status.remoteInfo).toBeNull();
     expect(status.upstream.fullName).toBe('atomantic/PortOS');
   });
+
+  it('forkSyncFresh is true within the freshness window for the same fork', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:alice/PortOS.git', host: 'github.com',
+      owner: 'alice', repo: 'PortOS', fullName: 'alice/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const recent = new Date(Date.now() - 2 * 60 * 1000).toISOString(); // 2 min ago
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        lastForkSync: { fullName: 'alice/PortOS', syncedAt: recent }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(true);
+    expect(status.forkSyncWindowMs).toBe(10 * 60 * 1000);
+  });
+
+  it('forkSyncFresh is false when lastForkSync is older than the window', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:alice/PortOS.git', host: 'github.com',
+      owner: 'alice', repo: 'PortOS', fullName: 'alice/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const stale = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30 min ago
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        lastForkSync: { fullName: 'alice/PortOS', syncedAt: stale }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(false);
+  });
+
+  it('forkSyncFresh is false when lastForkSync.fullName mismatches the current origin', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:bob/PortOS.git', host: 'github.com',
+      owner: 'bob', repo: 'PortOS', fullName: 'bob/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const recent = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        lastForkSync: { fullName: 'alice/PortOS', syncedAt: recent }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(false);
+  });
 });
 
 describe('syncFork', () => {
@@ -600,6 +661,19 @@ describe('syncFork', () => {
     });
     await expect(syncFork()).rejects.toThrow(/already the upstream/i);
     expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('uses pre-fetched remoteInfo without re-spawning git', async () => {
+    const remote = {
+      hasOrigin: true, isGithub: true, isUpstream: false, isFork: true,
+      fullName: 'alice/PortOS', owner: 'alice', repo: 'PortOS'
+    };
+    execGh.mockResolvedValue('✓ Synced');
+    await syncFork({ remoteInfo: remote });
+    expect(getOriginInfo).not.toHaveBeenCalled();
+    expect(execGh).toHaveBeenCalledWith([
+      'repo', 'sync', 'alice/PortOS', '--source', 'atomantic/PortOS', '--branch', 'main'
+    ]);
   });
 
   it('refuses when origin is a GitHub repo but not a fork (renamed/unrelated)', async () => {

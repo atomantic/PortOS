@@ -227,12 +227,9 @@ export default function UpdateTab() {
   const upstreamName = status?.upstream?.fullName || 'atomantic/PortOS';
   const isFork = !!remote?.isFork;
   const lastForkSync = status?.lastForkSync;
-  const forkSyncFresh = !!(
-    lastForkSync &&
-    remote?.fullName &&
-    lastForkSync.fullName === remote.fullName &&
-    (Date.now() - new Date(lastForkSync.syncedAt).getTime()) < 10 * 60 * 1000
-  );
+  // Server is the source of truth for the freshness window — don't
+  // re-implement the time math here.
+  const forkSyncFresh = !!status?.forkSyncFresh;
 
   return (
     <div className="space-y-6">
