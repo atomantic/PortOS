@@ -357,9 +357,14 @@ export default function VideoGen() {
     if (item.numFrames) setNumFrames(item.numFrames);
     if (item.fps) setFps(item.fps);
     if (item.seed != null) setSeed(String(item.seed));
-    if (item.steps != null && item.steps !== '') setSteps(String(item.steps));
+    // steps/guidanceScale: always set explicitly. Legacy entries (created
+    // before these were persisted) lack these fields — clear the form to the
+    // empty-string sentinel rather than leaving the prior render's value
+    // behind. The form treats '' as "use model default" so this is the
+    // faithful round-trip for missing fields.
+    setSteps(item.steps != null && item.steps !== '' ? String(item.steps) : '');
     const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
-    if (guidance != null && guidance !== '') setGuidanceScale(String(guidance));
+    setGuidanceScale(guidance != null && guidance !== '' ? String(guidance) : '');
     // tiling must match the TILING_OPTIONS enum. Legacy sidecars sometimes
     // store a boolean here — silently ignore unknown values so the <select>
     // stays valid and the next POST doesn't 400.
