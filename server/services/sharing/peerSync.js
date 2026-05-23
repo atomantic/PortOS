@@ -386,20 +386,33 @@ export async function unsubscribeAllForPeer(peerId) {
  * copy on disk; this just stops future pushes. The user is responsible for
  * any cross-peer cleanup beyond that (e.g., delete the record locally to
  * tombstone-propagate, then mark a fresh record ephemeral).
+ *
+ * Returns `{ removed, failed }` where `removed` lists subscription ids the
+ * unsubscribe call actually completed for, and `failed` lists ids whose
+ * unsubscribePeer threw (race with another teardown path, malformed sub
+ * id, etc.). Callers can branch on `failed.length > 0` to surface partial
+ * failures; today nobody does, but the contract has to be honest so a
+ * future caller that DOES want to verify completion can.
  */
 export async function unsubscribeAllForRecord(recordKind, recordId) {
   if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonEmptyStr(recordId)) {
-    return { removed: [] };
+    return { removed: [], failed: [] };
   }
   const matching = await listPeerSubscriptions({ recordKind, recordId });
   const removed = [];
+  const failed = [];
   for (const sub of matching) {
-    await unsubscribePeer(sub.id).catch((err) => {
+    const ok = await unsubscribePeer(sub.id).then(() => true).catch((err) => {
       console.log(`⚠️ peerSync: unsubscribe-for-record failed for ${sub.id}: ${err.message}`);
+      return false;
     });
-    removed.push(sub.id);
+    if (ok) {
+      removed.push(sub.id);
+    } else {
+      failed.push(sub.id);
+    }
   }
-  return { removed };
+  return { removed, failed };
 }
 
 // --- Asset manifest -----------------------------------------------------
@@ -833,6 +846,19 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   const existing = await findPeerSubscription(peerId, recordKind, recordId);
   if (existing) return false;
 
+  // Skip if the local record is ephemeral — auto-creating a reverse sub
+  // for a local-only record would accumulate orphan rows in
+  // peer_subscriptions.json. Every future edit on the local side fires
+  // recordEvents.updated → triggerPushForRecord → pushRecordToPeer →
+  // buildPushPayload → sanitizeRecordForWire returns null (ephemeral
+  // filter) → push aborts with "record-not-found". The sub burns an
+  // asset-manifest sha-pass on every edit and never sends bytes. Better
+  // to refuse the reverse-subscribe at the source. Note: the merge path
+  // upstream already refused the inbound edit (local-ephemeral → continue),
+  // so the sender's record state isn't reflected locally anyway — there's
+  // nothing meaningful to push back even if we did create the sub.
+  if (await isLocalRecordEphemeral(recordKind, recordId)) return false;
+
   // Honor the per-peer `directions` flag. A peer marked inbound-only is one
   // we accept pushes FROM but never push back TO — auto-creating a reverse
   // subscription would break that explicit configuration.
@@ -843,6 +869,26 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
 
   await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
   return true;
+}
+
+/**
+ * Look up the local record (live or tombstoned) and return whether its
+ * `ephemeral` flag is set. Used by the reverse-subscribe gate; the static
+ * imports for `getUniverse` / `getSeries` are already at module top, so no
+ * dynamic import needed here. Returns `false` on any error path (record
+ * missing, IO failure) — the conservative default is "let the reverse-sub
+ * happen," matching pre-flag behavior for any record we can't classify.
+ */
+async function isLocalRecordEphemeral(recordKind, recordId) {
+  if (recordKind === 'universe') {
+    const u = await getUniverse(recordId, { includeDeleted: true }).catch(() => null);
+    return u?.ephemeral === true;
+  }
+  if (recordKind === 'series') {
+    const s = await getSeries(recordId, { includeDeleted: true }).catch(() => null);
+    return s?.ephemeral === true;
+  }
+  return false;
 }
 
 // --- Receiver-side asset pull worker ------------------------------------
