@@ -13,6 +13,7 @@ const DecisionLogWidget     = lazyWithReload(() => import('../DecisionLogWidget'
 const DeathClockWidget      = lazyWithReload(() => import('../DeathClockWidget'));
 const ProactiveAlertsWidget = lazyWithReload(() => import('../ProactiveAlertsWidget'));
 const QuickBrainCapture     = lazyWithReload(() => import('../QuickBrainCapture'));
+const QuickImagePrompt      = lazyWithReload(() => import('../QuickImagePrompt'));
 const QuickTaskWidget       = lazyWithReload(() => import('../QuickTaskWidget'));
 const ReviewHubCard         = lazyWithReload(() => import('../ReviewHubCard'));
 const AppsGridWidget        = lazyWithReload(() => import('./builtins/AppsGridWidget'));
@@ -37,6 +38,7 @@ const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActi
 // label-free so the dashboard doesn't turn into a wall of HUD chrome.
 export const WIDGETS = [
   { id: 'quick-brain',       label: 'Quick Brain Capture',   Component: QuickBrainCapture,      width: 'half',    defaultH: 3 },
+  { id: 'quick-image',       label: 'Quick Image Prompt',    Component: QuickImagePrompt,       width: 'half',    defaultH: 4 },
   { id: 'quick-task',        label: 'Quick Task',            Component: QuickTaskWidget,        width: 'half',    defaultH: 5 },
   { id: 'apps',              label: 'Apps Grid',             Component: AppsGridWidget,         width: 'full',    defaultH: 5, module: { id: '03', status: 'APPS',    glyph: 'matrix' } },
   { id: 'cos',               label: 'Chief of Staff',        Component: CosDashboardWidget,     width: 'third',   defaultH: 6, module: { id: '02', status: 'STAFF',   glyph: 'orbit' } },

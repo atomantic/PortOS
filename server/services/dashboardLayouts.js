@@ -79,7 +79,7 @@ const DEFAULT_LAYOUTS = [
     name: 'Everything',
     builtIn: true,
     widgets: [
-      'quick-brain', 'quick-task',
+      'quick-brain', 'quick-image', 'quick-task',
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
       'proactive-alerts', 'review-hub', 'system-health', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
@@ -92,6 +92,7 @@ const DEFAULT_LAYOUTS = [
     grid: [
       // Row 0–4: capture row + tasks
       { id: 'quick-brain',      x: 0,  y: 0,  w: 3, h: 2 },
+      { id: 'quick-image',      x: 0,  y: 2,  w: 3, h: 3 },
       { id: 'quick-task',       x: 3,  y: 0,  w: 5, h: 5 },
       { id: 'upcoming-tasks',   x: 8,  y: 0,  w: 4, h: 5 },
       // Row 5–9: primary monitoring + alerts
