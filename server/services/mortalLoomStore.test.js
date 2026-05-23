@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 let existsResult = true;
@@ -49,7 +49,12 @@ vi.mock('../lib/objects.js', () => ({
 const store = await import('./mortalLoomStore.js');
 // Tests must not pay the 50ms+100ms retry backoff on every transient-error
 // case. Zero delays keep the suite fast while still exercising the retry path.
-store._setRetryDelaysForTest([0, 0]);
+// Set up + restore the original through beforeAll/afterAll so the mutation
+// can't leak into other test files that import mortalLoomStore.js in the same
+// Vitest worker (when isolation is disabled).
+const ORIGINAL_RETRY_DELAYS = store.TRANSIENT_RETRY_DELAYS_MS;
+beforeAll(() => store._setRetryDelaysForTest([0, 0]));
+afterAll(() => store._setRetryDelaysForTest(ORIGINAL_RETRY_DELAYS));
 
 beforeEach(() => {
   existsResult = true;
@@ -360,6 +365,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     const handlers = {};
     const child = {
       on: vi.fn(function (evt, cb) { handlers[evt] = cb; return child; }),
+      unref: vi.fn(),
       _emit: (evt, ...args) => handlers[evt]?.(...args),
     };
     return child;
@@ -385,12 +391,21 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // Force darwin so the platform guard doesn't short-circuit the test.
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
 
-    spawnMock.mockReturnValue(makeFakeChild());
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
     settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
 
     await store.initMortalLoomStore();
 
-    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+    // Spawn options must include detached:true so the child doesn't keep the
+    // Node process alive on shutdown; unref() is the matching half of the
+    // pattern. Without both, a slow brctl download blocks process exit.
+    expect(spawnMock).toHaveBeenCalledWith(
+      'brctl',
+      ['download', '/icloud/MortalLoom.json'],
+      expect.objectContaining({ detached: true, stdio: 'ignore' })
+    );
+    expect(child.unref).toHaveBeenCalledTimes(1);
   });
 
   it('re-pins when settings:updated flips enabled on with a new path', async () => {

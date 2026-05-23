@@ -38,7 +38,10 @@ function normalizePath(rawPath) {
 // windows and on-demand materialization of evicted files. These surface as
 // EAGAIN (errno -11) or EDEADLK from Node's fs calls. 50ms + 100ms covers the
 // common sub-200ms coordination windows without making transients observable.
-// Exposed (not const) so tests can set it to `[]` for speed.
+// Exposed (not const) so tests can set it to `[0, 0]` to keep the retry path
+// covered without paying the backoff sleep. (An empty array would still work
+// — and run faster still — but it would disable the retry loop entirely,
+// which defeats the purpose of testing the retry behavior.)
 export let TRANSIENT_RETRY_DELAYS_MS = [50, 100];
 export function _setRetryDelaysForTest(delays) { TRANSIENT_RETRY_DELAYS_MS = delays; }
 
@@ -98,7 +101,12 @@ function pinAgainstEviction(path) {
   if (!path || lastPinnedPath === path) return;
   lastPinnedPath = path;
 
-  const child = spawn('brctl', ['download', path], { stdio: 'ignore' });
+  // detached + unref so a long-running `brctl download` (large evicted file,
+  // slow network) can't keep the Node process alive on shutdown. Matches the
+  // repo's fire-and-forget spawn pattern in server/routes/apps.js +
+  // server/routes/brain.js.
+  const child = spawn('brctl', ['download', path], { detached: true, stdio: 'ignore' });
+  child.unref();
   // Capture `path` in each handler so a late-arriving error/exit from a stale
   // child (one whose path has since been replaced by a newer pinAgainstEviction
   // call) doesn't clear the dedupe cache for the *current* path. Without this
