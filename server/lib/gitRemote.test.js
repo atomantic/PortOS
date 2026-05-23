@@ -74,6 +74,17 @@ describe('parseGitRemoteUrl', () => {
     expect(parseGitRemoteUrl(123)).toBeNull();
     expect(parseGitRemoteUrl('not-a-url')).toBeNull();
   });
+
+  it('rejects URLs with extra path segments beyond owner/repo', () => {
+    // SCP-style with extra segment would otherwise produce repo="repo/extra"
+    expect(parseGitRemoteUrl('git@github.com:owner/repo/extra')).toBeNull();
+    expect(parseGitRemoteUrl('git@github.com:owner/repo/extra.git')).toBeNull();
+    // HTTPS with extra path segment
+    expect(parseGitRemoteUrl('https://github.com/owner/repo/extra')).toBeNull();
+    expect(parseGitRemoteUrl('https://github.com/org/team/repo.git')).toBeNull();
+    // ssh:// with extra
+    expect(parseGitRemoteUrl('ssh://git@github.com/owner/repo/extra.git')).toBeNull();
+  });
 });
 
 describe('readOriginRemoteUrl', () => {

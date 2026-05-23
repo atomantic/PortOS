@@ -7,7 +7,9 @@ export const UPSTREAM_FULL_NAME = `${UPSTREAM_OWNER}/${UPSTREAM_REPO}`;
 
 /**
  * Parse a git remote URL (SSH or HTTPS) into { host, owner, repo }.
- * Returns null when the URL doesn't look like a GitHub-style "owner/repo" remote.
+ * Host-agnostic — accepts GitHub, GitLab, enterprise hosts, etc. Returns null
+ * when the URL doesn't match an "owner/repo" shape (exactly two path segments
+ * after the host). GitHub.com classification happens later in `getOriginInfo`.
  *
  * Handles:
  *   git@github.com:owner/repo.git
@@ -15,6 +17,10 @@ export const UPSTREAM_FULL_NAME = `${UPSTREAM_OWNER}/${UPSTREAM_REPO}`;
  *   https://github.com/owner/repo.git
  *   https://github.com/owner/repo
  *   git@github.enterprise.com:org/repo.git
+ *
+ * Rejects URLs with extra path segments (e.g. `git@host:owner/repo/extra`)
+ * since those would produce a `fullName` like `owner/repo/extra` that breaks
+ * `gh repo sync` and fork classification.
  */
 export function parseGitRemoteUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return null;
@@ -23,14 +29,15 @@ export function parseGitRemoteUrl(url) {
   // Strip a trailing .git for both SSH and HTTPS variants
   const stripGit = (s) => s.replace(/\.git$/i, '');
 
-  // SCP-style SSH: git@host:owner/repo(.git)
-  const scpMatch = trimmed.match(/^[a-zA-Z0-9._-]+@([^:]+):([^/]+)\/(.+)$/);
+  // SCP-style SSH: git@host:owner/repo(.git) — repo segment cannot contain '/'
+  const scpMatch = trimmed.match(/^[a-zA-Z0-9._-]+@([^:]+):([^/]+)\/([^/]+)$/);
   if (scpMatch) {
     return { host: scpMatch[1], owner: scpMatch[2], repo: stripGit(scpMatch[3]) };
   }
 
-  // URL-style: scheme://[user@]host/owner/repo(.git)
-  const urlMatch = trimmed.match(/^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/(.+?)\/?$/);
+  // URL-style: scheme://[user@]host/owner/repo(.git) — repo segment cannot
+  // contain '/'; an optional single trailing '/' is tolerated.
+  const urlMatch = trimmed.match(/^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)\/?$/);
   if (urlMatch) {
     return { host: urlMatch[1], owner: urlMatch[2], repo: stripGit(urlMatch[3]) };
   }

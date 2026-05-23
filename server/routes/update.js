@@ -49,8 +49,9 @@ router.delete('/ignore', asyncHandler(async (req, res) => {
 
 // POST /api/update/sync-fork — fast-forward the user's GitHub fork from upstream
 // atomantic/PortOS via `gh repo sync`. Non-destructive: gh refuses to overwrite
-// divergent fork history without --force, so a 422-shaped error here means the
-// fork's main has commits not on upstream (user customizations).
+// divergent fork history without --force, so a 409 FORK_DIVERGED here means the
+// fork's main has commits not on upstream (user customizations). Other failures
+// (gh missing, network, etc.) bubble as 502 FORK_SYNC_FAILED.
 router.post('/sync-fork', asyncHandler(async (req, res) => {
   const { branch } = validateRequest(syncForkSchema, req.body || {});
   const info = await updateChecker.getRemoteInfo();
@@ -73,7 +74,7 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
     // can show the "you have local customizations" guidance
     if (/fast forward|diverge|non-fast/i.test(msg)) {
       throw new ServerError(
-        `Fork sync would overwrite local commits on your fork's main: ${msg}. ` +
+        `Fork sync would overwrite commits on ${info.fullName}'s main branch (GitHub): ${msg}. ` +
         `Move customizations to a feature branch, PR them upstream, or run ` +
         `\`gh repo sync ${info.fullName} --force\` from a terminal if you want to discard them.`,
         { status: 409, code: 'FORK_DIVERGED' }

@@ -122,8 +122,10 @@ export async function getRemoteInfo() {
  * non-destructive by design.
  *
  * Returns { synced, alreadyUpToDate, fullName, source, mergedBranch, message }.
- * Throws ServerError-shaped errors when the fork has diverged or `gh` is
- * unavailable so the route can surface the message to the user.
+ * Throws plain `Error` instances for validation/refusal cases (no origin, not
+ * GitHub, already upstream); `execGh` failures (e.g. diverged fork) bubble up
+ * as whatever `execGh` throws. The /api/update/sync-fork route inspects
+ * err.message to classify into 400 / 409 / 502 ServerError responses.
  */
 export async function syncFork({ branch } = {}) {
   const info = await getRemoteInfo();
