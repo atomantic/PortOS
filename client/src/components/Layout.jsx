@@ -990,7 +990,11 @@ export default function Layout() {
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
             location.pathname.startsWith('/wiki') ||
-            location.pathname.startsWith('/universes') ||
+            // Only the universe EDITOR (/universes/:id, /universes/new) is
+            // full-width — it manages its own scroll. The /universes index
+            // (list/table) takes the normal padded+scrolling main, mirroring
+            // the Series Pipeline index (/pipeline is not full-width either).
+            location.pathname.startsWith('/universes/') ||
             location.pathname.startsWith('/writers-room') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||
