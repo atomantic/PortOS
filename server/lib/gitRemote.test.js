@@ -160,12 +160,23 @@ describe('getOriginInfo', () => {
     expect(info.isFork).toBe(false);
   });
 
-  it('classifies fork when origin is another github user', async () => {
+  it('classifies fork when origin is another github user with the same repo name', async () => {
     execGit.mockResolvedValue({ stdout: 'git@github.com:alice/PortOS.git\n', stderr: '', exitCode: 0 });
     const info = await getOriginInfo();
     expect(info.isFork).toBe(true);
     expect(info.isUpstream).toBe(false);
     expect(info.fullName).toBe('alice/PortOS');
+  });
+
+  it('does NOT classify as fork when the repo name differs (renamed/unrelated)', async () => {
+    // Someone might fork-and-rename, or point origin at an unrelated GitHub
+    // repo. Treating that as a fork would invoke `gh repo sync` and fail.
+    execGit.mockResolvedValue({ stdout: 'git@github.com:alice/MyCustomOS.git\n', stderr: '', exitCode: 0 });
+    const info = await getOriginInfo();
+    expect(info.isGithub).toBe(true);
+    expect(info.isFork).toBe(false);
+    expect(info.isUpstream).toBe(false);
+    expect(info.fullName).toBe('alice/MyCustomOS');
   });
 
   it('classifies upstream even when origin URL carries a port', async () => {

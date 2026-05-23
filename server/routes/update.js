@@ -72,6 +72,13 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
     throw new ServerError('Origin is already the upstream atomantic/PortOS — nothing to sync.',
       { status: 400, code: 'ALREADY_UPSTREAM' });
   }
+  if (!info.isFork) {
+    throw new ServerError(
+      `Origin ${info.fullName} is not a fork of atomantic/PortOS (repo name differs). ` +
+      `Fork sync requires the origin to be a GitHub fork.`,
+      { status: 400, code: 'NOT_A_FORK' }
+    );
+  }
 
   const result = await updateChecker.syncFork({ branch }).catch(err => {
     const msg = err.message || 'Fork sync failed';

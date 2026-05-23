@@ -138,6 +138,15 @@ export async function syncFork({ branch } = {}) {
   if (info.isUpstream) {
     throw new Error('Origin is already the upstream atomantic/PortOS — nothing to sync.');
   }
+  if (!info.isFork) {
+    // Catches a GitHub remote that points at a repo with a different name
+    // (e.g. someone forked-and-renamed). `gh repo sync` would fail with a
+    // confusing 502; surface a clear refusal instead.
+    throw new Error(
+      `Origin ${info.fullName} is not a fork of ${UPSTREAM_FULL_NAME} ` +
+      `(repo name differs). Fork sync requires the origin to be a GitHub fork named "${UPSTREAM_REPO}".`
+    );
+  }
 
   const targetBranch = branch || 'main';
   const args = ['repo', 'sync', info.fullName, '--source', UPSTREAM_FULL_NAME, '--branch', targetBranch];

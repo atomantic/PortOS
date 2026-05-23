@@ -93,7 +93,13 @@ export async function readOriginRemoteUrl(cwd = PATHS.root) {
  *     fullName: string | null,     // "owner/repo"
  *     isUpstream: boolean,         // origin == atomantic/PortOS on github.com
  *     isGithub: boolean,
- *     isFork: boolean              // a GitHub remote that isn't upstream
+ *     isFork: boolean              // a GitHub `<other>/PortOS` repo — strict
+ *                                  // fork candidate: same repo name (case-
+ *                                  // insensitive), different owner. A repo
+ *                                  // with a different name (e.g. someone
+ *                                  // forked-and-renamed) is NOT classified
+ *                                  // as a fork because `gh repo sync` would
+ *                                  // fail and the fork-aware UI would lie.
  *   }
  *
  * Comparison is case-insensitive (GitHub treats owner/repo names as such).
@@ -134,10 +140,13 @@ export async function getOriginInfo(cwd = PATHS.root) {
   }
 
   const isGithub = /(^|\.)github\.com$/i.test(parsed.host);
-  const isUpstream =
-    isGithub &&
-    parsed.owner.toLowerCase() === UPSTREAM_OWNER.toLowerCase() &&
-    parsed.repo.toLowerCase() === UPSTREAM_REPO.toLowerCase();
+  const ownerMatchesUpstream = parsed.owner.toLowerCase() === UPSTREAM_OWNER.toLowerCase();
+  const repoMatchesUpstream = parsed.repo.toLowerCase() === UPSTREAM_REPO.toLowerCase();
+  const isUpstream = isGithub && ownerMatchesUpstream && repoMatchesUpstream;
+  // Strict fork: same repo name, different owner, on GitHub. A renamed
+  // GitHub repo (different name) doesn't count — `gh repo sync` would fail
+  // and the fork-aware UI would mislead the user.
+  const isFork = isGithub && repoMatchesUpstream && !ownerMatchesUpstream;
 
   return {
     hasOrigin: true,
@@ -148,6 +157,6 @@ export async function getOriginInfo(cwd = PATHS.root) {
     fullName: `${parsed.owner}/${parsed.repo}`,
     isUpstream,
     isGithub,
-    isFork: isGithub && !isUpstream
+    isFork
   };
 }

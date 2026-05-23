@@ -602,6 +602,20 @@ describe('syncFork', () => {
     expect(execGh).not.toHaveBeenCalled();
   });
 
+  it('refuses when origin is a GitHub repo but not a fork (renamed/unrelated)', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: false,
+      isFork: false,
+      fullName: 'alice/MyCustomOS',
+      owner: 'alice',
+      repo: 'MyCustomOS'
+    });
+    await expect(syncFork()).rejects.toThrow(/not a fork of atomantic\/PortOS/i);
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
   it('propagates gh CLI errors (diverged fork)', async () => {
     getOriginInfo.mockResolvedValue({
       hasOrigin: true,

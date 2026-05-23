@@ -74,6 +74,9 @@ if [ -n "$origin_url" ]; then
   # so PATs don't leak into data/update.log or the update UI step output.
   origin_url_safe=$(printf '%s' "$origin_url" | sed -E 's|://[^@/]+@|://***@|')
   log "🌐 Pulling from origin: $origin_url_safe"
+  # Also append directly to $UPDATE_LOG — updateExecutor only forwards STEP:
+  # lines, so the `log` above doesn't reach update.log on its own.
+  echo "🌐 Pulling from origin: $origin_url_safe" >> "$UPDATE_LOG"
 fi
 current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
 stashed_for_branch=""
