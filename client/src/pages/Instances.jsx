@@ -854,7 +854,12 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
     // card's `peerSubs` effect (deps are `peer.instanceId` only). Without
     // a local subscription here, SchemaGapBadge keeps rendering the stale
     // `blockedBySchema` value until a full page reload.
-    const handleSchemaSubChange = () => { refetch(); };
+    // The event carries `peerId` so only the affected card refetches —
+    // every card listens, but skips events for other peers.
+    const handleSchemaSubChange = (payload) => {
+      if (payload?.peerId && payload.peerId !== peer.instanceId) return;
+      refetch();
+    };
     socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
     socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
     return () => {

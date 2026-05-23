@@ -811,10 +811,14 @@ async function persistPushSuccess(subId, hash) {
  * PortOS version string for the user-visible message.
  */
 async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions }) {
+  // Capture peerId inside the lock so the emitted event carries it — lets each
+  // Instances PeerCard filter on its own peer instead of every card refetching.
+  let blockedPeerId = null;
   await withStateLock(async () => {
     const state = await readState();
     const sub = state.subscriptions.find((s) => s.id === subId);
     if (!sub) return;
+    blockedPeerId = sub.peerId || null;
     const now = new Date().toISOString();
     sub.blockedBySchema = {
       detectedAt: now,
@@ -826,19 +830,21 @@ async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersi
     sub.updatedAt = now;
     await writeState(state);
   });
-  peerSyncEvents.emit('subscription-blocked', { subId });
+  peerSyncEvents.emit('subscription-blocked', { subId, peerId: blockedPeerId });
 }
 
 async function clearSchemaVersionBlock(subId) {
+  let clearedPeerId = null;
   await withStateLock(async () => {
     const state = await readState();
     const sub = state.subscriptions.find((s) => s.id === subId);
     if (!sub || !sub.blockedBySchema) return;
+    clearedPeerId = sub.peerId || null;
     delete sub.blockedBySchema;
     sub.updatedAt = new Date().toISOString();
     await writeState(state);
   });
-  peerSyncEvents.emit('subscription-unblocked', { subId });
+  peerSyncEvents.emit('subscription-unblocked', { subId, peerId: clearedPeerId });
 }
 
 async function buildPushPayload(sub, sourceInstanceId) {

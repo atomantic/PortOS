@@ -39,6 +39,7 @@ import { adoptImportedSubscription, withReexportSuppressed } from './subscriptio
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
 import { isStr } from '../../lib/storyBible.js';
+import { isPlainObject } from '../../lib/objects.js';
 
 function isSelfAuthored(senderInstanceId, localInstanceId) {
   return !!localInstanceId
@@ -729,12 +730,12 @@ export async function processManifest(bucketId, manifestFilename) {
   // PORTOS SCHEMA-VERSION GATE — even when the share-protocol schemaVersion
   // is compatible, the manifest's per-category storage layout versions
   // (`portosSchemaVersions`, e.g. `{ universes: 5 }`) may exceed what this
-  // PortOS can apply. Reject without marking processed so a later upgrade
-  // naturally re-imports (the watcher re-fires; the cursor still
-  // dedups via `hasBeenProcessed` until the upgrade lands and the comparator
-  // passes). Emits a `portos-schema-ahead` event the UI uses to render a
-  // persistent "Update PortOS to import this share" badge.
-  const senderSchemaVersions = manifest.portosSchemaVersions && typeof manifest.portosSchemaVersions === 'object'
+  // PortOS can apply. We refuse the import AND mark it processed (see the
+  // dedup rationale in the branch below) — so retry-after-upgrade is NOT
+  // automatic; the user clears the bucket cursor (or unshare/reshares) once
+  // they've upgraded. Emits a `portos-schema-ahead` event the UI uses to
+  // render a persistent "Update PortOS to import this share" badge.
+  const senderSchemaVersions = isPlainObject(manifest.portosSchemaVersions)
     ? manifest.portosSchemaVersions
     : {};
   const portosDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);

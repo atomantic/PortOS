@@ -52,7 +52,9 @@ router.post('/:category/apply', asyncHandler(async (req, res) => {
     throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   const { data, portosMeta } = parsed.data;
-  if (!data) throw new ServerError('Missing data field', { status: 400 });
+  // `z.unknown()` accepts falsy-but-present payloads (0, false, ''); only
+  // reject genuinely missing/null so we don't 400 a valid empty-ish snapshot.
+  if (data == null) throw new ServerError('Missing data field', { status: 400 });
   const result = await dataSync.applyRemote(category, data, { portosMeta });
   res.json(result);
 }));

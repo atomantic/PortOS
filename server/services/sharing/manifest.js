@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { readdir, rename } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { isPlainObject } from '../../lib/objects.js';
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
 import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
@@ -159,7 +160,12 @@ export function buildManifest({
     // ahead — the user is told to upgrade PortOS before the import can
     // proceed. Optional on the wire so legacy manifests (no field) still
     // validate; absent treated as "no contract" by the comparator.
-    portosSchemaVersions: portosSchemaVersions && typeof portosSchemaVersions === 'object'
+    // Plain-object only: `typeof === 'object'` alone would accept arrays, and
+    // `{ ...[] }` spreads into numeric keys, producing a malformed
+    // `{ "0": ... }` map the importer's comparator can't read. `isPlainObject`
+    // rejects arrays + null (the realistic junk); exotic inputs like a Date
+    // spread to a harmless `{}` the comparator treats as "no contract".
+    portosSchemaVersions: isPlainObject(portosSchemaVersions)
       ? { ...portosSchemaVersions }
       : null,
     createdAt: new Date().toISOString(),
