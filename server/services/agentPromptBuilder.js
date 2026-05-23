@@ -237,13 +237,13 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // per-reviewer-kind bullet that actually applies to the configured list.
   const multiBullets = [
     hasCopilot ? '**copilot**: request a Copilot review when you reach its turn (the system pre-requested it only if Copilot leads the list), wait for it (poll every 5–15s, max 5 min/round), and re-request on later rounds.' : null,
-    hasCli ? `**codex / gemini / claude**: invoke that CLI against the PR diff (\`gh pr diff ${prNumber || ''}\`) to produce a review.` : null,
+    hasCli ? `**codex / gemini / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).` : null,
   ].filter(Boolean).join(' ');
   const waitOrInvokeStep = multi
     ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. ${multiBullets}`
     : (hasCopilot
         ? 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.'
-        : `Invoke the ${reviewerLabel} CLI against the PR diff (\`gh pr diff ${prNumber || ''}\` or \`gh pr view ${prNumber || ''} --json files\`) to produce a code review. Capture its findings as concrete issues to address.`);
+        : `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.`);
 
   const stopModeNote = stopMode === 'on-findings'
     ? '**Stop mode (on-findings):** stop after the FIRST reviewer whose findings you actually fixed and committed; skip the remaining reviewers.'
