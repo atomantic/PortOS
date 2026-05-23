@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 
 let existsResult = true;
 // Queue of return values for sequential existsSync() calls. When empty, falls
@@ -8,6 +9,7 @@ const existsQueue = [];
 const readFileMock = vi.fn();
 const statMock = vi.fn();
 const writeFileMock = vi.fn();
+const spawnMock = vi.fn();
 
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => (existsQueue.length ? existsQueue.shift() : existsResult)),
@@ -19,9 +21,15 @@ vi.mock('fs/promises', () => ({
   stat: (...args) => statMock(...args),
 }));
 
+vi.mock('child_process', () => ({
+  spawn: (...args) => spawnMock(...args),
+}));
+
 let settings = { mortalloom: { enabled: true } };
+const settingsEvents = new EventEmitter();
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => settings),
+  settingsEvents,
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -39,6 +47,9 @@ vi.mock('../lib/objects.js', () => ({
 }));
 
 const store = await import('./mortalLoomStore.js');
+// Tests must not pay the 50ms+100ms retry backoff on every transient-error
+// case. Zero delays keep the suite fast while still exercising the retry path.
+store._setRetryDelaysForTest([0, 0]);
 
 beforeEach(() => {
   existsResult = true;
@@ -46,9 +57,11 @@ beforeEach(() => {
   readFileMock.mockReset();
   statMock.mockReset();
   writeFileMock.mockReset();
+  spawnMock.mockReset();
   settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -300,5 +313,158 @@ describe('getStatus', () => {
     expect(status.summary.goals).toBe(1);
     expect(status.summary.alcoholDrinks).toBe(2);
     expect(status.summary.hasProfile).toBe(true);
+  });
+});
+
+describe('readStore — EAGAIN retry', () => {
+  it('retries on transient EAGAIN and succeeds when a later attempt resolves', async () => {
+    // First attempt: EAGAIN (iCloud coordination lock). Second attempt: success.
+    // Without retry, the dashboard's proactive-alerts poll would surface stale
+    // data + a warning every 2 minutes when iCloud is mid-coordination.
+    const transient = Object.assign(new Error('EAGAIN'), { code: 'EAGAIN', errno: -11 });
+    readFileMock.mockRejectedValueOnce(transient);
+    readFileMock.mockResolvedValueOnce(JSON.stringify({ goals: [{ id: 'recovered' }] }));
+
+    const result = await store.readStore();
+
+    expect(result).toEqual({ goals: [{ id: 'recovered' }] });
+    expect(readFileMock).toHaveBeenCalledTimes(2);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not retry on ENOENT — file-not-found is not a transient', async () => {
+    const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    readFileMock.mockRejectedValueOnce(enoent);
+
+    const result = await store.readStore();
+
+    expect(result).toBeNull();
+    expect(readFileMock).toHaveBeenCalledTimes(1);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('exhausts retries on persistent EAGAIN (3 attempts total) and warns once', async () => {
+    const transient = Object.assign(new Error('EAGAIN'), { code: 'EAGAIN', errno: -11 });
+    readFileMock.mockRejectedValue(transient);
+
+    const result = await store.readStore();
+
+    expect(result).toBeNull();
+    expect(readFileMock).toHaveBeenCalledTimes(3);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('initMortalLoomStore — brctl pinning', () => {
+  const makeFakeChild = () => {
+    const handlers = {};
+    return {
+      on: vi.fn((evt, cb) => { handlers[evt] = cb; return this; }),
+      _emit: (evt, ...args) => handlers[evt]?.(...args),
+    };
+  };
+
+  beforeEach(() => {
+    settingsEvents.removeAllListeners('settings:updated');
+    store._resetMortalLoomInitForTest();
+  });
+
+  it('spawns brctl download when sync is enabled (darwin only)', async () => {
+    // Force darwin so the platform guard doesn't short-circuit the test.
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+
+    await store.initMortalLoomStore();
+
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('re-pins when settings:updated flips enabled on with a new path', async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+    const initialCalls = spawnMock.mock.calls.length;
+
+    // Same path: deduped, no new spawn.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
+    expect(spawnMock.mock.calls.length).toBe(initialCalls);
+
+    // New path: re-pins.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/other/MortalLoom.json' } });
+    expect(spawnMock).toHaveBeenLastCalledWith('brctl', ['download', '/icloud/other/MortalLoom.json'], expect.any(Object));
+
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('no-ops on non-darwin platforms (init pin AND settings-change re-pin both guarded)', async () => {
+    // Earlier this test only emitted settings:updated without calling
+    // initMortalLoomStore(), so the listener was never attached and the
+    // assertion passed for the wrong reason. Fix: call init() so the listener
+    // IS attached and the platform guard inside pinAgainstEviction is the
+    // thing under test on both the immediate-pin and the event-driven path.
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('attaches the settings:updated listener even when getSettings throws during init', async () => {
+    // Regression: if isMortalLoomEnabled() rejects (transient settings.json
+    // read failure at boot), the listener must STILL be attached so a later
+    // settings:updated event can re-pin. Earlier code set initialized=true
+    // and ran the await BEFORE attaching the listener, so a throw left the
+    // listener gone forever.
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    const { getSettings } = await import('./settings.js');
+    getSettings.mockRejectedValueOnce(new Error('settings.json read failed'));
+
+    await expect(store.initMortalLoomStore()).rejects.toThrow('settings.json read failed');
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    // Listener was attached before the failing await, so a later event still
+    // fires pinAgainstEviction.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('clears lastPinnedPath when brctl is signal-killed so a later event can retry', async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // Simulate signal-kill: exit handler fires with code=null, signal='SIGTERM'.
+    // Earlier code skipped the cache-clear in this branch, so the dedup cache
+    // would stay poisoned and a subsequent settings:updated for the same path
+    // would no-op forever.
+    child._emit('exit', null, 'SIGTERM');
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 });
