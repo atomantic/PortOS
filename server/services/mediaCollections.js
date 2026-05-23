@@ -554,6 +554,12 @@ const validateItemInput = (item) => {
   if (!ref || ref.length > REF_MAX_LENGTH || ref.includes(':')) {
     throw makeErr('item.ref invalid (empty, too long, or contains ":")', ERR_VALIDATION);
   }
+  // Mirror sanitizeItem's path-traversal rejection so the write path can't
+  // persist a ref that the next listCollections() read would silently drop
+  // (which would also churn coverKey/updatedAt for the dangling-cover guard).
+  if (ref.includes('/') || ref.includes('\\') || ref.includes('..')) {
+    throw makeErr('item.ref invalid (contains path separators or "..")', ERR_VALIDATION);
+  }
   return { kind: item.kind, ref };
 };
 

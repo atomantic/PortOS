@@ -1014,6 +1014,36 @@ describe('peerSync', () => {
       expect(peerFetch).toHaveBeenCalledTimes(1);
     });
 
+    it('appends .mp4 when a collection video item ref is a bare id (no extension)', async () => {
+      // Regression: video collection items store the bare id (e.g. a UUID),
+      // while the on-disk file is `<id>.mp4`. Without the append, the file
+      // would never be found, no manifest entry would be emitted, and the
+      // receiver would never pull the video bytes.
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.videos, 'vid-abc.mp4'), 'fake mp4 bytes');
+
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe' });
+      vi.mocked(findCollectionByUniverseId).mockResolvedValueOnce({
+        id: 'col-1', name: 'Universe: U', description: '', coverKey: null,
+        universeId: 'u1', seriesId: null,
+        items: [{ kind: 'video', ref: 'vid-abc', addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      const videoEntries = captured.assetManifest.filter(a => a.kind === 'video');
+      expect(videoEntries).toHaveLength(1);
+      // The .mp4 must have been appended to the bare id when constructing the manifest entry.
+      expect(videoEntries[0].filename).toBe('vid-abc.mp4');
+    });
+
     it('does NOT bundle a linked collection when the universe is a tombstone', async () => {
       vi.mocked(getUniverse).mockResolvedValue({
         id: 'u1', name: 'Gone', deleted: true, deletedAt: '2026-05-22T03:00:00Z',

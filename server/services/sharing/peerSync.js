@@ -823,7 +823,15 @@ async function buildAssetManifestForCollection(collection) {
     const safeName = sanitizeAssetFilename(it.ref);
     if (!safeName) continue;
     if (it.kind === 'video') {
-      const entry = await hashSimpleAsset(safeName, 'video', PATHS.videos);
+      // Video collection items store the bare video id (e.g. a UUID), while
+      // the on-disk file is `<id>.mp4` (today every PortOS-managed video is
+      // mp4 — confirmed by inspecting video-history.json). The image side
+      // stores refs WITH the extension already, so it works as-is. Append
+      // `.mp4` here unless the ref already carries an extension (defensive
+      // — older state may have stamped a filename instead of an id, and a
+      // future video format would land as `.webm` etc.).
+      const filename = /\.[a-z0-9]+$/i.test(safeName) ? safeName : `${safeName}.mp4`;
+      const entry = await hashSimpleAsset(filename, 'video', PATHS.videos);
       if (entry) out.push(entry);
     } else {
       // Treat 'image' (and any unknown kind that isn't 'video') as a gallery

@@ -45,6 +45,25 @@ describe('mediaCollections service', () => {
       .rejects.toMatchObject({ code: svc.ERR_DUPLICATE });
   });
 
+  it('addItem rejects refs with path-traversal tokens up-front', async () => {
+    // Mirrors sanitizeItem's path-traversal rejection on the write boundary.
+    // Without this, an API call could persist an unsafe ref that
+    // listCollections() would then silently drop on the next read
+    // (churning coverKey / updatedAt and making items disappear).
+    const c = await svc.createCollection({ name: 'A' });
+    for (const ref of ['../etc/passwd', 'subdir/file.png', 'a\\b.png', 'foo..bar.png']) {
+      await expect(svc.addItem(c.id, { kind: 'image', ref }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    }
+  });
+
+  it('bulkUpdateCollectionItems rejects path-traversal refs up-front', async () => {
+    const c = await svc.createCollection({ name: 'A' });
+    await expect(svc.bulkUpdateCollectionItems(c.id, {
+      add: [{ kind: 'image', ref: '../etc/passwd' }],
+    })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
   it('many-to-many: same item can live in multiple collections', async () => {
     const a = await svc.createCollection({ name: 'A' });
     const b = await svc.createCollection({ name: 'B' });
