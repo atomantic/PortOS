@@ -237,7 +237,7 @@ export default function MediaLightbox({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClose(); }}
-            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg"
+            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
             aria-label="Close"
             title="Close (Esc)"
           >
@@ -247,7 +247,7 @@ export default function MediaLightbox({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setFullScreen((v) => !v); }}
-            className="absolute top-2 right-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg"
+            className="absolute top-2 right-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
             aria-label={fullScreen ? 'Exit full screen' : 'Full screen'}
             title={fullScreen ? 'Exit full screen (Esc, F)' : 'Full screen (F)'}
           >
