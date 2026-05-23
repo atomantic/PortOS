@@ -812,15 +812,25 @@ async function buildAssetManifestForCollection(collection) {
   const out = [];
   for (const it of collection?.items || []) {
     if (!it || typeof it.ref !== 'string') continue;
+    // Path-traversal guard: collection items can arrive from a peer (via
+    // `linkedCollection` push or the snapshot-sync mediaCollections
+    // category), and a malicious `ref` like `../etc/passwd` would otherwise
+    // let `join(PATHS, ref)` read arbitrary local files when THIS instance
+    // is the sender — leaking the hash of the targeted file to peers. Same
+    // posture as the receiver-side `diffAssetManifestAgainstLocal`.
+    // `sanitizeItem` in mediaCollections.js also rejects path-traversal
+    // refs on the inbound merge boundary; this is defense in depth.
+    const safeName = sanitizeAssetFilename(it.ref);
+    if (!safeName) continue;
     if (it.kind === 'video') {
-      const entry = await hashSimpleAsset(it.ref, 'video', PATHS.videos);
+      const entry = await hashSimpleAsset(safeName, 'video', PATHS.videos);
       if (entry) out.push(entry);
     } else {
       // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
       // image — the receiver's diff path will only accept entries whose kind
       // maps to a known directory in `directoryForAssetKind`, so a junk kind
       // gets filtered there without polluting disk.
-      const entry = await hashImageForManifest(it.ref);
+      const entry = await hashImageForManifest(safeName);
       if (entry) out.push(entry);
     }
   }

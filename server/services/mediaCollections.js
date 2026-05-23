@@ -56,6 +56,14 @@ const sanitizeItem = (raw) => {
   // addressable via the REST surface — reject it here so persisted data
   // always round-trips.
   if (ref.includes(':')) return null;
+  // Path-traversal defense in depth. Refs persist to wire-syncable state
+  // (peer pushes carry collections via `linkedCollection`, snapshot sync
+  // carries the whole file), and downstream code joins the ref onto a
+  // PATHS dir to hash / pull the asset. A peer-supplied ref like
+  // `../etc/passwd` would otherwise let one peer make another peer hash
+  // (and leak the hash of) arbitrary local files. Same posture as
+  // `sanitizeAssetFilename` in `server/services/sharing/peerSync.js`.
+  if (ref.includes('/') || ref.includes('\\') || ref.includes('..')) return null;
   // A hand-edited or corrupted `addedAt` would feed NaN into the cover
   // resolver's Date sort — replace anything unparseable with now().
   const parsed = typeof raw.addedAt === 'string' ? Date.parse(raw.addedAt) : NaN;
@@ -765,12 +773,24 @@ function mergeCollectionItems(localItems, remoteItems) {
       byKey.set(k, it);
       continue;
     }
-    // Earliest addedAt wins — a sync replay shouldn't bump the addedAt of an
-    // item already in the collection.
-    const earlier = (existing.addedAt || '') <= (it.addedAt || '') ? existing : it;
+    // Earliest addedAt wins — a sync replay shouldn't bump the addedAt of
+    // an item already in the collection. Parse to epoch ms instead of
+    // lexicographic compare: `sanitizeItem` keeps any Date.parse-able
+    // string (not strictly ISO-8601), so two parseable-but-different-format
+    // timestamps could compare incorrectly as strings.
+    const existingMs = parseAddedAtMs(existing.addedAt);
+    const incomingMs = parseAddedAtMs(it.addedAt);
+    const earlier = existingMs <= incomingMs ? existing : it;
     byKey.set(k, earlier);
   }
   return Array.from(byKey.values());
+}
+
+function parseAddedAtMs(s) {
+  const n = typeof s === 'string' ? Date.parse(s) : NaN;
+  // Unparseable timestamps lose to any valid one (Infinity > any finite ms),
+  // so a corrupted addedAt can never claim "earlier" than a real one.
+  return Number.isFinite(n) ? n : Infinity;
 }
 
 function collectionsEqual(a, b) {

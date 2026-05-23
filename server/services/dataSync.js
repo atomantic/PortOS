@@ -14,7 +14,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { mergeUniversesFromSync } from './universeBuilder.js';
 import { mergeSeriesFromSync } from './pipeline/series.js';
 import { mergeIssuesFromSync } from './pipeline/issues.js';
-import { mergeMediaCollectionsFromSync, listCollections } from './mediaCollections.js';
+import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
@@ -434,7 +434,21 @@ async function getMediaCollectionsSnapshot() {
   // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
   // circuits the I/O when the file hasn't moved.
   const collections = await listCollections();
-  const data = { collections };
+  // Canonicalize ordering for the wire so two peers holding identical sets
+  // produce identical checksums regardless of write history. Without this
+  // sort, on-disk order is insertion-order — peer A and peer B can land the
+  // same items in different orders and end up with permanently different
+  // checksums, which the UI's cursor-vs-remote comparison reads as "behind"
+  // forever. Sort collections by id (stable, unique) and each collection's
+  // items by `<kind>:<ref>` (the same key used for set membership in
+  // `mergeCollectionItems`).
+  const canonical = collections
+    .map((c) => ({
+      ...c,
+      items: [...(c.items || [])].sort((a, b) => itemKey(a).localeCompare(itemKey(b))),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const data = { collections: canonical };
   return { data, checksum: computeChecksum(data) };
 }
 

@@ -839,4 +839,59 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(all).toHaveLength(1);
     expect(all[0].id).toBe('good');
   });
+
+  it('rejects items whose ref contains path-traversal tokens', async () => {
+    // Defense in depth — a peer can push a collection containing a ref
+    // like '../etc/passwd' via the linkedCollection field. sanitizeItem
+    // must drop these BEFORE they hit disk so the sender-side
+    // buildAssetManifestForCollection (and any future downstream consumer)
+    // never sees an unsafe ref.
+    const result = await svc.mergeMediaCollectionsFromSync([{
+      id: 'c-evil',
+      name: 'Evil',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [
+        { kind: 'image', ref: '../etc/passwd', addedAt: '2026-05-22T01:00:00Z' },
+        { kind: 'image', ref: 'subdir/file.png', addedAt: '2026-05-22T01:00:00Z' },
+        { kind: 'image', ref: 'C:\\Windows\\System32', addedAt: '2026-05-22T01:00:00Z' },
+        { kind: 'image', ref: 'real.png', addedAt: '2026-05-22T01:00:00Z' },
+      ],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-22T01:00:00Z',
+    }]);
+    expect(result.applied).toBe(true);
+    const [merged] = await svc.listCollections();
+    // Only the safe ref survived sanitization
+    expect(merged.items).toHaveLength(1);
+    expect(merged.items[0].ref).toBe('real.png');
+  });
+
+  it('compares addedAt as parsed milliseconds (not lexicographic) when picking the earlier item', async () => {
+    // sanitizeItem accepts any Date.parse-able string, not strictly ISO-8601.
+    // Lexicographic compare would order "05/22/2026 ..." AFTER "2026-..." (the
+    // digit '0' sorts before '2'), but as parsed timestamps the slash-format
+    // is actually EARLIER here. Numeric compare keeps "earlier wins" honest
+    // across formats.
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1', name: 'A', description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T10:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    });
+    await svc.mergeMediaCollectionsFromSync([{
+      id: 'c1', name: 'A', description: '', coverKey: null,
+      universeId: null, seriesId: null,
+      items: [{ kind: 'image', ref: 'a.png', addedAt: '05/22/2026 08:00:00 UTC' }],
+      createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+    }]);
+    const [merged] = await svc.listCollections();
+    // The 08:00 slash-format timestamp is earlier than 10:00 ISO; numeric
+    // compare picks it. Lexicographic compare would have picked the ISO one.
+    expect(Date.parse(merged.items[0].addedAt)).toBe(Date.parse('05/22/2026 08:00:00 UTC'));
+  });
 });

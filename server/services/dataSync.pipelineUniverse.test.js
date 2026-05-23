@@ -362,4 +362,58 @@ describe('dataSync — mediaCollections category', () => {
     const after = await dataSync.getChecksum('mediaCollections');
     expect(after.checksum).not.toBe(before.checksum);
   });
+
+  it('snapshot checksum is order-insensitive for collections and items', async () => {
+    // Regression: two peers can hold identical sets but write them to disk
+    // in different orders (insertion-order persistence). Without
+    // canonicalization in getMediaCollectionsSnapshot, their checksums
+    // diverge permanently and the UI reads "behind" forever even though
+    // they're converged.
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [
+        {
+          id: 'c-b', name: 'B', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'image', ref: 'z.png', addedAt: '2026-05-22T03:00:00Z' },
+            { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T03:00:00Z',
+        },
+        {
+          id: 'c-a', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'video', ref: 'v1', addedAt: '2026-05-22T02:00:00Z' },
+            { kind: 'image', ref: 'x.png', addedAt: '2026-05-22T01:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        },
+      ],
+    });
+    const a = await dataSync.getSnapshot('mediaCollections');
+
+    // Same SET, reversed order at every level.
+    await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [
+        {
+          id: 'c-a', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'image', ref: 'x.png', addedAt: '2026-05-22T01:00:00Z' },
+            { kind: 'video', ref: 'v1', addedAt: '2026-05-22T02:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        },
+        {
+          id: 'c-b', name: 'B', description: '', coverKey: null, universeId: null, seriesId: null,
+          items: [
+            { kind: 'image', ref: 'a.png', addedAt: '2026-05-22T01:00:00Z' },
+            { kind: 'image', ref: 'z.png', addedAt: '2026-05-22T03:00:00Z' },
+          ],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T03:00:00Z',
+        },
+      ],
+    });
+    const b = await dataSync.getSnapshot('mediaCollections');
+    expect(b.checksum).toBe(a.checksum);
+  });
 });
