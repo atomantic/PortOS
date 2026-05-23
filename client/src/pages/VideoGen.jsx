@@ -332,7 +332,12 @@ export default function VideoGen() {
   const handleRemixVideo = (item) => {
     if (!item) return;
     setStylePreset(null);
-    if (item.prompt) setPrompt(item.prompt);
+    // prompt: always set explicitly. Legacy entries can be missing `prompt`
+    // (normalizeVideo surfaces them as '(no prompt)') — clear the form instead
+    // of leaving whatever the user previously typed, matching the
+    // useImagePreviewActions.handleRemix '(no prompt)' filter.
+    const nextPrompt = item.prompt && item.prompt !== '(no prompt)' ? item.prompt : '';
+    setPrompt(nextPrompt);
     // negativePrompt: always set explicitly so remixing a clip with no
     // negative prompt clears any value the user previously typed. Skipping the
     // else-branch would leave stale form text and break the "round-trip
