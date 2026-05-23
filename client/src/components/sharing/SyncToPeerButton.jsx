@@ -63,6 +63,17 @@ export default function SyncToPeerButton({
     setLoading(false);
   };
 
+  // Per-record subscribability — mirrors server-side peerHasCategory in
+  // peerSync.js. universe → 'universe' category, series → 'pipeline'.
+  // Without this gate the UI would let the user subscribe to a peer
+  // whose category bit is off, then silently fail every push with
+  // category-disabled (server-side guard in pushRecordToPeer).
+  const requiredCategory = recordKind === 'universe' ? 'universe' : 'pipeline';
+  const peerHasMatchingCategory = (peer) => {
+    const cats = peer?.syncCategories;
+    return !!cats && typeof cats === 'object' && cats[requiredCategory] === true;
+  };
+
   useEffect(() => {
     if (open) refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -79,6 +90,7 @@ export default function SyncToPeerButton({
 
   const subscriptionForPeer = (peerInstanceId) =>
     subscriptions.find((s) => s.peerId === peerInstanceId) || null;
+
 
   const handleToggle = async (peer) => {
     setBusyPeerId(peer.instanceId);
@@ -145,13 +157,22 @@ export default function SyncToPeerButton({
               {peers.map((p) => {
                 const subscribed = !!subscriptionForPeer(p.instanceId);
                 const busy = busyPeerId === p.instanceId;
+                // Disable when the peer's syncCategories doesn't cover this
+                // record kind. server-side pushRecordToPeer would otherwise
+                // accept the subscription but refuse every push with
+                // `category-disabled`, leaving the UI with a misleading
+                // "Syncing" toast for a peer that won't actually receive
+                // any pushes.
+                const categoryEnabled = peerHasMatchingCategory(p);
+                const categoryLabel = requiredCategory === 'universe' ? 'Universe' : 'Pipeline';
                 return (
                   <li key={p.instanceId}>
                     <button
                       type="button"
                       onClick={() => handleToggle(p)}
-                      disabled={busy}
-                      className="w-full text-left px-3 py-2 hover:bg-port-bg disabled:opacity-50 flex items-start gap-2"
+                      disabled={busy || !categoryEnabled}
+                      title={!categoryEnabled ? `Enable ${categoryLabel} sync for this peer on the Instances page first.` : undefined}
+                      className="w-full text-left px-3 py-2 hover:bg-port-bg disabled:opacity-50 disabled:cursor-not-allowed flex items-start gap-2"
                     >
                       <span className="mt-0.5 shrink-0">
                         {busy
@@ -165,6 +186,7 @@ export default function SyncToPeerButton({
                         <div className="text-[10px] text-gray-500 truncate">
                           {p.status === 'online' ? 'online' : p.status || 'offline'}
                           {p.host ? ` · ${p.host}` : p.address ? ` · ${p.address}` : ''}
+                          {!categoryEnabled && ` · ${categoryLabel} sync off`}
                         </div>
                       </div>
                     </button>

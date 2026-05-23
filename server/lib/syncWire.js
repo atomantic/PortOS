@@ -88,6 +88,23 @@ export function sanitizeRecordForWire(kind, record) {
       // that carried `ephemeral: true` on disk MUST hash identically against
       // a pre-flag peer's tombstone for the same record.
       const { deleted: _deleted, deletedAt: _deletedAt, ephemeral: _ephemeral, ...rest } = record;
+      // EPHEMERAL TOMBSTONES — minimize the payload. If a record was
+      // created ephemeral and never shared, deleting it would otherwise
+      // ship the full content to peers that never had it (just because
+      // tombstones cross the wire). Minimize to `{ id, updatedAt }` plus
+      // the tombstone fields — enough for an ack on a peer that DID
+      // have the live copy (no-op for one that didn't), no content
+      // leakage either way.
+      if (record.ephemeral === true) {
+        const minimized = {
+          id: record.id,
+          ...(record.updatedAt ? { updatedAt: record.updatedAt } : {}),
+          // Issues need their parent linkage so mergeIssuesFromSync can
+          // route the tombstone to the right series cascade.
+          ...(kind === 'issue' && record.seriesId ? { seriesId: record.seriesId } : {}),
+        };
+        return { ...minimized, ...sanitizeSoftDeleteFields(record) };
+      }
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'mediaCollection': {

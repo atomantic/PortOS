@@ -19,8 +19,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getInstances.mockResolvedValue({
     peers: [
-      { instanceId: 'peer-a', name: 'Peer A', enabled: true, status: 'online', host: 'host-a.tail.net' },
-      { instanceId: 'peer-b', name: 'Peer B', enabled: true, status: 'offline', address: '10.0.0.3' },
+      // syncCategories needs to include the record-kind-matching category
+      // (universe for these tests) so the dropdown's peerHasMatchingCategory
+      // guard doesn't disable the row.
+      { instanceId: 'peer-a', name: 'Peer A', enabled: true, status: 'online', host: 'host-a.tail.net', syncCategories: { universe: true, pipeline: true } },
+      { instanceId: 'peer-b', name: 'Peer B', enabled: true, status: 'offline', address: '10.0.0.3', syncCategories: { universe: true, pipeline: true } },
       { instanceId: 'peer-c', name: 'Peer C disabled', enabled: false, status: 'offline' },
       { instanceId: '', name: 'No-id peer', enabled: true },
     ],
