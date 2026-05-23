@@ -23,6 +23,15 @@ const DEFAULT_ICLOUD_PATH = join(
   'Library/Mobile Documents/iCloud~net~shadowpuppet~MeatSpaceTracker/Documents/MortalLoom.json'
 );
 
+// settings.json is shallow-merged and not schema-validated, so the path field
+// can land here as any JSON shape (number, array, object, …). Calling .trim()
+// on a non-string throws — and one of our call sites is an EventEmitter
+// listener where an unhandled throw crashes the process. Centralize the
+// "treat-as-string-or-fall-back" guard at every read.
+function normalizePath(rawPath) {
+  return (typeof rawPath === 'string' ? rawPath.trim() : '') || DEFAULT_ICLOUD_PATH;
+}
+
 // === Transient-error retry ===
 
 // iCloud's `bird` daemon takes brief exclusive coordination locks during sync
@@ -75,10 +84,14 @@ export function defaultStorePath() { return DEFAULT_ICLOUD_PATH; }
 // now. It does NOT set a persistent retention flag against future eviction
 // (that requires Finder's "Keep Downloaded" or undocumented `brctl unevict`),
 // so re-eviction under future disk pressure is still possible — the retry-
-// on-EAGAIN path handles that case. Best-effort, fire-and-forget; on non-
-// macOS or when brctl is unavailable we just log and rely on the retry path.
+// on-EAGAIN path handles that case. Best-effort, fire-and-forget; on
+// non-macOS we never spawn brctl, and on macOS when brctl is unexpectedly
+// missing (sandboxed env, removed binary) we warn ONCE and then fall
+// through to the retry path silently — without the dedupe, every
+// settings:updated would re-warn.
 
 let lastPinnedPath = null;
+let brctlMissingWarned = false;
 
 function pinAgainstEviction(path) {
   if (process.platform !== 'darwin') return;
@@ -86,13 +99,25 @@ function pinAgainstEviction(path) {
   lastPinnedPath = path;
 
   const child = spawn('brctl', ['download', path], { stdio: 'ignore' });
+  // Capture `path` in each handler so a late-arriving error/exit from a stale
+  // child (one whose path has since been replaced by a newer pinAgainstEviction
+  // call) doesn't clear the dedupe cache for the *current* path. Without this
+  // capture, the stale exit would null out lastPinnedPath even though the new
+  // path's child is still in flight (or has already succeeded), defeating
+  // dedupe and causing repeated spawns on subsequent settings:updated events.
   child.on('error', (err) => {
-    // ENOENT here means `brctl` itself isn't in PATH (sandboxed env, etc.).
-    // Clear the cache so a later settings change can retry.
-    lastPinnedPath = null;
-    if (err.code !== 'ENOENT') {
-      console.warn(`⚠️ brctl download failed for MortalLoom store: ${err.message}`);
+    if (lastPinnedPath === path) lastPinnedPath = null;
+    if (err.code === 'ENOENT') {
+      // brctl isn't in PATH. On darwin this is extremely unusual; surface it
+      // once so operators in a sandbox aren't left wondering why pinning is
+      // a silent no-op, then dedupe so we don't spam on every settings change.
+      if (!brctlMissingWarned) {
+        brctlMissingWarned = true;
+        console.warn('⚠️ brctl not found on PATH; MortalLoom store pinning disabled (retry-on-EAGAIN path remains)');
+      }
+      return;
     }
+    console.warn(`⚠️ brctl download failed for MortalLoom store: ${err.message}`);
   });
   child.on('exit', (code, signal) => {
     if (code === 0) {
@@ -102,8 +127,9 @@ function pinAgainstEviction(path) {
     // Non-zero exit OR signal-kill (code===null,signal set). Either way the
     // pin didn't complete, so clear the dedupe cache to allow a retry on the
     // next settings:updated event. Without this, a SIGTERM'd brctl would
-    // permanently mask its own retry.
-    lastPinnedPath = null;
+    // permanently mask its own retry. Guard with the captured `path` so a
+    // stale child can't clear cache for a path that has already moved on.
+    if (lastPinnedPath === path) lastPinnedPath = null;
     if (code !== null) {
       console.warn(`⚠️ brctl download exited ${code} for MortalLoom store: ${path}`);
     } else {
@@ -126,6 +152,7 @@ export function _resetMortalLoomInitForTest() {
   listenerAttached = false;
   didInitialPin = false;
   lastPinnedPath = null;
+  brctlMissingWarned = false;
 }
 
 /**
@@ -149,7 +176,7 @@ export async function initMortalLoomStore() {
         lastPinnedPath = null;
         return;
       }
-      pinAgainstEviction(settings.mortalloom.path?.trim() || DEFAULT_ICLOUD_PATH);
+      pinAgainstEviction(normalizePath(settings.mortalloom.path));
     });
     listenerAttached = true;
   }
@@ -169,7 +196,7 @@ export async function initMortalLoomStore() {
 
 async function resolvePath() {
   const s = await getSettings();
-  return s?.mortalloom?.path?.trim() || DEFAULT_ICLOUD_PATH;
+  return normalizePath(s?.mortalloom?.path);
 }
 
 export async function isMortalLoomEnabled() {
@@ -398,7 +425,7 @@ export async function readDailyLogIfEnabled() {
 
 export async function getStatus() {
   const s = await getSettings();
-  const path = s?.mortalloom?.path?.trim() || DEFAULT_ICLOUD_PATH;
+  const path = normalizePath(s?.mortalloom?.path);
   const enabled = Boolean(s?.mortalloom?.enabled);
   const missingResponse = {
     enabled, path, usingDefault: path === DEFAULT_ICLOUD_PATH, defaultPath: DEFAULT_ICLOUD_PATH,

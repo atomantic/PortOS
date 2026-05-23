@@ -513,4 +513,90 @@ describe('initMortalLoomStore — brctl pinning', () => {
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
+
+  it('warns once when brctl is missing, then dedupes on subsequent settings changes', async () => {
+    // Regression: the brctl pin comment promised "we just log and rely on the
+    // retry path" but the error handler silently swallowed ENOENT entirely.
+    // Operators in a sandboxed darwin env had no signal that pinning was a
+    // no-op. Now we surface ENOENT once per process, then dedupe via
+    // brctlMissingWarned so settings churn doesn't spam the same warning.
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    const child1 = makeFakeChild();
+    const child2 = makeFakeChild();
+    spawnMock.mockReturnValueOnce(child1).mockReturnValueOnce(child2);
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+
+    // First brctl process fires error with ENOENT.
+    child1._emit('error', Object.assign(new Error('not found'), { code: 'ENOENT' }));
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenLastCalledWith(
+      expect.stringContaining('brctl not found on PATH')
+    );
+
+    // Re-emit settings:updated with a DIFFERENT path so dedupe doesn't gate.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/other.json' } });
+    child2._emit('error', Object.assign(new Error('not found'), { code: 'ENOENT' }));
+    // No second warning — the missing-binary dedupe held.
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stale-child error does not clear the cache for the current path', async () => {
+    // Regression: error/exit handlers previously cleared lastPinnedPath
+    // unconditionally. If a newer pinAgainstEviction() had already spawned a
+    // second child for a different path, the older child's error would null
+    // the cache for the *current* path, defeating dedupe and causing a
+    // spurious re-spawn on the next settings:updated for the same current
+    // path. Capturing `path` in the closure and comparing before clearing
+    // confines each handler's cache invalidation to its own path.
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    const child1 = makeFakeChild();
+    const child2 = makeFakeChild();
+    spawnMock.mockReturnValueOnce(child1).mockReturnValueOnce(child2);
+    settings = { mortalloom: { enabled: true, path: '/icloud/A.json' } };
+    await store.initMortalLoomStore();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // Newer pin for path B kicks off (e.g. user changed path before A's
+    // child finished). Cache now points to B, child2 is in flight.
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/B.json' } });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+
+    // Stale child1 finally errors. Must NOT clear the B cache.
+    child1._emit('error', Object.assign(new Error('boom'), { code: 'EAGAIN' }));
+
+    // Re-emit settings:updated for B — dedupe should still hold (no spawn).
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/B.json' } });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('tolerates non-string path in settings without throwing in the listener', async () => {
+    // Regression: settings.json is shallow-merged and not schema-validated, so
+    // mortalloom.path can land as a number / array / object. Calling .trim()
+    // on a non-string throws — and an unhandled throw inside the EventEmitter
+    // listener can crash the process. Listener must normalize via type-check.
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+    spawnMock.mockClear();
+
+    // Each non-string shape must be tolerated and fall back to the default
+    // path rather than throwing.
+    expect(() => {
+      settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: 42 } });
+    }).not.toThrow();
+    expect(() => {
+      settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: ['x'] } });
+    }).not.toThrow();
+    expect(() => {
+      settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: { wrapped: '/x' } } });
+    }).not.toThrow();
+    expect(() => {
+      settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: null } });
+    }).not.toThrow();
+  });
 });
