@@ -221,6 +221,31 @@ describe('settings.js', () => {
       expect(written.mortalloom).toEqual({ enabled: true, path: '/foo' });
     });
 
+    it('reads are silent but auto-heal write announces the strip', async () => {
+      // Pollution sitting on disk.
+      const polluted = {
+        theme: 'dark',
+        alcoholDrinks: [{ id: 'A' }]
+      };
+      readFile.mockResolvedValue(JSON.stringify(polluted));
+      writeFile.mockResolvedValue();
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Pure read — must NOT log (otherwise every GET /api/settings spams).
+      await getSettings();
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      // Write path — the auto-heal must surface a single warning so the
+      // operator sees the file is being cleaned.
+      await updateSettings({ timezone: 'UTC' });
+      expect(warnSpy).toHaveBeenCalled();
+      const firstCallArg = warnSpy.mock.calls[0][0];
+      expect(firstCallArg).toContain('alcoholDrinks');
+
+      warnSpy.mockRestore();
+    });
+
     it('drops __proto__ / constructor / prototype keys instead of mutating Object.prototype', async () => {
       // A `__proto__` own property arrives via JSON.parse of a payload like
       // `{"__proto__":{"polluted":true}}`. Without the guard, the cleaned-object

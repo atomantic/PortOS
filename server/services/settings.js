@@ -62,9 +62,14 @@ export const settingsEvents = new EventEmitter();
 // default-10-listeners warning.
 settingsEvents.setMaxListeners(50);
 
-const load = async () => {
+// `warn` defaults to false so the public `getSettings()` read path stays
+// silent (a single polluted file would otherwise spam logs on every GET).
+// `updateSettings` passes `warn: true` because it's part of a write/heal
+// path — the operator should see the one-line "stripping…" notice that
+// announces the auto-heal write that's about to happen.
+const load = async ({ warn = false } = {}) => {
   const raw = await readFile(SETTINGS_FILE, 'utf-8').catch(() => '{}');
-  return stripStoreKeys(safeJSONParse(raw, {}));
+  return stripStoreKeys(safeJSONParse(raw, {}), { warn });
 };
 
 const save = async (settings) => {
@@ -73,11 +78,11 @@ const save = async (settings) => {
   settingsEvents.emit('settings:updated', cleaned);
 };
 
-export const getSettings = load;
+export const getSettings = () => load();
 export const saveSettings = save;
 
 export const updateSettings = async (patch) => {
-  const current = await load();
+  const current = await load({ warn: true });
   const merged = { ...current, ...stripStoreKeys(patch, { warn: true }) };
   await save(merged);
   return merged;
