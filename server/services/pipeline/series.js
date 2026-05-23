@@ -148,6 +148,10 @@ const sanitizeSeries = (raw) => {
     // Soft-delete fields — peer sync needs the tombstone in the record itself
     // so LWW merge can resolve delete-vs-edit races by `updatedAt`.
     ...sanitizeSoftDeleteFields(raw),
+    // Local-only "don't sync to peers" marker. Persisted only when true so
+    // existing series keep their on-disk + wire-checksum shape. See
+    // syncWire.sanitizeRecordForWire for the wire-side enforcement.
+    ...(raw.ephemeral === true ? { ephemeral: true } : {}),
   };
 };
 
@@ -202,19 +206,25 @@ export async function createSeries(input = {}) {
       llm: input.llm || null,
       createdAt: now,
       updatedAt: now,
+      ephemeral: input.ephemeral === true,
     });
     state.series.push(next);
     await writeState(state);
     return next;
   });
-  // Fire-and-forget auto-subscribe to every peer with pipeline-sync enabled.
-  // Dynamic import to dodge a static cycle (peerSync imports merge entry
-  // points from this module).
-  import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
-    autoSubscribeRecordToAllPeers('series', created.id)
-  ).catch((err) => {
-    console.log(`⚠️ series: auto-subscribe after create failed: ${err.message}`);
-  });
+  // Skip auto-subscribe for ephemeral series — wire-side push would short-
+  // circuit via sanitizeRecordForWire anyway, but not creating the sub up
+  // front keeps the subscription store clean.
+  if (!created.ephemeral) {
+    // Fire-and-forget auto-subscribe to every peer with pipeline-sync enabled.
+    // Dynamic import to dodge a static cycle (peerSync imports merge entry
+    // points from this module).
+    import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('series', created.id)
+    ).catch((err) => {
+      console.log(`⚠️ series: auto-subscribe after create failed: ${err.message}`);
+    });
+  }
   return created;
 }
 
@@ -262,7 +272,7 @@ export async function updateSeries(id, patch = {}) {
   if (legacyFields.length > 0) {
     console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
   }
-  const { merged, nameChanged } = await queueSeriesWrite(async () => {
+  const { merged, nameChanged, prevEphemeral, nextEphemeral } = await queueSeriesWrite(async () => {
     const state = await readState();
     const idx = state.series.findIndex((s) => s.id === id);
     if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
@@ -291,6 +301,9 @@ export async function updateSeries(id, patch = {}) {
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
       ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
       ...('origin' in patch ? { origin: patch.origin } : {}),
+      // Local-only "don't sync" marker — sanitizer normalizes anything
+      // non-true back to absent.
+      ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
@@ -298,8 +311,31 @@ export async function updateSeries(id, patch = {}) {
     state.series[idx] = next;
     await writeState(state);
     emitRecordUpdated('series', next.id);
-    return { merged: next, nameChanged: next.name !== cur.name };
+    return {
+      merged: next,
+      nameChanged: next.name !== cur.name,
+      // See updateUniverse — surface the transition pair so the post-queue
+      // side effects can wire subscribe / unsubscribe.
+      prevEphemeral: cur.ephemeral === true,
+      nextEphemeral: next.ephemeral === true,
+    };
   });
+  // Ephemeral lifecycle wiring — see updateUniverse for the rationale. false→true
+  // tears down per-record subs; true→false re-auto-subscribes so the now-
+  // shareable series reaches every peer with the pipeline category enabled.
+  if (prevEphemeral && !nextEphemeral) {
+    import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('series', merged.id)
+    ).catch((err) => {
+      console.log(`⚠️ series: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+    });
+  } else if (!prevEphemeral && nextEphemeral) {
+    import('../sharing/peerSync.js').then(({ unsubscribeAllForRecord }) =>
+      unsubscribeAllForRecord('series', merged.id)
+    ).catch((err) => {
+      console.log(`⚠️ series: unsubscribe after ephemeralizing failed: ${err.message}`);
+    });
+  }
   // Cascade rename onto the linked per-series media collection (if any) —
   // log but don't fail the save. Runs OUTSIDE the queue so the media-
   // collections write tail can't stall subsequent series mutators. No-op
@@ -459,12 +495,18 @@ export async function mergeSeriesFromSync(remoteSeries) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
       const sanitized = sanitizeSeries(remote);
       if (!sanitized) continue;
+      // Strip inbound `ephemeral` — see mergeUniversesFromSync.
+      if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
       if (!local) {
         // See universeBuilder.mergeUniversesFromSync — no local means no
         // cascade work, regardless of inbound tombstone state.
         localById.set(sanitized.id, sanitized);
         changed++;
+      } else if (local.ephemeral === true) {
+        // Local-ephemeral series are immune to inbound merges. See
+        // mergeUniversesFromSync for the contract.
+        continue;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';

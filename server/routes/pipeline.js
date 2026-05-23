@@ -207,6 +207,8 @@ const seriesCreateSchema = z.object({
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
   llm: llmSchema,
+  // Local-only "don't sync to peers" marker.
+  ephemeral: z.boolean().optional(),
 });
 
 const seriesPatchSchema = z.object({
@@ -226,6 +228,7 @@ const seriesPatchSchema = z.object({
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
   llm: llmSchema,
+  ephemeral: z.boolean().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 const arcFieldLockSchema = z.object({ locked: z.boolean() });
 
@@ -254,6 +257,7 @@ const issueCreateSchema = z.object({
   lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
   pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
   minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
+  ephemeral: z.boolean().optional(),
 });
 
 const stageInputSchema = z.object({
@@ -336,6 +340,7 @@ const issuePatchSchema = z.object({
   // Union order matters: Zod picks the first arm that succeeds, so the
   // more-specific schemas (visual, audio) must precede the bare base.
   stages: z.record(z.string(), z.union([visualStageInputSchema, audioStageInputSchema, stageInputSchema])).optional(),
+  ephemeral: z.boolean().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 const generateSchema = z.object({

@@ -57,19 +57,37 @@ export function sanitizeRecordForWire(kind, record) {
   // permanent mismatch + churn until both sides clean up the corrupt entries.
   if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
   if (!isNonEmptyStr(record.id)) return null;
+  // Ephemeral records are local-only — scratch universes/series/issues the
+  // user (or a test fixture) explicitly marks "don't sync to peers." Filter
+  // here so BOTH transports (60s snapshot + per-record push) skip them
+  // identically. We never emit `ephemeral` on the wire — the field stays
+  // local to whatever instance owns the record, and the wire checksum for
+  // non-ephemeral records is byte-stable against pre-flag peers.
+  //
+  // EXCEPT: tombstones (deleted=true) still cross the wire even when
+  // ephemeral=true. If a record was live + shared, then later marked
+  // ephemeral, then deleted, peers still have the live copy — they need
+  // the tombstone to converge. The strip-below-then-readd-tail dance
+  // ensures `ephemeral` never appears in the serialized wire form even
+  // when the record carries it on disk.
+  if (record.ephemeral === true && record.deleted !== true) return null;
   switch (kind) {
     case 'universe':
     case 'series':
     case 'issue': {
-      // Strip the soft-delete fields from the input first, then re-add them
-      // in canonical position at the END. JS object spread preserves key
-      // position when *overwriting* an existing key — without this strip, a
-      // record where `deleted` happens to sit in a non-tail position would
-      // serialize differently from a freshly-rewritten record where it sits
-      // at the tail, defeating the byte-stable-checksum invariant the
-      // dataSync snapshot loop relies on (computeChecksum uses
-      // JSON.stringify, which is key-order sensitive).
-      const { deleted: _deleted, deletedAt: _deletedAt, ...rest } = record;
+      // Strip the soft-delete fields AND the local-only `ephemeral` flag
+      // from the input first, then re-add the soft-delete pair in canonical
+      // position at the END. JS object spread preserves key position when
+      // *overwriting* an existing key — without this strip, a record where
+      // `deleted` happens to sit in a non-tail position would serialize
+      // differently from a freshly-rewritten record where it sits at the
+      // tail, defeating the byte-stable-checksum invariant the dataSync
+      // snapshot loop relies on (computeChecksum uses JSON.stringify, which
+      // is key-order sensitive). The `ephemeral` strip protects the same
+      // invariant for the tombstone-cross-wire case above: a deleted record
+      // that carried `ephemeral: true` on disk MUST hash identically against
+      // a pre-flag peer's tombstone for the same record.
+      const { deleted: _deleted, deletedAt: _deletedAt, ephemeral: _ephemeral, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     default:

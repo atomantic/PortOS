@@ -320,6 +320,11 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
     const { listSeries } = await import('../pipeline/series.js');
     records = await listSeries({ includeDeleted: false }).catch(() => []);
   }
+  // Drop ephemeral records before the set-difference / sub creation. The wire
+  // sanitizer would short-circuit any push anyway, but creating a sub that
+  // can never push leaves an orphan row in peer_subscriptions.json that
+  // confuses unsubscribe-all / tombstone-cursor lifecycle assumptions.
+  records = records.filter(r => r?.ephemeral !== true);
   if (records.length === 0) return [];
   // Compute the set difference up front: which local records aren't yet
   // subscribed to this peer? The peer:online convergence path fires this
@@ -367,6 +372,30 @@ export async function unsubscribeAllForPeer(peerId) {
   for (const sub of matching) {
     await unsubscribePeer(sub.id).catch((err) => {
       console.log(`⚠️ peerSync: unsubscribe-all failed for ${sub.id}: ${err.message}`);
+    });
+    removed.push(sub.id);
+  }
+  return { removed };
+}
+
+/**
+ * Drop every subscription tied to a single record (across all peers). Used
+ * when a record transitions to ephemeral via PATCH — the user just opted
+ * the record out of sync, so the existing subs (one per peer with the
+ * matching category enabled) need to go away. Peers keep their last-pushed
+ * copy on disk; this just stops future pushes. The user is responsible for
+ * any cross-peer cleanup beyond that (e.g., delete the record locally to
+ * tombstone-propagate, then mark a fresh record ephemeral).
+ */
+export async function unsubscribeAllForRecord(recordKind, recordId) {
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonEmptyStr(recordId)) {
+    return { removed: [] };
+  }
+  const matching = await listPeerSubscriptions({ recordKind, recordId });
+  const removed = [];
+  for (const sub of matching) {
+    await unsubscribePeer(sub.id).catch((err) => {
+      console.log(`⚠️ peerSync: unsubscribe-for-record failed for ${sub.id}: ${err.message}`);
     });
     removed.push(sub.id);
   }
@@ -642,7 +671,22 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const sanitizedIssues = childIssues
       .map((i) => sanitizeRecordForWire('issue', i))
       .filter(Boolean);
-    const assetManifest = await buildAssetManifestForSeries(record, childIssues);
+    // Drop ephemeral child issues BEFORE feeding into the asset-manifest
+    // builder. sanitizedIssues above already filters them via
+    // sanitizeRecordForWire's ephemeral check, but the asset-manifest builder
+    // takes the raw `childIssues` array — without the parallel filter here,
+    // ephemeral issues' image / video / image-ref filenames would still
+    // appear in the manifest the receiver pulls. The user-visible effect:
+    // private/scratch image bytes for an issue the user said "don't sync"
+    // would land on every peer's disk via pullMissingAssetsFromPeer.
+    // Tombstoned ephemeral issues (deleted=true + ephemeral=true) DO stay
+    // in the manifest input — matching sanitizeRecordForWire's same
+    // exception, so the tombstone propagates and the peer can finish
+    // cleaning up.
+    const manifestIssues = childIssues.filter(
+      (i) => !(i?.ephemeral === true && i?.deleted !== true),
+    );
+    const assetManifest = await buildAssetManifestForSeries(record, manifestIssues);
     return {
       kind: 'series',
       record: sanitized,
@@ -1013,32 +1057,45 @@ async function getIssueSeriesId(issueId) {
 }
 
 /**
- * Re-push every subscription targeting `peerId` whose initial push hasn't
- * landed yet (`lastPushedAt == null`). Fires on `peer:online` so a record
- * created while the peer was unreachable still reaches it the moment the
- * peer comes back — without this retry, the new record would sit in limbo
- * until the user edited it again (creation paths don't fire
- * `recordEvents.updated`, so the existing debounce listener never sees it).
+ * Re-fire `pushRecordToPeer` for every subscription targeting `peerId`.
+ * Fires on `peer:online` so the federation converges after offline edits
+ * or out-of-band file changes (e.g., a cleanup script that wrote tombstones
+ * directly to disk while PM2 was offline). The `lastPushedHash` short-
+ * circuit inside `pushRecordToPeer` skips the network call for any sub
+ * whose record content is byte-identical to what was last pushed, so a
+ * steady-state peer:online with N converged records pays N hash passes but
+ * zero HTTP requests.
  *
- * Already-pushed subs are filtered out so this can't double-push under load.
- * Failures stay non-fatal — the next `peer:online` (or the user's next edit)
- * gets another attempt.
+ * Originally this only retried subs with `lastPushedAt == null` (initial
+ * push never landed). That left a gap: any state change recorded directly
+ * on disk (a CLI cleanup script, a hand-edit, a recovered backup) AFTER an
+ * initial push succeeded would never re-push because `lastPushedAt` was
+ * set. The unconditional retry + hash short-circuit covers both the
+ * "initial push" and "out-of-band drift" cases with the same code path.
+ *
+ * Failures stay non-fatal — the next `peer:online` (or the user's next
+ * edit) gets another attempt.
  */
 export async function retryPendingPushesForPeer(peerId) {
   if (!isNonEmptyStr(peerId)) return { retried: 0 };
   const subs = await listPeerSubscriptions({ peerId });
-  const pending = subs.filter(s => !s.lastPushedAt);
-  if (pending.length === 0) return { retried: 0 };
-  console.log(`🔄 peerSync: retrying ${pending.length} pending push${pending.length === 1 ? '' : 'es'} → ${peerId}`);
-  for (const sub of pending) {
+  if (subs.length === 0) return { retried: 0 };
+  // Separate counter for the log line — only count subs that were never
+  // pushed (genuine retries) so steady-state convergence runs stay quiet.
+  const neverPushedCount = subs.filter(s => !s.lastPushedAt).length;
+  if (neverPushedCount > 0) {
+    console.log(`🔄 peerSync: retrying ${neverPushedCount} pending push${neverPushedCount === 1 ? '' : 'es'} → ${peerId}`);
+  }
+  for (const sub of subs) {
     await pushRecordToPeer(sub).catch((err) => {
       console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
     });
   }
-  return { retried: pending.length };
+  return { retried: subs.length };
 }
 
 let onUpdated = null;
+let onDeleted = null;
 let onPeerOnline = null;
 
 /** Attach the `recordEvents` + `peer:online` listeners — call once during sharing init. */
@@ -1050,6 +1107,23 @@ export function installPeerSyncListener() {
     });
   };
   recordEvents.on('updated', onUpdated);
+  // ALSO listen for `deleted` events so soft-deletes propagate via the
+  // per-record push pipeline. Without this, `deleteUniverse` /
+  // `deleteSeries` (which emit `recordEvents.deleted`, NOT `updated`) only
+  // reached peers via the 60s snapshot loop — and that loop is skipped for
+  // any (peer, kind) pair covered by a per-record sub
+  // (syncOrchestrator.categoriesCoveredByPeerSync). The result was that
+  // every soft-delete on a record with active peer subs got stranded
+  // locally. Route delete events through the same `triggerPushForRecord`
+  // path: pushRecordToPeer reads the record with `includeDeleted: true`
+  // and the wire sanitizer (now updated) lets tombstones cross even for
+  // ephemeral records.
+  onDeleted = ({ recordKind, recordId }) => {
+    triggerPushForRecord(recordKind, recordId).catch((err) => {
+      console.log(`⚠️ peerSync: delete listener error for ${recordKind}/${recordId}: ${err.message}`);
+    });
+  };
+  recordEvents.on('deleted', onDeleted);
   // On peer:online, drive the local subscription state to convergence with
   // the user's intent. Two cases:
   //
@@ -1097,8 +1171,10 @@ export async function __resetForTests() {
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
   if (onUpdated) recordEvents.off('updated', onUpdated);
+  if (onDeleted) recordEvents.off('deleted', onDeleted);
   if (onPeerOnline) instanceEvents.off('peer:online', onPeerOnline);
   onUpdated = null;
+  onDeleted = null;
   onPeerOnline = null;
   await writeTail.catch(() => {});
 }

@@ -695,6 +695,57 @@ describe("universeBuilder service", () => {
         const fresh = await collections.getCollection(linked.id);
         expect(fresh.universeId).toBeNull();
       });
+
+      it("local-ephemeral universes are IMMUNE to inbound merges (peer edits + tombstones both refused)", async () => {
+        // The user marks a universe ephemeral to fork it private. A peer
+        // that still has the pre-ephemeral version (or has a reverse
+        // subscription) must not be able to overwrite local content or
+        // trigger an orphan cascade by deleting their copy.
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, { ephemeral: true });
+        const localBefore = await svc.getUniverse(w.id);
+        // Inbound edit with NEWER updatedAt — would normally win via LWW.
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const editResult = await svc.mergeUniversesFromSync([{
+          ...w,
+          name: "Should Not Land",
+          updatedAt: editTs,
+        }]);
+        expect(editResult.applied).toBe(false);
+        const localAfterEdit = await svc.getUniverse(w.id);
+        expect(localAfterEdit.name).toBe(localBefore.name);
+        expect(localAfterEdit.ephemeral).toBe(true);
+        // Inbound tombstone with NEWER updatedAt — would normally tombstone.
+        const tombstoneTs = new Date(Date.now() + 120_000).toISOString();
+        const deleteResult = await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(deleteResult.applied).toBe(false);
+        const stillLive = await svc.getUniverse(w.id);
+        expect(stillLive.deleted).toBeFalsy();
+      });
+
+      it("strips inbound `ephemeral` field — peers cannot plant a 'dark' record on the receiver", async () => {
+        // The wire never carries `ephemeral`, but a buggy / older / non-
+        // conformant peer (or the share-bucket importer's mutator-form
+        // path) could ship a record with `ephemeral: true`. The receiver
+        // must NOT honor that — it's a local-only marker by contract.
+        const ghostId = "550e8400-0000-0000-0000-000000000aaa";
+        const ts = new Date().toISOString();
+        await svc.mergeUniversesFromSync([{
+          id: ghostId,
+          name: "Inbound Poison",
+          ephemeral: true, // attempt to plant a dark record
+          updatedAt: ts,
+        }]);
+        const inbound = await svc.getUniverse(ghostId);
+        expect(inbound.name).toBe("Inbound Poison");
+        // Receiver scrubs the field — record is normal-syncable.
+        expect(inbound.ephemeral).toBeUndefined();
+      });
     });
 
     describe("pruneTombstonedUniverses", () => {

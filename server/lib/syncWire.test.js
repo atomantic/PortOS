@@ -116,6 +116,54 @@ describe('syncWire', () => {
       expect(sanitizeRecordForWire('universe', corrupt))
         .toEqual({ id: 'u1', deleted: false, deletedAt: null });
     });
+
+    it('returns null for live ephemeral records — they never cross the wire', () => {
+      // All three record kinds honor the ephemeral filter so a local-only
+      // scratch record stays off the federation regardless of which
+      // category's transport picks it up.
+      expect(sanitizeRecordForWire('universe', { id: 'u1', name: 'U', ephemeral: true })).toBeNull();
+      expect(sanitizeRecordForWire('series', { id: 's1', name: 'S', ephemeral: true })).toBeNull();
+      expect(sanitizeRecordForWire('issue', { id: 'i1', seriesId: 's1', title: 'I', ephemeral: true })).toBeNull();
+    });
+
+    it('lets tombstones for ephemeral records cross the wire (a record that was once shared then marked ephemeral then deleted)', () => {
+      // The ephemeral filter intentionally does NOT apply when deleted=true.
+      // History that matters: U was created live → peer auto-subscribed →
+      // user PATCHed { ephemeral: true } → user soft-deleted U. The peer
+      // still has the live copy on disk; the tombstone has to reach them
+      // for convergence. The wire output strips the `ephemeral` field
+      // entirely so the checksum is byte-stable against a pre-flag peer's
+      // tombstone for the same record.
+      const tombstone = { id: 'u1', name: 'U', ephemeral: true, deleted: true, deletedAt: '2026-05-22T00:00:00Z' };
+      const result = sanitizeRecordForWire('universe', tombstone);
+      expect(result).not.toBeNull();
+      expect(result.ephemeral).toBeUndefined();
+      expect(result.deleted).toBe(true);
+      expect(result.deletedAt).toBe('2026-05-22T00:00:00Z');
+    });
+
+    it('strips a stray `ephemeral: false` from the wire output (byte-stable checksum vs pre-flag peers)', () => {
+      // Defensive: if any code path persists `ephemeral: false` on disk
+      // (legacy data, hand-edit, importer bypass), the wire JSON must NOT
+      // carry the field — otherwise the snapshot checksum diverges from a
+      // pre-flag peer's snapshot for the same record and the 60s loop
+      // churns forever.
+      const result = sanitizeRecordForWire('universe', { id: 'u1', name: 'U', ephemeral: false });
+      expect(result).not.toBeNull();
+      expect(result.ephemeral).toBeUndefined();
+      // Byte-stable shape against a record with no `ephemeral` key at all:
+      const reference = sanitizeRecordForWire('universe', { id: 'u1', name: 'U' });
+      expect(JSON.stringify(result)).toBe(JSON.stringify(reference));
+    });
+
+    it('non-true ephemeral values are NOT filtered for LIVE records (truthy-but-not-true is treated as live)', () => {
+      // Matches the soft-delete posture — only the literal `true` triggers
+      // the filter so a corrupted payload (`ephemeral: 1` / `'yes'`) can't
+      // accidentally remove a record from sync.
+      expect(sanitizeRecordForWire('universe', { id: 'u1', ephemeral: 1 })).not.toBeNull();
+      expect(sanitizeRecordForWire('universe', { id: 'u1', ephemeral: 'yes' })).not.toBeNull();
+      expect(sanitizeRecordForWire('universe', { id: 'u1', ephemeral: false })).not.toBeNull();
+    });
   });
 
   describe('sanitizeStateForWire', () => {
@@ -152,6 +200,18 @@ describe('syncWire', () => {
       const result = sanitizeStateForWire('universe', state);
       expect(result.data.universes).toHaveLength(2);
       expect(result.data.universes[1].deleted).toBe(true);
+    });
+
+    it('drops ephemeral records from the snapshot — they live local-only', () => {
+      const state = {
+        universes: [
+          { id: 'live' },
+          { id: 'scratch', ephemeral: true },
+        ],
+      };
+      const result = sanitizeStateForWire('universe', state);
+      expect(result.data.universes).toHaveLength(1);
+      expect(result.data.universes[0].id).toBe('live');
     });
 
     it('returns series + issues for pipeline kind', () => {

@@ -413,6 +413,11 @@ const sanitizeIssue = (raw) => {
     updatedAt,
     // Soft-delete fields — see universeBuilder.sanitizeTemplate.
     ...sanitizeSoftDeleteFields(raw),
+    // Local-only "don't sync to peers" marker. Issues piggyback on their
+    // parent series' subscription, so marking an issue ephemeral keeps the
+    // series push payload from carrying it (sanitizeRecordForWire drops it
+    // and the series's bundled-issues filter discards the null entry).
+    ...(raw.ephemeral === true ? { ephemeral: true } : {}),
   };
 };
 
@@ -513,6 +518,7 @@ export function createIssue(input = {}) {
       stages: input.stages || {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ephemeral: input.ephemeral === true,
     });
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
     state.issues.push(next);
@@ -724,6 +730,10 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
       ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
       ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
       ...('origin' in patch ? { origin: patch.origin } : {}),
+      // Local-only "don't sync" marker. Issues piggyback on their parent
+      // series' subscription, so an ephemeral issue is dropped from the
+      // series push payload via sanitizeRecordForWire returning null.
+      ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
       stages: mergedStages,
       updatedAt: new Date().toISOString(),
     });
@@ -905,6 +915,8 @@ export function mergeIssuesFromSync(remoteIssues) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
       const sanitized = sanitizeIssue(remote);
       if (!sanitized) continue;
+      // Strip inbound `ephemeral` — see mergeUniversesFromSync.
+      if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
       if (!local) {
         // No local counterpart — accept the record but don't trigger a
@@ -913,6 +925,10 @@ export function mergeIssuesFromSync(remoteIssues) {
         // we may not even own would spuriously re-export.
         localById.set(sanitized.id, sanitized);
         changed++;
+      } else if (local.ephemeral === true) {
+        // Local-ephemeral issues are immune to inbound merges. See
+        // mergeUniversesFromSync for the contract.
+        continue;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';

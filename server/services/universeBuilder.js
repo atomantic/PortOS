@@ -755,6 +755,12 @@ const sanitizeTemplate = (raw) => {
     updatedAt,
     deleted,
     deletedAt,
+    // Local-only "don't sync to peers" marker. Only persisted when true so
+    // every existing universe keeps the same on-disk shape — and so the wire
+    // checksum stays byte-stable for non-ephemeral records (see
+    // sanitizeRecordForWire). Mark a scratch universe ephemeral to keep it
+    // off the federation; test fixtures stamp this too.
+    ...(raw.ephemeral === true ? { ephemeral: true } : {}),
   };
 };
 
@@ -881,20 +887,30 @@ export async function createUniverse(input = {}) {
       llm: input.llm || {},
       createdAt: now,
       updatedAt: now,
+      // Optional local-only marker — when true, every sync transport
+      // (snapshot loop + per-record push) skips this universe (see
+      // sanitizeRecordForWire) and the auto-subscribe below short-circuits.
+      ephemeral: input.ephemeral === true,
     });
     state.universes.push(next);
     await writeState(state);
     return next;
   });
   // Fire-and-forget auto-subscribe to every peer with universe-sync enabled.
+  // Skip the auto-subscribe entirely for ephemeral universes — the push
+  // would short-circuit anyway via sanitizeRecordForWire returning null, but
+  // not creating the subscription in the first place keeps peer_subscriptions.json
+  // free of orphan rows tied to records the user explicitly excluded.
   // Dynamic import keeps peerSync.js OUT of the universeBuilder module-load
   // graph — peerSync already imports getUniverse / mergeUniversesFromSync
   // from here, so a static import would close a cycle.
-  import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
-    autoSubscribeRecordToAllPeers('universe', created.id)
-  ).catch((err) => {
-    console.log(`⚠️ universe: auto-subscribe after create failed: ${err.message}`);
-  });
+  if (!created.ephemeral) {
+    import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('universe', created.id)
+    ).catch((err) => {
+      console.log(`⚠️ universe: auto-subscribe after create failed: ${err.message}`);
+    });
+  }
   return created;
 }
 
@@ -949,7 +965,7 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //     unchanged record (no `updatedAt` bump, no rename cascade, no
   //     `recordUpdated` emit).
   const isMutator = typeof patchOrMutator === 'function';
-  const { merged, nameChanged, skipped, removedCharacterIds } = await queueUniverseWrite(async () => {
+  const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await queueUniverseWrite(async () => {
     const state = await readState();
     const idx = state.universes.findIndex((w) => w.id === id);
     if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
@@ -1005,6 +1021,10 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       'characters', 'places', 'objects',
       // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
       'origin',
+      // Local-only "don't sync" marker — see sanitizeTemplate. Sanitizer
+      // normalizes anything non-true back to absent so a stray PATCH can't
+      // re-enable sync by sending `ephemeral: 'false'`.
+      'ephemeral',
     ];
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
@@ -1118,6 +1138,12 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       nameChanged: mergedRecord.name !== cur.name,
       skipped: false,
       removedCharacterIds,
+      // Surface the (prev, next) ephemeral pair so the post-queue side
+      // effects can wire subscribe / unsubscribe for the transition.
+      // Compare against `cur` (the pre-merge record) so transitions are
+      // detected regardless of patch shape (literal-object or mutator).
+      prevEphemeral: cur.ephemeral === true,
+      nextEphemeral: mergedRecord.ephemeral === true,
     };
   });
   if (skipped) return merged;
@@ -1132,6 +1158,32 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   if (nameChanged) {
     await renameCollectionForUniverse(merged.id, merged.name).catch((err) => {
       console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
+    });
+  }
+  // Ephemeral lifecycle wiring — fires AFTER the queued write so the on-disk
+  // state already reflects the transition before any peer-sync work runs.
+  // false→true: tear down every existing per-record sub for this universe
+  //             (peers keep their last-pushed copy on disk; we just stop
+  //             future pushes). Mirror of createUniverse's `if (!created.ephemeral)`
+  //             auto-subscribe-skip — both ends of the lifecycle keep
+  //             peer_subscriptions.json free of orphan rows.
+  // true→false: fire autoSubscribeRecordToAllPeers so the now-shareable
+  //             record reaches every peer with the universe category
+  //             enabled. The 60s snapshot loop is skipped for kinds covered
+  //             by per-record subs (see syncOrchestrator.categoriesCoveredByPeerSync),
+  //             so without this re-subscribe the record would be silently
+  //             invisible to those peers.
+  if (prevEphemeral && !nextEphemeral) {
+    import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('universe', merged.id)
+    ).catch((err) => {
+      console.log(`⚠️ universe: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+    });
+  } else if (!prevEphemeral && nextEphemeral) {
+    import('./sharing/peerSync.js').then(({ unsubscribeAllForRecord }) =>
+      unsubscribeAllForRecord('universe', merged.id)
+    ).catch((err) => {
+      console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
     });
   }
   emitRecordUpdated('universe', merged.id);
@@ -1227,6 +1279,13 @@ export async function mergeUniversesFromSync(remoteUniverses) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
       const sanitized = sanitizeTemplate(remote);
       if (!sanitized) continue;
+      // `ephemeral` is a LOCAL-only marker — never trust the inbound value.
+      // sanitizeTemplate preserves whatever the raw input carried; strip it
+      // here so a buggy/older/non-conformant peer (or the share-bucket
+      // importer's mutator-form path) can't plant a "dark" record on us
+      // that's permanently un-syncable. The on-disk-only contract is
+      // enforced on the receive boundary.
+      if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
       if (!local) {
         // No local counterpart — accept the record (live OR tombstone) but
@@ -1236,6 +1295,18 @@ export async function mergeUniversesFromSync(remoteUniverses) {
         // never existed.
         localById.set(sanitized.id, sanitized);
         changed++;
+      } else if (local.ephemeral === true) {
+        // Local-ephemeral records are IMMUNE to inbound merges. The user
+        // explicitly marked this record local-only — peer edits can't
+        // overwrite its content, peer deletes can't trigger our orphan
+        // cascade, and the post-merge asset-pull worker never gets the
+        // chance to download bytes for it. The sender may still have a
+        // reverse subscription on their side; we silently drop the push.
+        // Pre-ephemeral subs on OUR side are torn down by the
+        // updateUniverse PATCH transition (see "ephemeral lifecycle" wiring)
+        // so this branch should only fire for cross-peer fan-out or
+        // share-bucket import paths.
+        continue;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';

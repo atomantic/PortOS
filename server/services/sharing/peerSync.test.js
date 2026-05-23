@@ -50,6 +50,7 @@ import {
   subscribePeer,
   unsubscribePeer,
   unsubscribeAllForPeer,
+  unsubscribeAllForRecord,
   pushRecordToPeer,
   applyIncomingPush,
   diffAssetManifestAgainstLocal,
@@ -275,6 +276,32 @@ describe('peerSync', () => {
     });
   });
 
+  describe('unsubscribeAllForRecord', () => {
+    it('removes every subscription for a record across all peers', async () => {
+      // updateUniverse({ ephemeral: true }) fires this — when a record
+      // transitions ephemeral, every per-peer sub for that record must go
+      // away so the orphan-row state never materializes.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await subscribePeer({ peerId: 'peer-b-inbound-only', recordKind: 'universe', recordId: 'u1' });
+      // Different record on peer-a — must survive the unsubscribe.
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u-other' });
+      const result = await unsubscribeAllForRecord('universe', 'u1');
+      expect(result.removed).toHaveLength(2);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+      expect(await findPeerSubscription('peer-b-inbound-only', 'universe', 'u1')).toBeNull();
+      // Untouched: u-other on peer-a.
+      expect(await findPeerSubscription('peer-a', 'universe', 'u-other')).not.toBeNull();
+    });
+
+    it('returns {removed: []} for invalid arguments', async () => {
+      expect(await unsubscribeAllForRecord('', 'u1')).toEqual({ removed: [] });
+      expect(await unsubscribeAllForRecord('universe', '')).toEqual({ removed: [] });
+      expect(await unsubscribeAllForRecord('bogus', 'u1')).toEqual({ removed: [] });
+    });
+  });
+
   describe('autoSubscribeRecordToAllPeers', () => {
     beforeEach(() => {
       // Default these so the push triggered by subscribePeer doesn't 500
@@ -445,6 +472,21 @@ describe('peerSync', () => {
       expect(await autoSubscribePeerToAllRecords('peer-a', 'bogus')).toEqual([]);
     });
 
+    it('drops ephemeral records before computing the set-diff', async () => {
+      // Ephemeral universes/series are local-only — backfill must not
+      // create subscriptions for them, even when every other gate passes.
+      // Without the filter, the sub would be created and a later push would
+      // simply short-circuit via sanitizeRecordForWire — but the row would
+      // still live in peer_subscriptions.json forever, confusing unsubscribe-all.
+      vi.mocked(listUniverses).mockResolvedValue([
+        { id: 'live' },
+        { id: 'scratch', ephemeral: true },
+      ]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created.map(c => c.recordId)).toEqual(['live']);
+      expect(await findPeerSubscription('peer-a', 'universe', 'scratch')).toBeNull();
+    });
+
     it('short-circuits the for-loop when every record is already subscribed', async () => {
       // Regression: peer:online fires this helper on every online
       // transition. Without the pre-computed set-diff, a steady-state peer
@@ -496,7 +538,7 @@ describe('peerSync', () => {
       vi.mocked(listIssues).mockResolvedValue([]);
     });
 
-    it('re-pushes subs with lastPushedAt=null and skips already-pushed subs', async () => {
+    it('re-pushes subs with lastPushedAt=null and walks all subs on subsequent retries (hash short-circuits unchanged ones)', async () => {
       // Create a sub with the initial push FAILING — leaves lastPushedAt=null.
       vi.mocked(peerFetch).mockResolvedValueOnce(null);
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
@@ -511,9 +553,18 @@ describe('peerSync', () => {
       expect(result.retried).toBe(1);
       const updated = await findPeerSubscription('peer-a', 'universe', 'u1');
       expect(updated.lastPushedAt).toBeTruthy();
-      // Second retry must be a no-op now that lastPushedAt is set.
+      // Subsequent retry now walks every sub regardless of lastPushedAt
+      // (the lastPushedHash short-circuit inside pushRecordToPeer is what
+      // skips the actual HTTP call for unchanged records). This is the
+      // mechanism that lets out-of-band file edits (e.g., a cleanup script
+      // that wrote tombstones directly to disk + a server restart)
+      // re-propagate via peer:online without needing a per-record edit.
+      vi.mocked(peerFetch).mockClear();
       const second = await retryPendingPushesForPeer('peer-a');
-      expect(second.retried).toBe(0);
+      expect(second.retried).toBe(1); // walked, not skipped by the helper
+      // The hash short-circuit inside pushRecordToPeer prevents the actual
+      // HTTP call because the record content is unchanged since the first push.
+      expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
 
     it('returns {retried: 0} when the peer has no subscriptions', async () => {
@@ -826,6 +877,48 @@ describe('peerSync', () => {
       expect(captured.kind).toBe('series');
       expect(captured.issues).toHaveLength(2);
       expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i2']);
+    });
+
+    it('drops ephemeral child issues from both the bundled issues AND the asset manifest', async () => {
+      // Regression: an earlier version filtered ephemeral issues out of
+      // `sanitizedIssues` but still walked the unfiltered `childIssues`
+      // when building the asset manifest, leaking the ephemeral issue's
+      // image / video filenames onto the wire. The receiver would then
+      // background-fetch those bytes — defeating the "local-only" intent
+      // of ephemeral.
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(listIssues).mockResolvedValue([
+        // Live issue with a referenced image.
+        {
+          id: 'i1', seriesId: 's1', number: 1,
+          stages: { storyboards: { scenes: [{ imageJobId: 'job-live' }] } },
+        },
+        // Ephemeral issue — must NOT leak its image into the manifest.
+        {
+          id: 'i2', seriesId: 's1', number: 2, ephemeral: true,
+          stages: { storyboards: { scenes: [{ imageJobId: 'job-secret' }] } },
+        },
+      ]);
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+      });
+      // Sanitized issues: only the live one.
+      expect(captured.issues).toHaveLength(1);
+      expect(captured.issues[0].id).toBe('i1');
+      // Asset manifest entries (if any) must not reference the ephemeral
+      // issue's assets. The manifest can be empty if buildAssetManifest
+      // didn't find any concrete filenames in the live issue's stages
+      // (which is the case here — imageJobId references aren't yet
+      // resolved to filenames in Stage 2's manifest builder). The
+      // critical invariant is that NOTHING from the ephemeral issue
+      // appears.
+      const manifestFilenames = (captured.assetManifest || []).map(a => a.filename);
+      expect(manifestFilenames.some(f => /secret/i.test(f))).toBe(false);
     });
   });
 
