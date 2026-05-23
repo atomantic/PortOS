@@ -913,7 +913,15 @@ export async function applyIncomingPush(payload) {
   // snapshot-sync cycle will reconcile the collection if it diverged. The
   // sanitizer in mediaCollections strips a peer-supplied `id` that isn't a
   // string, so a bogus payload can't plant a malformed row.
-  if (linkedCollection && typeof linkedCollection === 'object') {
+  //
+  // Defense in depth on the peer-supplied envelope: require a plain object
+  // (arrays would get wrapped and the sanitizer would drop them, but
+  // skipping early avoids the wasted call) AND refuse to merge when the
+  // record we just applied is a tombstone (`record.deleted === true`). The
+  // sender already skips bundling for tombstones, so a present
+  // `linkedCollection` on a tombstone push is either a bug or a malicious
+  // peer trying to resurrect a collection during a delete propagation.
+  if (record.deleted !== true && isPlainObject(linkedCollection)) {
     await mergeMediaCollectionsFromSync([linkedCollection]).catch((err) => {
       console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
     });

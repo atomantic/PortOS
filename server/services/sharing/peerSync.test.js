@@ -1245,6 +1245,39 @@ describe('peerSync', () => {
       expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
     });
 
+    it('refuses to merge linkedCollection when the incoming record is a tombstone', async () => {
+      // Defense in depth: the sender's buildPushPayload already skips the
+      // bundle for tombstones, but a buggy or malicious peer could send
+      // one anyway. Receiving a collection during a delete propagation
+      // would resurrect collection state for a record being torn down.
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
+        linkedCollection: { id: 'col-1', name: 'Universe: U', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses to merge linkedCollection when it is not a plain object (array, primitive)', async () => {
+      // Wrapping a non-plain-object in `[...]` and passing to the merge
+      // function would just produce a no-op (sanitizeCollection drops
+      // non-objects), but skipping early keeps the trust posture clean
+      // and the failure mode obvious.
+      for (const bogus of [[], ['a'], 'string', 42, true]) {
+        vi.mocked(mergeMediaCollectionsFromSync).mockClear();
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', deleted: false, deletedAt: null },
+          linkedCollection: bogus,
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+        });
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      }
+    });
+
     it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {
       await applyIncomingPush({
         kind: 'series',
