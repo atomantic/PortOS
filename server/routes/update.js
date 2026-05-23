@@ -81,15 +81,18 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
     );
   }
 
+  // Default mirrors syncFork()'s internal default so error messaging matches
+  // the actual branch the gh call targeted.
+  const targetBranch = branch || 'main';
   const result = await updateChecker.syncFork({ branch, remoteInfo: info }).catch(err => {
     const msg = err.message || 'Fork sync failed';
     // gh's "would not be a fast forward" / "diverged" error → 409 so client
     // can show the "you have local customizations" guidance
     if (/fast forward|diverge|non-fast/i.test(msg)) {
       throw new ServerError(
-        `Fork sync would overwrite commits on ${info.fullName}'s main branch (GitHub): ${msg}. ` +
+        `Fork sync would overwrite commits on ${info.fullName}'s ${targetBranch} branch (GitHub): ${msg}. ` +
         `Move customizations to a feature branch, PR them upstream, or run ` +
-        `\`gh repo sync ${info.fullName} --force\` from a terminal if you want to discard them.`,
+        `\`gh repo sync ${info.fullName} --branch ${targetBranch} --force\` from a terminal if you want to discard them.`,
         { status: 409, code: 'FORK_DIVERGED' }
       );
     }
