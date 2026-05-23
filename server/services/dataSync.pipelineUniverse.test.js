@@ -23,8 +23,8 @@ afterAll(cleanup);
 
 const dataSync = await import('./dataSync.js');
 
-const SERIES_PATH = join(tempRoot, 'pipeline-series.json');
-const ISSUES_PATH = join(tempRoot, 'pipeline-issues.json');
+const SERIES_DIR = join(tempRoot, 'pipeline-series');
+const ISSUES_DIR = join(tempRoot, 'pipeline-issues');
 const UNIVERSES_DIR = join(tempRoot, 'universes');
 const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
 
@@ -36,6 +36,32 @@ function writeJSON(path, obj) {
 function readJSON(path) {
   return JSON.parse(readFileSync(path, 'utf-8'));
 }
+
+function writeCollectionState(dir, type, records) {
+  mkdirSync(dir, { recursive: true });
+  writeJSON(join(dir, 'index.json'), {
+    schemaVersion: 1,
+    type,
+    updatedAt: '2026-05-17T09:00:00Z',
+    config: {},
+  });
+  for (const record of records) {
+    mkdirSync(join(dir, record.id), { recursive: true });
+    writeJSON(join(dir, record.id, 'index.json'), record);
+  }
+}
+
+function readCollectionState(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readJSON(join(dir, entry.name, 'index.json')));
+}
+
+const writeSeriesState = (series) => writeCollectionState(SERIES_DIR, 'pipelineSeries', series);
+const writeIssueState = (issues) => writeCollectionState(ISSUES_DIR, 'pipelineIssues', issues);
+const readSeriesState = () => readCollectionState(SERIES_DIR);
+const readIssueState = () => readCollectionState(ISSUES_DIR);
 
 // Write the universes split layout (migration 034's output): one
 // `universes/<id>/index.json` per record + a type-level `universes/index.json`
@@ -202,12 +228,8 @@ describe('dataSync — universe category', () => {
 
 describe('dataSync — pipeline category', () => {
   it('snapshot bundles series + issues from their respective files', async () => {
-    writeJSON(SERIES_PATH, {
-      series: [{ id: 'ser-1', name: 'A', updatedAt: '2026-05-17T10:00:00Z' }]
-    });
-    writeJSON(ISSUES_PATH, {
-      issues: [{ id: 'iss-1', seriesId: 'ser-1', title: 'One', updatedAt: '2026-05-17T10:00:00Z' }]
-    });
+    writeSeriesState([{ id: 'ser-1', name: 'A', updatedAt: '2026-05-17T10:00:00Z' }]);
+    writeIssueState([{ id: 'iss-1', seriesId: 'ser-1', title: 'One', updatedAt: '2026-05-17T10:00:00Z' }]);
     const snap = await dataSync.getSnapshot('pipeline');
     expect(snap.data.series).toHaveLength(1);
     expect(snap.data.issues).toHaveLength(1);
@@ -221,8 +243,8 @@ describe('dataSync — pipeline category', () => {
   });
 
   it('applyRemote merges series + issues; count reports records actually changed', async () => {
-    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }] });
-    writeJSON(ISSUES_PATH, { issues: [] });
+    writeSeriesState([{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]);
+    writeIssueState([]);
 
     const result = await dataSync.applyRemote('pipeline', {
       series: [
@@ -242,21 +264,21 @@ describe('dataSync — pipeline category', () => {
     expect(result.seriesChanged).toBe(2);
     expect(result.issuesChanged).toBe(1);
 
-    const persistedSeries = readJSON(SERIES_PATH).series;
+    const persistedSeries = readSeriesState();
     expect(persistedSeries).toHaveLength(2);
     expect(persistedSeries.find(s => s.id === 'ser-1').name).toBe('New'); // LWW
     expect(persistedSeries.find(s => s.id === 'ser-2').name).toBe('Foundry');
 
-    const persistedIssues = readJSON(ISSUES_PATH).issues;
+    const persistedIssues = readIssueState();
     expect(persistedIssues).toHaveLength(1);
     expect(persistedIssues[0].seriesId).toBe('ser-2');
   });
 
   it('applyRemote count reports only the changed side when only series differs', async () => {
-    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }] });
+    writeSeriesState([{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]);
     // Local issues exist but won't change — sync must not inflate count to
     // include them (the pre-fix bug counted total post-merge issues).
-    writeJSON(ISSUES_PATH, { issues: [{ id: 'iss-1', seriesId: 'ser-1', title: 'Local', updatedAt: '2026-05-17T10:00:00Z' }] });
+    writeIssueState([{ id: 'iss-1', seriesId: 'ser-1', title: 'Local', updatedAt: '2026-05-17T10:00:00Z' }]);
 
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', name: 'New', updatedAt: '2026-05-17T11:00:00Z' }],
@@ -269,22 +291,22 @@ describe('dataSync — pipeline category', () => {
   });
 
   it('applyRemote is a no-op when nothing is newer', async () => {
-    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T10:00:00Z' }] });
-    writeJSON(ISSUES_PATH, { issues: [{ id: 'iss-1', updatedAt: '2026-05-17T10:00:00Z' }] });
+    writeSeriesState([{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]);
+    writeIssueState([{ id: 'iss-1', seriesId: 'ser-1', title: 'Local', updatedAt: '2026-05-17T10:00:00Z' }]);
 
-    const before = readJSON(SERIES_PATH);
+    const before = readSeriesState();
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', updatedAt: '2026-05-17T10:00:00Z' }], // same ts
       issues: [{ id: 'iss-1', updatedAt: '2026-05-17T09:00:00Z' }]  // older
     });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
-    expect(readJSON(SERIES_PATH)).toEqual(before);
+    expect(readSeriesState()).toEqual(before);
   });
 
   it('applyRemote skips writes for unchanged sides (writes only what differs)', async () => {
-    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T10:00:00Z' }] });
-    writeJSON(ISSUES_PATH, { issues: [] });
+    writeSeriesState([{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]);
+    writeIssueState([]);
 
     // Only issues change. Use a valid issue payload (id + seriesId + title)
     // since the merge now routes through sanitizeIssue.
@@ -295,8 +317,8 @@ describe('dataSync — pipeline category', () => {
 
     // Series file untouched (no incidental rewrite that could clobber a
     // concurrent write outside the sync orchestrator).
-    expect(readJSON(SERIES_PATH).series[0].updatedAt).toBe('2026-05-17T10:00:00Z');
-    expect(readJSON(ISSUES_PATH).issues).toHaveLength(1);
+    expect(readSeriesState()[0].updatedAt).toBe('2026-05-17T10:00:00Z');
+    expect(readIssueState()).toHaveLength(1);
   });
 });
 
@@ -326,13 +348,13 @@ describe('dataSync — getChecksum cache', () => {
   });
 
   it('reflects an out-of-band file mutation (pipeline series changes outside this service)', async () => {
-    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T10:00:00Z' }] });
-    writeJSON(ISSUES_PATH, { issues: [] });
+    writeSeriesState([{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }]);
+    writeIssueState([]);
     const before = await dataSync.getChecksum('pipeline');
     // Force a different mtime — vitest can run faster than the FS's ms tick,
     // so wait long enough that the mtime is guaranteed to advance.
     await new Promise((r) => setTimeout(r, 5));
-    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T11:00:00Z' }] });
+    writeSeriesState([{ id: 'ser-1', name: 'New', updatedAt: '2026-05-17T11:00:00Z' }]);
     const after = await dataSync.getChecksum('pipeline');
     expect(after.checksum).not.toBe(before.checksum);
   });

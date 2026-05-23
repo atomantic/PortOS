@@ -31,7 +31,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v5 = post-split. Migration 034 introduced it. The per-record-shape version
   // stays at 4 (stamped inside each record by `sanitizeTemplate`).
   universes: 5,
-  // future: series: N, issues: N, mediaCollections: N, ...
+  // v1 = post-split. Migrations 035/036 introduced the pipeline collection
+  // layout for issues and series.
+  pipelineIssues: 1,
+  pipelineSeries: 1,
+  // future: mediaCollections: N, ...
 });
 
 /**

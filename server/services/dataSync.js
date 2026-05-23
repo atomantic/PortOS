@@ -19,7 +19,7 @@ import {
 } from '../lib/schemaVersions.js';
 import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
-import { mergeIssuesFromSync } from './pipeline/issues.js';
+import { mergeIssuesFromSync, listIssues } from './pipeline/issues.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
@@ -32,8 +32,8 @@ const CHRONOTYPE_FILE = join(PATHS.digitalTwin, 'chronotype.json');
 const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
 const FEEDBACK_FILE = join(PATHS.digitalTwin, 'feedback.json');
 const MEATSPACE_DIR = PATHS.meatspace;
-const PIPELINE_SERIES_FILE = join(PATHS.data, 'pipeline-series.json');
-const PIPELINE_ISSUES_FILE = join(PATHS.data, 'pipeline-issues.json');
+const PIPELINE_SERIES_DIR = join(PATHS.data, 'pipeline-series');
+const PIPELINE_ISSUES_DIR = join(PATHS.data, 'pipeline-issues');
 // Universes used to live in a single `universe-builder.json`; migration 034
 // splits them into `data/universes/<id>/index.json` with a type-level
 // `data/universes/index.json`. Sync uses the directory for both reading
@@ -386,26 +386,22 @@ async function applyUniverseRemote(remoteData) {
 // --- Category: Pipeline ---
 
 async function getPipelineSnapshot() {
-  const [seriesFile, issuesFile] = await Promise.all([
-    readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
-    readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
+  const [series, issues] = await Promise.all([
+    listSeries({ includeDeleted: true }),
+    listIssues({ includeDeleted: true }),
   ]);
   // Wire-projection lives in `server/lib/syncWire.js` — see getUniverseSnapshot.
   const { data } = sanitizeStateForWire('pipeline', {
-    series: seriesFile.series,
-    issues: issuesFile.issues,
+    series,
+    issues,
   });
   return { data, checksum: computeChecksum(data) };
 }
 
 async function applyPipelineRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
-  // Routes through the per-file merge entry points so each side's
-  // read-modify-write runs INSIDE its own file-level write queue
-  // (`queueSeriesWrite` / `queueIssueWrite`) — serialized against every other
-  // local writer (bible edits, season metadata PATCH, season-cover render
-  // PATCH, updateStage, etc.). Each incoming record passes through its
-  // service's sanitizer for shape enforcement on the way in.
+  // Routes through the service merge entry points so each incoming record
+  // passes through the same sanitizer and LWW contract as local writes.
   const [seriesResult, issuesResult] = await Promise.all([
     mergeSeriesFromSync(remoteData.series || []),
     mergeIssuesFromSync(remoteData.issues || []),
@@ -541,13 +537,13 @@ const CHECKSUM_PATHS = {
   digitalTwin: Object.values(DIGITAL_TWIN_FILES).map((f) => f.path),
   meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
   universe: [UNIVERSE_BUILDER_DIR],
-  pipeline: [PIPELINE_SERIES_FILE, PIPELINE_ISSUES_FILE],
+  pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR],
   // mediaCollections invalidates on its own file AND on the parent record
   // files — `getMediaCollectionsSnapshot` filters collections whose linked
   // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
   // must re-checksum the collections snapshot even though
   // media-collections.json itself didn't move. Same goes for un-ephemeral.
-  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_FILE],
+  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR],
 };
 
 const CATEGORIES = {

@@ -18,6 +18,11 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // deliberate two-file edit.
     expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(5);
   });
+
+  it('declares pipeline collection layout versions', () => {
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(1);
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(1);
+  });
 });
 
 describe('buildPortosMeta', () => {
@@ -25,6 +30,8 @@ describe('buildPortosMeta', () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.schemaVersions.universes).toBe(5);
+    expect(meta.schemaVersions.pipelineIssues).toBe(1);
+    expect(meta.schemaVersions.pipelineSeries).toBe(1);
   });
 
   it('overrides merge into schemaVersions', async () => {
@@ -105,7 +112,7 @@ describe('compareSchemaVersions', () => {
     expect(compareSchemaVersions(null, { universes: 5 }).behind).toHaveLength(1);
     expect(compareSchemaVersions(undefined, { universes: 5 }).behind).toHaveLength(1);
     // Default receiver is PORTOS_SCHEMA_VERSIONS (live).
-    expect(compareSchemaVersions(null).behind).toHaveLength(1);
+    expect(compareSchemaVersions(null).behind).toHaveLength(Object.keys(PORTOS_SCHEMA_VERSIONS).length);
   });
 });
 

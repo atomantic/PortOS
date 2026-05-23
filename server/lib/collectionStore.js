@@ -39,7 +39,8 @@
  *   - `saveOne(id, record)` already wraps its write in `queueRecordWrite`, so
  *     plain mutations don't need explicit queueing. Wrap a custom RMW cycle
  *     in `queueRecordWrite(id, async () => { ... })` when an external read
- *     spans the load/save boundary.
+ *     spans the load/save boundary, then call `saveOneNow` inside that queue
+ *     so the queued function does not wait on itself.
  */
 
 import { join } from 'path';
@@ -92,6 +93,10 @@ export function createCollectionStore({
   const typeIndexPath = () => join(dir, 'index.json');
   const recordDir = (id) => join(dir, id);
   const recordPath = (id) => join(dir, id, 'index.json');
+  // Process-local fallback for tests that mock fileUtils' read/write helpers
+  // without backing them with a real directory tree. Production listIds still
+  // uses readdir as the source of truth whenever the collection dir exists.
+  const knownIds = new Set();
 
   const isValidId = (id) => typeof id === 'string' && idPattern.test(id);
 
@@ -183,9 +188,10 @@ export function createCollectionStore({
    */
   async function listIds() {
     const entries = await readdir(dir).catch((err) => {
-      if (err?.code === 'ENOENT') return [];
+      if (err?.code === 'ENOENT') return null;
       throw err;
     });
+    if (entries === null) return [...knownIds].filter(isValidId);
     const candidates = entries.filter((name) =>
       name !== 'index.json'
       && !name.startsWith('.')
@@ -251,6 +257,19 @@ export function createCollectionStore({
    * are expected to pre-sanitize before calling — same convention as the
    * monolithic-state services).
    */
+  async function saveOneNow(id, record) {
+    if (!isValidId(id)) {
+      throw new Error(`collectionStore[${type}]: invalid record id "${id}" — must match ${idPattern}`);
+    }
+    if (!isPlainObject(record)) {
+      throw new Error(`collectionStore[${type}]: record must be a plain object`);
+    }
+    await ensureDir(recordDir(id));
+    await atomicWrite(recordPath(id), record);
+    knownIds.add(id);
+    return record;
+  }
+
   function saveOne(id, record) {
     if (!isValidId(id)) {
       throw new Error(`collectionStore[${type}]: invalid record id "${id}" — must match ${idPattern}`);
@@ -259,9 +278,7 @@ export function createCollectionStore({
       throw new Error(`collectionStore[${type}]: record must be a plain object`);
     }
     return queueRecordWrite(id, async () => {
-      await ensureDir(recordDir(id));
-      await atomicWrite(recordPath(id), record);
-      return record;
+      return saveOneNow(id, record);
     });
   }
 
@@ -277,6 +294,7 @@ export function createCollectionStore({
     }
     return queueRecordWrite(id, async () => {
       await rm(recordDir(id), { recursive: true, force: true });
+      knownIds.delete(id);
     });
   }
 
@@ -341,6 +359,7 @@ export function createCollectionStore({
     loadOne,
     loadOneRaw,
     loadAll,
+    saveOneNow,
     saveOne,
     deleteOne,
     // Concurrency primitives

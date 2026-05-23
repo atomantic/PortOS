@@ -184,9 +184,9 @@ describe('sharing round-trip', () => {
     await series.updateSeries(s.id, { name: 'Test Series (renamed)' });
     // Force the local updatedAt to be older than the manifest so LWW triggers override.
     // (Easiest: mutate the on-disk JSON directly to set an old updatedAt.)
-    const statePath = join(tempData, 'pipeline-series.json');
+    const statePath = join(tempData, 'pipeline-series', s.id, 'index.json');
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-    state.series[0].updatedAt = '2020-01-01T00:00:00.000Z';
+    state.updatedAt = '2020-01-01T00:00:00.000Z';
     writeFileSync(statePath, JSON.stringify(state, null, 2));
 
     // Process the new manifest — should LWW-override.

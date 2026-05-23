@@ -15,13 +15,13 @@
  * Each stage record carries a status, the user-editable input, the AI output,
  * and a `lastRunId` pointer into data/runs/<runId>/ for the LLM transcript.
  *
- * Persisted to data/pipeline-issues.json.
+ * Persisted to data/pipeline-issues/{id}/index.json.
  */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { PATHS } from '../../lib/fileUtils.js';
+import { createCollectionStore } from '../../lib/collectionStore.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import {
@@ -38,15 +38,42 @@ import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { applyVolumeOrderedNumbers, UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
 import * as seriesSvc from './series.js';
 
-// Lazy resolution — see series.js for context.
-const statePath = () => join(PATHS.data, 'pipeline-issues.json');
+// TYPE-level (storage layout) schema version stamped on
+// `data/pipeline-issues/index.json`.
+//   v1 — issues split out of monolithic `data/pipeline-issues.json` into
+//        per-record `data/pipeline-issues/{id}/index.json`. See migration 035.
+const TYPE_SCHEMA_VERSION = 1;
 
-// File-level write lock: serializes concurrent updateIssue / updateStage calls
-// against the shared pipeline-issues.json state file so a blur-save PATCH can
-// never clobber an in-flight cover-render PATCH (and vice-versa, across any
-// pair of issues — not just two writes to the same issue id). CLAUDE.md:
-// "simple re-entrancy guards… are fine and expected."
-const queueIssueWrite = createFileWriteQueue();
+let _store = null;
+const store = () => {
+  if (_store && _store.dir === join(PATHS.data, 'pipeline-issues')) return _store;
+  _store = createCollectionStore({
+    dir: join(PATHS.data, 'pipeline-issues'),
+    type: 'pipelineIssues',
+    schemaVersion: TYPE_SCHEMA_VERSION,
+    sanitizeRecord: sanitizeIssue,
+    idPattern: /^iss-[A-Za-z0-9-]+$/,
+  });
+  return _store;
+};
+
+export const issueStore = () => store();
+
+// Series-scoped queue for mutations that can renumber siblings. Ordinary
+// per-issue PATCH/stage writes use collectionStore's per-id queue so edits to
+// different issues no longer serialize behind one monolithic JSON tail.
+const seriesIssueTails = new Map();
+function queueSeriesIssuesWrite(seriesId, fn) {
+  const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
+  const prev = seriesIssueTails.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  const silenced = next.catch(() => {});
+  seriesIssueTails.set(key, silenced);
+  silenced.finally(() => {
+    if (seriesIssueTails.get(key) === silenced) seriesIssueTails.delete(key);
+  });
+  return next;
+}
 
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
@@ -422,14 +449,16 @@ const sanitizeIssue = (raw) => {
 };
 
 async function readState() {
-  await ensureDir(PATHS.data);
-  const raw = await readJSONFile(statePath(), { issues: [] }, { logError: false });
-  const issues = Array.isArray(raw.issues) ? raw.issues.map(sanitizeIssue).filter(Boolean) : [];
-  return { issues };
+  return { issues: await store().loadAll() };
 }
 
-async function writeState(state) {
-  await atomicWrite(statePath(), state);
+async function saveIssueNow(issue) {
+  await store().saveOneNow(issue.id, issue);
+  return issue;
+}
+
+async function saveIssuesNow(issues) {
+  await Promise.all(issues.map((issue) => saveIssueNow(issue)));
 }
 
 export async function listIssues({
@@ -486,8 +515,7 @@ export async function listRecentIssues({ limit = 10, withHistory = true, include
 }
 
 export async function getIssue(id, { includeDeleted = false } = {}) {
-  const { issues } = await readState();
-  const found = issues.find((i) => i.id === id);
+  const found = await store().loadOne(id);
   if (!found) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
   if (found.deleted && !includeDeleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
   return found;
@@ -498,7 +526,7 @@ export function createIssue(input = {}) {
   if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
-  return queueIssueWrite(async () => {
+  return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
     const next = sanitizeIssue({
       id: `iss-${randomUUID()}`,
@@ -523,11 +551,11 @@ export function createIssue(input = {}) {
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
     state.issues.push(next);
     await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
-    await writeState(state);
+    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     // New issue = series-level change for any active share subscription.
     emitRecordUpdated('series', next.seriesId);
     return next;
-  }); // end queueIssueWrite
+  });
 }
 
 async function renumberInline(state, seriesId, fromSeasonId = null) {
@@ -545,11 +573,11 @@ async function renumberInline(state, seriesId, fromSeasonId = null) {
 }
 
 export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
-  return queueIssueWrite(async () => {
+  return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
     const changed = await renumberInline(state, seriesId, fromSeasonId);
     if (!changed) return { changed: false };
-    await writeState(state);
+    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     emitRecordUpdated('series', seriesId);
     return { changed: true };
   });
@@ -557,12 +585,12 @@ export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
 
 /**
  * Reassign every issue under `(seriesId, fromSeasonId)` to `toSeasonId` in a
- * single readState → in-memory mutate → writeState → one renumber pass.
+ * single collection load → in-memory mutate → per-record save pass.
  * Used by `deleteSeason` (and any future bulk season-move flow) to collapse
- * N per-issue queueIssueWrite cycles into one — the legacy N+1 pattern was
+ * N per-issue write cycles into one — the legacy N+1 pattern was
  * `for (iss of children) await updateIssue(iss.id, { seasonId: toSeasonId }, { skipRenumber: true })`
- * which paid N readState + N writeState round-trips and N debounced re-exports
- * even with `withReexportSuppressed`.
+ * which paid N read/write round-trips and N debounced re-exports even with
+ * `withReexportSuppressed`.
  *
  * Returns `{ reassigned, fromSeasonId, toSeasonId }`. `toSeasonId` may be
  * `null` (un-grouped). A re-export of the parent series is emitted once, after
@@ -570,7 +598,7 @@ export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
  * `series:updated` event regardless of the issue count.
  */
 export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { _preloadedSeries = null } = {}) {
-  return queueIssueWrite(async () => {
+  return queueSeriesIssuesWrite(seriesId, async () => {
     // Honor per-season locks — refuse to move issues OUT of or INTO a locked
     // volume. Series lives in a different write queue, so this is best-effort
     // single-user gating, not strict serialization (fine per CLAUDE.md).
@@ -615,7 +643,7 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
     // One renumber pass after the bulk move — the source AND destination
     // volume both reshuffled, so use the series-wide form (fromSeasonId=null).
     await renumberInline(state, seriesId, null);
-    await writeState(state);
+    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     emitRecordUpdated('series', seriesId);
     return { reassigned, fromSeasonId, toSeasonId };
   });
@@ -634,7 +662,7 @@ export function insertIssueWithId(input = {}) {
   if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
-  return queueIssueWrite(async () => {
+  return queueSeriesIssuesWrite(seriesId, async () => {
     const state = await readState();
     // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId.
     const existingIdx = state.issues.findIndex((i) => i.id === input.id);
@@ -652,110 +680,113 @@ export function insertIssueWithId(input = {}) {
     // Imported `number` is a starting hint — local canonical numbering still
     // comes from (volume order, arcPosition) of the local state.
     await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
-    await writeState(state);
+    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     return next;
   });
 }
 
-export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
-  return queueIssueWrite(async () => {
-    const state = await readState();
-    const idx = state.issues.findIndex((i) => i.id === id);
-    if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-    const cur = state.issues[idx];
-    if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-
-    // Per-stage merge: a stage patch carries only the fields the caller is
-    // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
-    // spread would replace the entire stage object and silently drop sibling
-    // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
-    // those back to empty arrays/null, erasing work the user (or LLM) just did.
-    // Callers that need stage-level changes without touching issue-level fields
-    // should use `updateStage`, which does a shallow merge of the patch over the
-    // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
-    // Note: `updateStage` still merges — omitted sibling stage fields are
-    // preserved. To clear a field explicitly, pass it as `null` or `""` in the
-    // patch.
-    //
-    // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
-    // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
-    // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
-    // just persisted. Passing `null` explicitly still clears the sub-object
-    // (intentional-clear semantics).
-    const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
-    let mergedStages = cur.stages;
-    if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
-      mergedStages = { ...cur.stages };
-      for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
-        const prev = cur.stages?.[stageId];
-        if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
-          const merged = { ...prev, ...stagePatch };
-          // Mirror the snapshot trigger from updateStageWithLatest so a
-          // route-level PATCH that swaps lastRunId (e.g. the restore endpoint)
-          // also produces a runHistory entry. No-op when the patch is a plain
-          // save-edit without lastRunId.
-          merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
-          for (const key of NESTED_DEEP_MERGE_KEYS) {
-            if (key in stagePatch
-                && stagePatch[key] && typeof stagePatch[key] === 'object'
-                && prev[key] && typeof prev[key] === 'object') {
-              merged[key] = { ...prev[key], ...stagePatch[key] };
-            }
+function mergeIssuePatch(cur, patch = {}) {
+  // Per-stage merge: a stage patch carries only the fields the caller is
+  // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
+  // spread would replace the entire stage object and silently drop sibling
+  // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
+  // those back to empty arrays/null, erasing work the user (or LLM) just did.
+  // Callers that need stage-level changes without touching issue-level fields
+  // should use `updateStage`, which does a shallow merge of the patch over the
+  // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
+  //
+  // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
+  // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
+  // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
+  // just persisted. Passing `null` explicitly still clears the sub-object.
+  const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
+  let mergedStages = cur.stages;
+  if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
+    mergedStages = { ...cur.stages };
+    for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
+      const prev = cur.stages?.[stageId];
+      if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
+        const merged = { ...prev, ...stagePatch };
+        merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
+        for (const key of NESTED_DEEP_MERGE_KEYS) {
+          if (key in stagePatch
+              && stagePatch[key] && typeof stagePatch[key] === 'object'
+              && prev[key] && typeof prev[key] === 'object') {
+            merged[key] = { ...prev[key], ...stagePatch[key] };
           }
-          // Clear transient error fields when a content/status change implies
-          // the previous failure is no longer the active state. Mirrors the
-          // pre-per-stage-merge behavior, where a `{ status, input, output }`
-          // patch replaced the whole stage and implicitly wiped errorMessage.
-          if ('status' in stagePatch && stagePatch.status !== 'error'
-              && stagePatch.status !== 'generating'
-              && !('errorMessage' in stagePatch)) {
-            merged.errorMessage = '';
-          }
-          mergedStages[stageId] = merged;
-        } else {
-          mergedStages[stageId] = stagePatch;
         }
+        if ('status' in stagePatch && stagePatch.status !== 'error'
+            && stagePatch.status !== 'generating'
+            && !('errorMessage' in stagePatch)) {
+          merged.errorMessage = '';
+        }
+        mergedStages[stageId] = merged;
+      } else {
+        mergedStages[stageId] = stagePatch;
       }
     }
+  }
 
-    const merged = sanitizeIssue({
-      ...cur,
-      ...('title' in patch ? { title: patch.title } : {}),
-      ...('number' in patch ? { number: patch.number } : {}),
-      ...('status' in patch ? { status: patch.status } : {}),
-      ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
-      ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
-      ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
-      ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
-      ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
-      ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
-      ...('origin' in patch ? { origin: patch.origin } : {}),
-      // Local-only "don't sync" marker. Issues piggyback on their parent
-      // series' subscription, so an ephemeral issue is dropped from the
-      // series push payload via sanitizeRecordForWire returning null.
-      ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
-      stages: mergedStages,
-      updatedAt: new Date().toISOString(),
+  const merged = sanitizeIssue({
+    ...cur,
+    ...('title' in patch ? { title: patch.title } : {}),
+    ...('number' in patch ? { number: patch.number } : {}),
+    ...('status' in patch ? { status: patch.status } : {}),
+    ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
+    ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
+    ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
+    ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
+    ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
+    ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
+    ...('origin' in patch ? { origin: patch.origin } : {}),
+    // Local-only "don't sync" marker. Issues piggyback on their parent
+    // series' subscription, so an ephemeral issue is dropped from the
+    // series push payload via sanitizeRecordForWire returning null.
+    ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
+    stages: mergedStages,
+    updatedAt: new Date().toISOString(),
+  });
+  if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+  return merged;
+}
+
+export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
+  const needsRenumber = !skipRenumber && ('seasonId' in patch || 'arcPosition' in patch);
+  if (!needsRenumber) {
+    return store().queueRecordWrite(id, async () => {
+      const cur = await store().loadOne(id);
+      if (!cur) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      const merged = mergeIssuePatch(cur, patch);
+      await saveIssueNow(merged);
+      emitRecordUpdated('series', merged.seriesId);
+      return merged;
     });
-    if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-    state.issues[idx] = merged;
-    // A seasonId move affects both source and destination volumes, so full
-    // renumber. An arcPosition change only reorders within the current volume.
-    // `skipRenumber` lets bulk callers (e.g. deleteSeason) collapse N per-update
-    // renumbers into one final pass.
-    if (!skipRenumber) {
+  }
+
+  return getIssue(id, { includeDeleted: true }).then((existing) =>
+    queueSeriesIssuesWrite(existing.seriesId, async () => {
+      const state = await readState();
+      const idx = state.issues.findIndex((i) => i.id === id);
+      if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      const cur = state.issues[idx];
+      if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      const merged = mergeIssuePatch(cur, patch);
+      state.issues[idx] = merged;
+      // A seasonId move affects both source and destination volumes, so full
+      // renumber. An arcPosition change only reorders within the current volume.
       if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
         await renumberInline(state, merged.seriesId, null);
       } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
         await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
       }
-    }
-    await writeState(state);
-    // Issues are exported as part of their parent series — re-export the
-    // series so any active subscription picks up the issue change.
-    emitRecordUpdated('series', merged.seriesId);
-    return merged;
-  }); // end queueIssueWrite
+      await saveIssuesNow(state.issues.filter((i) => i.seriesId === merged.seriesId));
+      // Issues are exported as part of their parent series — re-export the
+      // series so any active subscription picks up the issue change.
+      emitRecordUpdated('series', merged.seriesId);
+      return merged;
+    })
+  );
 }
 
 /**
@@ -808,22 +839,24 @@ export function deleteIssue(id) {
   // record stays on disk with `deleted: true` so the next sync propagates the
   // delete to peers; the orchestrator's GC sweep prunes it once all peers ack.
   // `renumberInline` filters tombstones, so surviving issues stay contiguous.
-  return queueIssueWrite(async () => {
-    const state = await readState();
-    const idx = state.issues.findIndex((i) => i.id === id);
-    if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-    const cur = state.issues[idx];
-    if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-    const seriesId = cur.seriesId;
-    const now = new Date().toISOString();
-    state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
-    await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
-    await writeState(state);
-    // Series export bundles every issue, so a deletion is an update on the
-    // parent series for any active share-bucket subscription.
-    emitRecordUpdated('series', seriesId);
-    return { id };
-  }); // end queueIssueWrite
+  return getIssue(id, { includeDeleted: true }).then((existing) =>
+    queueSeriesIssuesWrite(existing.seriesId, async () => {
+      const state = await readState();
+      const idx = state.issues.findIndex((i) => i.id === id);
+      if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      const cur = state.issues[idx];
+      if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      const seriesId = cur.seriesId;
+      const now = new Date().toISOString();
+      state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
+      await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
+      await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+      // Series export bundles every issue, so a deletion is an update on the
+      // parent series for any active share-bucket subscription.
+      emitRecordUpdated('series', seriesId);
+      return { id };
+    })
+  );
 }
 
 /**
@@ -843,11 +876,9 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
     // rather than waiting in line for an error it already knows about.
     return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
-  return queueIssueWrite(async () => {
-    const state = await readState();
-    const idx = state.issues.findIndex((i) => i.id === issueId);
-    if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-    const cur = state.issues[idx];
+  return store().queueRecordWrite(issueId, async () => {
+    const cur = await store().loadOne(issueId);
+    if (!cur) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
     const isVisual = VISUAL_STAGE_IDS.includes(stageId);
     const isAudio = AUDIO_STAGE_IDS.includes(stageId);
@@ -879,22 +910,19 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
       stages: { ...cur.stages, [stageId]: next },
       updatedAt: new Date().toISOString(),
     });
-    state.issues[idx] = mergedIssue;
-    await writeState(state);
+    await saveIssueNow(mergedIssue);
     emitRecordUpdated('series', mergedIssue.seriesId);
     return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
-  }); // end queueIssueWrite
+  });
 }
 
 /**
  * Sync-orchestrator entry point. Merges a remote peer's issues array into
- * local state INSIDE `queueIssueWrite`, so the read-modify-write window can't
- * clobber (or be clobbered by) a concurrent updateIssue / updateStage /
- * cover-render PATCH running through the same queue. Each incoming record
- * passes through `sanitizeIssue` for shape enforcement (stage statuses,
- * trimmed fields, valid id format). LWW by `updatedAt`; returns
- * `{ applied, count }` where `count` is the number of issues actually
- * changed/added.
+ * local state through the collection store's type-index queue for one
+ * consistent merge snapshot. Each incoming record passes through
+ * `sanitizeIssue` for shape enforcement (stage statuses, trimmed fields,
+ * valid id format). LWW by `updatedAt`; returns `{ applied, count }` where
+ * `count` is the number of issues actually changed/added.
  */
 export async function mergeIssuesFromSync(remoteIssues) {
   if (!Array.isArray(remoteIssues)) return { applied: false, count: 0 };
@@ -919,7 +947,7 @@ export async function mergeIssuesFromSync(remoteIssues) {
       .filter((s) => s?.ephemeral === true)
       .map((s) => s.id),
   );
-  return queueIssueWrite(async () => {
+  return store().queueTypeIndexWrite(async () => {
     const state = await readState();
     const localById = new Map(state.issues.map((i) => [i.id, i]));
     let changed = 0;
@@ -982,7 +1010,7 @@ export async function mergeIssuesFromSync(remoteIssues) {
     for (const seriesId of seriesNeedingRenumber) {
       await renumberInline(state, seriesId, null);
     }
-    await writeState(state);
+    await saveIssuesNow(state.issues);
     // Re-emit a series-updated for each touched series so any active share
     // subscription re-exports the post-merge issue set.
     for (const seriesId of seriesNeedingRenumber) {
@@ -1003,17 +1031,15 @@ export async function mergeIssuesFromSync(remoteIssues) {
  */
 export async function pruneTombstonedIssues(beforeMs) {
   if (!Number.isFinite(beforeMs)) return { pruned: 0 };
-  return queueIssueWrite(async () => {
-    const state = await readState();
-    const original = state.issues.length;
-    state.issues = state.issues.filter((i) => {
-      if (!i?.deleted) return true;
+  return store().queueTypeIndexWrite(async () => {
+    const { issues } = await readState();
+    const prunable = issues.filter((i) => {
+      if (!i?.deleted) return false;
       const t = Date.parse(i.deletedAt || '');
-      if (!Number.isFinite(t)) return true;
-      return t >= beforeMs;
+      if (!Number.isFinite(t)) return false;
+      return t < beforeMs;
     });
-    const pruned = original - state.issues.length;
-    if (pruned > 0) await writeState(state);
-    return { pruned };
+    await Promise.all(prunable.map((i) => store().deleteOne(i.id)));
+    return { pruned: prunable.length };
   });
 }

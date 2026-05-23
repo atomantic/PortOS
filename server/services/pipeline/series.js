@@ -7,14 +7,14 @@
  * those flow into every Issue's stage prompts so issues stay visually and
  * tonally consistent.
  *
- * Persisted to data/pipeline-series.json. Issues live in their own file
- * (server/services/pipeline/issues.js) and reference a series by id.
+ * Persisted to data/pipeline-series/{id}/index.json. Issues live in their own
+ * collection (server/services/pipeline/issues.js) and reference a series by id.
  */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { PATHS } from '../../lib/fileUtils.js';
+import { createCollectionStore } from '../../lib/collectionStore.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
@@ -22,18 +22,28 @@ import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 
-// Lazy resolution — PATHS.data may not be available at module-load time
-// (e.g. tests that swap it through a Proxy mock).
-const statePath = () => join(PATHS.data, 'pipeline-series.json');
+// TYPE-level (storage layout) schema version stamped on
+// `data/pipeline-series/index.json`.
+//   v1 — series split out of monolithic `data/pipeline-series.json` into
+//        per-record `data/pipeline-series/{id}/index.json`. See migration 036.
+const TYPE_SCHEMA_VERSION = 1;
 
-// File-level write lock. Required because multiple write paths can race on the single shared
-// pipeline-series.json file: PATCH /series/:id (bible edits), PATCH
-// /seasons/:seasonId (season metadata), the new volume cover-render route,
-// the season-cover filename hook landing, and the bible-extract merge.
-// All of those read-then-write the same JSON; without serialization a
-// later writer's `readState` can land on a pre-image snapshot and clobber
-// the earlier write. CLAUDE.md: "single tail per shared file."
-const queueSeriesWrite = createFileWriteQueue();
+// Lazy store factory so tests that swap PATHS.data per-test still see the
+// right temp root — the store captures PATHS.data once at first call.
+let _store = null;
+const store = () => {
+  if (_store && _store.dir === join(PATHS.data, 'pipeline-series')) return _store;
+  _store = createCollectionStore({
+    dir: join(PATHS.data, 'pipeline-series'),
+    type: 'pipelineSeries',
+    schemaVersion: TYPE_SCHEMA_VERSION,
+    sanitizeRecord: sanitizeSeries,
+    idPattern: /^ser-[A-Za-z0-9-]+$/,
+  });
+  return _store;
+};
+
+export const seriesStore = () => store();
 
 export const ERR_NOT_FOUND = 'PIPELINE_SERIES_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SERIES_VALIDATION';
@@ -91,8 +101,6 @@ const sanitizeSeriesLocked = (raw = {}) => {
   }
   return out;
 };
-
-const DEFAULT_STATE = { series: [] };
 
 const sanitizeSeries = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -155,26 +163,14 @@ const sanitizeSeries = (raw) => {
   };
 };
 
-async function readState() {
-  await ensureDir(PATHS.data);
-  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
-  const series = Array.isArray(raw.series) ? raw.series.map(sanitizeSeries).filter(Boolean) : [];
-  return { series };
-}
-
-async function writeState(state) {
-  await atomicWrite(statePath(), state);
-}
-
 export async function listSeries({ includeDeleted = false } = {}) {
-  const { series } = await readState();
+  const series = await store().loadAll();
   const filtered = includeDeleted ? series : series.filter((s) => !s.deleted);
   return [...filtered].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
 export async function getSeries(id, { includeDeleted = false } = {}) {
-  const { series } = await readState();
-  const found = series.find((s) => s.id === id);
+  const found = await store().loadOne(id);
   if (!found) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
   if (found.deleted && !includeDeleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
   return found;
@@ -183,35 +179,30 @@ export async function getSeries(id, { includeDeleted = false } = {}) {
 export async function createSeries(input = {}) {
   const name = trimTo(input.name, NAME_MAX);
   if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
-  const created = await queueSeriesWrite(async () => {
-    const state = await readState();
-    const now = new Date().toISOString();
-    const next = sanitizeSeries({
-      id: `ser-${randomUUID()}`,
-      name,
-      logline: input.logline || '',
-      premise: input.premise || '',
-      universeId: input.universeId || null,
-      writersRoomWorkId: input.writersRoomWorkId || null,
-      arc: input.arc || null,
-      seasons: input.seasons || [],
-      locked: input.locked || {},
-      styleNotes: input.styleNotes || '',
-      titleLogo: input.titleLogo || '',
-      author: input.author || '',
-      stylePromptOverride: input.stylePromptOverride || '',
-      stylePromptOverrideMode: input.stylePromptOverrideMode,
-      targetFormat: input.targetFormat || 'comic+tv',
-      issueCountTarget: input.issueCountTarget || 0,
-      llm: input.llm || null,
-      createdAt: now,
-      updatedAt: now,
-      ephemeral: input.ephemeral === true,
-    });
-    state.series.push(next);
-    await writeState(state);
-    return next;
+  const now = new Date().toISOString();
+  const created = sanitizeSeries({
+    id: `ser-${randomUUID()}`,
+    name,
+    logline: input.logline || '',
+    premise: input.premise || '',
+    universeId: input.universeId || null,
+    writersRoomWorkId: input.writersRoomWorkId || null,
+    arc: input.arc || null,
+    seasons: input.seasons || [],
+    locked: input.locked || {},
+    styleNotes: input.styleNotes || '',
+    titleLogo: input.titleLogo || '',
+    author: input.author || '',
+    stylePromptOverride: input.stylePromptOverride || '',
+    stylePromptOverrideMode: input.stylePromptOverrideMode,
+    targetFormat: input.targetFormat || 'comic+tv',
+    issueCountTarget: input.issueCountTarget || 0,
+    llm: input.llm || null,
+    createdAt: now,
+    updatedAt: now,
+    ephemeral: input.ephemeral === true,
   });
+  await store().saveOne(created.id, created);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
   // circuit via sanitizeRecordForWire anyway, but not creating the sub up
   // front keeps the subscription store clean.
@@ -241,24 +232,20 @@ export async function insertSeriesWithId(input = {}) {
   }
   const name = trimTo(input.name, NAME_MAX);
   if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
-  return queueSeriesWrite(async () => {
-    const state = await readState();
+  return store().queueRecordWrite(input.id, async () => {
     // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId —
     // re-import undeletes; peer-sync resurrection is prevented at the merge
     // path via LWW, not here.
-    const existingIdx = state.series.findIndex((s) => s.id === input.id);
-    if (existingIdx >= 0 && !state.series[existingIdx].deleted) {
+    const existing = await store().loadOne(input.id);
+    if (existing && !existing.deleted) {
       throw makeErr(`Series id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const next = sanitizeSeries({ ...input, name });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
-    if (existingIdx >= 0) {
+    if (existing) {
       console.warn(`♻️  insertSeriesWithId: overwriting tombstone for ${input.id}`);
-      state.series[existingIdx] = next;
-    } else {
-      state.series.push(next);
     }
-    await writeState(state);
+    await store().saveOneNow(next.id, next);
     return next;
   });
 }
@@ -272,11 +259,9 @@ export async function updateSeries(id, patch = {}) {
   if (legacyFields.length > 0) {
     console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
   }
-  const { merged, nameChanged, prevEphemeral, nextEphemeral } = await queueSeriesWrite(async () => {
-    const state = await readState();
-    const idx = state.series.findIndex((s) => s.id === id);
-    if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    const cur = state.series[idx];
+  const { merged, nameChanged, prevEphemeral, nextEphemeral } = await store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     // Per-field merge so `{ provider: 'codex' }` doesn't clobber an existing `model`.
     const mergedLlm = 'llm' in patch
@@ -308,8 +293,7 @@ export async function updateSeries(id, patch = {}) {
       updatedAt: new Date().toISOString(),
     });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
-    state.series[idx] = next;
-    await writeState(state);
+    await store().saveOneNow(next.id, next);
     return {
       merged: next,
       nameChanged: next.name !== cur.name,
@@ -359,11 +343,9 @@ export async function setArcFieldLock(id, field, locked) {
   if (!ARC_LOCKABLE_FIELDS.includes(field)) {
     throw makeErr(`Unknown arc lock field: ${field}`, ERR_VALIDATION);
   }
-  return queueSeriesWrite(async () => {
-    const state = await readState();
-    const idx = state.series.findIndex((s) => s.id === id);
-    if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    const cur = state.series[idx];
+  return store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     const arcFields = { ...(cur.locked?.arcFields || {}) };
     if (locked === true) arcFields[field] = true;
@@ -377,8 +359,7 @@ export async function setArcFieldLock(id, field, locked) {
       updatedAt: new Date().toISOString(),
     });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
-    state.series[idx] = next;
-    await writeState(state);
+    await store().saveOneNow(next.id, next);
     emitRecordUpdated('series', next.id);
     return next;
   });
@@ -386,9 +367,9 @@ export async function setArcFieldLock(id, field, locked) {
 
 /**
  * Apply a structured patch to one season inside a series. Routes through the
- * shared series write tail so a season-cover render PATCH, the season-cover
- * filename hook landing, and a user-driven season metadata edit all serialize
- * against the single pipeline-series.json file. Returns the updated series.
+ * per-series collection-store queue so a season-cover render PATCH, the
+ * season-cover filename hook landing, and a user-driven season metadata edit
+ * all serialize against the same series record. Returns the updated series.
  *
  * Throws `PIPELINE_SEASON_NOT_FOUND` (the seasons-service ERR_NOT_FOUND
  * value, inlined here to avoid a circular import seasons → series → seasons)
@@ -396,11 +377,9 @@ export async function setArcFieldLock(id, field, locked) {
  * with "Season not found" rather than "Series not found".
  */
 export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
-  return queueSeriesWrite(async () => {
-    const state = await readState();
-    const idx = state.series.findIndex((s) => s.id === seriesId);
-    if (idx < 0) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
-    const cur = state.series[idx];
+  return store().queueRecordWrite(seriesId, async () => {
+    const cur = await store().loadOne(seriesId);
+    if (!cur) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${seriesId}`, ERR_NOT_FOUND);
     const seasons = Array.isArray(cur.seasons) ? cur.seasons : [];
     const seasonIdx = seasons.findIndex((s) => s.id === seasonId);
@@ -428,8 +407,7 @@ export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
       updatedAt: new Date().toISOString(),
     });
     if (!merged) throw makeErr('Invalid series payload after season patch', ERR_VALIDATION);
-    state.series[idx] = merged;
-    await writeState(state);
+    await store().saveOneNow(merged.id, merged);
     emitRecordUpdated('series', merged.id);
     return merged;
   });
@@ -440,15 +418,12 @@ export async function deleteSeries(id) {
   // tombstone propagates via the existing LWW merge. Side effects (media-
   // collection unlink + recordDeleted emit) still run locally and also fire
   // on the receiving peer via mergeSeriesFromSync's transition detection.
-  const result = await queueSeriesWrite(async () => {
-    const state = await readState();
-    const idx = state.series.findIndex((s) => s.id === id);
-    if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
-    const cur = state.series[idx];
+  const result = await store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     const now = new Date().toISOString();
-    state.series[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
-    await writeState(state);
+    await store().saveOneNow(id, { ...cur, deleted: true, deletedAt: now, updatedAt: now });
     // Any live share-bucket subscription for this series tears itself down via
     // the recordEvents listener instead of orphaning.
     emitRecordDeleted('series', id);
@@ -477,12 +452,10 @@ async function cascadeDeleteSideEffects(id) {
 
 /**
  * Sync-orchestrator entry point. Merges a remote peer's series array into
- * local state INSIDE `queueSeriesWrite`, so the read-modify-write window
- * can't clobber (or be clobbered by) a concurrent bible edit, season-metadata
- * PATCH, season-cover render PATCH, or season-cover filename hook also running
- * through the same queue. Each incoming record passes through `sanitizeSeries`
- * for shape enforcement. LWW by `updatedAt`; returns `{ applied, count }`
- * where `count` is the number of series actually changed/added.
+ * local state through per-record collection-store queues. Each incoming record
+ * passes through `sanitizeSeries` for shape enforcement. LWW by `updatedAt`;
+ * returns `{ applied, count }` where `count` is the number of series actually
+ * changed/added.
  */
 export async function mergeSeriesFromSync(remoteSeries) {
   if (!Array.isArray(remoteSeries)) return { applied: false, count: 0 };
@@ -493,41 +466,37 @@ export async function mergeSeriesFromSync(remoteSeries) {
   // see `mergeUniversesFromSync` for the rationale (the Stage 2 per-record
   // peer-sync push owns sync-time edit emits).
   const transitionedToDeleted = [];
-  const result = await queueSeriesWrite(async () => {
-    const state = await readState();
-    const localById = new Map(state.series.map((s) => [s.id, s]));
-    let changed = 0;
-    for (const remote of remoteSeries) {
-      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+  let changed = 0;
+  for (const remote of remoteSeries) {
+    if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+    if (!SERIES_ID_RE.test(remote.id)) continue;
+    await store().queueRecordWrite(remote.id, async () => {
       const sanitized = sanitizeSeries(remote);
-      if (!sanitized) continue;
+      if (!sanitized) return;
       // Strip inbound `ephemeral` — see mergeUniversesFromSync.
       if ('ephemeral' in sanitized) delete sanitized.ephemeral;
-      const local = localById.get(sanitized.id);
+      const local = await store().loadOne(sanitized.id);
       if (!local) {
         // See universeBuilder.mergeUniversesFromSync — no local means no
         // cascade work, regardless of inbound tombstone state.
-        localById.set(sanitized.id, sanitized);
+        await store().saveOneNow(sanitized.id, sanitized);
         changed++;
       } else if (local.ephemeral === true) {
         // Local-ephemeral series are immune to inbound merges. See
         // mergeUniversesFromSync for the contract.
-        continue;
+        return;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
-          localById.set(sanitized.id, sanitized);
+          await store().saveOneNow(sanitized.id, sanitized);
           if (sanitized.deleted && !local.deleted) transitionedToDeleted.push(sanitized.id);
           changed++;
         }
       }
-    }
-    if (changed === 0) return { applied: false, count: 0 };
-    state.series = Array.from(localById.values());
-    await writeState(state);
-    return { applied: true, count: changed };
-  });
+    });
+  }
+  const result = changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
   for (const id of transitionedToDeleted) {
     await cascadeDeleteSideEffects(id);
   }
@@ -542,17 +511,13 @@ export async function mergeSeriesFromSync(remoteSeries) {
  */
 export async function pruneTombstonedSeries(beforeMs) {
   if (!Number.isFinite(beforeMs)) return { pruned: 0 };
-  return queueSeriesWrite(async () => {
-    const state = await readState();
-    const original = state.series.length;
-    state.series = state.series.filter((s) => {
-      if (!s?.deleted) return true;
+  const series = await store().loadAll();
+  const prunable = series.filter((s) => {
+    if (!s?.deleted) return false;
       const t = Date.parse(s.deletedAt || '');
-      if (!Number.isFinite(t)) return true;
-      return t >= beforeMs;
-    });
-    const pruned = original - state.series.length;
-    if (pruned > 0) await writeState(state);
-    return { pruned };
+    if (!Number.isFinite(t)) return false;
+    return t < beforeMs;
   });
+  await Promise.all(prunable.map((s) => store().deleteOne(s.id)));
+  return { pruned: prunable.length };
 }

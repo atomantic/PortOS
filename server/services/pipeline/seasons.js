@@ -141,9 +141,9 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
     }
   }
   // Re-point child issues first so a mid-write crash doesn't leave them
-  // dangling against a deleted season id. `bulkReassignSeason` collapses what
-  // used to be N per-issue queueIssueWrite cycles into a single readState →
-  // in-memory mutate → writeState → one renumber pass.
+  // dangling against a deleted season id. `bulkReassignSeason` collapses the
+  // old N per-issue write cycle into one collection load, in-memory mutate,
+  // renumber pass, and per-record save batch.
   //
   // Each updateSeries + bulkReassignSeason still emits `emitRecordUpdated('series', …)`. Without
   // suppression those two events would schedule two debounced re-exports of the same

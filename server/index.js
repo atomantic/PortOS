@@ -141,6 +141,8 @@ import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { runMigrations } from '../scripts/run-migrations.js';
 import { verifyCollectionVersions } from './lib/collectionStore.js';
 import { universeStore } from './services/universeBuilder.js';
+import { seriesStore } from './services/pipeline/series.js';
+import { issueStore } from './services/pipeline/issues.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -196,7 +198,7 @@ await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
