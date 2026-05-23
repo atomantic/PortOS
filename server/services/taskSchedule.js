@@ -527,7 +527,7 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 
 ## Phase 6 — Review and ship
 
-The configured reviewers for this task, in order, are \`{reviewer}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging (equivalent to \`/do:pr --review-with {reviewer}\`).
+The configured reviewers for this task, in order, are \`{reviewer}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging — this mirrors slashdo's \`/do:pr --review-with <list>\` (the lone default \`copilot\` needs no flag; multi-reviewer runs may also carry \`--review-stop-on-*\` / \`--reviewer-applies\`).
 
 1. Run \`/simplify\` (three-agent reuse/quality/efficiency review) against your own diff and fix findings in the same diff. BEFORE opening the PR, not retroactively.
 2. Push the branch: \`git push -u origin claim/<slug>\`

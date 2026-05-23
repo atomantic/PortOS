@@ -1448,8 +1448,6 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       const cliName = prResult.cli || 'gh';
       emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
 
-      let copilotReviewOk = false;
-      let copilotReviewSkipped = false;
       const reviewerList = normalizeReviewers({ reviewers });
       const copilotIsFirst = reviewerList[0] === DEFAULT_REVIEWER;
       const nonCopilotReviewers = reviewerList.filter(r => r !== DEFAULT_REVIEWER);
@@ -1457,18 +1455,17 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       // then reviews the freshly-opened PR. When copilot is configured after a CLI
       // reviewer (e.g. [codex, copilot]), pre-requesting now would make Copilot review
       // the stale pre-CLI-fix diff; instead the follow-up agent requests it at copilot's
-      // turn, after the earlier reviewer's fixes are pushed.
+      // turn, after the earlier reviewer's fixes are pushed. This pre-request is a
+      // latency optimization only — the follow-up requests Copilot at its turn
+      // regardless, so a failed/absent pre-request is recoverable (no reviewer dropped).
       if (shouldRequestCopilot && copilotIsFirst) {
         const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
         if (reviewResult.success && reviewResult.skipped) {
-          // Non-GitHub forge (e.g. GitLab MR) — Copilot reviewer doesn't exist there. Log info, no warning.
-          emitLog('info', `🤖 Skipping Copilot review request for ${prResult.url} (non-GitHub forge)`, { agentId, prUrl: prResult.url });
-          copilotReviewSkipped = true;
+          emitLog('info', `🤖 Skipping Copilot pre-request for ${prResult.url} (non-GitHub forge)`, { agentId, prUrl: prResult.url });
         } else if (reviewResult.success) {
-          emitLog('success', `🤖 Requested Copilot review on ${prResult.url}`, { agentId, prUrl: prResult.url });
-          copilotReviewOk = true;
+          emitLog('success', `🤖 Requested initial Copilot review on ${prResult.url}`, { agentId, prUrl: prResult.url });
         } else {
-          emitLog('warn', `🤖 Failed to request Copilot review on ${prResult.url}: ${reviewResult.error}`, { agentId, prUrl: prResult.url });
+          emitLog('warn', `🤖 Copilot pre-request failed for ${prResult.url}: ${reviewResult.error} — follow-up will re-request at its turn`, { agentId, prUrl: prResult.url });
           warnings.push(`Copilot review request failed for ${prResult.url}: ${reviewResult.error}`);
         }
       }
@@ -1477,16 +1474,11 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       }
 
       // Spawn the review-loop follow-up agent that runs the multi-reviewer loop until
-      // clean and merges. Without this, the loop stops after the initial review request.
-      // Drop copilot only when it LED the list but its pre-request didn't land (failed or
-      // non-GitHub forge). When copilot is not first it stays in the list — the follow-up
-      // requests it at its turn (spawnReviewLoopFollowUp's forge guard strips it on
-      // non-GitHub remotes). Spawn whenever at least one reviewer remains.
-      const copilotPreRequestLanded = copilotReviewOk && !copilotReviewSkipped;
-      const effectiveReviewers = (copilotIsFirst && !copilotPreRequestLanded)
-        ? reviewerList.filter(r => r !== DEFAULT_REVIEWER)
-        : reviewerList;
-      const canSpawnFollowUp = shouldRequestCopilot && effectiveReviewers.length > 0;
+      // clean and merges. Hand it the FULL ordered list — the follow-up requests Copilot
+      // at copilot's turn (so a failed pre-request or copilot-only config still gets a
+      // review pass) and invokes the CLI reviewers itself. The only reviewer dropped is
+      // copilot on a non-GitHub forge, handled centrally in spawnReviewLoopFollowUp.
+      const canSpawnFollowUp = shouldRequestCopilot && reviewerList.length > 0;
       if (canSpawnFollowUp) {
         await spawnReviewLoopFollowUp({
           originalAgentId: agentId,
@@ -1494,7 +1486,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           prUrl: prResult.url,
           prBranch: worktreeBranch,
           sourceWorkspace,
-          reviewers: effectiveReviewers,
+          reviewers: reviewerList,
           reviewStopMode,
           reviewerApplies
         }).catch(err => {
@@ -1535,12 +1527,18 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
 }
 
 /**
- * Spawn an internal follow-up task that runs the Copilot review-and-fix loop
- * (per /do:rpr) on the just-created PR until it has zero unresolved comments,
- * then merges the PR. This is what makes the user-facing "review loop" actually
- * loop — the original agent only requests the *initial* Copilot review and
- * exits; without this follow-up, the loop ends after one iteration and the PR
- * is never merged.
+ * Spawn an internal follow-up task that drives the ordered multi-reviewer
+ * review-and-fix loop on the just-created PR until the configured reviewer chain
+ * is satisfied, then merges the PR. This is what makes the user-facing "review
+ * loop" actually loop — the original agent only opens the PR (and at most
+ * pre-requests Copilot when it leads) and exits; without this follow-up the loop
+ * ends after one iteration and the PR is never merged.
+ *
+ * `reviewers` is the ordered list (e.g. `[codex, gemini, copilot]`); the follow-up
+ * runs each in order — invoking the CLI reviewers itself and requesting Copilot at
+ * its turn — honoring `reviewStopMode` (`all`/`on-findings`/`on-clean`) and
+ * `reviewerApplies`. Copilot is GitHub-only, so it is stripped here on non-GitHub
+ * forges; if that empties the list, no follow-up is spawned.
  *
  * The follow-up task uses an isolated worktree attached to the existing PR
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push

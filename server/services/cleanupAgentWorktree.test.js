@@ -507,18 +507,22 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.autoApproved).toBe(true);
   });
 
-  it('should NOT spawn a review-loop follow-up when Copilot review request fails', async () => {
+  it('STILL spawns the review-loop follow-up when the Copilot pre-request fails (follow-up re-requests at its turn)', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/43' });
     git.requestCopilotReview.mockResolvedValue({ success: false, error: 'gh exited 1' });
+    addTask.mockResolvedValue({ id: 'sys-rl-q' });
 
     await cleanupAgentWorktree('agent-1', true, {
       openPR: true, requestCopilotReview: true, description: 'X',
       originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
     });
 
-    // No follow-up because the initial review never landed — nothing to wait on
-    expect(addTask).not.toHaveBeenCalled();
+    // A failed pre-request is recoverable — the follow-up requests Copilot itself at
+    // its turn. Not spawning would leave the PR open with no review loop (the bug).
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot']);
     expect(removeWorktree).toHaveBeenCalled();
   });
 

@@ -5,7 +5,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
 import CronInput from '../../CronInput';
-import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
 import ReviewerPicker from '../ReviewerPicker';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import ToggleSwitch from '../../ToggleSwitch';
@@ -501,7 +501,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         {(config.taskMetadata?.reviewLoop || config.taskMetadata?.openPR) && (
           <div className="mt-3 pl-2">
             <ReviewerPicker
-              reviewers={normalizeReviewers(config.taskMetadata)}
+              reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : DEFAULT_REVIEWERS)}
               stopMode={config.taskMetadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE}
               reviewerApplies={!!config.taskMetadata?.reviewerApplies}
               disabled={updating}
