@@ -220,5 +220,20 @@ describe('settings.js', () => {
       const written = JSON.parse(content);
       expect(written.mortalloom).toEqual({ enabled: true, path: '/foo' });
     });
+
+    it('drops __proto__ / constructor / prototype keys instead of mutating Object.prototype', async () => {
+      // A `__proto__` own property arrives via JSON.parse of a payload like
+      // `{"__proto__":{"polluted":true}}`. Without the guard, the cleaned-object
+      // rebuild would invoke the __proto__ setter.
+      const malicious = JSON.parse('{"theme":"dark","__proto__":{"polluted":true},"constructor":{"polluted":true}}');
+      readFile.mockResolvedValue(JSON.stringify(malicious));
+      writeFile.mockResolvedValue();
+
+      const result = await getSettings();
+
+      expect(result).toEqual({ theme: 'dark' });
+      // Confirm no prototype pollution — a fresh object must not see `polluted`.
+      expect({}.polluted).toBeUndefined();
+    });
   });
 });

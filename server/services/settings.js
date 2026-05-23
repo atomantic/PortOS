@@ -2,6 +2,14 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
+
+// Prototype-pollution guard: when JSON.parse / PUT /api/settings hands us a
+// payload with a `__proto__` (or `constructor`/`prototype`) own property,
+// rebuilding the object via `cleaned[k] = v` would invoke the prototype
+// setter and mutate Object.prototype. Skip these keys defensively — settings
+// never legitimately uses them. Mirrors POLLUTING_KEYS in server/lib/objects.js.
+const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const SETTINGS_FILE = join(PATHS.data, 'settings.json');
 
@@ -24,11 +32,14 @@ const MORTALLOOM_STORE_KEYS = new Set([
 // `warn` only emits the console warning when set — write paths pass true so
 // the operator sees pollution being persisted-out/incoming, reads stay silent
 // so a single polluted file doesn't spam logs on every GET /api/settings.
+// Non-plain-object inputs (arrays, null, primitives) pass through unchanged;
+// rebuilding them as `{}` would silently coerce-then-lose the original value.
 const stripStoreKeys = (settings, { warn = false } = {}) => {
-  if (!settings || typeof settings !== 'object') return settings;
+  if (!isPlainObject(settings)) return settings;
   const cleaned = {};
   const polluted = [];
   for (const [k, v] of Object.entries(settings)) {
+    if (POLLUTING_KEYS.has(k)) continue;
     if (MORTALLOOM_STORE_KEYS.has(k)) {
       polluted.push(k);
       continue;
