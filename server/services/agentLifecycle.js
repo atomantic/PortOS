@@ -1448,12 +1448,14 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       let copilotReviewOk = false;
       let copilotReviewSkipped = false;
       const reviewerList = normalizeReviewers({ reviewers });
-      const copilotInList = reviewerList.includes(DEFAULT_REVIEWER);
+      const copilotIsFirst = reviewerList[0] === DEFAULT_REVIEWER;
       const nonCopilotReviewers = reviewerList.filter(r => r !== DEFAULT_REVIEWER);
-      // Only `copilot` maps to the GitHub native reviewer API. claude/gemini/codex
-      // are driven by the follow-up agent's CLI, so we pre-request Copilot only when
-      // it's in the list — but still spawn the follow-up for the CLI reviewers below.
-      if (shouldRequestCopilot && copilotInList) {
+      // Pre-request the native Copilot review ONLY when copilot LEADS the order — it
+      // then reviews the freshly-opened PR. When copilot is configured after a CLI
+      // reviewer (e.g. [codex, copilot]), pre-requesting now would make Copilot review
+      // the stale pre-CLI-fix diff; instead the follow-up agent requests it at copilot's
+      // turn, after the earlier reviewer's fixes are pushed.
+      if (shouldRequestCopilot && copilotIsFirst) {
         const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
         if (reviewResult.success && reviewResult.skipped) {
           // Non-GitHub forge (e.g. GitLab MR) — Copilot reviewer doesn't exist there. Log info, no warning.
@@ -1473,11 +1475,14 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
 
       // Spawn the review-loop follow-up agent that runs the multi-reviewer loop until
       // clean and merges. Without this, the loop stops after the initial review request.
-      // Drop copilot from the follow-up list if its pre-request didn't land (failed or
-      // non-GitHub forge); CLI reviewers still run. Spawn whenever at least one reviewer remains.
-      const effectiveReviewers = (copilotReviewOk && !copilotReviewSkipped)
-        ? reviewerList
-        : reviewerList.filter(r => r !== DEFAULT_REVIEWER);
+      // Drop copilot only when it LED the list but its pre-request didn't land (failed or
+      // non-GitHub forge). When copilot is not first it stays in the list — the follow-up
+      // requests it at its turn (spawnReviewLoopFollowUp's forge guard strips it on
+      // non-GitHub remotes). Spawn whenever at least one reviewer remains.
+      const copilotPreRequestLanded = copilotReviewOk && !copilotReviewSkipped;
+      const effectiveReviewers = (copilotIsFirst && !copilotPreRequestLanded)
+        ? reviewerList.filter(r => r !== DEFAULT_REVIEWER)
+        : reviewerList;
       const canSpawnFollowUp = shouldRequestCopilot && effectiveReviewers.length > 0;
       if (canSpawnFollowUp) {
         await spawnReviewLoopFollowUp({

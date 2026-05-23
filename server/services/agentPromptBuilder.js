@@ -224,6 +224,10 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
   const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER);
   const multi = reviewers.length > 1;
+  // The system pre-requests the initial Copilot review only when copilot LEADS the
+  // order; otherwise the agent must request it at copilot's turn (so Copilot reviews
+  // the post-CLI-fix state, not a stale diff).
+  const copilotIsFirst = reviewers[0] === DEFAULT_REVIEWER;
   const reviewerLabel = reviewers.map(r => `\`${r}\``).join(' → ');
   const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies);
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
@@ -231,7 +235,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
   // focused wording; for a list, dispatch each reviewer in order.
   const waitOrInvokeStep = multi
-    ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. **copilot**: an initial Copilot review was pre-requested; wait for it (poll every 5–15s, max 5 min/round) and re-request on later rounds. **codex / gemini / claude**: invoke that CLI against the PR diff (\`gh pr diff ${prNumber || ''}\`) to produce a review.`
+    ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. **copilot**: request a Copilot review when you reach its turn (the system pre-requested it only if Copilot leads the list), wait for it (poll every 5–15s, max 5 min/round), and re-request on later rounds. **codex / gemini / claude**: invoke that CLI against the PR diff (\`gh pr diff ${prNumber || ''}\`) to produce a review.`
     : (hasCopilot
         ? 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.'
         : `Invoke the ${reviewerLabel} CLI against the PR diff (\`gh pr diff ${prNumber || ''}\` or \`gh pr view ${prNumber || ''} --json files\`) to produce a code review. Capture its findings as concrete issues to address.`);
@@ -248,9 +252,11 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
         : "**Reviewer applies (off):** read each CLI reviewer's findings and apply the fixes yourself (default).")
     : '';
 
-  const initialReviewState = hasCopilot
-    ? 'The system has already requested an initial Copilot code review.'
-    : 'The system did NOT pre-request a reviewer because the configured reviewers are CLI-based — you must invoke them yourself against the PR diff.';
+  const initialReviewState = (hasCopilot && copilotIsFirst)
+    ? 'The system has already requested the initial Copilot code review (Copilot leads the order).'
+    : hasCopilot
+      ? 'Copilot is configured after a CLI reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the CLI reviewers yourself.'
+      : 'The system did NOT pre-request a reviewer because the configured reviewers are CLI-based — you must invoke them yourself against the PR diff.';
   const repeatedCommentsNote = '**Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.';
   const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
@@ -782,10 +788,16 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
  * both agent flows converge on the same final state. `reviewers` only colors
  * the wording — the merge step itself is reviewer-agnostic.
  */
-function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS } = {}) {
+function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
   const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot' : 'the';
+  // Under an explicit stop-mode, the multi-reviewer loop can exit `partial` (later
+  // reviewers intentionally skipped after the short-circuit) — that's a successful
+  // outcome the user opted into, so merge on it too. Under `all`, only `clean`/`too-large`.
+  const mergeStatuses = reviewStopMode !== 'all'
+    ? '`clean`, `partial` (a stop-mode short-circuit you opted into), or `too-large`'
+    : '`clean` (or `too-large`)';
   const lines = [
-    `${startStep}. **Merge the PR immediately when the ${reviewerLabel} review loop reports \`clean\` (or \`too-large\`)** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, or \`guardrail\`; leave the PR open for human follow-up.`,
+    `${startStep}. **Merge the PR immediately when the ${reviewerLabel} review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, or \`guardrail\`; leave the PR open for human follow-up.`,
     '   ```bash',
     '   gh pr merge "<PR_URL>" --squash --delete-branch',
     '   ```',
@@ -810,7 +822,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     : '';
   const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
-  const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers }) : { lines: [], nextStep: 3 };
+  const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode }) : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
   const quitStep = sentinelStep + 1;
 
@@ -861,7 +873,7 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = fals
       ? 'Copilot review loop'
       : `review loop for ${reviewers.join(', ')} in order`;
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, opens a pull request against the default branch, and drives the ${reviewerNote} until clean.`);
-    const merge = buildPostPRMergeSteps(step, { reviewers });
+    const merge = buildPostPRMergeSteps(step, { reviewers, reviewStopMode });
     lines.push(...merge.lines);
     step = merge.nextStep;
     return lines.join('\n');

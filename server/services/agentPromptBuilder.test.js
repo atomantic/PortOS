@@ -342,6 +342,45 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/do:pr --review-with gemini`/);
     });
 
+    it('allows merging on `partial` in the completion merge step when a stop-mode is set', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'gemini'], reviewStopMode: 'on-clean' } }),
+        '/r',
+        { branchName: 'feat', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).toMatch(/--review-stop-on-clean/);
+      // `partial` is a successful stop-mode short-circuit → mergeable.
+      expect(prompt).toMatch(/`partial`/);
+    });
+
+    it('does NOT merge on `partial` under the default stop-mode (all)', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'gemini'] } }),
+        '/r',
+        { branchName: 'feat', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).not.toMatch(/`partial`/);
+    });
+
+    it('tells the follow-up to request Copilot at its turn when copilot does NOT lead the list', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopReviewers: ['codex', 'copilot'],
+          sourceTaskId: 'task-src-4',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      // Must instruct requesting Copilot at its turn — not claim a pre-request happened.
+      expect(prompt).toMatch(/request a Copilot review when you reach its turn/);
+      expect(prompt).not.toMatch(/already requested the initial Copilot/);
+    });
+
     it('worktreeCommitGuidance: existing-branch wins over slashdo/PR — emits the review-fix push wording', () => {
       // When the worktree reuses a pre-existing PR branch (e.g. a review-loop
       // follow-up agent picking up where the prior agent left off), the agent
