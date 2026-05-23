@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
 
@@ -48,10 +49,10 @@ router.delete('/ignore', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/update/sync-fork — fast-forward the user's GitHub fork from upstream
-// atomantic/PortOS via `gh repo sync`. Non-destructive: gh refuses to overwrite
-// divergent fork history without --force, so a 409 FORK_DIVERGED here means the
-// fork's main has commits not on upstream (user customizations). Other failures
-// (gh missing, network, etc.) bubble as 502 FORK_SYNC_FAILED.
+// via `gh repo sync`. Non-destructive: gh refuses to overwrite divergent fork
+// history without --force, so a 409 FORK_DIVERGED here means the fork's main has
+// commits not on upstream (user customizations). Other failures (gh missing,
+// network, etc.) bubble as 502 FORK_SYNC_FAILED.
 router.post('/sync-fork', asyncHandler(async (req, res) => {
   const { branch } = validateRequest(syncForkSchema, req.body || {});
   // Surface git-binary/spawn failures as a structured 502 instead of an
@@ -69,12 +70,12 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
       { status: 400, code: 'NOT_GITHUB' });
   }
   if (info.isUpstream) {
-    throw new ServerError('Origin is already the upstream atomantic/PortOS — nothing to sync.',
+    throw new ServerError(`Origin is already the upstream ${UPSTREAM_FULL_NAME} — nothing to sync.`,
       { status: 400, code: 'ALREADY_UPSTREAM' });
   }
   if (!info.isFork) {
     throw new ServerError(
-      `Origin ${info.fullName} is not a fork of atomantic/PortOS (repo name differs). ` +
+      `Origin ${info.fullName} is not a fork of ${UPSTREAM_FULL_NAME} (repo name differs). ` +
       `Fork sync requires the origin to be a GitHub fork.`,
       { status: 400, code: 'NOT_A_FORK' }
     );

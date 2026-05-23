@@ -45,6 +45,7 @@ export default function UpdateTab() {
     const data = await api.getUpdateStatus().catch(() => null);
     if (data) setStatus(data);
     setLoading(false);
+    return data;
   }, []);
 
   useEffect(() => {
@@ -135,11 +136,16 @@ export default function UpdateTab() {
     setChecking(false);
   };
 
-  const runUpdate = useCallback(async (opts = {}) => {
-    if (status?.latestRelease?.version) {
-      targetVersionRef.current = status.latestRelease.version;
+  // `fromStatus` lets callers (e.g. handleSyncForkAndUpdate) pass the freshly
+  // fetched status object instead of relying on the closure capture — `setStatus`
+  // only schedules a render and the awaited fetchStatus() return value is the
+  // single source of truth for the just-loaded state.
+  const runUpdate = useCallback(async (opts = {}, fromStatus = null) => {
+    const s = fromStatus || status;
+    if (s?.latestRelease?.version) {
+      targetVersionRef.current = s.latestRelease.version;
     }
-    preUpdateVersionRef.current = status?.currentVersion || null;
+    preUpdateVersionRef.current = s?.currentVersion || null;
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
@@ -152,7 +158,7 @@ export default function UpdateTab() {
       targetVersionRef.current = result.tag.replace(/^v/, '');
     }
     return result;
-  }, [status?.latestRelease?.version, status?.currentVersion]);
+  }, [status]);
 
   const handleUpdate = () => runUpdate();
 
@@ -172,8 +178,8 @@ export default function UpdateTab() {
     } else {
       toast.success(`Synced ${synced.fullName} from ${synced.source}`);
     }
-    await fetchStatus();
-    await runUpdate();
+    const fresh = await fetchStatus();
+    await runUpdate({}, fresh);
   };
 
   const handleSyncForkOnly = async () => {

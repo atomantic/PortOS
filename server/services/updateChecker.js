@@ -122,10 +122,18 @@ export async function getRemoteInfo() {
  * non-destructive by design.
  *
  * Returns { synced, alreadyUpToDate, fullName, source, mergedBranch, message }.
- * Throws plain `Error` instances for validation/refusal cases (no origin, not
- * GitHub, already upstream); `execGh` failures (e.g. diverged fork) bubble up
- * as whatever `execGh` throws. The /api/update/sync-fork route inspects
- * err.message to classify into 400 / 409 / 502 ServerError responses.
+ *
+ * Error handling — by layer:
+ *   - This function throws plain `Error` for pre-flight refusals (no origin,
+ *     not GitHub, already upstream, not a fork).
+ *   - `execGh` rejections (gh CLI failure including the diverged-fork case)
+ *     bubble up unchanged.
+ *   - The /api/update/sync-fork route runs an upfront 400 gate against the
+ *     same conditions (NO_ORIGIN / NOT_GITHUB / ALREADY_UPSTREAM / NOT_A_FORK)
+ *     so the pre-flight throws above are defense-in-depth and would normally
+ *     be unreachable from the route. The route only string-matches `err.message`
+ *     to distinguish the gh diverged-fork case (409 FORK_DIVERGED) from other
+ *     gh failures (502 FORK_SYNC_FAILED).
  */
 export async function syncFork({ branch } = {}) {
   const info = await getRemoteInfo();
@@ -136,7 +144,7 @@ export async function syncFork({ branch } = {}) {
     throw new Error(`Origin remote is not on GitHub (host: ${info.host || 'unknown'}). Fork sync is GitHub-only.`);
   }
   if (info.isUpstream) {
-    throw new Error('Origin is already the upstream atomantic/PortOS — nothing to sync.');
+    throw new Error(`Origin is already the upstream ${UPSTREAM_FULL_NAME} — nothing to sync.`);
   }
   if (!info.isFork) {
     // Catches a GitHub remote that points at a repo with a different name
