@@ -148,4 +148,77 @@ describe('settings.js', () => {
       expect(result).toEqual({ theme: 'dark' });
     });
   });
+
+  describe('MortalLoom store key pollution guard', () => {
+    it('strips MortalLoom-store top-level keys on read', async () => {
+      // Simulates the historical corruption: settings.json contains both
+      // legitimate settings and MortalLoom store arrays.
+      const polluted = {
+        theme: 'dark',
+        timezone: 'UTC',
+        alcoholDrinks: [{ id: 'A', name: 'beer' }],
+        bloodTests: [{ id: 'B' }],
+        goals: [{ id: 'G' }],
+        profile: { name: 'X' },
+        mortalloom: { enabled: true }
+      };
+      readFile.mockResolvedValue(JSON.stringify(polluted));
+
+      const result = await getSettings();
+
+      expect(result).toEqual({
+        theme: 'dark',
+        timezone: 'UTC',
+        mortalloom: { enabled: true }
+      });
+      expect(result.alcoholDrinks).toBeUndefined();
+      expect(result.goals).toBeUndefined();
+      expect(result.profile).toBeUndefined();
+    });
+
+    it('strips MortalLoom-store keys before writing', async () => {
+      const existing = { theme: 'dark' };
+      readFile.mockResolvedValue(JSON.stringify(existing));
+      writeFile.mockResolvedValue();
+
+      // Caller accidentally passes a payload with store keys.
+      await updateSettings({ alcoholDrinks: [], goals: [], voice: { enabled: true } });
+
+      const [, content] = writeFile.mock.calls[0];
+      const written = JSON.parse(content);
+      expect(written).toEqual({ theme: 'dark', voice: { enabled: true } });
+      expect(written.alcoholDrinks).toBeUndefined();
+      expect(written.goals).toBeUndefined();
+    });
+
+    it('auto-heals corrupted settings.json on next save', async () => {
+      // Polluted file on disk.
+      const polluted = {
+        theme: 'dark',
+        alcoholDrinks: [{ id: 'A' }],
+        bloodTests: [{ id: 'B' }],
+        habits: [{ id: 'H' }]
+      };
+      readFile.mockResolvedValue(JSON.stringify(polluted));
+      writeFile.mockResolvedValue();
+
+      // Any save (even unrelated) cleans up the file.
+      await updateSettings({ timezone: 'UTC' });
+
+      const [, content] = writeFile.mock.calls[0];
+      const written = JSON.parse(content);
+      expect(written).toEqual({ theme: 'dark', timezone: 'UTC' });
+    });
+
+    it('preserves legitimate mortalloom config key (not in store-key list)', async () => {
+      readFile.mockResolvedValue('{}');
+      writeFile.mockResolvedValue();
+
+      await updateSettings({ mortalloom: { enabled: true, path: '/foo' } });
+
+      const [, content] = writeFile.mock.calls[0];
+      const written = JSON.parse(content);
+      expect(written.mortalloom).toEqual({ enabled: true, path: '/foo' });
+    });
+  });
 });
