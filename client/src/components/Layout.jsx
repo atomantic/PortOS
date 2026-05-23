@@ -970,6 +970,7 @@ export default function Layout() {
         {/* Main content */}
         {(() => {
           const isFullWidth = location.pathname === '/character' ||
+            location.pathname === '/ai' ||
             location.pathname === '/ask' ||
             location.pathname.startsWith('/ask/') ||
             location.pathname.startsWith('/calendar') ||
@@ -985,6 +986,7 @@ export default function Layout() {
             location.pathname.startsWith('/pipeline/issues/') ||
             location.pathname.startsWith('/pipeline/series/') ||
             location.pathname.startsWith('/post') ||
+            location.pathname === '/prompts' ||
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
             location.pathname.startsWith('/wiki') ||
