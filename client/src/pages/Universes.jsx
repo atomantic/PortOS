@@ -101,8 +101,14 @@ export default function Universes() {
     await deleteUniverse(u.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       // Roll back only this row (re-insert if still missing) so a concurrent
-      // delete's optimistic removal isn't clobbered by a stale full-list snapshot.
-      setUniverses((prev) => (prev.some((x) => x.id === u.id) ? prev : [...prev, u]));
+      // delete's optimistic removal isn't clobbered by a stale full-list
+      // snapshot. Re-sort by the server's order (createdAt desc, newest-first)
+      // so the restored row lands in its original position, not at the end.
+      setUniverses((prev) =>
+        prev.some((x) => x.id === u.id)
+          ? prev
+          : [...prev, u].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')),
+      );
     });
   };
 
