@@ -589,7 +589,7 @@ function PeerSyncSubscriptionsSection({ peer, peerSubs, peerSubsLoaded, setPeerS
       <div className="flex items-center gap-1.5 mb-1.5">
         <ArrowLeftRight size={12} className="text-gray-500" />
         <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">
-          Live-pushed records ({subs.length})
+          Live-pushed records ({peerSubs.length})
         </span>
       </div>
       <div className="space-y-1">
