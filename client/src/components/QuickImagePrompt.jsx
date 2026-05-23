@@ -18,13 +18,13 @@ export default function QuickImagePrompt() {
 
     submittingRef.current = true;
     setIsSubmitting(true);
-    setPrompt('');
 
     // Omit `mode` so the server falls back to the user's saved
     // `settings.imageGen.mode` default. Async backends (local/codex) respond
     // with { jobId, status, position } — sync external responds with the
     // generation result. Toast wording covers both cases without inspecting
-    // backend internals.
+    // backend internals. Preserve the input on failure so the user doesn't
+    // have to retype after a server error (the API helper toasts on its own).
     const result = await generateImage({
       prompt: text,
       negativePrompt: DEFAULT_NEGATIVE_PROMPT,
@@ -33,6 +33,7 @@ export default function QuickImagePrompt() {
     submittingRef.current = false;
     setIsSubmitting(false);
     if (result) {
+      setPrompt('');
       toast.success(result.status === 'queued' || result.status === 'running' ? 'Image queued' : 'Image generated');
     }
   };
