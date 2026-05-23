@@ -174,6 +174,33 @@ export default function VideoGen() {
     if (Number.isFinite(h) && h > 0) setHeight(h);
   }, [incomingWidth, incomingHeight]);
 
+  // Remix payload from MediaPreview (?modelId=…&numFrames=…&seed=…). Populate
+  // form state once on mount, then strip the params so a hot-reload or back-
+  // nav doesn't re-clobber edits the user has made since. Mirrors the
+  // ImageGen remix-prefill effect.
+  useEffect(() => {
+    const remixKeys = ['modelId', 'numFrames', 'fps', 'seed', 'steps', 'guidanceScale', 'tiling', 'disableAudio'];
+    const present = remixKeys.filter((k) => searchParams.get(k) != null);
+    if (present.length === 0) return;
+    const get = (k) => searchParams.get(k);
+    if (get('modelId')) setModelId(get('modelId'));
+    const nf = Number(get('numFrames'));
+    if (Number.isFinite(nf) && nf > 0) setNumFrames(nf);
+    const f = Number(get('fps'));
+    if (Number.isFinite(f) && f > 0) setFps(f);
+    if (get('seed') != null) setSeed(get('seed'));
+    if (get('steps')) setSteps(get('steps'));
+    if (get('guidanceScale')) setGuidanceScale(get('guidanceScale'));
+    if (get('tiling')) setTiling(get('tiling'));
+    if (get('disableAudio') === '1') setDisableAudio(true);
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      remixKeys.forEach((k) => n.delete(k));
+      return n;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [history, setHistory] = useState([]);
   // `preview` is URL-driven via `usePreviewRoute(previewItems)` — declared
   // after `previewItems` below so the resolver can match against it.
@@ -273,6 +300,32 @@ export default function VideoGen() {
     if (item?.width) params.set('w', String(item.width));
     if (item?.height) params.set('h', String(item.height));
     navigate(`/media/video?${params.toString()}`);
+  };
+
+  // Remix a prior render: hand all its params back into the form so the user
+  // can iterate (tweak the prompt, swap seeds, etc.) without re-typing.
+  // Mirrors ImageGen.handleRemix — in-page state set so the form jumps to
+  // the new values without a navigation. The `item` is the raw video sidecar
+  // (not the normalized MediaPreview shape).
+  const handleRemixVideo = (item) => {
+    if (!item) return;
+    setStylePreset(null);
+    if (item.prompt) setPrompt(item.prompt);
+    const neg = item.negativePrompt || item.negative_prompt;
+    if (neg) setNegativePrompt(neg);
+    if (item.modelId && models.some((m) => m.id === item.modelId)) setModelId(item.modelId);
+    if (item.width) setWidth(item.width);
+    if (item.height) setHeight(item.height);
+    if (item.numFrames) setNumFrames(item.numFrames);
+    if (item.fps) setFps(item.fps);
+    if (item.seed != null) setSeed(String(item.seed));
+    if (item.steps != null && item.steps !== '') setSteps(String(item.steps));
+    const guidance = item.guidanceScale ?? item.guidance_scale ?? item.guidance;
+    if (guidance != null && guidance !== '') setGuidanceScale(String(guidance));
+    if (item.tiling) setTiling(item.tiling);
+    const disableAudio = item.disableAudio ?? item.disable_audio;
+    if (disableAudio === true) setDisableAudio(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const [generating, setGenerating] = useState(false);
@@ -1362,6 +1415,7 @@ export default function VideoGen() {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onContinue={(item) => handleContinueHistory(item.raw)}
+        onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">

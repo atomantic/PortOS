@@ -517,7 +517,7 @@ function SettingsPane({
             <Sparkles className="w-3.5 h-3.5" /> Refine Prompt
           </button>
         )}
-        {!isVideo && onRemix && (
+        {onRemix && (
           <button
             type="button"
             onClick={() => { onRemix(item); onClose(); }}
