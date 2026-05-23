@@ -896,8 +896,8 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
  * `{ applied, count }` where `count` is the number of issues actually
  * changed/added.
  */
-export function mergeIssuesFromSync(remoteIssues) {
-  if (!Array.isArray(remoteIssues)) return Promise.resolve({ applied: false, count: 0 });
+export async function mergeIssuesFromSync(remoteIssues) {
+  if (!Array.isArray(remoteIssues)) return { applied: false, count: 0 };
   // Series IDs whose issue set saw at least one delete-transition — drives a
   // post-write renumber so the receiver's issue numbering catches up with the
   // sender's (otherwise a synced tombstone would leave a gap).
@@ -907,17 +907,40 @@ export function mergeIssuesFromSync(remoteIssues) {
   // Stage 2 per-record peer-sync push owns sync-time edit emits). Delete-
   // transitions DO emit per series so subscribers know to drop the issue.
   const seriesNeedingRenumber = new Set();
+  // Build the set of locally-ephemeral series ids BEFORE the queue. The
+  // per-record push pipeline (applyIncomingPush) already gates the bundled
+  // issues batch by parent-ephemeral, but the snapshot pipeline path
+  // (applyPipelineRemote → mergeIssuesFromSync) bypasses that check. Without
+  // this filter, a peer with `pipeline` sync enabled can create/update/
+  // tombstone issues under a locally-private series and overwrite the
+  // user's private fork.
+  const ephemeralSeriesIds = new Set(
+    (await seriesSvc.listSeries({ includeDeleted: true }).catch(() => []))
+      .filter((s) => s?.ephemeral === true)
+      .map((s) => s.id),
+  );
   return queueIssueWrite(async () => {
     const state = await readState();
     const localById = new Map(state.issues.map((i) => [i.id, i]));
     let changed = 0;
     for (const remote of remoteIssues) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      // Drop issues whose parent series is locally ephemeral, BEFORE any
+      // mutation. This covers create/update/tombstone uniformly — the
+      // sanitized.seriesId may be either the existing local series or a
+      // remote-only target; reject either way.
+      if (ephemeralSeriesIds.has(remote.seriesId)) continue;
       const sanitized = sanitizeIssue(remote);
       if (!sanitized) continue;
       // Strip inbound `ephemeral` — see mergeUniversesFromSync.
       if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
+      // Belt-and-suspenders: if the existing local issue belongs to an
+      // ephemeral series, refuse the merge even though the inbound
+      // sanitized.seriesId might point elsewhere (a peer could ship an
+      // issue id whose local copy is under a private series and try to
+      // move it).
+      if (local && ephemeralSeriesIds.has(local.seriesId)) continue;
       if (!local) {
         // No local counterpart — accept the record but don't trigger a
         // renumber pass. A tombstone for an issue we never had has nothing

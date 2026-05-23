@@ -63,14 +63,21 @@ export default function SyncToPeerButton({
     setLoading(false);
   };
 
-  // Per-record subscribability — mirrors server-side peerHasCategory in
-  // peerSync.js. universe → 'universe' category, series → 'pipeline'.
-  // Without this gate the UI would let the user subscribe to a peer
-  // whose category bit is off, then silently fail every push with
-  // category-disabled (server-side guard in pushRecordToPeer).
+  // Per-record subscribability — mirrors server-side guards in peerSync.js
+  // (peerAllowsOutbound + peerHasCategory). Without this triple gate the
+  // UI would let the user subscribe to a peer that silently rejects every
+  // push (with peer-disabled, peer-disallows-outbound, or
+  // category-disabled), leaving the row checked but no records ever
+  // landing. universe → 'universe' category, series → 'pipeline'.
   const requiredCategory = recordKind === 'universe' ? 'universe' : 'pipeline';
-  const peerHasMatchingCategory = (peer) => {
-    const cats = peer?.syncCategories;
+  const peerCanReceiveOutbound = (peer) => {
+    if (!peer) return false;
+    // Global sync flag off → server's pushRecordToPeer refuses.
+    if (peer.syncEnabled === false) return false;
+    // Inbound-only direction → outbound pushes silently dropped.
+    if (Array.isArray(peer.directions) && peer.directions.length > 0
+        && !peer.directions.includes('outbound')) return false;
+    const cats = peer.syncCategories;
     return !!cats && typeof cats === 'object' && cats[requiredCategory] === true;
   };
 
@@ -157,21 +164,28 @@ export default function SyncToPeerButton({
               {peers.map((p) => {
                 const subscribed = !!subscriptionForPeer(p.instanceId);
                 const busy = busyPeerId === p.instanceId;
-                // Disable when the peer's syncCategories doesn't cover this
-                // record kind. server-side pushRecordToPeer would otherwise
-                // accept the subscription but refuse every push with
-                // `category-disabled`, leaving the UI with a misleading
-                // "Syncing" toast for a peer that won't actually receive
-                // any pushes.
-                const categoryEnabled = peerHasMatchingCategory(p);
+                // Disable when the peer can't actually receive outbound
+                // pushes for this record kind — global sync off, inbound-
+                // only directions, or the per-record category is off. UI
+                // mirrors server-side guards in pushRecordToPeer.
+                const canSync = peerCanReceiveOutbound(p);
                 const categoryLabel = requiredCategory === 'universe' ? 'Universe' : 'Pipeline';
+                // Compute the most-specific reason for the inline hint.
+                const disabledReason = !canSync
+                  ? (p.syncEnabled === false
+                      ? 'Sync disabled for this peer'
+                      : (Array.isArray(p.directions) && p.directions.length > 0
+                          && !p.directions.includes('outbound')
+                          ? 'Peer is inbound-only'
+                          : `${categoryLabel} sync off`))
+                  : null;
                 return (
                   <li key={p.instanceId}>
                     <button
                       type="button"
                       onClick={() => handleToggle(p)}
-                      disabled={busy || !categoryEnabled}
-                      title={!categoryEnabled ? `Enable ${categoryLabel} sync for this peer on the Instances page first.` : undefined}
+                      disabled={busy || !canSync}
+                      title={disabledReason ? `${disabledReason}. Enable on the Instances page first.` : undefined}
                       className="w-full text-left px-3 py-2 hover:bg-port-bg disabled:opacity-50 disabled:cursor-not-allowed flex items-start gap-2"
                     >
                       <span className="mt-0.5 shrink-0">
@@ -186,7 +200,7 @@ export default function SyncToPeerButton({
                         <div className="text-[10px] text-gray-500 truncate">
                           {p.status === 'online' ? 'online' : p.status || 'offline'}
                           {p.host ? ` · ${p.host}` : p.address ? ` · ${p.address}` : ''}
-                          {!categoryEnabled && ` · ${categoryLabel} sync off`}
+                          {disabledReason && ` · ${disabledReason}`}
                         </div>
                       </div>
                     </button>
