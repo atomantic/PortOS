@@ -738,9 +738,18 @@ export async function mergeMediaCollectionsFromSync(remoteCollections) {
         continue;
       }
       const mergedItems = mergeCollectionItems(local.items, sanitized.items);
+      // LWW on collection-level scalars. Parse to epoch ms (not lexicographic
+      // compare on the raw strings): `sanitizeCollection` accepts any
+      // Date.parse-able string for `updatedAt`, so a hand-edit or older peer
+      // writing a non-ISO format could otherwise lose to a "newer" string
+      // that's actually an older moment in time. Unparseable side LOSES (a
+      // corrupted timestamp can't claim to be newer); both unparseable
+      // breaks to local-wins (no signal to override). `localTs`/`remoteTs`
+      // keep the original strings so the winning side's `updatedAt`
+      // round-trips to disk verbatim — only the comparison is numeric.
       const localTs = local.updatedAt || '';
       const remoteTs = sanitized.updatedAt || '';
-      const remoteWins = remoteTs > localTs;
+      const remoteWins = compareNewerWins(remoteTs, localTs);
       const scalarSource = remoteWins ? sanitized : local;
       // Cover key: only adopt the scalar source's coverKey if it points at an
       // item that survives the union — otherwise sanitizeCollection on next
@@ -783,20 +792,51 @@ function mergeCollectionItems(localItems, remoteItems) {
     // an item already in the collection. Parse to epoch ms instead of
     // lexicographic compare: `sanitizeItem` keeps any Date.parse-able
     // string (not strictly ISO-8601), so two parseable-but-different-format
-    // timestamps could compare incorrectly as strings.
-    const existingMs = parseAddedAtMs(existing.addedAt);
-    const incomingMs = parseAddedAtMs(it.addedAt);
-    const earlier = existingMs <= incomingMs ? existing : it;
+    // timestamps could compare incorrectly as strings. Tie → existing wins
+    // (matches the previous `<=` behavior — sync replay shouldn't churn).
+    const cmp = compareEarlierWins(existing.addedAt, it.addedAt);
+    const earlier = cmp <= 0 ? existing : it;
     byKey.set(k, earlier);
   }
   return Array.from(byKey.values());
 }
 
-function parseAddedAtMs(s) {
+// Parse a timestamp string to epoch ms, or null when unparseable. The
+// "loses on null" semantics differ between the two LWW directions, so each
+// caller handles nulls explicitly rather than baking a polarity into this
+// helper (an Infinity / -Infinity fallback would invert behavior between
+// "earliest wins" and "newer wins").
+function parseTsMs(s) {
   const n = typeof s === 'string' ? Date.parse(s) : NaN;
-  // Unparseable timestamps lose to any valid one (Infinity > any finite ms),
-  // so a corrupted addedAt can never claim "earlier" than a real one.
-  return Number.isFinite(n) ? n : Infinity;
+  return Number.isFinite(n) ? n : null;
+}
+
+// "Earliest wins" tiebreak for two records of the same key. Used by
+// mergeCollectionItems when both sides claim to know an `addedAt` for the
+// same `<kind>:<ref>`. Returns -1 if `a` is earlier (a wins), 1 if `b` is
+// earlier, 0 on tie. Unparseable side LOSES — a corrupted timestamp can't
+// claim to be earliest; if both are unparseable the caller's default wins.
+function compareEarlierWins(a, b) {
+  const aMs = parseTsMs(a);
+  const bMs = parseTsMs(b);
+  if (aMs === null && bMs === null) return 0;
+  if (aMs === null) return 1;  // a unparseable → b wins
+  if (bMs === null) return -1; // b unparseable → a wins
+  if (aMs < bMs) return -1;
+  if (aMs > bMs) return 1;
+  return 0;
+}
+
+// "Newer wins" comparison: returns true iff `candidate` is strictly newer
+// than `incumbent`. Used by mergeMediaCollectionsFromSync to decide whether
+// remote overrides local on scalar fields. Same null-loses-to-valid rule
+// as `compareEarlierWins`. Ties → incumbent (local) wins.
+function compareNewerWins(candidate, incumbent) {
+  const cMs = parseTsMs(candidate);
+  const iMs = parseTsMs(incumbent);
+  if (cMs === null) return false;       // candidate unparseable → never overrides
+  if (iMs === null) return true;        // incumbent unparseable, candidate valid → take valid
+  return cMs > iMs;
 }
 
 function collectionsEqual(a, b) {

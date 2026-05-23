@@ -888,6 +888,60 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(merged.items[0].ref).toBe('real.png');
   });
 
+  it('compares collection updatedAt as parsed milliseconds (not lexicographic)', async () => {
+    // Same hazard as the addedAt case: sanitizeCollection accepts any
+    // Date.parse-able string for `updatedAt`, so a non-ISO but valid
+    // timestamp could compare incorrectly as a string and flip LWW the
+    // wrong way. The slash-format timestamp here ('05/22/2026 18:00 UTC')
+    // sorts BEFORE the ISO timestamp lexicographically ('0' < '2'), but
+    // it's actually LATER in real time — so remote should win.
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1', name: 'Local', description: 'local', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T10:00:00Z',
+      }],
+    });
+    await svc.mergeMediaCollectionsFromSync([{
+      id: 'c1', name: 'Remote', description: 'remote', coverKey: null,
+      universeId: null, seriesId: null,
+      items: [],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '05/22/2026 18:00:00 UTC',
+    }]);
+    const [merged] = await svc.listCollections();
+    // Numeric compare: 18:00 > 10:00 → remote wins → name flips to "Remote"
+    expect(merged.name).toBe('Remote');
+    expect(merged.description).toBe('remote');
+  });
+
+  it('LWW: unparseable updatedAt never overrides a valid one', async () => {
+    // Defense in depth — a hand-edit or corrupted record shipping a
+    // garbage `updatedAt` shouldn't be able to claim "newer" than a valid
+    // local record and overwrite its scalars.
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1', name: 'Local', description: 'local', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T03:00:00Z',
+      }],
+    });
+    await svc.mergeMediaCollectionsFromSync([{
+      id: 'c1', name: 'Remote', description: 'remote', coverKey: null,
+      universeId: null, seriesId: null,
+      items: [],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: 'not a real timestamp',
+    }]);
+    const [merged] = await svc.listCollections();
+    expect(merged.name).toBe('Local');
+    expect(merged.description).toBe('local');
+  });
+
   it('compares addedAt as parsed milliseconds (not lexicographic) when picking the earlier item', async () => {
     // sanitizeItem accepts any Date.parse-able string, not strictly ISO-8601.
     // Lexicographic compare would order "05/22/2026 ..." AFTER "2026-..." (the
