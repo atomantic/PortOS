@@ -24,10 +24,12 @@ export default function ReviewerPicker({
   disabled = false
 }) {
   const id = useId();
-  // Render the parent's list verbatim (no normalization) so display === stored
-  // state. An empty list shows the "defaults to Copilot" hint and lets the user
-  // clear copilot; the server/submit layer resolves [] → ['copilot'].
-  const selected = Array.isArray(reviewers) ? reviewers : [];
+  // Render the parent's list (de-duped, order-preserving) so display === stored
+  // state for valid input while staying robust to malformed/legacy duplicates —
+  // dupes would otherwise collide on the `key={value}` below and corrupt
+  // reorder/remove. An empty list shows the "defaults to Copilot" hint and lets
+  // the user clear copilot; the server/submit layer resolves [] → ['copilot'].
+  const selected = Array.isArray(reviewers) ? [...new Set(reviewers)] : [];
   const available = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
   const hasNonCopilot = selected.some(r => r !== 'copilot');
 

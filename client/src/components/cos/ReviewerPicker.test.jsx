@@ -18,6 +18,14 @@ describe('ReviewerPicker', () => {
     expect(screen.getByText(/none — defaults to Copilot/)).toBeInTheDocument();
   });
 
+  it('de-dupes a malformed list with duplicates (order-preserving)', () => {
+    render(<ReviewerPicker reviewers={['codex', 'codex', 'gemini']} onChange={() => {}} />);
+    // Two distinct pills (badges 1 and 2), not three.
+    expect(screen.getByText('1.')).toBeInTheDocument();
+    expect(screen.getByText('2.')).toBeInTheDocument();
+    expect(screen.queryByText('3.')).not.toBeInTheDocument();
+  });
+
   it('emits an empty list when the last reviewer is removed (server resolves to copilot)', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
