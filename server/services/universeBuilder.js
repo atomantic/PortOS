@@ -1021,9 +1021,15 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       'characters', 'places', 'objects',
       // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
       'origin',
-      // Local-only "don't sync" marker — see sanitizeTemplate. Sanitizer
-      // normalizes anything non-true back to absent so a stray PATCH can't
-      // re-enable sync by sending `ephemeral: 'false'`.
+      // Local-only "don't sync" marker — see sanitizeTemplate. The safety
+      // property is one-directional: ONLY a literal `true` marks the record
+      // ephemeral; every other value (`false`, `'true'`, `1`, etc.) is
+      // dropped at the sanitizer back to absent — i.e. sync-enabled. A
+      // mutator PATCH like `{ ephemeral: 'false' }` therefore CLEARS the
+      // flag (re-enabling sync), it does NOT mark the record ephemeral.
+      // The asymmetry is intentional: protecting "private by default" is
+      // not the goal — protecting "you can't accidentally truthy your way
+      // into ephemeral and never sync again" is.
       'ephemeral',
     ];
     const scalarPatch = Object.fromEntries(
