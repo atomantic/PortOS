@@ -1592,8 +1592,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopReviewerApplies: reviewerApplies,
       sourceTaskId: originalTask?.id || null,
       sourceAgentId: originalAgentId || null,
-      // skipCommitCheck: this task may exit cleanly with zero new commits if the
-      // initial Copilot review came back clean. Don't false-positive that as failure.
+      // This follow-up may legitimately exit with zero new commits when every
+      // reviewer comes back clean — completion handling must not treat a
+      // zero-commit exit as a failure.
       readOnly: false
     },
     autoApproved: true,

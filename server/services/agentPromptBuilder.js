@@ -799,8 +799,11 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
   const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot ' : '';
   // Under an explicit stop-mode, the multi-reviewer loop can exit `partial` (later
   // reviewers intentionally skipped after the short-circuit) — that's a successful
-  // outcome the user opted into, so merge on it too. Under `all`, only `clean`/`too-large`.
-  const mergeStatuses = reviewStopMode !== 'all'
+  // outcome the user opted into, so merge on it too. Match the known stop-modes
+  // explicitly so an unknown/invalid value falls through to the safe default
+  // (only `clean`/`too-large` mergeable).
+  const explicitStopMode = reviewStopMode === 'on-findings' || reviewStopMode === 'on-clean';
+  const mergeStatuses = explicitStopMode
     ? '`clean`, `partial` (a stop-mode short-circuit you opted into), or `too-large`'
     : '`clean` (or `too-large`)';
   const lines = [
