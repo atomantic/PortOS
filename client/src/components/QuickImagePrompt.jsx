@@ -33,7 +33,10 @@ export default function QuickImagePrompt() {
     submittingRef.current = false;
     setIsSubmitting(false);
     if (result) {
-      setPrompt('');
+      // Only clear if the textarea still holds the submitted text — the user
+      // can keep typing while the request is in flight and we don't want to
+      // wipe out new input on resolve.
+      setPrompt((current) => (current === text ? '' : current));
       toast.success(result.status === 'queued' || result.status === 'running' ? 'Image queued' : 'Image generated');
     }
   };
