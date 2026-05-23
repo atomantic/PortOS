@@ -233,9 +233,14 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
-  // focused wording; for a list, dispatch each reviewer in order.
+  // focused wording; for a list, dispatch each reviewer in order. Only emit the
+  // per-reviewer-kind bullet that actually applies to the configured list.
+  const multiBullets = [
+    hasCopilot ? '**copilot**: request a Copilot review when you reach its turn (the system pre-requested it only if Copilot leads the list), wait for it (poll every 5–15s, max 5 min/round), and re-request on later rounds.' : null,
+    hasCli ? `**codex / gemini / claude**: invoke that CLI against the PR diff (\`gh pr diff ${prNumber || ''}\`) to produce a review.` : null,
+  ].filter(Boolean).join(' ');
   const waitOrInvokeStep = multi
-    ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. **copilot**: request a Copilot review when you reach its turn (the system pre-requested it only if Copilot leads the list), wait for it (poll every 5–15s, max 5 min/round), and re-request on later rounds. **codex / gemini / claude**: invoke that CLI against the PR diff (\`gh pr diff ${prNumber || ''}\`) to produce a review.`
+    ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. ${multiBullets}`
     : (hasCopilot
         ? 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.'
         : `Invoke the ${reviewerLabel} CLI against the PR diff (\`gh pr diff ${prNumber || ''}\` or \`gh pr view ${prNumber || ''} --json files\`) to produce a code review. Capture its findings as concrete issues to address.`);
@@ -304,7 +309,7 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
     '',
     '**Loop UNTIL all reviewers are satisfied (or the stop mode triggers), capped at 10 iterations per reviewer:**',
     `1. ${waitOrInvokeStep}`,
-    '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push' + (hasCopilot ? ', resolve threads.' : '.'),
+    '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push' + (hasCopilot ? ', and (for Copilot) resolve the addressed threads.' : '.'),
     '3. Re-review with the same reviewer until clean, then advance to the next reviewer in the list.',
     '4. When the list is exhausted (or the stop mode triggers), merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
     '   ```bash',
@@ -789,7 +794,9 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
  * the wording — the merge step itself is reviewer-agnostic.
  */
 function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
-  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot' : 'the';
+  // Trailing space when present so the sentence reads "the Copilot review loop"
+  // (lone copilot) or "the review loop" (multi/CLI) — never "the the review loop".
+  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot ' : '';
   // Under an explicit stop-mode, the multi-reviewer loop can exit `partial` (later
   // reviewers intentionally skipped after the short-circuit) — that's a successful
   // outcome the user opted into, so merge on it too. Under `all`, only `clean`/`too-large`.
@@ -797,7 +804,7 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
     ? '`clean`, `partial` (a stop-mode short-circuit you opted into), or `too-large`'
     : '`clean` (or `too-large`)';
   const lines = [
-    `${startStep}. **Merge the PR immediately when the ${reviewerLabel} review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, or \`guardrail\`; leave the PR open for human follow-up.`,
+    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, or \`guardrail\`; leave the PR open for human follow-up.`,
     '   ```bash',
     '   gh pr merge "<PR_URL>" --squash --delete-branch',
     '   ```',
