@@ -112,40 +112,57 @@ function pinAgainstEviction(path) {
   });
 }
 
-let initialized = false;
+// Two flags, not one: the listener is durable (sync, idempotent) but the
+// initial-pin step does awaits that can reject transiently (settings.json
+// read failure). Coupling them under a single `initialized = true` set
+// BEFORE the await would mean a transient boot failure permanently disables
+// the initial pin — even though the listener got attached and a retry would
+// succeed. Splitting them lets a caller re-invoke initMortalLoomStore() to
+// retry the initial pin without duplicating the listener.
+let listenerAttached = false;
+let didInitialPin = false;
 
 export function _resetMortalLoomInitForTest() {
-  initialized = false;
+  listenerAttached = false;
+  didInitialPin = false;
   lastPinnedPath = null;
 }
 
 /**
  * Boot hook: pin the configured MortalLoom store against iCloud eviction when
  * sync is enabled, and re-pin if the user later toggles sync on or changes the
- * path. Safe to call multiple times — duplicate calls are no-ops.
+ * path. Safe to call multiple times — the durable listener attaches at most
+ * once, and the initial-pin step retries on subsequent calls if a prior call's
+ * await rejected.
  */
 export async function initMortalLoomStore() {
-  if (initialized) return;
-  initialized = true;
+  // Attach the settings listener FIRST so even a transient failure in the
+  // immediate-pin step below doesn't leave the system without
+  // re-pin-on-settings-change. The listener has no async dependencies and is
+  // the durable half of this hook.
+  if (!listenerAttached) {
+    settingsEvents.on('settings:updated', (settings) => {
+      if (!settings?.mortalloom?.enabled) {
+        // Disable clears the dedup cache so a future re-enable (even with the
+        // same path) triggers another materialize attempt — otherwise toggling
+        // off → on with an unchanged path would silently no-op.
+        lastPinnedPath = null;
+        return;
+      }
+      pinAgainstEviction(settings.mortalloom.path?.trim() || DEFAULT_ICLOUD_PATH);
+    });
+    listenerAttached = true;
+  }
 
-  // Attach the settings listener FIRST so a transient failure in the
-  // immediate-pin step below (getSettings rejecting under disk pressure, etc.)
-  // doesn't leave the system without re-pin-on-settings-change. The listener
-  // has no async dependencies and is the durable half of this hook.
-  settingsEvents.on('settings:updated', (settings) => {
-    if (!settings?.mortalloom?.enabled) {
-      // Disable clears the dedup cache so a future re-enable (even with the
-      // same path) triggers another materialize attempt — otherwise toggling
-      // off → on with an unchanged path would silently no-op.
-      lastPinnedPath = null;
-      return;
-    }
-    pinAgainstEviction(settings.mortalloom.path?.trim() || DEFAULT_ICLOUD_PATH);
-  });
+  if (didInitialPin) return;
 
+  // The awaits below can throw under transient disk pressure on settings.json.
+  // Only flip didInitialPin after they succeed so a caller can retry the
+  // boot pin on a subsequent invocation without re-attaching the listener.
   if (await isMortalLoomEnabled()) {
     pinAgainstEviction(await resolvePath());
   }
+  didInitialPin = true;
 }
 
 // === Core I/O ===

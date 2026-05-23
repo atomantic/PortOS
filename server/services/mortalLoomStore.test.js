@@ -365,14 +365,24 @@ describe('initMortalLoomStore — brctl pinning', () => {
     return child;
   };
 
+  // process.platform overrides aren't restored by vi.restoreAllMocks(). Capture
+  // the original property descriptor before each test and restore it in
+  // afterEach so an assertion failure can't leak the mutated platform into
+  // unrelated test files (mirrors the updateExecutor.test.js pattern).
+  let originalPlatformDescriptor;
   beforeEach(() => {
     settingsEvents.removeAllListeners('settings:updated');
     store._resetMortalLoomInitForTest();
+    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  });
+  afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
   });
 
   it('spawns brctl download when sync is enabled (darwin only)', async () => {
     // Force darwin so the platform guard doesn't short-circuit the test.
-    const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
 
     spawnMock.mockReturnValue(makeFakeChild());
@@ -381,12 +391,9 @@ describe('initMortalLoomStore — brctl pinning', () => {
     await store.initMortalLoomStore();
 
     expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
-
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 
   it('re-pins when settings:updated flips enabled on with a new path', async () => {
-    const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
 
     spawnMock.mockReturnValue(makeFakeChild());
@@ -401,8 +408,6 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // New path: re-pins.
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/other/MortalLoom.json' } });
     expect(spawnMock).toHaveBeenLastCalledWith('brctl', ['download', '/icloud/other/MortalLoom.json'], expect.any(Object));
-
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 
   it('no-ops on non-darwin platforms (init pin AND settings-change re-pin both guarded)', async () => {
@@ -411,7 +416,6 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // assertion passed for the wrong reason. Fix: call init() so the listener
     // IS attached and the platform guard inside pinAgainstEviction is the
     // thing under test on both the immediate-pin and the event-driven path.
-    const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
 
     settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
@@ -420,8 +424,6 @@ describe('initMortalLoomStore — brctl pinning', () => {
 
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
     expect(spawnMock).not.toHaveBeenCalled();
-
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 
   it('attaches the settings:updated listener even when getSettings throws during init', async () => {
@@ -430,7 +432,6 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // settings:updated event can re-pin. Earlier code set initialized=true
     // and ran the await BEFORE attaching the listener, so a throw left the
     // listener gone forever.
-    const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
 
     spawnMock.mockReturnValue(makeFakeChild());
@@ -444,8 +445,33 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // fires pinAgainstEviction.
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
     expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+  });
 
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  it('retries the initial pin on a subsequent call when the first attempt threw', async () => {
+    // Regression for the listenerAttached/didInitialPin split: if
+    // isMortalLoomEnabled() rejects, didInitialPin must stay false so a
+    // subsequent initMortalLoomStore() call can retry the pin. The listener
+    // must NOT be re-attached (otherwise events fire twice).
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    const { getSettings } = await import('./settings.js');
+    getSettings.mockRejectedValueOnce(new Error('settings.json read failed'));
+
+    await expect(store.initMortalLoomStore()).rejects.toThrow('settings.json read failed');
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    // Second call: getSettings recovers, initial pin proceeds.
+    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    await store.initMortalLoomStore();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
+
+    // Listener was attached on the first call, not the second — emitting once
+    // must fire pinAgainstEviction once, not twice.
+    spawnMock.mockClear();
+    settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/other/MortalLoom.json' } });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it('re-pins after a disable → re-enable cycle with the same path', async () => {
@@ -453,7 +479,6 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // back on (without changing the path) silently no-ops. Settings.json
     // listeners must clear `lastPinnedPath` on disable so a subsequent
     // enable with the same path materializes again.
-    const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
 
     spawnMock.mockReturnValue(makeFakeChild());
@@ -469,12 +494,9 @@ describe('initMortalLoomStore — brctl pinning', () => {
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock).toHaveBeenLastCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.any(Object));
-
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 
   it('clears lastPinnedPath when brctl is signal-killed so a later event can retry', async () => {
-    const realPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
 
     const child = makeFakeChild();
@@ -490,7 +512,5 @@ describe('initMortalLoomStore — brctl pinning', () => {
     child._emit('exit', null, 'SIGTERM');
     settingsEvents.emit('settings:updated', { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } });
     expect(spawnMock).toHaveBeenCalledTimes(2);
-
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 });
