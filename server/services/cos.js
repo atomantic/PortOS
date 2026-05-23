@@ -1957,7 +1957,7 @@ async function generateManagedAppImprovementTask(app, state) {
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewer\}/g, reviewer)
+    .replace(/\{reviewers\}/g, reviewer)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);
 
   applyAppWorktreeDefault(metadata, app);
@@ -2104,7 +2104,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewer\}/g, reviewer)
+    .replace(/\{reviewers\}/g, reviewer)
     // Use a replacer function — String.replace with a replacement STRING
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and

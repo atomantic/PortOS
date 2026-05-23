@@ -44,7 +44,7 @@ const addTaskMock = vi.fn(async (task) => task);
 vi.mock('./cos.js', () => ({
   addTask: (...args) => addTaskMock(...args),
 }));
-const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewer}\n{referenceData}\n{planConstraint}');
+const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}');
 vi.mock('./taskSchedule.js', () => ({
   getTaskPrompt: (...args) => getTaskPromptMock(...args),
 }));
@@ -69,7 +69,7 @@ beforeEach(async () => {
   addTaskMock.mockReset();
   addTaskMock.mockImplementation(async (task) => task);
   getTaskPromptMock.mockReset();
-  getTaskPromptMock.mockImplementation(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewer}\n{referenceData}\n{planConstraint}');
+  getTaskPromptMock.mockImplementation(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}');
   existsMock.mockReset();
   existsMock.mockReturnValue(false);
   svc = await import('./referenceRepos.js');

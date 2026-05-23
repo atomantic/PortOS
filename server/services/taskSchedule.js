@@ -527,12 +527,12 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 
 ## Phase 6 — Review and ship
 
-The configured reviewers for this task, in order, are \`{reviewer}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging — this mirrors slashdo's \`/do:pr --review-with <list>\` (the lone default \`copilot\` needs no flag; multi-reviewer runs may also carry \`--review-stop-on-*\` / \`--reviewer-applies\`).
+The configured reviewers for this task, in order, are \`{reviewers}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging — this mirrors slashdo's \`/do:pr --review-with <list>\` (the lone default \`copilot\` needs no flag; multi-reviewer runs may also carry \`--review-stop-on-*\` / \`--reviewer-applies\`).
 
 1. Run \`/simplify\` (three-agent reuse/quality/efficiency review) against your own diff and fix findings in the same diff. BEFORE opening the PR, not retroactively.
 2. Push the branch: \`git push -u origin claim/<slug>\`
 3. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
-4. **Wait for each configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Run the reviewers in the listed order (\`{reviewer}\`); for each one, apply the matching handling below before advancing to the next:
+4. **Wait for each configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Run the reviewers in the listed order (\`{reviewers}\`); for each one, apply the matching handling below before advancing to the next:
 
    - **\`copilot\`** — This repo has GitHub Copilot Code Review configured to auto-run on every new PR. Poll until Copilot's review lands or a 10-minute timeout fires:
      \`\`\`bash
