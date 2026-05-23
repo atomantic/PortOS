@@ -1280,11 +1280,12 @@ export async function mergeUniversesFromSync(remoteUniverses) {
       const sanitized = sanitizeTemplate(remote);
       if (!sanitized) continue;
       // `ephemeral` is a LOCAL-only marker — never trust the inbound value.
-      // sanitizeTemplate preserves whatever the raw input carried; strip it
-      // here so a buggy/older/non-conformant peer (or the share-bucket
-      // importer's mutator-form path) can't plant a "dark" record on us
-      // that's permanently un-syncable. The on-disk-only contract is
-      // enforced on the receive boundary.
+      // sanitizeTemplate only persists a literal `{ ephemeral: true }` (any
+      // other value gets dropped at the sanitizer); strip even that here so
+      // a buggy/older/non-conformant peer (or the share-bucket importer's
+      // mutator-form path) can't plant a "dark" record on us that's
+      // permanently un-syncable. The on-disk-only contract is enforced on
+      // the receive boundary.
       if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
       if (!local) {

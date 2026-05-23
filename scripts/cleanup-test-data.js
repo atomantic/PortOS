@@ -15,21 +15,27 @@
  * each tombstoned series so the orphan-zombie state (children with a
  * seriesId pointing at a tombstone-GC'd parent) never materializes.
  *
- * Propagation to peers requires PM2 to be either restarted after this
- * script runs, OR for this script to run inside the PM2 process. Reason:
- * `deleteUniverse` / `deleteSeries` emit `recordEvents.deleted`, which
- * peer-sync now listens for — but only in the process that has
- * `installPeerSyncListener()` running (the PM2 server, not this CLI).
- * The PM2 restart triggers `peer:online` → `retryPendingPushesForPeer`
- * → unconditional re-push of every sub (let `lastPushedHash`
- * short-circuit the unchanged ones), and the now-tombstoned records hash
- * differently so the tombstone push fires.
+ * IMPORTANT — STOP THE SERVER BEFORE `--apply`. This script invokes the
+ * service-layer read/modify/write helpers in a SEPARATE Node process from
+ * any running portos-server. The service-layer write tails (per-file
+ * `writeState` queues) are in-process — they do NOT serialize across
+ * processes, so a concurrent `portos-server` write can clobber this
+ * script's tombstone (last-writer-wins on the JSON file). Always:
  *
- * Usage (run on whichever machine has the polluted data):
+ *   pm2 stop portos-server                          # 1. stop the server
+ *   node scripts/cleanup-test-data.js               #    dry-run first
+ *   node scripts/cleanup-test-data.js --apply       # 2. apply
+ *   pm2 start portos-server                         # 3. restart
  *
- *   node scripts/cleanup-test-data.js              # dry-run, prints what would be deleted
- *   node scripts/cleanup-test-data.js --apply      # actually soft-delete
- *   pm2 restart portos-server                      # then propagate to peers
+ * The PM2 restart propagation: on boot the server fires `peer:online` →
+ * `retryPendingPushesForPeer` → walks every sub and re-pushes (let
+ * `lastPushedHash` short-circuit the unchanged ones). The now-tombstoned
+ * records hash differently so the tombstone push fires for each peer.
+ * That delete event is what reaches peers — `deleteUniverse` /
+ * `deleteSeries` emit `recordEvents.deleted` which peer-sync now listens
+ * for, but only in the process that has `installPeerSyncListener()`
+ * running. The CLI process here doesn't, which is why the restart is the
+ * propagation mechanism rather than the script's own writes.
  *
  * Add names to TEST_FIXTURE_*_NAMES if your data has other test residue.
  * Names are matched EXACTLY (after trim) to avoid clobbering user-named
@@ -81,6 +87,11 @@ async function main() {
   const { apply } = parseArgs(process.argv);
   if (!apply) {
     console.log('🧪 DRY-RUN — pass --apply to actually soft-delete\n');
+  } else {
+    // Service-layer write tails are in-process — a concurrent portos-server
+    // can clobber tombstones (last-writer-wins on the JSON file). Warn loudly.
+    console.log('⚠️  --apply: STOP the server before continuing or tombstones may be clobbered');
+    console.log('⚠️  Run `pm2 stop portos-server` first, then `pm2 start portos-server` to propagate\n');
   }
 
   // Universes (skip already-tombstoned ones so a re-run is a no-op).
