@@ -160,6 +160,25 @@ describe('SyncDetailDrawer', () => {
     await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
   });
 
+  it('toasts success for "Pull missing metadata" only when something was recovered', async () => {
+    mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
+    mockPullMissingMetadata.mockResolvedValue({ recovered: 1, attempted: 2 });
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    await waitFor(() => screen.getByText('My Collection'));
+    fireEvent.click(screen.getByRole('button', { name: /pull missing metadata/i }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(expect.stringMatching(/pulled 1\/2/i)));
+  });
+
+  it('toasts a neutral message for "Pull missing metadata" when recovered=0 (not success)', async () => {
+    mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
+    mockPullMissingMetadata.mockResolvedValue({ recovered: 0, attempted: 2 });
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    await waitFor(() => screen.getByText('My Collection'));
+    fireEvent.click(screen.getByRole('button', { name: /pull missing metadata/i }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(expect.stringMatching(/no missing metadata found \(2 checked\)/i)));
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
   it('calls onClose when the close button is clicked', () => {
     const onClose = vi.fn();
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={onClose} />);

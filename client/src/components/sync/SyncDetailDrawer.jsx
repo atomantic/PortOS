@@ -224,7 +224,14 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     const result = await pullMissingMetadata(filenames, { silent: true });
     const recovered = result?.recovered ?? 0;
     const attempted = result?.attempted ?? filenames.length;
-    toast.success(`Pulled ${recovered}/${attempted} metadata items`);
+    // Mirror MediaCollectionDetail's Unsorted "Pull missing prompts": only
+    // claim success when something was actually recovered — recovered=0 (or
+    // attempted=0) is a neutral "nothing to do", not a win.
+    if (recovered > 0) {
+      toast.success(`Pulled ${recovered}/${attempted} metadata item${attempted === 1 ? '' : 's'}`);
+    } else {
+      toast(`No missing metadata found (${attempted} checked)`);
+    }
     refresh();
     loadRecord(); // refresh the preview thumbnails post-pull
   }, { errorMessage: 'Failed to pull missing metadata' });

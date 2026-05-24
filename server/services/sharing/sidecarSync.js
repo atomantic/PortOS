@@ -98,6 +98,11 @@ export async function backfillMissingSidecars({ filenames }) {
   for (const filename of Array.isArray(filenames) ? filenames : []) {
     const safeName = sanitizeAssetFilename(filename);
     if (!safeName) continue;
+    // Contract: filenames name images already present in PATHS.images. Skip any
+    // whose image bytes are absent — a stale/invalid filename would otherwise
+    // write an orphan `<base>.metadata.json` (sidecar with no image) and inflate
+    // `attempted`.
+    if (!existsSync(join(PATHS.images, safeName))) continue;
     const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
     // A sidecar can exist yet carry NO prompt: getOrComputeImageSha256 writes a
     // cache-only `{ sha256: {...} }` sidecar for every image it hashes during

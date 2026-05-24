@@ -248,6 +248,19 @@ describe('backfillMissingSidecars', () => {
     expect(peerFetch).not.toHaveBeenCalled();
   });
 
+  it('skips filenames whose image bytes are not on disk (no orphan sidecar, no fetch)', async () => {
+    // Image file intentionally NOT written — only a stale filename is passed.
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
+    ]);
+    const result = await backfillMissingSidecars({ filenames: ['ghost.png'] });
+    expect(result.attempted).toBe(0);
+    expect(result.recovered).toBe(0);
+    expect(peerFetch).not.toHaveBeenCalled();
+    // No orphan sidecar was written for the absent image.
+    expect(existsSync(join(PATHS.images, 'ghost.metadata.json'))).toBe(false);
+  });
+
   it('handles non-array filenames gracefully (returns zeros)', async () => {
     vi.mocked(getPeers).mockResolvedValue([]);
     const result = await backfillMissingSidecars({ filenames: null });
