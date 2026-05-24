@@ -233,9 +233,19 @@ export function buildCliSpawnConfig(provider, model) {
   const providerId = provider?.id || 'claude-code';
   const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
 
-  // Codex CLI uses different invocation pattern
+  // Codex CLI uses different invocation pattern.
+  // `--dangerously-bypass-approvals-and-sandbox` is the Codex equivalent of
+  // Claude's `--dangerously-skip-permissions` / Gemini's `--yolo`: it skips all
+  // approval prompts AND disables the sandbox. Without it, `codex exec` runs
+  // under the default workspace-write sandbox (network blocked, so `gh pr create`
+  // can't resolve api.github.com) and, in non-interactive `exec` mode, any
+  // command that needs approval is silently cancelled — which is exactly how a
+  // codex agent could push a branch over SSH yet fail to open the PR over HTTPS.
+  // PortOS runs on a private, single-user, trusted machine (the "externally
+  // sandboxed" context this flag documents), matching how we already spawn the
+  // other CLIs unrestricted.
   if (providerId === 'codex') {
-    const args = ['exec'];
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
     if (effectiveModel) {
       args.push('--model', effectiveModel);
     }

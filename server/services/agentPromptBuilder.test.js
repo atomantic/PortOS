@@ -205,6 +205,22 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/PortOS will push and open the PR/);
     });
 
+    it('inlines a simplify-equivalent self-review (no /simplify command) for non-Claude CLI agents', () => {
+      // /simplify is a Claude Code built-in; codex/gemini can't run it. With
+      // simplify enabled they must still get the reuse/quality/efficiency pass,
+      // phrased inline so any CLI can perform it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false }); // no providerId → not Claude → no slashdo
+      expect(prompt).toMatch(/^## Completion$/m);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
+      expect(prompt).toMatch(/PortOS will push and open the PR/);
+    });
+
     it('emits a slashdo Completion block (/simplify + /do:pr) for Claude Code CLI + openPR', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, simplify: true } }),

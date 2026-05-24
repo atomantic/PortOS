@@ -135,16 +135,19 @@ describe('createStreamJsonParser.getFinalResult', () => {
 });
 
 describe('buildCliSpawnConfig', () => {
-  it('omits --model for Codex configured-default sentinel', () => {
+  it('omits --model for Codex configured-default sentinel but bypasses sandbox/approvals', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'codex-configured-default');
 
-    expect(config.args).toEqual(['exec']);
+    // The bypass flag is the Codex equivalent of Claude's --dangerously-skip-permissions
+    // / Gemini's --yolo. Without it, codex exec runs sandboxed (no network → `gh`
+    // can't reach api.github.com) and non-interactive approval prompts get cancelled.
+    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox']);
   });
 
-  it('passes explicit Codex model selections through', () => {
+  it('passes explicit Codex model selections through alongside the sandbox bypass', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4');
 
-    expect(config.args).toEqual(['exec', '--model', 'gpt-5.4']);
+    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.4']);
   });
 });
 

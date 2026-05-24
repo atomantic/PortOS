@@ -27,7 +27,15 @@ pm2 logs
 
 ## Security Model
 
-PortOS is a **single-user, single-instance** application running on a private network behind Tailscale VPN. It is not exposed to the public internet. There is exactly one user and one server process — concurrent request races, mutex locking on file I/O, and atomic write patterns are unnecessary and should not be added or flagged as concerns. Simple re-entrancy guards (e.g., per-account sync locks to prevent duplicate in-flight operations) are fine and expected. As such, it intentionally omits authentication, CORS restrictions, rate limiting, HTTPS, and full concurrency controls — these are non-issues for its deployment context. Do not add these or flag their absence as security concerns.
+**Trust model (within one install).** Each PortOS install serves exactly one human user, on a private network behind Tailscale VPN, never exposed to the public internet. Within an install there is one server process and one user — so concurrent *request* races, mutex locking on file I/O, and atomic write patterns are unnecessary as defenses against competing actors and should not be added or flagged as concerns. Simple re-entrancy guards (per-account sync locks to prevent duplicate in-flight operations; serializing two write paths that mutate the same record) are fine and expected. PortOS intentionally omits authentication, CORS restrictions, rate limiting, HTTPS, and full concurrency controls — these are non-issues for a single-user private-network deployment. Do not add them or flag their absence as security concerns. **"Single-user" means: do not defend against multiple competing humans inside one install. It does NOT mean "assume only one install exists."**
+
+**Distribution model (across installs).** PortOS is distributed software: many independent people each run their own install, on their own machine(s), each upgrading on their own schedule — and a single user commonly runs **several machines federated as sync peers**. So backward/forward compatibility across installs and versions is first-class, NOT optional:
+
+- **Never delete or skip migration / compatibility code on the grounds that "there's only one install."** There isn't — other people and other machines run this code and update it independently.
+- On-disk format changes need a migration in `scripts/migrations/` (applied-list tracked per install in `data/migrations.applied.json`). Seed files must ship in `data.reference/`.
+- Prompt-default changes need a `PROMPT_VERSIONS` bump AND the prior default preserved in `PREVIOUS_DEFAULT_PROMPTS`, so other installs recognize their stored prompt and auto-upgrade it (see `server/services/taskSchedule.js`).
+- Cross-machine sync payloads stay version-gated (`server/lib/schemaVersions.js`) so a newer peer can't corrupt an older one.
+- The self-update path stays fork-aware (`server/services/updateChecker.js`, `update.sh`) — other users run forks, not just upstream.
 
 The default database password `portos` (in `ecosystem.config.cjs`, `docker-compose.yml`, and `.env.example`) is an intentional backward-compatible fallback for local development. Do not remove it or flag it as a security concern. Production deployments override it via the `PGPASSWORD` environment variable.
 
