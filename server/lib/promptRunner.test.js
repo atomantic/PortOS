@@ -678,6 +678,40 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(autoFixer.noteFallbackHandled).toHaveBeenCalledTimes(1);
   });
 
+  it('uses runner-provided errorAnalysis when marking the failed provider', async () => {
+    const status = mockToolkitWithFallback();
+    const runnerErrorAnalysis = {
+      hasError: true,
+      category: 'usage-limit',
+      message: 'Usage limit reset at 5pm',
+      waitTime: 12345,
+    };
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({
+        success: false,
+        error: 'plain wrapper error',
+        errorAnalysis: runnerErrorAnalysis,
+      });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('recovered');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(status.markUsageLimit).toHaveBeenCalledWith('primary-cli', {
+      message: 'Usage limit reset at 5pm',
+      waitTime: 12345,
+    });
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
   it('does NOT suppress the investigation task when the fallback ALSO fails (both errors must surface)', async () => {
     mockToolkitWithFallback();
 
