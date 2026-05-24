@@ -431,7 +431,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
                     entry={entry}
                     kind={kind}
                     recordId={recordId}
-                    onRefresh={refresh}
+                    onRefresh={() => { refresh(); loadRecord(); }}
                   />
                 ))}
               </div>

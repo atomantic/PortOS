@@ -173,18 +173,18 @@ export default {
     await mkdir(dataDir, { recursive: true });
     await writeJsonAtomic(collectionsPath, { ...doc, collections });
 
-    let subsRewritten = 0;
+    let subsDeduped = 0;
     if (await fileExists(subsPath)) {
       const subsDoc = await readJson(subsPath, { subscriptions: [] });
       if (subsDoc && Array.isArray(subsDoc.subscriptions)) {
         const before = subsDoc.subscriptions.length;
         const next = rewriteSubscriptions(subsDoc.subscriptions, idMap);
-        subsRewritten = before - next.length + Object.keys(idMap).length; // informational
+        subsDeduped = before - next.length; // subscriptions collapsed by id-rewrite dedupe
         await writeJsonAtomic(subsPath, { ...subsDoc, subscriptions: next });
       }
     }
 
-    console.log(`📦 migration 038: canonicalized ${renamed} linked-collection id(s), merged ${merged} duplicate(s); rewrote mediaCollection subscriptions`);
-    return { ok: true, reason: 'migrated', renamed, merged };
+    console.log(`📦 migration 038: canonicalized ${renamed} linked-collection id(s), merged ${merged} duplicate(s), deduped ${subsDeduped} mediaCollection subscription(s)`);
+    return { ok: true, reason: 'migrated', renamed, merged, subsDeduped };
   },
 };

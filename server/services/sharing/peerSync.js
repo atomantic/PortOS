@@ -1822,6 +1822,11 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   if (parsed.data.sourceInstanceId !== peer.instanceId) {
     return { pulled: false, reason: 'invalid-payload' };
   }
+  // Likewise, the payload must be the record we asked for — a buggy peer that
+  // returns a different kind/id would otherwise merge unexpected data locally.
+  if (parsed.data.kind !== recordKind || parsed.data.record?.id !== recordId) {
+    return { pulled: false, reason: 'invalid-payload' };
+  }
 
   console.log(`🔄 peerSync: pull-record ${recordKind}/${recordId} ← ${peer.name || peerId}`);
   const result = await applyIncomingPush(parsed.data);

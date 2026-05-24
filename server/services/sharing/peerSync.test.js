@@ -771,6 +771,18 @@ describe('peerSync', () => {
       expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
         .toEqual({ pulled: false, reason: 'invalid-payload' });
     });
+
+    it('invalid-payload when the returned record is not the one we requested', async () => {
+      // Asked for universe/u-pull but the peer returned a different record id —
+      // applying it would merge unexpected data under the requested key.
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ kind: 'universe', record: { id: 'some-other-id' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
+      });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'invalid-payload' });
+    });
   });
 
   describe('syncNowForPeer', () => {
