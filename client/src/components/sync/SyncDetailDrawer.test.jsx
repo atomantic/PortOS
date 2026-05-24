@@ -31,6 +31,11 @@ vi.mock('../MediaImage', () => ({
 // ── Mock socket (used transitively by MediaImage's real code) ────────────────
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
+// ── Mock toast (default export is callable AND has .success/.error) ──────────
+// vi.hoisted so the value exists when the hoisted vi.mock factory runs.
+const mockToast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: mockToast }));
+
 import SyncDetailDrawer from './SyncDetailDrawer';
 
 const RECORD_ID = 'col-123';
@@ -77,7 +82,7 @@ beforeEach(() => {
   mockGetMediaCollection.mockImplementation(pendingPromise);
   mockGetUniverse.mockImplementation(pendingPromise);
   mockGetPipelineSeries.mockImplementation(pendingPromise);
-  mockSyncRecordToPeer.mockResolvedValue({ ok: true });
+  mockSyncRecordToPeer.mockResolvedValue({ pushed: true });
   mockPullMissingMetadata.mockResolvedValue({ recovered: 2, attempted: 2 });
 });
 
@@ -109,6 +114,28 @@ describe('SyncDetailDrawer', () => {
     await waitFor(() => expect(mockSyncRecordToPeer).toHaveBeenCalledWith(
       'peer-a', 'mediaCollection', RECORD_ID, { silent: true },
     ));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
+  });
+
+  it('toasts success only when the push actually happened (pushed:true)', async () => {
+    mockSyncRecordToPeer.mockResolvedValue({ pushed: true });
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    fireEvent.click(screen.getAllByRole('button', { name: /sync to peer/i })[0]);
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(expect.stringMatching(/synced to void/i)));
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('toasts an error with the reason when the server reports pushed:false (HTTP 200)', async () => {
+    // The endpoint returns 200 with { pushed:false, reason } when nothing went
+    // out (category disabled, record missing, etc.) — must NOT claim success.
+    mockSyncRecordToPeer.mockResolvedValue({ pushed: false, reason: 'category-disabled' });
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    fireEvent.click(screen.getAllByRole('button', { name: /sync to peer/i })[0]);
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/nothing synced to void.*not enabled/i),
+    ));
+    expect(mockToast.success).not.toHaveBeenCalled();
+    // Still refreshes so the badge reflects current state.
     await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
   });
 

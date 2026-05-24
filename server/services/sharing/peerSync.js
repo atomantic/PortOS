@@ -1674,8 +1674,14 @@ async function pushFromFreshSubscription(subId) {
  *   - For issue updates, the subscription on the parent series (resolved
  *     via `getIssueSeriesId` — see below).
  */
-async function collectSubscriptionsForUpdate(recordKind, recordId) {
-  if (recordKind === 'universe' || recordKind === 'series') {
+export async function collectSubscriptionsForUpdate(recordKind, recordId) {
+  // Direct-subscription kinds: a peer subscribes to the record itself, so an
+  // edit/delete fires a push to exactly those subs. mediaCollection belongs
+  // here (standalone collections sync per-record) — omitting it would make
+  // mediaCollections.js's emitRecordUpdated('mediaCollection', …) inert, so
+  // collection edits would only reach peers via initial subscribe / manual
+  // force-push, never on subsequent edits.
+  if (recordKind === 'universe' || recordKind === 'series' || recordKind === 'mediaCollection') {
     return listPeerSubscriptions({ recordKind, recordId });
   }
   if (recordKind === 'issue') {

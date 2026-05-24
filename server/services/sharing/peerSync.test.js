@@ -69,6 +69,7 @@ import {
   retryPendingPushesForPeer,
   forcePushRecord,
   syncNowForPeer,
+  collectSubscriptionsForUpdate,
   __resetForTests,
   __drainForTests,
 } from './peerSync.js';
@@ -1469,6 +1470,37 @@ describe('peerSync', () => {
       expect(captured.record.id).toBe('col-tomb');
       expect(captured.record.deleted).toBe(true);
       expect(captured.assetManifest).toEqual([]);
+    });
+  });
+
+  describe('collectSubscriptionsForUpdate', () => {
+    // Regression: mediaCollections.js emits emitRecordUpdated('mediaCollection',…)
+    // on every edit/delete, but the push pipeline only acted on it if
+    // collectSubscriptionsForUpdate returns the direct subs. Omitting the
+    // mediaCollection branch made those emits inert (edits never auto-pushed).
+    it('returns direct mediaCollection subscriptions (so edits/deletes auto-push)', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+        enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+        syncCategories: { universe: true, pipeline: true, mediaCollections: true },
+      }]);
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-7', name: 'Standalone', description: '', coverKey: null,
+        universeId: null, seriesId: null, items: [],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
+        deleted: false, deletedAt: null,
+      });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'col-7' });
+      await __drainForTests();
+
+      const subs = await collectSubscriptionsForUpdate('mediaCollection', 'col-7');
+      expect(subs.map((s) => s.recordId)).toContain('col-7');
+      expect(subs.every((s) => s.recordKind === 'mediaCollection')).toBe(true);
+    });
+
+    it('returns [] for a kind with no direct/parent subscription path', async () => {
+      expect(await collectSubscriptionsForUpdate('image', 'whatever')).toEqual([]);
     });
   });
 

@@ -116,14 +116,38 @@ function CollectionPreview({ collection, loading }) {
   );
 }
 
+// Friendly labels for the `{ pushed:false, reason }` shapes the server's
+// forcePushRecord → pushRecordToPeer can return with HTTP 200 (the push was
+// accepted as a request but no bytes actually went out). Unmapped reasons
+// (e.g. `http-409`) fall back to the raw string.
+const PUSH_SKIP_LABELS = {
+  'category-disabled': 'this category is not enabled for that peer',
+  'peer-disallows-outbound': 'that peer does not accept outbound sync',
+  'peer-not-found': 'peer not found',
+  'record-not-found': 'record missing locally',
+  'peer-schema-behind': 'peer is on an older PortOS version',
+  'peer-schema-behind-cooldown': 'peer is on an older PortOS version',
+  'invalid-subscription': 'subscription is invalid',
+  unchanged: 'already up to date',
+  network: 'network error reaching the peer',
+};
+
 // ── Peer row with per-peer sync action ───────────────────────────────────────
 function PeerRow({ entry, kind, recordId, onRefresh }) {
   const { peerId, peerName, status } = entry;
   const needsAction = status !== 'in-parity';
 
   const [syncToPeer, syncing] = useAsyncAction(async () => {
-    await syncRecordToPeer(peerId, kind, recordId, { silent: true });
-    toast.success(`Synced to ${peerName}`);
+    // The endpoint returns 200 even when nothing was pushed ({ pushed:false,
+    // reason }) — toasting success unconditionally would mislead the user.
+    const result = await syncRecordToPeer(peerId, kind, recordId, { silent: true });
+    if (result?.pushed) {
+      toast.success(`Synced to ${peerName}`);
+    } else {
+      const reason = result?.reason;
+      const detail = reason ? ` — ${PUSH_SKIP_LABELS[reason] ?? reason}` : '';
+      toast.error(`Nothing synced to ${peerName}${detail}`);
+    }
     onRefresh();
   }, { errorMessage: `Failed to sync to ${peerName}` });
 
