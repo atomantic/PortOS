@@ -18,7 +18,7 @@ import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
 import { timeAgo } from '../utils/formatters';
 import { listUniverses, deleteUniverse, listPipelineSeries } from '../services/api';
-import { useSyncIntegrity } from '../hooks/useSyncIntegrity';
+import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 
 // Named canon entities across all trunks — the "Canon" column reflects the
 // characters/places/objects the user has registered, not the looser variation
@@ -51,7 +51,7 @@ export default function Universes() {
   const [series, setSeries] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const { statusById, noSyncingPeers } = useSyncIntegrity('universe');
+  const sync = useSyncIntegrity('universe');
 
   useEffect(() => {
     // Guard setState against a navigate-away before the fetch resolves —
@@ -174,7 +174,7 @@ export default function Universes() {
                           ) : null}
                         </Link>
                         <SyncBadge
-                          status={noSyncingPeers ? 'not-syncing' : statusById.get(u.id)}
+                          status={syncBadgeStatus(sync, u.id)}
                           onClick={() => navigate(`/universes/${encodeURIComponent(u.id)}/sync`)}
                         />
                       </div>
@@ -220,7 +220,7 @@ export default function Universes() {
                   <ShareToButton kind="universe" ids={[u.id]} compact />
                   <SyncToPeerButton recordKind="universe" recordId={u.id} compact />
                   <SyncBadge
-                    status={noSyncingPeers ? 'not-syncing' : statusById.get(u.id)}
+                    status={syncBadgeStatus(sync, u.id)}
                     onClick={() => navigate(`/universes/${encodeURIComponent(u.id)}/sync`)}
                   />
                 </div>

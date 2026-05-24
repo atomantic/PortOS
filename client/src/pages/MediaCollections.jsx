@@ -8,7 +8,7 @@ import {
 } from '../services/api';
 import { buildUnsortedCollection } from '../lib/unsorted';
 import SyncBadge from '../components/sync/SyncBadge';
-import { useSyncIntegrity } from '../hooks/useSyncIntegrity';
+import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 
 // Resolve a collection's cover-thumbnail URL. Default = newest item by
 // addedAt; user-pinned coverKey wins when set. We need full image/video
@@ -59,7 +59,7 @@ export default function MediaCollections() {
 
   // Sync integrity — no peers prop (the page doesn't fetch peers itself),
   // so the hook fetches instances internally.
-  const { statusById, noSyncingPeers } = useSyncIntegrity('mediaCollection');
+  const sync = useSyncIntegrity('mediaCollection');
 
   const refresh = async () => {
     setLoading(true);
@@ -177,7 +177,7 @@ export default function MediaCollections() {
                 <div className="flex items-center justify-between gap-1">
                   {!c.synthetic && (
                     <SyncBadge
-                      status={noSyncingPeers ? 'not-syncing' : statusById.get(c.id)}
+                      status={syncBadgeStatus(sync, c.id)}
                       onClick={() => navigate(`/media/collections/${encodeURIComponent(c.id)}/sync`)}
                     />
                   )}

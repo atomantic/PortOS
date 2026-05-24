@@ -114,6 +114,23 @@ describe('pullSidecarForImage', () => {
     expect(existsSync(join(PATHS.images, 'htmlpage.metadata.json'))).toBe(false);
   });
 
+  it('returns false and writes nothing when the JSON body is not an object (scalar/array)', async () => {
+    // Valid JSON but a non-object — writing it would corrupt the gallery reader
+    // (getOrComputeImageSha256 spreads `sidecar || {}`; a string spreads to char keys).
+    for (const body of ['"oops"', '[1,2,3]', '42', 'true', 'null']) {
+      vi.mocked(peerFetch).mockReset();
+      const buf = Buffer.from(body);
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-length': String(buf.byteLength) }),
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      });
+      const result = await pullSidecarForImage(fakePeer, fakeBase, 'scalar.png');
+      expect(result).toBe(false);
+    }
+    expect(existsSync(join(PATHS.images, 'scalar.metadata.json'))).toBe(false);
+  });
+
   it('rejects path-traversal filenames before any fetch or FS op', async () => {
     vi.mocked(peerFetch).mockResolvedValue({ ok: true, arrayBuffer: async () => Buffer.from('{}').buffer });
     const result = await pullSidecarForImage(fakePeer, fakeBase, '../../etc/passwd.png');

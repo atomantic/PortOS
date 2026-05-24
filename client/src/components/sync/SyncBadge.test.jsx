@@ -43,6 +43,16 @@ describe('SyncBadge', () => {
     expect(btn.className).toMatch(/gray/);
   });
 
+  it('renders "Sync unknown" with neutral styling for unknown status', () => {
+    render(<SyncBadge status="unknown" onClick={() => {}} />);
+    const btn = screen.getByRole('button', { name: /sync unknown/i });
+    expect(btn).toBeInTheDocument();
+    // Neutral, like not-syncing — not a warning/success state.
+    expect(btn.className).not.toMatch(/port-warning/);
+    expect(btn.className).not.toMatch(/port-success/);
+    expect(btn.className).toMatch(/gray/);
+  });
+
   it('calls onClick when clicked', () => {
     const onClick = vi.fn();
     render(<SyncBadge status="in-parity" onClick={onClick} />);

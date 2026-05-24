@@ -54,6 +54,7 @@ function worstStatus(a, b) {
  *   loading: boolean,
  *   error: Error|null,
  *   noSyncingPeers: boolean,
+ *   integrityUnavailable: boolean,
  *   statusById: Map<string, string>,
  *   byPeer: Map<string, Array<{peerId:string, peerName:string, status:string}>>,
  *   refresh: () => void,
@@ -62,15 +63,36 @@ function worstStatus(a, b) {
  * `statusById`  — Map<recordId, worst status across all queried peers>
  * `byPeer`      — Map<recordId, [{peerId, peerName, status}, …]> for drawer breakdowns
  * `noSyncingPeers` — true when no online peer has the matching category enabled
+ * `integrityUnavailable` — true when eligible peers DO exist but none returned
+ *   usable integrity data (all too-old / unreachable / fetch-failed). Distinct
+ *   from `noSyncingPeers`; lets callers render a neutral "unknown" badge instead
+ *   of silently rendering nothing.
  *
  * Status precedence (worst → best): assets-missing, diverged, peer-only,
  * local-only, in-parity. A record absent from every peer response is not
  * included in `statusById` — callers may treat absence as "unknown / no peers".
  */
+/**
+ * Map a useSyncIntegrity result + a record id to the SyncBadge `status` prop,
+ * applying the single source of precedence so the 4 badge call sites can't
+ * drift: no syncing peers → 'not-syncing'; a known per-record status wins;
+ * otherwise 'unknown' when integrity was unavailable, else undefined (badge
+ * renders nothing — record not seen by any peer).
+ *
+ * @param {{noSyncingPeers:boolean, integrityUnavailable:boolean, statusById:Map}} sync
+ * @param {string} recordId
+ * @returns {string|undefined}
+ */
+export function syncBadgeStatus(sync, recordId) {
+  if (sync.noSyncingPeers) return 'not-syncing';
+  return sync.statusById.get(recordId) ?? (sync.integrityUnavailable ? 'unknown' : undefined);
+}
+
 export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [noSyncingPeers, setNoSyncingPeers] = useState(false);
+  const [integrityUnavailable, setIntegrityUnavailable] = useState(false);
   const [statusById, setStatusById] = useState(() => new Map());
   const [byPeer, setByPeer] = useState(() => new Map());
 
@@ -107,6 +129,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
 
       if (eligiblePeers.length === 0) {
         setNoSyncingPeers(true);
+        setIntegrityUnavailable(false);
         setStatusById(new Map());
         setByPeer(new Map());
         setLoading(false);
@@ -135,8 +158,10 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
       const newStatusById = new Map();
       const newByPeer = new Map();
 
+      let anyAvailable = false;
       for (const { peer, data } of results) {
         if (!data?.available) continue;
+        anyAvailable = true;
         for (const rec of data.records ?? []) {
           const existing = newStatusById.get(rec.id);
           newStatusById.set(rec.id, worstStatus(existing, rec.status));
@@ -147,6 +172,11 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
         }
       }
 
+      // Eligible peers existed but NONE returned usable integrity data (all
+      // too-old / unreachable / fetch-failed). Without flagging this, every
+      // statusById.get(id) is undefined and the badge silently disappears even
+      // though sync IS configured — callers render a neutral badge off this.
+      setIntegrityUnavailable(!anyAvailable);
       setStatusById(newStatusById);
       setByPeer(newByPeer);
     } catch (err) {
@@ -161,5 +191,5 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
     run();
   }, [run]);
 
-  return { loading, error, noSyncingPeers, statusById, byPeer, refresh: run };
+  return { loading, error, noSyncingPeers, integrityUnavailable, statusById, byPeer, refresh: run };
 }

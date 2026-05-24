@@ -21,6 +21,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../../lib/fileUtils.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { isPlainObject } from '../../lib/objects.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -70,11 +71,17 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   // corrupt the gallery's gen-params reader. Only write if the body is valid
   // JSON. Wrapped in try/catch because JSON.parse throws (this runs outside the
   // Express request lifecycle, so an uncaught throw would crash the worker).
+  let parsed;
   try {
-    JSON.parse(buf.toString('utf8'));
+    parsed = JSON.parse(buf.toString('utf8'));
   } catch {
     return false;
   }
+  // Must be a JSON OBJECT, not just valid JSON. A scalar/array (`"oops"`, `[]`)
+  // parses fine but writing it would corrupt the gallery reader: downstream
+  // getOrComputeImageSha256 does `{ ...(sidecar || {}) }`, and spreading a
+  // truthy string yields numeric char keys (`{0:'o',1:'o',…}`).
+  if (!isPlainObject(parsed)) return false;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, sidecarName), buf);
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);

@@ -20,11 +20,18 @@ vi.mock('../hooks/useSyncIntegrity', () => ({
   useSyncIntegrity: () => ({
     statusById,
     noSyncingPeers: false,
+    integrityUnavailable: false,
     loading: false,
     error: null,
     refresh: vi.fn(),
     byPeer: new Map(),
   }),
+  // Mirror the real precedence helper so badge-status assertions stay valid.
+  syncBadgeStatus: (sync, recordId) => (
+    sync.noSyncingPeers
+      ? 'not-syncing'
+      : (sync.statusById.get(recordId) ?? (sync.integrityUnavailable ? 'unknown' : undefined))
+  ),
 }));
 
 // ── Mock buildUnsortedCollection ─────────────────────────────────────────────

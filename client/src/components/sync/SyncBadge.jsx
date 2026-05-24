@@ -3,11 +3,11 @@
  *
  * Props:
  *   status   — 'in-parity' | 'diverged' | 'assets-missing' | 'local-only' |
- *              'peer-only' | 'not-syncing' | null | undefined
+ *              'peer-only' | 'not-syncing' | 'unknown' | null | undefined
  *   onClick  — called when the badge button is clicked (e.g. open detail drawer)
  */
 
-import { CheckCircle2, AlertTriangle, WifiOff } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, WifiOff, HelpCircle } from 'lucide-react';
 
 const STATUS_CONFIG = {
   'in-parity': {
@@ -47,6 +47,14 @@ const STATUS_CONFIG = {
     // True when no online peer is syncing THIS category — either no peers are
     // sync-enabled at all, or they are but have this category turned off.
     title: 'No peers syncing this category — enable it for a peer?',
+  },
+  unknown: {
+    label: 'Sync unknown',
+    className: 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30',
+    Icon: HelpCircle,
+    // Sync IS configured, but every eligible peer was unreachable / too-old /
+    // errored, so we couldn't compute parity. Distinct from 'not-syncing'.
+    title: 'Sync status unavailable — peer offline, unreachable, or on an older PortOS',
   },
 };
 

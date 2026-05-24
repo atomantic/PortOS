@@ -15,7 +15,7 @@ import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
-import { useSyncIntegrity } from '../hooks/useSyncIntegrity';
+import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import {
   listPipelineSeries,
   createPipelineSeries,
@@ -46,7 +46,7 @@ export default function Pipeline() {
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const { statusById, noSyncingPeers } = useSyncIntegrity('series');
+  const sync = useSyncIntegrity('series');
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -360,7 +360,7 @@ export default function Pipeline() {
                 ) : null}
               </Link>
               <SyncBadge
-                status={noSyncingPeers ? 'not-syncing' : statusById.get(s.id)}
+                status={syncBadgeStatus(sync, s.id)}
                 onClick={() => navigate(`/pipeline/series/${encodeURIComponent(s.id)}/sync`)}
               />
               <ShareToButton kind="series" ids={[s.id]} compact />

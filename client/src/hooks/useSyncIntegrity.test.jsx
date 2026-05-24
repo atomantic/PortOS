@@ -13,6 +13,7 @@ vi.mock('../services/apiPeerSync.js', () => ({
 }));
 
 let useSyncIntegrity;
+let syncBadgeStatus;
 let getInstances;
 let fetchSyncIntegrity;
 
@@ -41,7 +42,7 @@ const PEER_OFFLINE = {
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ useSyncIntegrity } = await import('./useSyncIntegrity.js'));
+  ({ useSyncIntegrity, syncBadgeStatus } = await import('./useSyncIntegrity.js'));
   ({ getInstances } = await import('../services/apiSystem.js'));
   ({ fetchSyncIntegrity } = await import('../services/apiPeerSync.js'));
   getInstances.mockReset();
@@ -235,6 +236,40 @@ describe('useSyncIntegrity — refresh()', () => {
   });
 });
 
+describe('useSyncIntegrity — integrityUnavailable', () => {
+  it('integrityUnavailable=true when eligible peers exist but none return available data', async () => {
+    fetchSyncIntegrity
+      .mockResolvedValueOnce({ available: false, reason: 'peer-unreachable', records: [] })
+      .mockResolvedValueOnce({ available: false, reason: 'peer-too-old', records: [] });
+
+    const { result } = renderWithPeers('universe', [PEER_A, PEER_B]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.integrityUnavailable).toBe(true);
+    expect(result.current.noSyncingPeers).toBe(false); // distinct: peers ARE configured
+    expect(result.current.statusById.size).toBe(0);
+  });
+
+  it('integrityUnavailable=false when at least one peer returns available data', async () => {
+    fetchSyncIntegrity
+      .mockResolvedValueOnce({ available: false, reason: 'peer-unreachable', records: [] })
+      .mockResolvedValueOnce({ available: true, records: [{ id: 'r', name: 'R', status: 'in-parity' }] });
+
+    const { result } = renderWithPeers('universe', [PEER_A, PEER_B]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.integrityUnavailable).toBe(false);
+  });
+
+  it('integrityUnavailable=false when there are no eligible peers (that is noSyncingPeers)', async () => {
+    const { result } = renderWithPeers('universe', []);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.noSyncingPeers).toBe(true);
+    expect(result.current.integrityUnavailable).toBe(false);
+  });
+});
+
 describe('useSyncIntegrity — individual peer fetch errors', () => {
   it('treats a thrown error from fetchSyncIntegrity as unavailable (graceful)', async () => {
     fetchSyncIntegrity
@@ -250,5 +285,31 @@ describe('useSyncIntegrity — individual peer fetch errors', () => {
     // Error peer is skipped; good peer's records still surface.
     expect(result.current.statusById.get('rec-5')).toBe('in-parity');
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe('syncBadgeStatus — badge precedence helper', () => {
+  const make = (over = {}) => ({
+    noSyncingPeers: false,
+    integrityUnavailable: false,
+    statusById: new Map(),
+    ...over,
+  });
+
+  it('returns not-syncing when no peers sync this category (highest precedence)', () => {
+    const sync = make({ noSyncingPeers: true, integrityUnavailable: true, statusById: new Map([['r', 'diverged']]) });
+    expect(syncBadgeStatus(sync, 'r')).toBe('not-syncing');
+  });
+
+  it('returns the per-record status when known', () => {
+    expect(syncBadgeStatus(make({ statusById: new Map([['r', 'diverged']]) }), 'r')).toBe('diverged');
+  });
+
+  it('returns unknown when integrity was unavailable and the record has no status', () => {
+    expect(syncBadgeStatus(make({ integrityUnavailable: true }), 'r')).toBe('unknown');
+  });
+
+  it('returns undefined when the record is simply not seen by any peer', () => {
+    expect(syncBadgeStatus(make(), 'r')).toBeUndefined();
   });
 });
