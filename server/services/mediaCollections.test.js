@@ -417,6 +417,28 @@ describe('mediaCollections service', () => {
     });
 
     describe('findOrCreateUniverseCollection', () => {
+      it('mints a DETERMINISTIC id (uc-<universeId>) so federated peers converge, not a random UUID', async () => {
+        const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
+        expect(c.id).toBe('uc-u-1');
+        expect(svc.linkedCollectionId({ universeId: 'u-1' })).toBe('uc-u-1');
+        // Series mirror.
+        const s = await svc.findOrCreateSeriesCollection({ seriesId: 's-9', seriesName: 'Bar' });
+        expect(s.id).toBe('sc-s-9');
+      });
+
+      it('revives the deterministic id after delete instead of duplicating it (tombstone reclaim)', async () => {
+        const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
+        await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });
+        await svc.deleteCollection(c.id); // tombstone at uc-u-1
+        const revived = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
+        expect(revived.id).toBe('uc-u-1');
+        expect(revived.deleted).toBeFalsy();
+        // Exactly one live collection at the deterministic id — the tombstone was
+        // reclaimed, not left to shadow the fresh record in listCollections' dedup.
+        const live = await svc.listCollections();
+        expect(live.filter((x) => x.id === 'uc-u-1')).toHaveLength(1);
+      });
+
       it('returns the existing universeId-linked collection on second call', async () => {
         const first = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'Foo',

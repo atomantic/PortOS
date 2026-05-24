@@ -252,7 +252,9 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
     }
     const now = new Date().toISOString();
     const next = {
-      id: randomUUID(),
+      // Deterministic id when universe-linked (cross-machine convergence);
+      // standalone (no link) keeps a random id. See linkedCollectionId.
+      id: linkedCollectionId({ universeId }) || randomUUID(),
       name: trimmed,
       description: trimmedDescription,
       coverKey: null,
@@ -262,7 +264,11 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
       updatedAt: now,
     };
     createdId = next.id;
-    await writeAll([...all, next]);
+    // Reclaim the deterministic id if a tombstone already holds it (re-creating
+    // a previously-deleted universe/series collection). A plain append would
+    // leave two records at the same id and listCollections' dedup keeps the
+    // tombstone (it's first), silently dropping this fresh live record.
+    await writeAll([...all.filter((c) => c.id !== next.id), next]);
     return next;
   });
   if (createdId) announceNewCollection(createdId);
@@ -276,6 +282,21 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
 // sanitizeCollection's slice and silently mismatch.
 export const universeCollectionNameFor = (universeName) =>
   `Universe: ${typeof universeName === 'string' ? universeName : ''}`.slice(0, NAME_MAX_LENGTH);
+
+// Deterministic id for a universe/series-LINKED collection. Every federated
+// machine derives the SAME id from the same universe/series id — so per-record
+// collection sync (which keys on `id`) treats both machines' copies as ONE
+// record and converges, instead of each minting a random UUID and duplicating
+// the collection on every peer. Standalone (unlinked) collections keep a random
+// id — they have no stable cross-machine identity. Migration 038 canonicalizes
+// existing linked-collection ids to this scheme. Mirror any change here in that
+// migration. `uc-`/`sc-` prefixes keep linked ids visually distinct from the
+// random UUIDs of standalone collections.
+export const linkedCollectionId = ({ universeId = null, seriesId = null } = {}) => {
+  if (universeId) return `uc-${universeId}`;
+  if (seriesId) return `sc-${seriesId}`;
+  return null;
+};
 
 // Look up an existing collection by its universeId stamp. Returns null if no
 // collection has ever been linked to this universe — callers fall back to
@@ -351,7 +372,9 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
     // migration belong to "ambiguous, leave it" rather than "auto-adopt."
     const now = new Date().toISOString();
     const next = {
-      id: randomUUID(),
+      // Deterministic id so this universe's collection has the SAME id on every
+      // peer (per-record sync keys on id) — see linkedCollectionId.
+      id: linkedCollectionId({ universeId: normalizedUniverseId }),
       name: desiredName,
       description: trimmedDescription,
       coverKey: null,
@@ -361,7 +384,11 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
       updatedAt: now,
     };
     createdId = next.id;
-    await writeAll([...all, next]);
+    // Reclaim the deterministic id if a tombstone already holds it (re-creating
+    // a previously-deleted universe/series collection). A plain append would
+    // leave two records at the same id and listCollections' dedup keeps the
+    // tombstone (it's first), silently dropping this fresh live record.
+    await writeAll([...all.filter((c) => c.id !== next.id), next]);
     return next;
   });
   // Announce only when a NEW record was persisted (not a find-existing hit), so
@@ -406,7 +433,8 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
     if (linked) return linked;
     const now = new Date().toISOString();
     const next = {
-      id: randomUUID(),
+      // Deterministic id — same series collection id on every peer (see linkedCollectionId).
+      id: linkedCollectionId({ seriesId: normalizedSeriesId }),
       name: desiredName,
       description: trimmedDescription,
       coverKey: null,
@@ -416,7 +444,11 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
       updatedAt: now,
     };
     createdId = next.id;
-    await writeAll([...all, next]);
+    // Reclaim the deterministic id if a tombstone already holds it (re-creating
+    // a previously-deleted universe/series collection). A plain append would
+    // leave two records at the same id and listCollections' dedup keeps the
+    // tombstone (it's first), silently dropping this fresh live record.
+    await writeAll([...all.filter((c) => c.id !== next.id), next]);
     return next;
   });
   if (createdId) announceNewCollection(createdId);
