@@ -232,11 +232,13 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  // Normalize the universe id exactly as findOrCreateUniverseCollection does, so
-  // the deterministic id minted here matches the runtime/persisted value (and
-  // can't exceed the peer-sync id length cap if a malformed long id slips in).
+  // Normalize the universe id (trim whitespace, then cap length) so the
+  // presence guard and the stored/derived value operate on the SAME string —
+  // a padded id can't yield `uc- u1 ` while the guard saw a non-empty value.
+  // Whitespace-only is treated as "no universe". Keeps the derived deterministic
+  // id under the peer-sync id length cap.
   const normalizedUniverseId = typeof universeId === 'string' && universeId.trim()
-    ? universeId.slice(0, UNIVERSE_ID_MAX)
+    ? universeId.trim().slice(0, UNIVERSE_ID_MAX)
     : null;
   let createdId = null;
   const result = await serializeFileWrite(async () => {

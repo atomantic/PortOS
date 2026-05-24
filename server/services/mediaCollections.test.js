@@ -462,6 +462,14 @@ describe('mediaCollections service', () => {
         expect(svc.linkedCollectionId({ universeId: overlong })).toBe(`uc-${sliced}`);
       });
 
+      it('findOrCreateCollectionByName trims a padded universeId so it converges (no uc- u1 -style ids)', async () => {
+        // A padded id must normalize to the same canonical id an unpadded caller
+        // gets — the presence guard and the slice operate on the trimmed value.
+        const c = await svc.findOrCreateCollectionByName({ name: 'Universe: Padded', universeId: '  u-pad  ' });
+        expect(c.id).toBe('uc-u-pad');
+        expect(c.universeId).toBe('u-pad');
+      });
+
       it('revives the deterministic id after delete instead of duplicating it (tombstone reclaim)', async () => {
         const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
         await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });
