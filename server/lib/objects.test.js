@@ -128,6 +128,13 @@ describe('canonicalStringify', () => {
     expect(canonicalStringify([1, undefined, 2])).toBe('[1,null,2]');
   });
 
+  it('serializes SPARSE-array holes as null, not invalid JSON (matches JSON.stringify)', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    const sparse = [1, , 2];
+    expect(canonicalStringify(sparse)).toBe('[1,null,2]');
+    expect(canonicalStringify(sparse)).toBe(JSON.stringify(sparse));
+  });
+
   it('handles nested arrays of objects with sorted keys', () => {
     const a = canonicalStringify({ items: [{ y: 1, x: 2 }] });
     const b = canonicalStringify({ items: [{ x: 2, y: 1 }] });

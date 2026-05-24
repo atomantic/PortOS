@@ -70,7 +70,11 @@ export const deepMerge = (base, patch) => {
  */
 export const canonicalStringify = (value) => {
   if (Array.isArray(value)) {
-    return `[${value.map((v) => canonicalStringify(v) ?? 'null').join(',')}]`;
+    // Array.from (not .map) so SPARSE-array holes are visited and serialized as
+    // `null` — matching JSON.stringify ([1,,2] → "[1,null,2]"). `.map` preserves
+    // holes, and `.join` would then emit invalid JSON ("[1,,2]"), diverging the
+    // cross-machine hash for any value containing a sparse array.
+    return `[${Array.from(value, (v) => canonicalStringify(v) ?? 'null').join(',')}]`;
   }
   if (isPlainObject(value)) {
     const parts = [];

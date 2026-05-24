@@ -95,4 +95,28 @@ describe('pullMissingMetadata', () => {
     const [, opts] = request.mock.calls[0];
     expect(opts.silent).toBe(true);
   });
+
+  it('sends a single request when at/under the 5000 cap', async () => {
+    await pullMissingMetadata(Array.from({ length: 5000 }, (_, i) => `f${i}.json`));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('chunks lists over 5000 into multiple requests and aggregates counts', async () => {
+    request.mockReset();
+    request
+      .mockResolvedValueOnce({ attempted: 5000, recovered: 10 })
+      .mockResolvedValueOnce({ attempted: 1, recovered: 1 });
+
+    const result = await pullMissingMetadata(
+      Array.from({ length: 5001 }, (_, i) => `f${i}.json`),
+      { silent: true },
+    );
+
+    expect(request).toHaveBeenCalledTimes(2);
+    // Each chunk is ≤ 5000 (server's peerPullMetadataSchema cap).
+    expect(JSON.parse(request.mock.calls[0][1].body).filenames).toHaveLength(5000);
+    expect(JSON.parse(request.mock.calls[1][1].body).filenames).toHaveLength(1);
+    // Aggregated counts across batches.
+    expect(result).toEqual({ attempted: 5001, recovered: 11 });
+  });
 });

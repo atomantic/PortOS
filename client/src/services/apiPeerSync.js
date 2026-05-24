@@ -92,13 +92,33 @@ export const syncNowForPeer = (peerId, options = {}) =>
     ...options,
   });
 
+// The server validates each /pull-metadata request at ≤5000 filenames
+// (peerPullMetadataSchema). Chunk larger lists so big libraries don't hard-400.
+const PULL_METADATA_BATCH = 5000;
+
 /**
  * Request the server to pull metadata for a list of filenames from peers.
- * Same silent-capable pattern.
+ * Same silent-capable pattern. Transparently batches lists larger than the
+ * server's per-request cap and aggregates the `{ attempted, recovered }` counts,
+ * so callers can pass an unbounded filename list (e.g. a large Unsorted library).
  */
-export const pullMissingMetadata = (filenames, options = {}) =>
-  request('/peer-sync/pull-metadata', {
-    method: 'POST',
-    body: JSON.stringify({ filenames }),
-    ...options,
-  });
+export const pullMissingMetadata = async (filenames, options = {}) => {
+  const list = Array.isArray(filenames) ? filenames : [];
+  const postChunk = (chunk) =>
+    request('/peer-sync/pull-metadata', {
+      method: 'POST',
+      body: JSON.stringify({ filenames: chunk }),
+      ...options,
+    });
+
+  if (list.length <= PULL_METADATA_BATCH) return postChunk(list);
+
+  let attempted = 0;
+  let recovered = 0;
+  for (let i = 0; i < list.length; i += PULL_METADATA_BATCH) {
+    const res = await postChunk(list.slice(i, i + PULL_METADATA_BATCH));
+    attempted += res?.attempted ?? 0;
+    recovered += res?.recovered ?? 0;
+  }
+  return { attempted, recovered };
+};

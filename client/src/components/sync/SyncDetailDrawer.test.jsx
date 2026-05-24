@@ -272,7 +272,7 @@ describe('SyncDetailDrawer — kind="universe"', () => {
     mockGetUniverse.mockResolvedValue(UNIVERSE_DATA);
     mockGetPipelineSeries.mockImplementation(pendingPromise);
     mockGetMediaCollection.mockImplementation(pendingPromise);
-    mockSyncRecordToPeer.mockResolvedValue({ ok: true });
+    mockSyncRecordToPeer.mockResolvedValue({ pushed: true });
     mockPullMissingMetadata.mockResolvedValue({ recovered: 0, attempted: 0 });
   });
 
@@ -335,7 +335,7 @@ describe('SyncDetailDrawer — kind="series"', () => {
     mockGetPipelineSeries.mockResolvedValue(SERIES_DATA);
     mockGetUniverse.mockImplementation(pendingPromise);
     mockGetMediaCollection.mockImplementation(pendingPromise);
-    mockSyncRecordToPeer.mockResolvedValue({ ok: true });
+    mockSyncRecordToPeer.mockResolvedValue({ pushed: true });
     mockPullMissingMetadata.mockResolvedValue({ recovered: 0, attempted: 0 });
   });
 
