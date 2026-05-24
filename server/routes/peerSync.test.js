@@ -9,6 +9,8 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   unsubscribePeer: vi.fn(),
   applyIncomingPush: vi.fn(),
   forcePushRecord: vi.fn(),
+  getRecordPayloadForPeer: vi.fn(),
+  pullRecordFromPeer: vi.fn(),
   syncNowForPeer: vi.fn(),
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
@@ -556,6 +558,53 @@ describe('peer-sync routes', () => {
         .send({ recordKind: 'universe', recordId: 'u1' });
       expect(res.status).toBe(400);
       expect(svc.forcePushRecord).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/peer-sync/record', () => {
+    it('200 with the record payload for a valid kind + id', async () => {
+      svc.getRecordPayloadForPeer.mockResolvedValue({ kind: 'universe', record: { id: 'u1' }, assetManifest: [], sourceInstanceId: 'me' });
+      const res = await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=u1');
+      expect(res.status).toBe(200);
+      expect(res.body.record.id).toBe('u1');
+      expect(svc.getRecordPayloadForPeer).toHaveBeenCalledWith('universe', 'u1');
+    });
+
+    it('trims kind + id before the lookup', async () => {
+      svc.getRecordPayloadForPeer.mockResolvedValue({ kind: 'universe', record: { id: 'u1' }, assetManifest: [], sourceInstanceId: 'me' });
+      await request(buildApp()).get('/api/peer-sync/record?kind=%20universe%20&id=%20u1%20');
+      expect(svc.getRecordPayloadForPeer).toHaveBeenCalledWith('universe', 'u1');
+    });
+
+    it('404 when the record does not exist locally', async () => {
+      svc.getRecordPayloadForPeer.mockResolvedValue(null);
+      const res = await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=ghost');
+      expect(res.status).toBe(404);
+    });
+
+    it('400 on invalid kind or missing id', async () => {
+      expect((await request(buildApp()).get('/api/peer-sync/record?kind=issue&id=x')).status).toBe(400);
+      expect((await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=%20%20')).status).toBe(400);
+      expect(svc.getRecordPayloadForPeer).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/peer-sync/pull-record', () => {
+    it('200 with the pull result for a valid body', async () => {
+      svc.pullRecordFromPeer.mockResolvedValue({ pulled: true, missingAssets: 3 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/pull-record')
+        .send({ peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'uc-7' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ pulled: true, missingAssets: 3 });
+      expect(svc.pullRecordFromPeer).toHaveBeenCalledWith('peer-a', 'mediaCollection', 'uc-7');
+    });
+
+    it('400 on invalid body (missing recordId / bad kind / missing peerId)', async () => {
+      expect((await request(buildApp()).post('/api/peer-sync/pull-record').send({ peerId: 'p', recordKind: 'universe' })).status).toBe(400);
+      expect((await request(buildApp()).post('/api/peer-sync/pull-record').send({ peerId: 'p', recordKind: 'issue', recordId: 'i' })).status).toBe(400);
+      expect((await request(buildApp()).post('/api/peer-sync/pull-record').send({ recordKind: 'universe', recordId: 'u1' })).status).toBe(400);
+      expect(svc.pullRecordFromPeer).not.toHaveBeenCalled();
     });
   });
 

@@ -13,6 +13,7 @@ const mockGetMediaCollection = vi.fn();
 const mockGetUniverse = vi.fn();
 const mockGetPipelineSeries = vi.fn();
 const mockSyncRecordToPeer = vi.fn();
+const mockPullRecordFromPeer = vi.fn();
 const mockPullMissingMetadata = vi.fn();
 
 vi.mock('../../services/api', () => ({
@@ -20,6 +21,7 @@ vi.mock('../../services/api', () => ({
   getUniverse: (...args) => mockGetUniverse(...args),
   getPipelineSeries: (...args) => mockGetPipelineSeries(...args),
   syncRecordToPeer: (...args) => mockSyncRecordToPeer(...args),
+  pullRecordFromPeer: (...args) => mockPullRecordFromPeer(...args),
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),
 }));
 
@@ -84,6 +86,7 @@ beforeEach(() => {
   mockGetUniverse.mockImplementation(pendingPromise);
   mockGetPipelineSeries.mockImplementation(pendingPromise);
   mockSyncRecordToPeer.mockResolvedValue({ pushed: true });
+  mockPullRecordFromPeer.mockResolvedValue({ pulled: true, missingAssets: 0 });
   mockPullMissingMetadata.mockResolvedValue({ recovered: 2, attempted: 2 });
 });
 
@@ -98,6 +101,29 @@ describe('SyncDetailDrawer', () => {
     await waitFor(() => expect(screen.getByRole('dialog', { name: /sync details/i })).toBeInTheDocument());
     // The per-kind fetcher must not be hit with an empty id (would 404 on `/media/collections/`).
     expect(mockGetMediaCollection).not.toHaveBeenCalled();
+  });
+
+  it('shows ONLY "Pull from peer" for a peer-only record and calls pullRecordFromPeer', async () => {
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: buildByPeer([{ peerId: 'peer-a', peerName: 'void', status: 'peer-only' }]),
+    }));
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: /sync to peer/i })).not.toBeInTheDocument();
+    const pullBtn = screen.getByRole('button', { name: /pull from peer/i });
+    fireEvent.click(pullBtn);
+    await waitFor(() => expect(mockPullRecordFromPeer).toHaveBeenCalledWith(
+      'peer-a', 'mediaCollection', RECORD_ID, { silent: true },
+    ));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
+  });
+
+  it('offers BOTH pull and push for an assets-missing record (ambiguous direction)', async () => {
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: buildByPeer([{ peerId: 'peer-a', peerName: 'void', status: 'assets-missing' }]),
+    }));
+    render(<SyncDetailDrawer kind="universe" recordId={RECORD_ID} onClose={() => {}} />);
+    expect(screen.getByRole('button', { name: /pull from peer/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /sync to peer/i })).toBeInTheDocument();
   });
 
   it('drops a stale in-flight fetch when recordId changes mid-flight (latest wins)', async () => {

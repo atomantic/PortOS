@@ -68,6 +68,8 @@ import {
   autoSubscribePeerToAllRecords,
   retryPendingPushesForPeer,
   forcePushRecord,
+  getRecordPayloadForPeer,
+  pullRecordFromPeer,
   syncNowForPeer,
   collectSubscriptionsForUpdate,
   __resetForTests,
@@ -708,6 +710,53 @@ describe('peerSync', () => {
       // Subscription should now exist.
       const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
       expect(sub).not.toBeNull();
+    });
+  });
+
+  describe('getRecordPayloadForPeer', () => {
+    it('returns a push-payload for an existing universe', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      const payload = await getRecordPayloadForPeer('universe', 'u1');
+      expect(payload).toMatchObject({ kind: 'universe', record: { id: 'u1' } });
+      expect(Array.isArray(payload.assetManifest)).toBe(true);
+    });
+
+    it('returns null when the record does not exist locally', async () => {
+      vi.mocked(getUniverse).mockResolvedValue(undefined);
+      expect(await getRecordPayloadForPeer('universe', 'ghost')).toBeNull();
+    });
+  });
+
+  describe('pullRecordFromPeer', () => {
+    it('peer-not-found when the peer is unknown', async () => {
+      vi.mocked(getPeers).mockResolvedValue([]);
+      expect(await pullRecordFromPeer('nope', 'universe', 'u1')).toEqual({ pulled: false, reason: 'peer-not-found' });
+    });
+
+    it('peer-unreachable when the fetch fails', async () => {
+      vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u1')).toEqual({ pulled: false, reason: 'peer-unreachable' });
+    });
+
+    it('not-on-peer on a 404 from the peer', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 404 });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u1')).toEqual({ pulled: false, reason: 'not-on-peer' });
+    });
+
+    it('invalid-payload when the peer returns a malformed body', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ junk: true }) });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u1')).toEqual({ pulled: false, reason: 'invalid-payload' });
+    });
+
+    it('applies a valid payload and reports missingAssets count', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
+      });
+      const result = await pullRecordFromPeer('peer-a', 'universe', 'u-pull');
+      expect(result.pulled).toBe(true);
+      expect(typeof result.missingAssets).toBe('number');
     });
   });
 

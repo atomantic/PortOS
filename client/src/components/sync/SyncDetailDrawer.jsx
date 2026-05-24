@@ -18,7 +18,7 @@ import { X, RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, Wif
 import toast from '../ui/Toast';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { getMediaCollection, getUniverse, getPipelineSeries, syncRecordToPeer, pullMissingMetadata } from '../../services/api';
+import { getMediaCollection, getUniverse, getPipelineSeries, syncRecordToPeer, pullRecordFromPeer, pullMissingMetadata } from '../../services/api';
 import MediaImage from '../MediaImage';
 
 // ── Per-kind record fetcher ──────────────────────────────────────────────────
@@ -144,10 +144,25 @@ const PUSH_SKIP_LABELS = {
   network: 'network error reaching the peer',
 };
 
+// Friendly labels for the `{ pulled:false, reason }` shapes pullRecordFromPeer
+// can return. Unmapped reasons (e.g. `http-500`) fall back to the raw string.
+const PULL_SKIP_LABELS = {
+  'peer-not-found': 'peer not found',
+  'peer-unreachable': 'peer offline or unreachable',
+  'not-on-peer': 'record not on that peer (or peer on an older PortOS)',
+  'invalid-payload': 'peer returned an unexpected response',
+};
+
 // ── Peer row with per-peer sync action ───────────────────────────────────────
 function PeerRow({ entry, kind, recordId, onRefresh }) {
   const { peerId, peerName, status } = entry;
-  const needsAction = status !== 'in-parity';
+  // Direction-aware actions. local-only → we have it, peer doesn't → PUSH.
+  // peer-only → peer has it, we don't → PULL. diverged / assets-missing are
+  // ambiguous (either side could be ahead) → offer BOTH so the fix is always
+  // reachable from the machine you're on. (Pre-fix, only push existed, which
+  // couldn't resolve a record the LOCAL side was behind on.)
+  const canPush = ['local-only', 'diverged', 'assets-missing'].includes(status);
+  const canPull = ['peer-only', 'diverged', 'assets-missing'].includes(status);
 
   const [syncToPeer, syncing] = useAsyncAction(async () => {
     // The endpoint returns 200 even when nothing was pushed ({ pushed:false,
@@ -163,25 +178,50 @@ function PeerRow({ entry, kind, recordId, onRefresh }) {
     onRefresh();
   }, { errorMessage: `Failed to sync to ${peerName}` });
 
+  const [pullFromPeer, pulling] = useAsyncAction(async () => {
+    const result = await pullRecordFromPeer(peerId, kind, recordId, { silent: true });
+    if (result?.pulled) {
+      const n = result?.missingAssets ?? 0;
+      toast.success(`Pulled from ${peerName}${n > 0 ? ` — fetching ${n} asset${n === 1 ? '' : 's'}` : ''}`);
+    } else {
+      const detail = result?.reason ? ` — ${PULL_SKIP_LABELS[result.reason] ?? result.reason}` : '';
+      toast.error(`Nothing pulled from ${peerName}${detail}`);
+    }
+    onRefresh();
+  }, { errorMessage: `Failed to pull from ${peerName}` });
+
   return (
     <div className="flex items-center justify-between gap-2 py-2 border-b border-port-border/60 last:border-0">
       <div className="min-w-0">
         <p className="text-sm text-white truncate">{peerName}</p>
         <StatusPill status={status} />
       </div>
-      {needsAction && (
-        <button
-          type="button"
-          onClick={() => syncToPeer()}
-          disabled={syncing}
-          className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
-        >
-          {syncing
-            ? <Loader2 className="w-3 h-3 animate-spin" />
-            : <ArrowUpCircle className="w-3 h-3" />}
-          Sync to peer
-        </button>
-      )}
+      <div className="flex-shrink-0 flex items-center gap-1.5">
+        {canPull && (
+          <button
+            type="button"
+            onClick={() => pullFromPeer()}
+            disabled={pulling || syncing}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-success/15 hover:bg-port-success/30 text-port-success disabled:opacity-40"
+            title="Fetch this record + its assets from the peer (fixes when this machine is behind)"
+          >
+            {pulling ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+            Pull from peer
+          </button>
+        )}
+        {canPush && (
+          <button
+            type="button"
+            onClick={() => syncToPeer()}
+            disabled={syncing || pulling}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
+            title="Push this record + its assets to the peer"
+          >
+            {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowUpCircle className="w-3 h-3" />}
+            Sync to peer
+          </button>
+        )}
+      </div>
     </div>
   );
 }

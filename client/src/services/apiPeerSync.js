@@ -82,6 +82,18 @@ export const syncRecordToPeer = (peerId, recordKind, recordId, options = {}) =>
   });
 
 /**
+ * Receiver-initiated PULL of a record (+ its assets) FROM a peer — the mirror of
+ * syncRecordToPeer, for when the LOCAL machine is the one behind. Returns
+ * `{ pulled, reason?, missingAssets? }`.
+ */
+export const pullRecordFromPeer = (peerId, recordKind, recordId, options = {}) =>
+  request('/peer-sync/pull-record', {
+    method: 'POST',
+    body: JSON.stringify({ peerId, recordKind, recordId }),
+    ...options,
+  });
+
+/**
  * Trigger a full sync-now for all subscribed records to a peer.
  * Same silent-capable pattern as `syncRecordToPeer`.
  */

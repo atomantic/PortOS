@@ -10,6 +10,7 @@ let fetchSyncIntegrity;
 let syncRecordToPeer;
 let syncNowForPeer;
 let pullMissingMetadata;
+let pullRecordFromPeer;
 
 beforeEach(async () => {
   vi.resetModules();
@@ -19,6 +20,7 @@ beforeEach(async () => {
     syncRecordToPeer,
     syncNowForPeer,
     pullMissingMetadata,
+    pullRecordFromPeer,
   } = await import('./apiPeerSync.js'));
   request.mockReset();
   request.mockResolvedValue({ ok: true });
@@ -78,6 +80,17 @@ describe('syncNowForPeer', () => {
     await syncNowForPeer('peer-c', { silent: true });
     const [, opts] = request.mock.calls[0];
     expect(opts.silent).toBe(true);
+  });
+});
+
+describe('pullRecordFromPeer', () => {
+  it('POSTs /peer-sync/pull-record with the record tuple', async () => {
+    await pullRecordFromPeer('peer-a', 'mediaCollection', 'uc-7', { silent: true });
+    expect(request).toHaveBeenCalledWith('/peer-sync/pull-record', {
+      method: 'POST',
+      body: JSON.stringify({ peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'uc-7' }),
+      silent: true,
+    });
   });
 });
 

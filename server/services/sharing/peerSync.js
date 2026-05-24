@@ -57,6 +57,7 @@ import {
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
 import { getInstanceId, getPeers, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { peerSyncPushSchema } from '../../lib/validation.js';
 import { instanceEvents } from '../instanceEvents.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
@@ -1766,6 +1767,49 @@ export async function forcePushRecord(peerId, recordKind, recordId) {
   // Null the lastPushedHash to bypass the unchanged short-circuit in pushRecordToPeer.
   console.log(`🔄 peerSync: force-push ${recordKind}/${recordId} → ${peerId}`);
   return pushRecordToPeer({ ...sub, lastPushedHash: null }, { bypassSchemaCooldown: true });
+}
+
+/**
+ * Build the push-payload for a single record WITHOUT a subscription — backs the
+ * peer-facing `GET /api/peer-sync/record` endpoint so a peer can PULL this
+ * record (and its assets) from us. Returns null when the record doesn't exist
+ * locally. Same shape `pushRecordToPeer` sends, so the puller reuses
+ * `applyIncomingPush` verbatim.
+ */
+export async function getRecordPayloadForPeer(recordKind, recordId) {
+  const instanceId = await getInstanceId();
+  return buildPushPayload({ recordKind, recordId }, instanceId);
+}
+
+/**
+ * Receiver-initiated PULL — the mirror of forcePushRecord. Fetch a record's
+ * push-payload from `peerId` and apply it locally (merging the record + its
+ * bundled collection and background-pulling missing asset bytes via
+ * applyIncomingPush). Lets a machine that is BEHIND on a record fix itself,
+ * instead of "Sync to peer" being the only (push-only) action — which can't
+ * help when the LOCAL side is the one missing data. Best-effort: returns
+ * `{ pulled, reason?, missingAssets? }`.
+ */
+export async function pullRecordFromPeer(peerId, recordKind, recordId) {
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find((p) => p.instanceId === peerId) || null;
+  if (!peer) return { pulled: false, reason: 'peer-not-found' };
+
+  const url = `${peerBaseUrl(peer)}/api/peer-sync/record?kind=${encodeURIComponent(recordKind)}&id=${encodeURIComponent(recordId)}`;
+  const res = await peerFetch(url).catch(() => null);
+  if (!res) return { pulled: false, reason: 'peer-unreachable' };
+  if (res.status === 404) return { pulled: false, reason: 'not-on-peer' };
+  if (!res.ok) return { pulled: false, reason: `http-${res.status}` };
+
+  const body = await res.json().catch(() => null);
+  // The peer response is untrusted — validate with the SAME schema the inbound
+  // /push route uses before handing it to applyIncomingPush.
+  const parsed = peerSyncPushSchema.safeParse(body);
+  if (!parsed.success) return { pulled: false, reason: 'invalid-payload' };
+
+  console.log(`🔄 peerSync: pull-record ${recordKind}/${recordId} ← ${peer.name || peerId}`);
+  const result = await applyIncomingPush(parsed.data);
+  return { pulled: true, missingAssets: result?.missingAssets?.length ?? 0 };
 }
 
 /**

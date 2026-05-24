@@ -38,6 +38,8 @@ import {
   unsubscribePeer,
   applyIncomingPush,
   forcePushRecord,
+  getRecordPayloadForPeer,
+  pullRecordFromPeer,
   syncNowForPeer,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
@@ -144,6 +146,27 @@ router.get('/manifest', asyncHandler(async (req, res) => {
   res.json({ records: await buildLocalManifest(kind) });
 }));
 
+// --- GET /record --- return ONE record's push payload so a peer can PULL it.
+//
+// The mirror of the sender's /push: a peer that's behind on this record fetches
+// the payload here and applies it locally (POST /pull-record below). Same shape
+// buildPushPayload produces, so the puller reuses applyIncomingPush.
+router.get('/record', asyncHandler(async (req, res) => {
+  const kind = typeof req.query.kind === 'string' ? req.query.kind.trim() : '';
+  const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+  if (!validKind(kind)) {
+    throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (!id) {
+    throw new ServerError('id required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const payload = await getRecordPayloadForPeer(kind, id);
+  if (!payload) {
+    throw new ServerError('record not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(payload);
+}));
+
 // --- GET /integrity --- compare this instance's records against a peer's.
 //
 // Fetches the peer's /manifest, runs the pure diff, and returns
@@ -171,6 +194,14 @@ router.get('/integrity', asyncHandler(async (req, res) => {
 router.post('/sync-record', asyncHandler(async (req, res) => {
   const { peerId, recordKind, recordId } = validateRequest(peerSyncRecordSchema, req.body || {});
   res.json(await forcePushRecord(peerId, recordKind, recordId).catch(mapAndRethrow));
+}));
+
+// --- POST /pull-record --- receiver-initiated PULL of a record (+ assets) FROM
+// a peer. The mirror of /sync-record — fixes a record the LOCAL machine is
+// behind on, which a push can't resolve. Reuses peerSyncRecordSchema's shape.
+router.post('/pull-record', asyncHandler(async (req, res) => {
+  const { peerId, recordKind, recordId } = validateRequest(peerSyncRecordSchema, req.body || {});
+  res.json(await pullRecordFromPeer(peerId, recordKind, recordId).catch(mapAndRethrow));
 }));
 
 // --- POST /sync-now --- trigger an immediate full-sync for a peer.
