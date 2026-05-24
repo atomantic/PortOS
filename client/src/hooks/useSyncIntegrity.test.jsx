@@ -107,6 +107,15 @@ describe('useSyncIntegrity — no syncing peers', () => {
     expect(result.current.noSyncingPeers).toBe(true);
     expect(fetchSyncIntegrity).not.toHaveBeenCalled();
   });
+
+  it('excludes a peer with enabled=false (not polled, not eligible)', async () => {
+    const peerOff = { ...PEER_A, enabled: false };
+    const { result } = renderWithPeers('universe', [peerOff]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.noSyncingPeers).toBe(true);
+    expect(fetchSyncIntegrity).not.toHaveBeenCalled();
+  });
 });
 
 describe('useSyncIntegrity — worst-case status reduction', () => {

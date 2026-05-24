@@ -1263,12 +1263,25 @@ export const peerSubscribeSchema = z.object({
 // second-pass scrub against path separators inside the service layer; this
 // schema just constrains shape + caps so a malformed manifest doesn't bypass
 // validation entirely. SHA-256 is hex-64 when present.
-const peerAssetManifestEntrySchema = z.object({
-  filename: z.string().trim().min(1).max(255),
-  kind: z.enum(['image', 'image-ref', 'video']),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
-  sidecarSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
-}).strict();
+//
+// Discriminated on `kind` because `sidecarSha256` (the gen-params sidecar hash)
+// is ONLY meaningful for images — image-ref/video entries carry no sidecar, so
+// `.strict()` on the non-image branch rejects a stray `sidecarSha256` instead
+// of silently accepting a malformed sender payload.
+const hex64 = z.string().regex(/^[a-f0-9]{64}$/i);
+const peerAssetManifestEntrySchema = z.discriminatedUnion('kind', [
+  z.object({
+    filename: z.string().trim().min(1).max(255),
+    kind: z.literal('image'),
+    sha256: hex64.optional(),
+    sidecarSha256: hex64.optional(),
+  }).strict(),
+  z.object({
+    filename: z.string().trim().min(1).max(255),
+    kind: z.enum(['image-ref', 'video']),
+    sha256: hex64.optional(),
+  }).strict(),
+]);
 
 // One sanitized record on the wire. Mirrors sanitizeRecordForWire's output:
 // id is required, soft-delete fields are tail-canonical, and the receiver's

@@ -121,6 +121,48 @@ describe('peer-sync routes', () => {
       expect(svc.applyIncomingPush).not.toHaveBeenCalled();
     });
 
+    it('accepts an image manifest entry carrying sidecarSha256', async () => {
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'universe',
+          record: { id: 'u1' },
+          assetManifest: [{ filename: 'a.png', kind: 'image', sha256: 'a'.repeat(64), sidecarSha256: 'b'.repeat(64) }],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts a video/image-ref manifest entry without a sidecar hash', async () => {
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'mediaCollection',
+          record: { id: 'c1' },
+          assetManifest: [
+            { filename: 'v.mp4', kind: 'video', sha256: 'c'.repeat(64) },
+            { filename: 'r.png', kind: 'image-ref', sha256: 'd'.repeat(64) },
+          ],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+    });
+
+    it('400s when a non-image manifest entry carries sidecarSha256 (discriminated union)', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'mediaCollection',
+          record: { id: 'c1' },
+          assetManifest: [{ filename: 'v.mp4', kind: 'video', sha256: 'c'.repeat(64), sidecarSha256: 'e'.repeat(64) }],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(400);
+      expect(svc.applyIncomingPush).not.toHaveBeenCalled();
+    });
+
     it('400s when the record is missing an id', async () => {
       // Stage 1's schema-parity rule: validation must catch the malformed
       // record at the route boundary, not let the service throw.

@@ -118,6 +118,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
       const category = KIND_TO_CATEGORY[kind];
       const eligiblePeers = (peers || []).filter(
         (p) =>
+          p.enabled !== false &&
           p.status === 'online' &&
           p.syncEnabled !== false &&
           p.instanceId &&
