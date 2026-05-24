@@ -233,6 +233,7 @@ const aiToolkitHooks = {
         workspacePath: metadata.workspacePath,
         workspaceName: metadata.workspaceName,
         errorDetails: errorMessage,
+        errorAnalysis: metadata.errorAnalysis,
         // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
       }
     });

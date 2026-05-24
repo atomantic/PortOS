@@ -259,7 +259,7 @@ export async function runPromptThroughProvider(args) {
       throw stripFallbackContext(firstError);
     }
 
-    await markProviderUnavailableFromError(failed, firstError.message).catch(err => {
+    await markProviderUnavailableFromError(failed, firstError.message, firstError.errorAnalysis).catch(err => {
       console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
     });
 
@@ -337,22 +337,25 @@ async function pickFallbackProvider(failed) {
 
 /**
  * Translate the runner's failure into an availability marker on the
- * failed provider. Uses analyzeError to categorize and pick a cooldown;
- * usage-limit failures route through `markUsageLimit` so the parsed
- * wait time (e.g. "reset 5pm") is honored.
+ * failed provider. Reuses the runner's precomputed error analysis when
+ * present, otherwise falls back to analyzeError to categorize and pick a
+ * cooldown; usage-limit failures route through `markUsageLimit` so the
+ * parsed wait time (e.g. "reset 5pm") is honored.
  *
  * Skips the mark when the toolkit's `executeApiRun` has already marked
  * the provider unavailable inline (it does this for RATE_LIMIT and
  * USAGE_LIMIT before firing onComplete) — re-marking would double-
  * increment `failureCount` and re-write the status file for no gain.
  */
-async function markProviderUnavailableFromError(failed, errorMessage) {
+async function markProviderUnavailableFromError(failed, errorMessage, runnerAnalysis) {
   const toolkit = getAIToolkitInstance();
   const providerStatus = toolkit?.services?.providerStatus;
   if (!providerStatus) return;
   if (!providerStatus.isAvailable(failed.id)) return;
 
-  const analysis = analyzeError(errorMessage || '');
+  const analysis = runnerAnalysis && typeof runnerAnalysis === 'object'
+    ? runnerAnalysis
+    : analyzeError(errorMessage || '');
   const category = analysis?.category || ERROR_CATEGORIES.UNKNOWN;
 
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
@@ -490,7 +493,11 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
     const labelByType = { cli: 'CLI', api: 'API', tui: 'TUI' };
     const onComplete = (result) => {
       if (result?.error || result?.success === false) {
-        safeReject(new Error(result?.error || `${labelByType[effectiveProvider.type] || effectiveProvider.type} execution failed`));
+        const err = new Error(result?.error || `${labelByType[effectiveProvider.type] || effectiveProvider.type} execution failed`);
+        if (result?.errorAnalysis && typeof result.errorAnalysis === 'object') {
+          err.errorAnalysis = result.errorAnalysis;
+        }
+        safeReject(err);
       } else {
         // TUI runs do their own cleanup inside executeTuiRun (preferring
         // the response file the model was directed to write, falling back
