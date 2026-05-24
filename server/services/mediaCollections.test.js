@@ -450,6 +450,18 @@ describe('mediaCollections service', () => {
         expect(result.items.map((i) => i.ref)).toContain('keep.png');
       });
 
+      it('findOrCreateCollectionByName slices an overlong universeId for both the id and the stored field', async () => {
+        // An overlong owner id must yield the same canonical id the universeId-first
+        // path computes (it slices to UNIVERSE_ID_MAX=80) — otherwise the backfill/
+        // create here and findOrCreateUniverseCollection would diverge and duplicate.
+        const overlong = 'u-' + 'x'.repeat(200);
+        const sliced = overlong.slice(0, 80);
+        const c = await svc.findOrCreateCollectionByName({ name: 'Universe: Big', universeId: overlong });
+        expect(c.id).toBe(`uc-${sliced}`);
+        expect(c.universeId).toBe(sliced);
+        expect(svc.linkedCollectionId({ universeId: overlong })).toBe(`uc-${sliced}`);
+      });
+
       it('revives the deterministic id after delete instead of duplicating it (tombstone reclaim)', async () => {
         const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
         await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });

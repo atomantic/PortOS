@@ -68,6 +68,17 @@ describe('canonicalizeCollections', () => {
     ]);
     expect(renamed).toBe(0);
   });
+
+  it('slices an overlong owner id to the runtime cap for both the id and the stored field', () => {
+    const longId = 'u'.repeat(120); // > UNIVERSE_ID_MAX (80)
+    const sliced = longId.slice(0, 80);
+    const { collections } = canonicalizeCollections([
+      { id: 'rand-long', name: 'Universe: Long', universeId: longId, items: [], updatedAt: '2026-05-01T00:00:00Z' },
+    ]);
+    // Matches what findOrCreateUniverseCollection would compute (it slices first).
+    expect(collections[0].id).toBe(`uc-${sliced}`);
+    expect(collections[0].universeId).toBe(sliced);
+  });
 });
 
 describe('rewriteSubscriptions', () => {

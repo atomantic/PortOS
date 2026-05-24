@@ -254,11 +254,16 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   // that resolves afterward fails the equality check and is dropped, instead
   // of overwriting the newer record with a stale name/preview.
   const loadGenRef = useRef(0);
+  // Hold the in-flight load timeout so it can be cleared on unmount or on a
+  // rapid re-load — not only when the fetch settles. Without this, closing the
+  // drawer (or switching records) mid-fetch leaves the 12s timer scheduled.
+  const loadTimeoutRef = useRef(null);
 
   const loadRecord = useCallback(() => {
     if (!fetcher) return;
     const gen = ++loadGenRef.current; // invalidates any prior in-flight fetch
     const fresh = () => mountedRef.current && gen === loadGenRef.current;
+    if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current); // drop a prior timer on rapid re-load
     // An empty recordId (e.g. a param-less route mount) would fetch
     // `/media/collections/` and 404/toast — skip the request, and clear any
     // previously-loaded record so a stale name/preview can't linger.
@@ -267,16 +272,20 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     setRecordLoading(true);
     // Hard timeout so a hung request can never leave the drawer on a permanent
     // "Loading…" spinner. Bumping the generation also drops a late response.
-    const timeout = setTimeout(() => {
+    loadTimeoutRef.current = setTimeout(() => {
       if (fresh()) { loadGenRef.current += 1; setRecordError(true); setRecordLoading(false); }
     }, RECORD_LOAD_TIMEOUT_MS);
     fetcher(recordId)
       .then((data) => { if (fresh()) { setRecord(data); setRecordError(false); } })
       .catch(() => { if (fresh()) { setRecord(null); setRecordError(true); } })
-      .finally(() => { clearTimeout(timeout); if (fresh()) setRecordLoading(false); });
+      .finally(() => { clearTimeout(loadTimeoutRef.current); if (fresh()) setRecordLoading(false); });
   }, [fetcher, recordId]);
 
-  useEffect(() => { loadRecord(); }, [loadRecord]);
+  // Run on mount/recordId change; clear any pending load timer on unmount.
+  useEffect(() => {
+    loadRecord();
+    return () => { if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current); };
+  }, [loadRecord]);
 
   // Keep the mediaCollection-specific alias in scope so the pull action below
   // can read it without changing its reference to `collection`.

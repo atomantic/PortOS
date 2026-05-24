@@ -232,6 +232,12 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
+  // Normalize the universe id exactly as findOrCreateUniverseCollection does, so
+  // the deterministic id minted here matches the runtime/persisted value (and
+  // can't exceed the peer-sync id length cap if a malformed long id slips in).
+  const normalizedUniverseId = typeof universeId === 'string' && universeId.trim()
+    ? universeId.slice(0, UNIVERSE_ID_MAX)
+    : null;
   let createdId = null;
   const result = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
@@ -240,13 +246,13 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
     // should not be resurrected by name.
     const existing = all.find((c) => !c.deleted && c.name.toLowerCase() === needle);
     if (existing) {
-      if (universeId && !existing.universeId) {
+      if (normalizedUniverseId && !existing.universeId) {
         // Lazy backfill so legacy "Universe: <name>" collections gain the link
         // the first time a universe-builder render references them. Adopt the
         // DETERMINISTIC id at the same time — keeping the old random id would
         // leave a universe-linked collection that can't converge across peers
         // (the very bug deterministic ids fix).
-        const canonId = linkedCollectionId({ universeId });
+        const canonId = linkedCollectionId({ universeId: normalizedUniverseId });
         // If the universe ALREADY has its canonical collection, don't promote a
         // same-named orphan over it (that would clobber the canonical record's
         // items) — return the canonical one; the orphan is a duplicate the merge
@@ -255,7 +261,7 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
         if (liveCanonical) return liveCanonical;
         // No live canonical — rename the orphan to the deterministic id,
         // reclaiming a tombstone at that id if one exists.
-        const linked = { ...existing, id: canonId, universeId, updatedAt: new Date().toISOString() };
+        const linked = { ...existing, id: canonId, universeId: normalizedUniverseId, updatedAt: new Date().toISOString() };
         await writeAll([...all.filter((c) => c.id !== existing.id && c.id !== canonId), linked]);
         if (canonId !== existing.id) createdId = canonId; // announce the newly-linked record
         return linked;
@@ -266,11 +272,11 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
     const next = {
       // Deterministic id when universe-linked (cross-machine convergence);
       // standalone (no link) keeps a random id. See linkedCollectionId.
-      id: linkedCollectionId({ universeId }) || randomUUID(),
+      id: linkedCollectionId({ universeId: normalizedUniverseId }) || randomUUID(),
       name: trimmed,
       description: trimmedDescription,
       coverKey: null,
-      universeId: universeId || null,
+      universeId: normalizedUniverseId,
       items: [],
       createdAt: now,
       updatedAt: now,
@@ -303,10 +309,13 @@ export const universeCollectionNameFor = (universeName) =>
 // id — they have no stable cross-machine identity. Migration 038 canonicalizes
 // existing linked-collection ids to this scheme. Mirror any change here in that
 // migration. `uc-`/`sc-` prefixes keep linked ids visually distinct from the
-// random UUIDs of standalone collections.
+// random UUIDs of standalone collections. The owner id is sliced to the same cap
+// storage uses so the derived id is bounded by construction — callers can pass a
+// raw owner id without first slicing it and still converge on the canonical id
+// (and stay under the peer-sync id length cap).
 export const linkedCollectionId = ({ universeId = null, seriesId = null } = {}) => {
-  if (universeId) return `uc-${universeId}`;
-  if (seriesId) return `sc-${seriesId}`;
+  if (universeId) return `uc-${String(universeId).slice(0, UNIVERSE_ID_MAX)}`;
+  if (seriesId) return `sc-${String(seriesId).slice(0, SERIES_ID_MAX)}`;
   return null;
 };
 

@@ -35,12 +35,20 @@
 import { mkdir, readFile, writeFile, rename, stat } from 'fs/promises';
 import { join } from 'path';
 
-// Inlined copy of services/mediaCollections.js#linkedCollectionId — migrations
-// stay dependency-light (importing the service would pull its whole module
-// graph + side effects). Keep the scheme identical to that helper.
+// Inlined copies of services/mediaCollections.js — migrations stay
+// dependency-light (importing the service would pull its whole module graph +
+// side effects). Keep these identical to that module: UNIVERSE_ID_MAX /
+// SERIES_ID_MAX bound the owner id, and `findOrCreateUniverseCollection` slices
+// the owner id to that cap BEFORE deriving the deterministic id and before
+// storing it. The migration must slice the same way, or an overlong/hand-edited
+// owner id would yield a canonical id (and a stored universeId) that disagrees
+// with what the live service computes — the runtime couldn't re-find the row and
+// would mint a duplicate.
+const UNIVERSE_ID_MAX = 80;
+const SERIES_ID_MAX = 80;
 const linkedIdFor = (c) => {
-  if (c.universeId) return `uc-${c.universeId}`;
-  if (c.seriesId) return `sc-${c.seriesId}`;
+  if (c.universeId) return `uc-${String(c.universeId).slice(0, UNIVERSE_ID_MAX)}`;
+  if (c.seriesId) return `sc-${String(c.seriesId).slice(0, SERIES_ID_MAX)}`;
   return null;
 };
 
@@ -78,11 +86,19 @@ export function canonicalizeCollections(input) {
   // Canonical-id -> merged live record.
   const byCanon = new Map();
 
-  for (const c of list) {
-    if (!c || typeof c !== 'object') continue;
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    // Slice owner ids to the runtime cap up front so the derived id, the stored
+    // universeId/seriesId, and the merge below all key on the same value the
+    // live service would compute. idMap stays keyed on the original `raw.id`.
+    const c = {
+      ...raw,
+      ...(typeof raw.universeId === 'string' ? { universeId: raw.universeId.slice(0, UNIVERSE_ID_MAX) } : {}),
+      ...(typeof raw.seriesId === 'string' ? { seriesId: raw.seriesId.slice(0, SERIES_ID_MAX) } : {}),
+    };
     const canon = c.deleted === true ? null : linkedIdFor(c);
-    if (!canon) { passthrough.push(c); continue; }
-    if (c.id !== canon) { idMap[c.id] = canon; renamed += 1; }
+    if (!canon) { passthrough.push(raw); continue; }
+    if (raw.id !== canon) { idMap[raw.id] = canon; renamed += 1; }
     const existing = byCanon.get(canon);
     if (!existing) {
       byCanon.set(canon, { ...c, id: canon });
