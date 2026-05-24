@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { applyPromptReplaceMigration, md5 } from './_lib.js';
+import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc } from './_lib.js';
 
 const FILENAME = 'pipeline-fake.md';
 const BODY_OLD = '# OLD\n';
@@ -106,5 +106,64 @@ describe('applyPromptReplaceMigration opt-ins', () => {
         applyPromptReplaceMigration({ rootDir, ...baseOpts }),
       ).rejects.toThrow(/ENOENT/);
     });
+  });
+});
+
+describe('readLayoutsDoc / writeLayoutsDoc', () => {
+  let rootDir;
+  let dataDir;
+  let layoutsPath;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-layouts-'));
+    dataDir = join(rootDir, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    layoutsPath = join(dataDir, 'dashboard-layouts.json');
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it('reports no-state when the file is absent', async () => {
+    const result = await readLayoutsDoc({ rootDir, label: 'migration test' });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('no-state');
+    expect(result.path).toBe(layoutsPath);
+  });
+
+  it('reports unreadable for malformed JSON', async () => {
+    writeFileSync(layoutsPath, 'not json');
+    const result = await readLayoutsDoc({ rootDir, label: 'migration test' });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('unreadable');
+  });
+
+  it('reports no-layouts-array when the layouts key is missing or non-array', async () => {
+    writeFileSync(layoutsPath, JSON.stringify({ activeLayoutId: 'default' }));
+    expect((await readLayoutsDoc({ rootDir, label: 'x' })).reason).toBe('no-layouts-array');
+    writeFileSync(layoutsPath, JSON.stringify({ layouts: 'nope' }));
+    expect((await readLayoutsDoc({ rootDir, label: 'x' })).reason).toBe('no-layouts-array');
+    writeFileSync(layoutsPath, 'null');
+    expect((await readLayoutsDoc({ rootDir, label: 'x' })).reason).toBe('no-layouts-array');
+  });
+
+  it('returns the parsed doc + path when valid', async () => {
+    const doc = { activeLayoutId: 'default', layouts: [{ id: 'default', widgets: [] }] };
+    writeFileSync(layoutsPath, JSON.stringify(doc));
+    const result = await readLayoutsDoc({ rootDir, label: 'migration test' });
+    expect(result.ok).toBe(true);
+    expect(result.path).toBe(layoutsPath);
+    expect(result.doc).toEqual(doc);
+  });
+
+  it('round-trips through writeLayoutsDoc with 2-space indentation', async () => {
+    const doc = { activeLayoutId: 'default', layouts: [{ id: 'default', widgets: ['cos'] }] };
+    await writeLayoutsDoc(layoutsPath, doc);
+    const raw = readFileSync(layoutsPath, 'utf-8');
+    expect(raw).toBe(JSON.stringify(doc, null, 2));
+    const reread = await readLayoutsDoc({ rootDir, label: 'migration test' });
+    expect(reread.ok).toBe(true);
+    expect(reread.doc).toEqual(doc);
   });
 });

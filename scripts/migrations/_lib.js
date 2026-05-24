@@ -1,9 +1,13 @@
 /**
- * Shared scaffolding for hash-driven prompt-replace migrations.
+ * Shared scaffolding for migrations. Two families live here:
  *
- * Every prompt-replace migration from 003 onward uses
- * `makePromptReplaceMigration` to collapse onto ~50 lines (hash table + label
- * + customized-skip hint).
+ *   1. Hash-driven prompt-replace migrations — every one from 003 onward uses
+ *      `makePromptReplaceMigration` to collapse onto ~50 lines (hash table +
+ *      label + customized-skip hint).
+ *   2. Dashboard-layout seeding migrations — `readLayoutsDoc` /
+ *      `writeLayoutsDoc` collapse the read → JSON.parse → `Array.isArray`
+ *      guard → write shell shared by every migration that mutates built-in
+ *      layouts in `data/dashboard-layouts.json` (029, 030, 033, …).
  *
  * The runner (`scripts/run-migrations.js`) explicitly skips `_`-prefixed
  * files so this module is never imported as a migration.
@@ -178,4 +182,47 @@ export function makePromptReplaceMigration({
   };
 
   return { applyMigration, up };
+}
+
+/**
+ * Read + parse + guard `data/dashboard-layouts.json` for a layout-seeding
+ * migration. Collapses the preamble every such migration repeats: resolve the
+ * path, read the file (absent → fresh install, nothing to do), JSON-parse it
+ * (unreadable → skip), and verify `doc.layouts` is an array.
+ *
+ * Returns a discriminated result:
+ * - `{ ok: false, reason: 'no-state' | 'unreadable' | 'no-layouts-array', path }`
+ *   — the caller short-circuits with `return { updated: 0, reason: result.reason }`.
+ * - `{ ok: true, doc, path }` — mutate `doc.layouts` in place, then persist
+ *   with `writeLayoutsDoc(path, doc)`.
+ *
+ * `label` is the migration's human tag (e.g. `'migration 029'`); it keeps the
+ * no-state / unreadable log lines per-migration identifiable.
+ */
+export async function readLayoutsDoc({ rootDir, label }) {
+  const path = join(rootDir, 'data', 'dashboard-layouts.json');
+  const raw = await readFile(path, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) {
+    console.log(`📦 ${label}: no dashboard-layouts.json yet — fresh install will seed from defaults.`);
+    return { ok: false, reason: 'no-state', path };
+  }
+  let doc;
+  try {
+    doc = JSON.parse(raw);
+  } catch {
+    console.log(`📦 ${label}: dashboard-layouts.json unreadable — skipping.`);
+    return { ok: false, reason: 'unreadable', path };
+  }
+  if (!doc || !Array.isArray(doc.layouts)) {
+    return { ok: false, reason: 'no-layouts-array', path };
+  }
+  return { ok: true, doc, path };
+}
+
+/** Persist a layouts doc with the canonical 2-space indentation. */
+export async function writeLayoutsDoc(path, doc) {
+  await writeFile(path, JSON.stringify(doc, null, 2));
 }
