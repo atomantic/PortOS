@@ -1267,7 +1267,7 @@ const peerAssetManifestEntrySchema = z.object({
   filename: z.string().trim().min(1).max(255),
   kind: z.enum(['image', 'image-ref', 'video']),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
-  sidecarSha256: z.string().min(1).max(128).optional(),
+  sidecarSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 }).strict();
 
 // One sanitized record on the wire. Mirrors sanitizeRecordForWire's output:

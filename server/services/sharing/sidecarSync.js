@@ -53,8 +53,16 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
     .finally(() => clearTimeout(timeoutId))
     .catch(() => null);
   if (!res || !res.ok) return false;
+  // Require a trustworthy content-length and refuse over-cap BEFORE buffering.
+  // peerFetch only enforces `maxBytes` on the HTTPS shim; the plain-HTTP path
+  // falls back to native fetch (no streaming cap), so without this guard an
+  // HTTP peer could stream an unbounded body into memory. serve-static always
+  // sets content-length for static files — mirrors doPullOneAsset in peerSync.js.
+  if (!res.headers.has('content-length')) return false;
+  const contentLength = Number(res.headers.get('content-length'));
+  if (!Number.isFinite(contentLength) || contentLength <= 0 || contentLength > SIDECAR_MAX_BYTES) return false;
   const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length === 0 || buf.length > SIDECAR_MAX_BYTES) return false;
+  if (buf.length === 0 || buf.length > SIDECAR_MAX_BYTES || buf.length !== contentLength) return false;
   // JSON-parse gate: a peer (or an intermediary) could serve an HTML error
   // page with a 200, which we'd otherwise write as `<base>.metadata.json` and
   // corrupt the gallery's gen-params reader. Only write if the body is valid

@@ -549,17 +549,23 @@ export async function updateCollection(id, patch) {
 }
 
 export async function deleteCollection(id) {
-  const { universeId: deletedUniverseId, seriesId: deletedSeriesId } = await serializeFileWrite(async () => {
+  const { universeId: deletedUniverseId, seriesId: deletedSeriesId, alreadyDeleted } = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const target = all[idx];
+    // Idempotent on an already-tombstoned record: re-stamping deletedAt/
+    // updatedAt would make an old tombstone look "newer" to a peer's LWW (and
+    // re-emitting churns the sync pipeline). Return without rewriting or
+    // re-emitting.
+    if (target.deleted === true) return { universeId: null, seriesId: null, alreadyDeleted: true };
     const now = new Date().toISOString();
     const next = [...all];
     next[idx] = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], universeId: null, seriesId: null };
     await writeAll(next);
-    return { universeId: target.universeId || null, seriesId: target.seriesId || null };
+    return { universeId: target.universeId || null, seriesId: target.seriesId || null, alreadyDeleted: false };
   });
+  if (alreadyDeleted) return { id };
   // Mirror addItem/removeItem/bulkUpdateCollectionItems — universe-linked
   // shares need to know membership changed so the subscriber doesn't keep
   // publishing the deleted collection's contents until an unrelated edit

@@ -20,7 +20,7 @@ export default function MediaCollectionSyncView() {
   return (
     <SyncDetailDrawer
       kind="mediaCollection"
-      recordId={decodeURIComponent(id)}
+      recordId={id}
       onClose={handleClose}
     />
   );

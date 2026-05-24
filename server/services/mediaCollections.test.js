@@ -129,6 +129,26 @@ describe('mediaCollections service', () => {
       .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it('deleteCollection is idempotent on an already-tombstoned record (no re-stamp, no re-emit)', async () => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const c = await svc.createCollection({ name: 'DoubleDelete' });
+    await svc.deleteCollection(c.id);
+    const firstDeletedAt = (await svc.listCollections({ includeDeleted: true })).find((x) => x.id === c.id).deletedAt;
+    await new Promise((r) => setTimeout(r, 5)); // ensure a later timestamp WOULD differ if re-stamped
+    const deletedEvts = [];
+    const handler = (evt) => deletedEvts.push(evt);
+    recordEvents.on('deleted', handler);
+    try {
+      const res = await svc.deleteCollection(c.id);
+      expect(res).toEqual({ id: c.id });
+      const afterSecond = (await svc.listCollections({ includeDeleted: true })).find((x) => x.id === c.id);
+      expect(afterSecond.deletedAt).toBe(firstDeletedAt); // not re-stamped
+      expect(deletedEvts).toEqual([]);                    // not re-emitted
+    } finally {
+      recordEvents.off('deleted', handler);
+    }
+  });
+
   it('deleteCollection emits recordUpdated on the universe when the deleted collection was linked', async () => {
     const events = [];
     const { recordEvents } = await import('./sharing/recordEvents.js');

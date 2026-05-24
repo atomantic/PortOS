@@ -19,7 +19,9 @@ export default function SyncView({ kind, param, backPath }) {
   const params = useParams();
   const navigate = useNavigate();
 
-  const recordId = decodeURIComponent(params[param] ?? '');
+  // react-router already URL-decodes useParams values; don't decode again
+  // (double-decode throws on malformed `%` or mangles ids containing `%25`).
+  const recordId = params[param] ?? '';
 
   return (
     <SyncDetailDrawer

@@ -190,7 +190,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     const filenames = (collection.items ?? [])
       .filter((it) => it.kind === 'image')
       .map((it) => it.ref);
-    if (filenames.length === 0) { toast.info('No image files to pull'); return; }
+    if (filenames.length === 0) { toast('No image files to pull'); return; }
     const result = await pullMissingMetadata(filenames, { silent: true });
     const recovered = result?.recovered ?? 0;
     const attempted = result?.attempted ?? filenames.length;

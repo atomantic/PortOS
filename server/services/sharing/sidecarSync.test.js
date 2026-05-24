@@ -53,6 +53,7 @@ describe('pullSidecarForImage', () => {
     const buf = Buffer.from(sidecarBody);
     vi.mocked(peerFetch).mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'content-length': String(buf.byteLength) }),
       arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
     });
 
@@ -84,6 +85,7 @@ describe('pullSidecarForImage', () => {
   it('returns false when peer returns an empty body', async () => {
     vi.mocked(peerFetch).mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'content-length': '0' }),
       arrayBuffer: async () => new ArrayBuffer(0),
     });
 
@@ -104,6 +106,7 @@ describe('pullSidecarForImage', () => {
     const htmlBody = Buffer.from('<!DOCTYPE html><html><body>500 oops</body></html>');
     vi.mocked(peerFetch).mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'content-length': String(htmlBody.byteLength) }),
       arrayBuffer: async () => htmlBody.buffer.slice(htmlBody.byteOffset, htmlBody.byteOffset + htmlBody.byteLength),
     });
     const result = await pullSidecarForImage(fakePeer, fakeBase, 'htmlpage.png');
@@ -117,6 +120,27 @@ describe('pullSidecarForImage', () => {
     expect(result).toBe(false);
     // Never even hit the network for a traversal name.
     expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects an over-cap content-length before buffering', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': String(10 * 1024 * 1024) }), // 10MB >> 256KB cap
+      arrayBuffer: async () => { throw new Error('should not buffer an over-cap body'); },
+    });
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'huge.png');
+    expect(result).toBe(false);
+    expect(existsSync(join(PATHS.images, 'huge.metadata.json'))).toBe(false);
+  });
+
+  it('refuses when the content-length header is missing (cannot bound the body)', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      headers: new Headers({}),
+      arrayBuffer: async () => Buffer.from('{}').buffer,
+    });
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'noheader.png');
+    expect(result).toBe(false);
   });
 });
 
@@ -133,6 +157,7 @@ describe('backfillMissingSidecars', () => {
     ]);
     vi.mocked(peerFetch).mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'content-length': String(sidecarBuf.byteLength) }),
       arrayBuffer: async () => sidecarBuf.buffer.slice(
         sidecarBuf.byteOffset, sidecarBuf.byteOffset + sidecarBuf.byteLength
       ),
