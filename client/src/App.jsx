@@ -37,6 +37,7 @@ const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
 const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
 const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
+const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollectionSyncView'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
@@ -218,6 +219,7 @@ export default function App() {
             <Route path="history" element={<MediaHistory />} />
             <Route path="collections" element={<MediaCollections />} />
             <Route path="collections/:id" element={<MediaCollectionDetail />} />
+            <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
             <Route path="creative-director" element={<CreativeDirector />} />
             <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
