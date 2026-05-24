@@ -1,10 +1,10 @@
 /**
  * SyncView — generic deep-linkable route wrapper for SyncDetailDrawer.
  *
- * Used by:
- *   /media/collections/:id/sync       → kind='mediaCollection', param='id'
+ * Used by the universe + pipeline-series sync routes:
  *   /universes/:universeId/sync       → kind='universe', param='universeId'
  *   /pipeline/series/:seriesId/sync   → kind='series', param='seriesId'
+ * (The /media/collections/:id/sync route uses MediaCollectionSyncView.)
  *
  * Props:
  *   kind      — record kind passed straight to SyncDetailDrawer

@@ -361,7 +361,7 @@ export default function Pipeline() {
               </Link>
               <SyncBadge
                 status={noSyncingPeers ? 'not-syncing' : statusById.get(s.id)}
-                onClick={() => navigate(`/pipeline/series/${s.id}/sync`)}
+                onClick={() => navigate(`/pipeline/series/${encodeURIComponent(s.id)}/sync`)}
               />
               <ShareToButton kind="series" ids={[s.id]} compact />
               <SyncToPeerButton recordKind="series" recordId={s.id} compact />

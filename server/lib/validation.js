@@ -1354,7 +1354,7 @@ export const peerSyncNowSchema = z.object({
 }).strict();
 
 export const peerPullMetadataSchema = z.object({
-  peerId: z.string().trim().min(1).max(120).optional(),
+  // Backfill tries every online peer; no per-peer scoping field today.
   filenames: z.array(z.string().min(1).max(300)).max(5000),
 }).strict();
 
