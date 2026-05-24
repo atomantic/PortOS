@@ -279,6 +279,20 @@ describe('backfillMissingSidecars', () => {
     expect(peerFetch).not.toHaveBeenCalled();
   });
 
+  it('skips peers the user turned off (enabled:false or syncEnabled:false)', async () => {
+    await writeFile(join(PATHS.images, 'bare-off.png'), Buffer.from('img'));
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-disabled', name: 'Disabled', status: 'online', enabled: false },
+      { instanceId: 'peer-nosync', name: 'NoSync', status: 'online', syncEnabled: false },
+    ]);
+
+    const result = await backfillMissingSidecars({ filenames: ['bare-off.png'] });
+    expect(result.attempted).toBe(1);
+    expect(result.recovered).toBe(0);
+    // Neither opted-out peer is contacted.
+    expect(peerFetch).not.toHaveBeenCalled();
+  });
+
   it('skips filenames whose image bytes are not on disk (no orphan sidecar, no fetch)', async () => {
     // Image file intentionally NOT written — only a stale filename is passed.
     vi.mocked(getPeers).mockResolvedValue([

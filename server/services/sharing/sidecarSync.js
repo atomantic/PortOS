@@ -103,8 +103,12 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
  * sanitization (path traversal) are skipped entirely.
  */
 export async function backfillMissingSidecars({ filenames }) {
+  // Skip peers the user explicitly turned off (enabled:false) or disabled sync
+  // for (syncEnabled:false) — the manual backfill must not contact peers the
+  // user opted out of, matching how syncOrchestrator gates its peer set. Both
+  // default-on-unless-false (mirrors useSyncIntegrity's eligibility filter).
   const peers = (await getPeers().catch(() => [])).filter(
-    (p) => p?.status === 'online' && p.instanceId
+    (p) => p?.enabled !== false && p?.syncEnabled !== false && p?.status === 'online' && p.instanceId
   );
   let attempted = 0;
   let recovered = 0;
