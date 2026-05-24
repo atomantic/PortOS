@@ -128,7 +128,7 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
 }
 
 /**
- * One sweep cycle. Returns `{ universes, series, issues, refused }`.
+ * One sweep cycle. Returns `{ universes, series, issues, collections, refused }`.
  *
  * `graceMs` defaults to 24h so the orchestrator path is unchanged; the
  * manual-trigger UI / CLI passes 0 to skip the post-delete buffer. The

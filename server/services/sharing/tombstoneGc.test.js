@@ -67,12 +67,13 @@ describe('TOMBSTONE_GRACE_MS', () => {
 });
 
 describe('sweepTombstones — no peers subscribed', () => {
-  it('uses now-GRACE as the cutoff for all three kinds when nobody is subscribed', async () => {
+  it('uses now-GRACE as the cutoff for all four kinds when nobody is subscribed', async () => {
     await sweepTombstones({ now: NOW });
     const expectedCutoff = NOW - TOMBSTONE_GRACE_MS + 1;
     expect(pruneTombstonedUniverses).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedSeries).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedIssues).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedCollections).toHaveBeenCalledWith(expectedCutoff);
   });
 });
 

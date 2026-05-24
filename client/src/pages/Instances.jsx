@@ -28,7 +28,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 // TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
 // echoes the same wording). The dedupe in the rendering call sites handles
 // the series/issue cohort coupling.
-const TOMBSTONE_KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues' };
+const TOMBSTONE_KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues', mediaCollection: 'media collections' };
 
 const STATUS_COLORS = {
   online: 'text-port-success',
@@ -1072,13 +1072,14 @@ function TombstoneGcSection() {
   const [runSweep, sweeping] = useAsyncAction(async () => {
     const result = await sweepTombstonesNow({ graceMs: 0 }, { silent: true });
     if (!result) return null;
-    const { universes = 0, series = 0, issues = 0, refused: refusedKinds = [] } = result;
-    const totalPruned = universes + series + issues;
+    const { universes = 0, series = 0, issues = 0, collections = 0, refused: refusedKinds = [] } = result;
+    const totalPruned = universes + series + issues + collections;
     if (totalPruned > 0) {
       const parts = [];
       if (universes) parts.push(`${universes} universe${universes === 1 ? '' : 's'}`);
       if (series) parts.push(`${series} series`);
       if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
+      if (collections) parts.push(`${collections} collection${collections === 1 ? '' : 's'}`);
       toast.success(`Pruned ${parts.join(' / ')}`);
     } else if (refusedKinds.length === 0) {
       toast('No tombstones eligible for pruning');
@@ -1091,10 +1092,13 @@ function TombstoneGcSection() {
     return result;
   }, { errorMessage: 'Tombstone sweep failed' });
 
-  // Every cohort refused iff both `universe` (its own cohort) and `series`
-  // (the pipeline cohort representative — issues always travel with series)
-  // are in the refused set.
-  const allRefused = refused != null && refused.includes('universe') && refused.includes('series');
+  // Every cohort refused iff `universe` (its own cohort), `series` (the
+  // pipeline cohort representative — issues always travel with series), AND
+  // `mediaCollection` (its own cohort) are all in the refused set.
+  const allRefused = refused != null
+    && refused.includes('universe')
+    && refused.includes('series')
+    && refused.includes('mediaCollection');
   const disabled = sweeping || refused == null || allRefused;
   const title = allRefused
     ? 'Every kind has an enabled snapshot-mode peer with no per-record subscription — pruning would risk resurrection. Subscribe the peer or disable it to enable GC.'
