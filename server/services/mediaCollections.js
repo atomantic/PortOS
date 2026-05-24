@@ -626,6 +626,9 @@ export async function addItem(id, item) {
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
+    // A soft-deleted collection behaves as not-found for mutations (matches
+    // updateCollection) — never resurrect a tombstone or churn its timestamps.
+    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const key = `${kind}:${ref}`;
     if (cur.items.find((it) => itemKey(it) === key)) {
       throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
@@ -689,6 +692,9 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
+    // A soft-deleted collection behaves as not-found for mutations (matches
+    // updateCollection) — never resurrect a tombstone or churn its timestamps.
+    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
 
     const removeSet = new Set(remove);
     const remainingItems = cur.items.filter((it) => !removeSet.has(itemKey(it)));
@@ -742,6 +748,9 @@ export async function removeItem(id, key) {
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
+    // A soft-deleted collection behaves as not-found for mutations (matches
+    // updateCollection) — never resurrect a tombstone or churn its timestamps.
+    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const before = cur.items.length;
     const items = cur.items.filter((it) => itemKey(it) !== key);
     if (items.length === before) throw makeErr(`Item not in collection: ${key}`, ERR_NOT_FOUND);

@@ -197,8 +197,9 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   const loadRecord = useCallback(() => {
     if (!fetcher) return;
     // An empty recordId (e.g. a param-less route mount) would fetch
-    // `/media/collections/` and 404/toast — skip the request and clear loading.
-    if (!recordId) { setRecordLoading(false); return; }
+    // `/media/collections/` and 404/toast — skip the request, and clear any
+    // previously-loaded record so a stale name/preview can't linger.
+    if (!recordId) { setRecord(null); setRecordLoading(false); return; }
     setRecordLoading(true);
     fetcher(recordId)
       .then((data) => { if (mountedRef.current) setRecord(data); })

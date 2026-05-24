@@ -100,6 +100,15 @@ describe('SyncDetailDrawer', () => {
     expect(mockGetMediaCollection).not.toHaveBeenCalled();
   });
 
+  it('clears a previously-loaded record when recordId becomes empty (no stale name/preview)', async () => {
+    mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
+    const { rerender } = render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    // Name renders in both the header and the preview, so match all occurrences.
+    await waitFor(() => expect(screen.getAllByText('My Collection').length).toBeGreaterThan(0));
+    rerender(<SyncDetailDrawer kind="mediaCollection" recordId="" onClose={() => {}} />);
+    await waitFor(() => expect(screen.queryAllByText('My Collection')).toHaveLength(0));
+  });
+
   it('shows an "integrity unavailable" message (not "No peer data") when every peer is unreachable', async () => {
     mockUseSyncIntegrity.mockReturnValue(defaultHookState({
       byPeer: new Map(), // no peer contributed records

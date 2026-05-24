@@ -142,6 +142,19 @@ describe('mediaCollections service', () => {
       .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it('item mutators (addItem/removeItem/bulkUpdateCollectionItems) throw ERR_NOT_FOUND on a tombstone', async () => {
+    const c = await svc.createCollection({ name: 'Live' });
+    await svc.addItem(c.id, { kind: 'image', ref: 'keep.png' });
+    await svc.deleteCollection(c.id);
+    // All three behave as not-found after soft-delete (no tombstone resurrection).
+    await expect(svc.addItem(c.id, { kind: 'image', ref: 'new.png' }))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    await expect(svc.removeItem(c.id, 'image:keep.png'))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    await expect(svc.bulkUpdateCollectionItems(c.id, { add: [{ kind: 'image', ref: 'b.png' }] }))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+  });
+
   it('deleteCollection is idempotent on an already-tombstoned record (no re-stamp, no re-emit)', async () => {
     const { recordEvents } = await import('./sharing/recordEvents.js');
     const c = await svc.createCollection({ name: 'DoubleDelete' });
