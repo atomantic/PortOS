@@ -1777,7 +1777,12 @@ export async function forcePushRecord(peerId, recordKind, recordId) {
  * `applyIncomingPush` verbatim.
  */
 export async function getRecordPayloadForPeer(recordKind, recordId) {
-  const instanceId = await getInstanceId();
+  // Mirror pushRecordToPeer's identity guard: if our self-identity can't be read
+  // or isn't initialized yet, do NOT emit a payload — a missing/UNKNOWN
+  // sourceInstanceId would 500 here or poison the puller (applyIncomingPush
+  // rejects sourceInstanceId='unknown'). Return null → the route 404s.
+  const instanceId = await getInstanceId().catch(() => null);
+  if (!isNonEmptyStr(instanceId) || instanceId === UNKNOWN_INSTANCE_ID) return null;
   return buildPushPayload({ recordKind, recordId }, instanceId);
 }
 

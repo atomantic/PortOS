@@ -774,6 +774,10 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
       setPeerSubsLoaded(true); // no instanceId → nothing to load; don't suppress forever
       return;
     }
+    // instanceId just became available or changed — re-suppress "behind" until
+    // this peer's first fetch settles, otherwise the stale [] would mislabel a
+    // live-push category. Cleared in the .finally() below.
+    setPeerSubsLoaded(false);
     let cancelled = false;
     const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {

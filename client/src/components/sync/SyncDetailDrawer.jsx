@@ -258,12 +258,23 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   // rapid re-load — not only when the fetch settles. Without this, closing the
   // drawer (or switching records) mid-fetch leaves the 12s timer scheduled.
   const loadTimeoutRef = useRef(null);
+  // Last recordId we began loading — lets us clear stale metadata only when
+  // SWITCHING records (not on a same-id refresh, which should keep the current
+  // record visible while it reloads).
+  const lastRecordIdRef = useRef(null);
 
   const loadRecord = useCallback(() => {
     if (!fetcher) return;
     const gen = ++loadGenRef.current; // invalidates any prior in-flight fetch
     const fresh = () => mountedRef.current && gen === loadGenRef.current;
     if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current); // drop a prior timer on rapid re-load
+    // Switching to a DIFFERENT record: drop the old record up front so the
+    // header/preview never shows the prior record's name while the new one
+    // loads — and can't stay stuck on it if the new fetch errors/times out.
+    if (recordId !== lastRecordIdRef.current) {
+      setRecord(null);
+      lastRecordIdRef.current = recordId;
+    }
     // An empty recordId (e.g. a param-less route mount) would fetch
     // `/media/collections/` and 404/toast — skip the request, and clear any
     // previously-loaded record so a stale name/preview can't linger.

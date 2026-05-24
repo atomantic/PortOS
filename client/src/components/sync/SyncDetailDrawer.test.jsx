@@ -142,6 +142,20 @@ describe('SyncDetailDrawer', () => {
     expect(screen.getAllByText('Beta Collection').length).toBeGreaterThan(0);
   });
 
+  it('clears the prior record while switching to a different recordId (no stale metadata)', async () => {
+    let resolveB;
+    mockGetMediaCollection
+      .mockImplementationOnce(() => Promise.resolve({ id: 'col-A', name: 'Alpha Collection', items: [] }))
+      .mockImplementationOnce(() => new Promise((r) => { resolveB = () => r({ id: 'col-B', name: 'Beta Collection', items: [] }); }));
+    const { rerender } = render(<SyncDetailDrawer kind="mediaCollection" recordId="col-A" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText('Alpha Collection').length).toBeGreaterThan(0));
+    // Switch to col-B (still loading) — Alpha must clear immediately, not linger.
+    rerender(<SyncDetailDrawer kind="mediaCollection" recordId="col-B" onClose={() => {}} />);
+    await waitFor(() => expect(screen.queryAllByText('Alpha Collection')).toHaveLength(0));
+    resolveB();
+    await waitFor(() => expect(screen.getAllByText('Beta Collection').length).toBeGreaterThan(0));
+  });
+
   it('clears a previously-loaded record when recordId becomes empty (no stale name/preview)', async () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     const { rerender } = render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);

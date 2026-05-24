@@ -725,6 +725,20 @@ describe('peerSync', () => {
       vi.mocked(getUniverse).mockResolvedValue(undefined);
       expect(await getRecordPayloadForPeer('universe', 'ghost')).toBeNull();
     });
+
+    it('returns null (no unknown-sourced payload) when self-identity is unknown', async () => {
+      // Without the guard this would emit a payload with sourceInstanceId='unknown'
+      // that the puller's applyIncomingPush rejects — or 500 on a read failure.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getInstanceId).mockResolvedValueOnce('unknown');
+      expect(await getRecordPayloadForPeer('universe', 'u1')).toBeNull();
+    });
+
+    it('returns null when self-identity read fails', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getInstanceId).mockRejectedValueOnce(new Error('instances.json unreadable'));
+      expect(await getRecordPayloadForPeer('universe', 'u1')).toBeNull();
+    });
   });
 
   describe('pullRecordFromPeer', () => {
