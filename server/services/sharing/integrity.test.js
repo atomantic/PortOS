@@ -87,12 +87,16 @@ describe('buildLocalManifest', () => {
     expect(assetShaListForRecord).toHaveBeenCalledWith('mediaCollection', col);
   });
 
-  it('marks deleted collections as deleted:true', async () => {
+  it('marks deleted collections as deleted:true and skips asset hashing for them', async () => {
     const col = makeCollection({ deleted: true });
     vi.mocked(listCollections).mockResolvedValue([col]);
 
     const result = await buildLocalManifest('mediaCollection');
     expect(result[0].deleted).toBe(true);
+    // Tombstones are never hashed — computeRecordIntegrity ignores assets for
+    // deleted records, so the file I/O would be wasted.
+    expect(result[0].assetHashes).toEqual([]);
+    expect(assetShaListForRecord).not.toHaveBeenCalled();
   });
 
   it('passes includeDeleted:true so listCollections returns tombstones', async () => {

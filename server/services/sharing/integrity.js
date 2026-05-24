@@ -37,13 +37,20 @@ async function recordsForKind(kind) {
  */
 export async function buildLocalManifest(kind) {
   const records = await recordsForKind(kind);
-  return Promise.all(records.map(async (r) => ({
-    id: r.id,
-    name: r.name,
-    updatedAt: r.updatedAt,
-    deleted: r.deleted === true,
-    assetHashes: await assetShaListForRecord(kind, r),
-  })));
+  return Promise.all(records.map(async (r) => {
+    const deleted = r.deleted === true;
+    return {
+      id: r.id,
+      name: r.name,
+      updatedAt: r.updatedAt,
+      deleted,
+      // Tombstones never need asset hashes: computeRecordIntegrity only
+      // compares assetHashes when BOTH sides are live (and drops
+      // deleted-vs-deleted pairs entirely). Hashing a deleted record's
+      // still-on-disk assets is pure wasted file I/O.
+      assetHashes: deleted ? [] : await assetShaListForRecord(kind, r),
+    };
+  }));
 }
 
 /**

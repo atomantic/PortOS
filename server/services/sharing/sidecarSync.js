@@ -17,8 +17,9 @@
 
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { atomicWrite, ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../../lib/fileUtils.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
+import { sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -98,7 +99,16 @@ export async function backfillMissingSidecars({ filenames }) {
     const safeName = sanitizeAssetFilename(filename);
     if (!safeName) continue;
     const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
-    if (existsSync(sidecarPath)) continue;
+    // A sidecar can exist yet carry NO prompt: getOrComputeImageSha256 writes a
+    // cache-only `{ sha256: {...} }` sidecar for every image it hashes during
+    // sync. Skipping on mere file existence would make "Pull missing prompts" a
+    // no-op for exactly the images this repair targets (synced-in, no gen-params).
+    // Only skip when the sidecar already holds real gen-params — sidecarGenParamsHash
+    // strips the sha256 cache key and returns null when nothing else remains.
+    if (existsSync(sidecarPath)) {
+      const existing = await readJSONFile(sidecarPath, null, { logError: false });
+      if (sidecarGenParamsHash(existing) !== null) continue;
+    }
     attempted++;
     for (const peer of peers) {
       const ok = await pullSidecarForImage(peer, peerBaseUrl(peer), safeName).catch(() => false);

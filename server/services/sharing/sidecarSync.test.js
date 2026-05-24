@@ -146,9 +146,12 @@ describe('pullSidecarForImage', () => {
 
 describe('backfillMissingSidecars', () => {
   it('attempts only images without sidecars and skips already-present ones', async () => {
-    // Create two images: one with a sidecar already, one bare.
+    // Create two images: one with a real gen-params sidecar already, one bare.
     await writeFile(join(PATHS.images, 'with-sidecar.png'), Buffer.from('img1'));
-    await writeFile(join(PATHS.images, 'with-sidecar.metadata.json'), Buffer.from('{}'));
+    await writeFile(
+      join(PATHS.images, 'with-sidecar.metadata.json'),
+      Buffer.from(JSON.stringify({ prompt: 'already has a prompt' })),
+    );
     await writeFile(join(PATHS.images, 'bare.png'), Buffer.from('img2'));
 
     const sidecarBuf = Buffer.from(JSON.stringify({ prompt: 'recovered' }));
@@ -176,9 +179,12 @@ describe('backfillMissingSidecars', () => {
     expect(existsSync(join(PATHS.images, 'bare.metadata.json'))).toBe(true);
   });
 
-  it('returns { attempted: 0, recovered: 0 } when all sidecars already exist', async () => {
+  it('returns { attempted: 0, recovered: 0 } when all sidecars already have gen-params', async () => {
     await writeFile(join(PATHS.images, 'all.png'), Buffer.from('img'));
-    await writeFile(join(PATHS.images, 'all.metadata.json'), Buffer.from('{}'));
+    await writeFile(
+      join(PATHS.images, 'all.metadata.json'),
+      Buffer.from(JSON.stringify({ prompt: 'p', model: 'flux' })),
+    );
     vi.mocked(getPeers).mockResolvedValue([
       { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
     ]);
@@ -187,6 +193,35 @@ describe('backfillMissingSidecars', () => {
     expect(result.attempted).toBe(0);
     expect(result.recovered).toBe(0);
     expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('treats a cache-only sidecar (just sha256, no prompt) as missing and attempts a pull', async () => {
+    // getOrComputeImageSha256 writes this exact shape for every image it hashes
+    // during sync — it has NO prompt, so "Pull missing prompts" must still try.
+    await writeFile(join(PATHS.images, 'cacheonly.png'), Buffer.from('img'));
+    await writeFile(
+      join(PATHS.images, 'cacheonly.metadata.json'),
+      Buffer.from(JSON.stringify({ sha256: { value: 'a'.repeat(64), mtimeMs: 1, size: 3 } })),
+    );
+    const recoveredBuf = Buffer.from(JSON.stringify({ prompt: 'recovered prompt' }));
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
+    ]);
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': String(recoveredBuf.byteLength) }),
+      arrayBuffer: async () => recoveredBuf.buffer.slice(
+        recoveredBuf.byteOffset, recoveredBuf.byteOffset + recoveredBuf.byteLength,
+      ),
+    });
+
+    const result = await backfillMissingSidecars({ filenames: ['cacheonly.png'] });
+    expect(result.attempted).toBe(1);
+    expect(result.recovered).toBe(1);
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    // The cache-only sidecar was overwritten with the real prompt metadata.
+    const written = JSON.parse(await readFile(join(PATHS.images, 'cacheonly.metadata.json'), 'utf8'));
+    expect(written.prompt).toBe('recovered prompt');
   });
 
   it('returns { attempted: 1, recovered: 0 } when no peer has the sidecar', async () => {
