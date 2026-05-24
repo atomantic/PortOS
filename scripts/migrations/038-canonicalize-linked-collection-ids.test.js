@@ -45,6 +45,29 @@ describe('canonicalizeCollections', () => {
     expect(renamed).toBe(2);
   });
 
+  it('merge: a corrupted addedAt loses "earliest wins" (valid timestamp is preserved)', () => {
+    const { collections } = canonicalizeCollections([
+      { id: 'a', name: 'U', universeId: 'u1', updatedAt: '2026-05-01T00:00:00Z',
+        items: [{ kind: 'image', ref: 'x.png', addedAt: 'not-a-date' }] },
+      { id: 'b', name: 'U', universeId: 'u1', updatedAt: '2026-05-02T00:00:00Z',
+        items: [{ kind: 'image', ref: 'x.png', addedAt: '2026-04-01T00:00:00Z' }] },
+    ]);
+    const item = collections[0].items.find((i) => i.ref === 'x.png');
+    expect(item.addedAt).toBe('2026-04-01T00:00:00Z'); // valid beats unparseable, not -Infinity
+  });
+
+  it('merge: unioned items are sorted by itemKey (deterministic, matches runtime → no checksum churn)', () => {
+    const { collections } = canonicalizeCollections([
+      { id: 'a', name: 'U', universeId: 'u1', updatedAt: '2026-05-01T00:00:00Z',
+        items: [{ kind: 'video', ref: 'z.mp4' }, { kind: 'image', ref: 'm.png' }] },
+      { id: 'b', name: 'U', universeId: 'u1', updatedAt: '2026-05-02T00:00:00Z',
+        items: [{ kind: 'image', ref: 'a.png' }] },
+    ]);
+    const keys = collections[0].items.map((i) => `${i.kind}:${i.ref}`);
+    expect(keys).toEqual([...keys].sort((x, y) => x.localeCompare(y)));
+    expect(keys).toEqual(['image:a.png', 'image:m.png', 'video:z.mp4']);
+  });
+
   it('leaves standalone (unlinked) collections untouched', () => {
     const { collections, renamed } = canonicalizeCollections([
       { id: 'standalone-uuid', name: 'My Bucket', universeId: null, seriesId: null, items: [] },

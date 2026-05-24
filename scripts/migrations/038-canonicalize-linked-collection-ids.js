@@ -53,10 +53,33 @@ const linkedIdFor = (c) => {
 };
 
 const itemKey = (it) => `${it?.kind}:${it?.ref}`;
-const parseMs = (s) => { const ms = Date.parse(s || ''); return Number.isFinite(ms) ? ms : -Infinity; };
+// Null-based timestamp parse (mirrors mediaCollections.js#parseTsMs): an
+// unparseable value returns null and LOSES every comparison, so a corrupted
+// timestamp can't win "earliest" or "newest". A -Infinity fallback would make
+// a bad timestamp win the earliest-wins comparisons below.
+const parseTsMs = (s) => { const n = typeof s === 'string' ? Date.parse(s) : NaN; return Number.isFinite(n) ? n : null; };
+// "Earliest wins": -1 if a is earlier (a wins), 1 if b is earlier, 0 on tie.
+// Unparseable side loses; both unparseable → tie (caller's incumbent wins).
+const compareEarlierWins = (a, b) => {
+  const aMs = parseTsMs(a); const bMs = parseTsMs(b);
+  if (aMs === null && bMs === null) return 0;
+  if (aMs === null) return 1;
+  if (bMs === null) return -1;
+  return aMs < bMs ? -1 : aMs > bMs ? 1 : 0;
+};
+// "Newer wins": true iff candidate is strictly newer than incumbent. Unparseable
+// candidate never overrides; unparseable incumbent loses to a valid candidate.
+const compareNewerWins = (candidate, incumbent) => {
+  const cMs = parseTsMs(candidate); const iMs = parseTsMs(incumbent);
+  if (cMs === null) return false;
+  if (iMs === null) return true;
+  return cMs > iMs;
+};
 
 // Union two collections' items: dedupe by kind:ref, keep the earliest addedAt
-// (a replay shouldn't bump an item's age). Mirrors mergeCollectionItems intent.
+// (a replay shouldn't bump an item's age). Mirrors mergeCollectionItems —
+// including the final sort by itemKey, so two installs with the same item set
+// persist the same order (else snapshot checksums churn until the next merge).
 const unionItems = (a = [], b = []) => {
   const byKey = new Map();
   for (const it of [...(a || []), ...(b || [])]) {
@@ -64,9 +87,9 @@ const unionItems = (a = [], b = []) => {
     const k = itemKey(it);
     const prev = byKey.get(k);
     if (!prev) { byKey.set(k, it); continue; }
-    if (parseMs(it.addedAt) < parseMs(prev.addedAt)) byKey.set(k, it);
+    if (compareEarlierWins(it.addedAt, prev.addedAt) < 0) byKey.set(k, it);
   }
-  return [...byKey.values()];
+  return [...byKey.values()].sort((x, y) => itemKey(x).localeCompare(itemKey(y)));
 };
 
 /**
@@ -107,7 +130,7 @@ export function canonicalizeCollections(input) {
     // Two records collapse to the same canonical id → merge (LWW scalars on the
     // newer updatedAt; union items; earliest createdAt wins).
     merged += 1;
-    const remoteWins = parseMs(c.updatedAt) > parseMs(existing.updatedAt);
+    const remoteWins = compareNewerWins(c.updatedAt, existing.updatedAt);
     const scalar = remoteWins ? c : existing;
     const items = unionItems(existing.items, c.items);
     const presentKeys = new Set(items.map(itemKey));
@@ -120,7 +143,8 @@ export function canonicalizeCollections(input) {
       universeId: scalar.universeId ?? existing.universeId ?? null,
       seriesId: scalar.seriesId ?? existing.seriesId ?? null,
       items,
-      createdAt: parseMs(c.createdAt) < parseMs(existing.createdAt) ? c.createdAt : existing.createdAt,
+      // Earliest createdAt wins; existing (incumbent) wins ties + unparseable.
+      createdAt: compareEarlierWins(c.createdAt, existing.createdAt) < 0 ? c.createdAt : existing.createdAt,
       updatedAt: remoteWins ? c.updatedAt : existing.updatedAt,
     });
   }
@@ -145,8 +169,9 @@ export function rewriteSubscriptions(subs, idMap) {
     }
     const existing = seen.get(next.id);
     if (!existing) { seen.set(next.id, next); continue; }
-    // Collision after rewrite — keep whichever was pushed most recently.
-    if (parseMs(next.lastPushedAt) > parseMs(existing.lastPushedAt)) seen.set(next.id, next);
+    // Collision after rewrite — keep whichever was pushed most recently
+    // (unparseable lastPushedAt loses; incumbent wins ties).
+    if (compareNewerWins(next.lastPushedAt, existing.lastPushedAt)) seen.set(next.id, next);
   }
   return [...seen.values()];
 }

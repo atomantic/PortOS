@@ -786,6 +786,17 @@ describe('peerSync', () => {
         .toEqual({ pulled: false, reason: 'invalid-payload' });
     });
 
+    it('payload-too-large when the peer declares a Content-Length over the cap', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: (h) => (h.toLowerCase() === 'content-length' ? String(64 * 1024 * 1024) : null) },
+        json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
+      });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
     it('invalid-payload when the returned record is not the one we requested', async () => {
       // Asked for universe/u-pull but the peer returned a different record id —
       // applying it would merge unexpected data under the requested key.

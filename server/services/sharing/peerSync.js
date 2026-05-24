@@ -1448,6 +1448,10 @@ const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
 
 const ASSET_PULL_TIMEOUT_MS = 60000;
 const ASSET_PULL_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap per asset
+// A record pull returns JSON (the record + its asset *manifest* of hashes, not
+// the bytes). Even a large series+issues record is metadata, so 16MB is a
+// generous ceiling that still caps a buggy/runaway peer's response.
+const RECORD_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
 
 // In-flight pull dedup. A peer can push multiple records that reference the
 // same asset in quick succession (universe edit → child collection re-link
@@ -1807,12 +1811,27 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // 'peer-unreachable'.
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-  const res = await peerFetch(url, { signal: controller.signal })
+  // maxBytes caps the HTTPS shim's in-memory buffering (see lib/httpClient.js);
+  // a buggy/misbehaving peer streaming an oversized body is aborted mid-stream
+  // rather than buffered whole. The shim rejects with an "exceed" Error.
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES })
     .finally(() => clearTimeout(timeoutId))
-    .catch(() => null);
+    .catch((err) => {
+      if (err?.message?.includes('exceed')) {
+        console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} exceeded payload cap — ${err.message}`);
+      }
+      return null;
+    });
   if (!res) return { pulled: false, reason: 'peer-unreachable' };
   if (res.status === 404) return { pulled: false, reason: 'not-on-peer' };
   if (!res.ok) return { pulled: false, reason: `http-${res.status}` };
+  // Plain-HTTP path: Node's fetch ignores maxBytes, but Express sets
+  // Content-Length on JSON — reject an oversized declared body before buffering.
+  const declaredLen = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLen) && declaredLen > RECORD_PAYLOAD_MAX_BYTES) {
+    console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} declared ${declaredLen} bytes > cap`);
+    return { pulled: false, reason: 'payload-too-large' };
+  }
 
   const body = await res.json().catch(() => null);
   // The peer response is untrusted — validate with the SAME schema the inbound
