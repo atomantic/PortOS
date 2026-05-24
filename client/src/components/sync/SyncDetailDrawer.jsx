@@ -176,7 +176,7 @@ function PeerRow({ entry, kind, recordId, onRefresh }) {
 
 // ── Main drawer ──────────────────────────────────────────────────────────────
 export default function SyncDetailDrawer({ kind, recordId, onClose }) {
-  const { byPeer, noSyncingPeers, loading, error, refresh } = useSyncIntegrity(kind);
+  const { byPeer, noSyncingPeers, integrityUnavailable, loading, error, refresh } = useSyncIntegrity(kind);
   const peerEntries = byPeer.get(recordId) ?? [];
 
   // Record state is owned here (fetched once) so the preview and the
@@ -331,7 +331,18 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
               </div>
             )}
 
-            {!loading && !error && !noSyncingPeers && peerEntries.length === 0 && (
+            {/* Eligible peers exist but none returned integrity data (all
+                offline / unreachable / on an older PortOS). Distinct from the
+                "record not present anywhere" case below — otherwise this would
+                read as a misleading "No peer data for this record." */}
+            {!loading && !error && !noSyncingPeers && integrityUnavailable && (
+              <div className="flex items-center gap-2 text-gray-500 text-sm">
+                <WifiOff className="w-4 h-4" />
+                Sync status unavailable — every peer was offline, unreachable, or on an older PortOS.
+              </div>
+            )}
+
+            {!loading && !error && !noSyncingPeers && !integrityUnavailable && peerEntries.length === 0 && (
               <p className="text-gray-500 text-sm">No peer data for this record.</p>
             )}
 

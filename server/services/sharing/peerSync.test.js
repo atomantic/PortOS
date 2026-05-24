@@ -183,12 +183,12 @@ afterEach(async () => {
 
 describe('peerSync', () => {
   describe('PEER_SUBSCRIBABLE_KINDS', () => {
-    it('includes universe, series, and mediaCollection', () => {
-      // Issues piggyback on series subscriptions — direct issue subs are
-      // intentionally rejected per the Stage 2 design.
-      expect(PEER_SUBSCRIBABLE_KINDS).toContain('universe');
-      expect(PEER_SUBSCRIBABLE_KINDS).toContain('series');
-      expect(PEER_SUBSCRIBABLE_KINDS).toContain('mediaCollection');
+    it('is exactly [universe, series, mediaCollection]', () => {
+      // Exact equality (not toContain) so an accidental add/remove/reorder is
+      // caught — this list is canonical and its order can affect iteration
+      // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
+      // subscriptions; direct issue subs are intentionally rejected (Stage 2).
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection']);
     });
   });
 

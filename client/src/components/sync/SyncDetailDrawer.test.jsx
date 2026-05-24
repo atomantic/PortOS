@@ -53,6 +53,7 @@ function defaultHookState(overrides = {}) {
       { peerId: 'peer-b', peerName: 'null', status: 'in-parity' },
     ]),
     noSyncingPeers: false,
+    integrityUnavailable: false,
     loading: false,
     error: null,
     refresh: mockRefresh,
@@ -90,6 +91,17 @@ describe('SyncDetailDrawer', () => {
   it('renders a dialog with "Sync Details" heading', async () => {
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
     await waitFor(() => expect(screen.getByRole('dialog', { name: /sync details/i })).toBeInTheDocument());
+  });
+
+  it('shows an "integrity unavailable" message (not "No peer data") when every peer is unreachable', async () => {
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: new Map(), // no peer contributed records
+      noSyncingPeers: false, // sync IS configured
+      integrityUnavailable: true, // …but no peer answered
+    }));
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    expect(screen.getByText(/sync status unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no peer data for this record/i)).not.toBeInTheDocument();
   });
 
   it('shows per-peer breakdown from useSyncIntegrity', async () => {
