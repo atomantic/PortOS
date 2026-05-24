@@ -102,16 +102,28 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   // isolated state and a rewire starts fresh.
   const lastSpokenAt = new Map();
 
-  // Speak one line, advancing the source's rate-limit bucket only when it
-  // actually went out (a quiet-hours/disabled suppression returns ok:false and
-  // doesn't consume the budget). May reject if synthesis throws — the caller
-  // owns the catch.
+  // Speak one line, advancing the source's rate-limit bucket. The slot is
+  // reserved BEFORE awaiting `speak`: synthesis is async, so a same-tick burst
+  // of same-source events (an error storm) would otherwise all read the stale
+  // timestamp, pass the gate, and start concurrent syntheses — defeating the
+  // per-source limit exactly when it matters. The reservation stands on a line
+  // that goes out; on suppression/failure/throw we roll it back (unless a later
+  // event already claimed the slot) so the budget isn't spent on a non-line.
+  // try/finally only — a synthesis rejection still propagates to the caller's
+  // catch.
   const dispatch = async (source, text, priority) => {
     if (!text) return;
     const now = Date.now();
     if (!allowBySource(source, lastSpokenAt.get(source), now, limits)) return;
-    const result = await speak({ io, text, priority, source });
-    if (result?.ok) lastSpokenAt.set(source, Date.now());
+    const previous = lastSpokenAt.get(source) ?? null;
+    lastSpokenAt.set(source, now);
+    let ok = false;
+    try {
+      const result = await speak({ io, text, priority, source });
+      ok = !!result?.ok;
+    } finally {
+      if (!ok && lastSpokenAt.get(source) === now) lastSpokenAt.set(source, previous);
+    }
   };
 
   // EventEmitter doesn't await async listeners, so a rejected dispatch would

@@ -152,6 +152,24 @@ describe('wireProactiveTriggers', () => {
     expect(speak.mock.calls[0][0].text).toMatch(/first/);
   });
 
+  it('rate-limits a same-tick concurrent burst (slot reserved before await)', async () => {
+    // Synthesis is async; emit two same-source events on the SAME tick (no
+    // flush between) so the second fires while the first speak() is still
+    // pending. The pre-await reservation must block the second — otherwise
+    // both start concurrent syntheses and talk over each other.
+    let resolveSpeak;
+    speak = vi.fn(() => new Promise((r) => { resolveSpeak = () => r({ ok: true }); }));
+    unwire = wireProactiveTriggers({ io: {}, speak, limits: { error: 60_000 } });
+
+    errorEvents.emit('error', { severity: 'critical', message: 'first' });
+    errorEvents.emit('error', { severity: 'critical', message: 'second' });
+    resolveSpeak();
+    await flush();
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak.mock.calls[0][0].text).toMatch(/first/);
+  });
+
   it('does not advance the bucket when a line was suppressed (ok:false)', async () => {
     speak = vi.fn(async () => ({ ok: false, reason: 'quiet-hours' }));
     unwire = wireProactiveTriggers({ io: {}, speak, limits: { error: 60_000 } });
