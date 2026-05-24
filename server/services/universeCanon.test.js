@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { rmSync, mkdirSync } from 'fs';
-import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 // Real tmpdir backing the per-record store. `mockPathsDataRoot` redirects
 // PATHS.data so collectionStore lands under tempRoot/universes/. Everything
@@ -33,10 +33,8 @@ vi.mock('crypto', async () => {
 // doesn't fan the fixture out to real peers (getPeers reads the live registry via a
 // dataPath closure to the real PATHS once the post-return microtask runs outside this
 // file's fileUtils mock window). Mirrors importer.test.js / promoteToPipeline.test.js.
-vi.mock('./instances.js', async () => {
-  const actual = await vi.importActual('./instances.js');
-  return { ...actual, getPeers: () => Promise.resolve([]) };
-});
+vi.mock('./instances.js', () => mockNoPeers());
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 // The bible extractor + staged-LLM runner + prompt-refine helpers all reach
 // out to live AI providers. Stub them to return deterministic shapes so we

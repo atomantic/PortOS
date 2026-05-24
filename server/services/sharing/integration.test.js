@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 function sha256Hex(buf) {
   return createHash('sha256').update(buf).digest('hex');
@@ -41,10 +42,11 @@ vi.mock('../../lib/fileUtils.js', async () => {
 
 // Stub instances.getInstanceId so the exporter doesn't try to read the
 // real identity.json. Returns a fixed id for assertions.
-vi.mock('../instances.js', () => ({
+vi.mock('../instances.js', () => mockNoPeers({}, {
   getInstanceId: () => Promise.resolve('test-instance-id'),
   UNKNOWN_INSTANCE_ID: 'unknown',
 }));
+vi.mock('./peerSync.js', () => mockNoPeerSync());
 
 // Stub mediaJobQueue.getJob — exporter uses it for full-fidelity gen
 // metadata on each shared imageJobId. Returns null so the exporter falls

@@ -173,5 +173,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `mockPathsDataRoot.js` | Shared `vi.mock` factory for `PATHS.data → temp dir`. |
+| `mockPathsDataRoot.js` | Shared Vitest helpers for `PATHS.data → temp dir` and no-peer record creation guards. |
 | `testHelper.js` | Test HTTP request helper. |

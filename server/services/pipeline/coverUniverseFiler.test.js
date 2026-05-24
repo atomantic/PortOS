@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 
@@ -17,6 +18,9 @@ vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
+
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const collections = await import('../mediaCollections.js');
 const seriesSvc = await import('./series.js');

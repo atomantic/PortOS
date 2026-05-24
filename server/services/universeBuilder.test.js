@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync } from "fs";
 import { writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { mockNoPeerSync, mockNoPeers } from "../lib/mockPathsDataRoot.js";
 
 // Real per-suite tmpdir backing the universes/ layout. Each test wipes the
 // tree in beforeEach. The fileUtils mock below overrides PATHS.data so the
@@ -43,10 +44,8 @@ vi.mock("../lib/fileUtils.js", async (importOriginal) => {
 // non-ephemeral fixture (e.g. "Moebius SciFi") initial-pushes it across the
 // federation and the receiving instance persists it into the real data/universes/.
 // Mirrors the same guard in importer.test.js and writersRoom/promoteToPipeline.test.js.
-vi.mock("./instances.js", async () => {
-  const actual = await vi.importActual("./instances.js");
-  return { ...actual, getPeers: () => Promise.resolve([]) };
-});
+vi.mock("./instances.js", () => mockNoPeers());
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 // Pre-seed state into the new per-record layout. Mirrors what migration 034
 // produces — each universe lands in `universes/<id>/index.json` and the

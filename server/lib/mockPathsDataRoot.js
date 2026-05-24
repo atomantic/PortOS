@@ -28,6 +28,10 @@
  *   - `makePathsProxy(actual, { dataRoot, extraOverrides? })` — used inside
  *     the test's own `vi.mock` factory. Returns the Proxy.
  *   - `createTempDataRoot()` — returns `{ tempRoot }` allocated under os.tmpdir().
+ *   - `mockNoPeers(actual?, overrides?)` — shared `instances.js` mock guard
+ *     for record-creating tests that should never auto-subscribe to live peers.
+ *   - `mockNoPeerSync(actual?, overrides?)` — shared `peerSync.js` mock guard
+ *     that makes fire-and-forget record auto-subscribe a clean no-op in tests.
  *
  * Migration: tests that need MULTIPLE PATHS members redirected
  * (e.g. `images`, `videos`) can pass `extraOverrides` (object or function)
@@ -82,6 +86,42 @@ export function makePathsProxy(actual, { dataRoot, extraOverrides = null, overri
       return target[prop];
     },
   });
+}
+
+/**
+ * Build an `instances.js` mock that disables peer auto-subscribe fan-out.
+ *
+ * `createUniverse` / `createSeries` fire a non-awaited peerSync import after
+ * record creation. In tests, that background path can outlive local fileUtils
+ * mocks and read the real peer registry unless `getPeers` is explicitly
+ * guarded. Pass the real module as `actual` when a suite needs the other
+ * exports, and pass `overrides` for test-specific exports like getInstanceId.
+ */
+export function mockNoPeers(actual = {}, overrides = {}) {
+  return {
+    UNKNOWN_INSTANCE_ID: 'unknown',
+    getInstanceId: () => Promise.resolve('test-instance'),
+    ...actual,
+    getPeers: () => Promise.resolve([]),
+    ...overrides,
+  };
+}
+
+/**
+ * Build a `sharing/peerSync.js` mock that disables create-time peer fan-out.
+ *
+ * This is intentionally separate from `mockNoPeers`: stubbing `getPeers → []`
+ * prevents live registry reads once `peerSync.js` loads, while this helper
+ * prevents record-creating tests from loading the peer-sync module graph at
+ * all through the fire-and-forget dynamic import.
+ */
+export function mockNoPeerSync(actual = {}, overrides = {}) {
+  return {
+    ...actual,
+    autoSubscribeRecordToAllPeers: () => Promise.resolve([]),
+    unsubscribeAllForRecord: () => Promise.resolve({ removed: [], failed: [] }),
+    ...overrides,
+  };
 }
 
 /**
