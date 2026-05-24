@@ -140,4 +140,27 @@ describe('canonicalStringify', () => {
     const b = canonicalStringify({ items: [{ x: 2, y: 1 }] });
     expect(a).toBe(b);
   });
+
+  it('serializes a Date via native JSON rules (toJSON → ISO), not {} (matches JSON.stringify)', () => {
+    const d = new Date('2026-01-02T03:04:05.000Z');
+    expect(canonicalStringify(d)).toBe(JSON.stringify(d));
+    expect(canonicalStringify(d)).toBe('"2026-01-02T03:04:05.000Z"');
+  });
+
+  it('serializes a nested Date value through native rules', () => {
+    const d = new Date('2026-01-02T03:04:05.000Z');
+    expect(canonicalStringify({ when: d })).toBe('{"when":"2026-01-02T03:04:05.000Z"}');
+  });
+
+  it('still key-sorts an Object.create(null) value (prototype null is canonical-sortable)', () => {
+    const o = Object.create(null);
+    o.b = 1; o.a = 2;
+    expect(canonicalStringify(o)).toBe('{"a":2,"b":1}');
+  });
+
+  it('serializes a class instance with toJSON via native rules (not key-sorted own props)', () => {
+    class Box { constructor() { this.z = 1; this.a = 2; } toJSON() { return { tag: 'box' }; } }
+    expect(canonicalStringify(new Box())).toBe(JSON.stringify(new Box()));
+    expect(canonicalStringify(new Box())).toBe('{"tag":"box"}');
+  });
 });

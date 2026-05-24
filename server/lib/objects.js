@@ -64,10 +64,22 @@ export const deepMerge = (base, patch) => {
  * a receiver where the object was rebuilt in a different key order.
  *
  * Arrays preserve order (order is semantic for arrays); object keys are sorted
- * lexicographically. Non-plain values (primitives, null) serialize via the
- * native `JSON.stringify` rules. `undefined` and functions are dropped exactly
- * as `JSON.stringify` drops them.
+ * lexicographically. Only TRUE plain objects (prototype `Object.prototype` or
+ * `null`) get key-sorted; everything else — primitives, null, and exotic
+ * objects like Date / Map / class instances — serializes via native
+ * `JSON.stringify` rules (so e.g. a Date round-trips through `toJSON` to its
+ * ISO string instead of collapsing to `{}`). `undefined` and functions are
+ * dropped exactly as `JSON.stringify` drops them.
  */
+// NB: isPlainObject() is intentionally loose (true for Date/Map/class
+// instances), so it's WRONG here — it would key-sort a Date's (empty) own keys
+// into `{}`. Require the prototype to be Object.prototype or null instead.
+const isCanonicalSortable = (v) => {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
+
 export const canonicalStringify = (value) => {
   if (Array.isArray(value)) {
     // Array.from (not .map) so SPARSE-array holes are visited and serialized as
@@ -76,7 +88,7 @@ export const canonicalStringify = (value) => {
     // cross-machine hash for any value containing a sparse array.
     return `[${Array.from(value, (v) => canonicalStringify(v) ?? 'null').join(',')}]`;
   }
-  if (isPlainObject(value)) {
+  if (isCanonicalSortable(value)) {
     const parts = [];
     for (const key of Object.keys(value).sort()) {
       const serialized = canonicalStringify(value[key]);

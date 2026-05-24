@@ -131,6 +131,20 @@ describe('pullSidecarForImage', () => {
     expect(existsSync(join(PATHS.images, 'scalar.metadata.json'))).toBe(false);
   });
 
+  it('returns false and writes nothing when the peer sidecar is cache-only (sha256 block, no prompt)', async () => {
+    // A cache-only sidecar has no prompt to recover and could clobber a
+    // prompt-bearing local one — must not be written.
+    const cacheOnly = Buffer.from(JSON.stringify({ sha256: { value: 'a'.repeat(64), mtimeMs: 1, size: 2 } }));
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-length': String(cacheOnly.byteLength) }),
+      arrayBuffer: async () => cacheOnly.buffer.slice(cacheOnly.byteOffset, cacheOnly.byteOffset + cacheOnly.byteLength),
+    });
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'cacheonly.png');
+    expect(result).toBe(false);
+    expect(existsSync(join(PATHS.images, 'cacheonly.metadata.json'))).toBe(false);
+  });
+
   it('rejects path-traversal filenames before any fetch or FS op', async () => {
     vi.mocked(peerFetch).mockResolvedValue({ ok: true, arrayBuffer: async () => Buffer.from('{}').buffer });
     const result = await pullSidecarForImage(fakePeer, fakeBase, '../../etc/passwd.png');

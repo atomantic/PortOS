@@ -82,6 +82,11 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   // getOrComputeImageSha256 does `{ ...(sidecar || {}) }`, and spreading a
   // truthy string yields numeric char keys (`{0:'o',1:'o',…}`).
   if (!isPlainObject(parsed)) return false;
+  // Refuse a cache-only sidecar (just the machine-local `sha256` block, no
+  // gen-params): it carries no prompt worth recovering and writing it could
+  // clobber a prompt-bearing sidecar already on disk. sidecarGenParamsHash
+  // returns null exactly when nothing remains beyond the sha256 cache key.
+  if (sidecarGenParamsHash(parsed) === null) return false;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, sidecarName), buf);
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);
