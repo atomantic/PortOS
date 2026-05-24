@@ -529,6 +529,23 @@ async function buildCollectionAssetManifest(collection) {
   return out;
 }
 
+/**
+ * Returns sorted sha256 hashes for a record's own assets (used by the
+ * integrity manifest builder). For `series` this captures the series' OWN
+ * asset refs only — child-issue assets are not yet included (v1 limitation;
+ * full issue-level integrity is deferred to a future pass).
+ *
+ * @param {'universe'|'series'|'mediaCollection'} kind
+ * @param {object} record
+ * @returns {Promise<string[]>} sorted sha256 strings (falsy hashes omitted)
+ */
+export async function assetShaListForRecord(kind, record) {
+  const manifest = kind === 'mediaCollection'
+    ? await buildCollectionAssetManifest(record)
+    : await buildAssetManifest(record);
+  return manifest.map((e) => e.sha256).filter(Boolean).sort();
+}
+
 async function hashImageForManifest(filename) {
   // Sanitize before join — a record with `imageRefs` containing a path-
   // traversal filename (peer-pushed via linkedCollection, hand-edited,

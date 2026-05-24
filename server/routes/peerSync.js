@@ -37,7 +37,9 @@ import {
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
+  PEER_SUBSCRIBABLE_KINDS,
 } from '../services/sharing/peerSync.js';
+import { buildLocalManifest, getPeerIntegrity } from '../services/sharing/integrity.js';
 
 const router = Router();
 
@@ -116,6 +118,36 @@ router.post('/subscriptions', asyncHandler(async (req, res) => {
 router.delete('/subscriptions/:id', asyncHandler(async (req, res) => {
   const result = await unsubscribePeer(req.params.id).catch(mapAndRethrow);
   res.json(result);
+}));
+
+// Guard: only accept record kinds that the peer-sync pipeline actually handles.
+const validKind = (k) => typeof k === 'string' && PEER_SUBSCRIBABLE_KINDS.includes(k);
+
+// --- GET /manifest --- advertise this instance's record manifest for a kind.
+//
+// Called by peers running `getPeerIntegrity` to compare their local state
+// against ours. The response is a flat list of rows — one per record —
+// including tombstones so deletes diff correctly. Asset hashes are sorted
+// sha256 strings so the diff is order-independent.
+router.get('/manifest', asyncHandler(async (req, res) => {
+  if (!validKind(req.query.kind)) {
+    throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  res.json({ records: await buildLocalManifest(req.query.kind) });
+}));
+
+// --- GET /integrity --- compare this instance's records against a peer's.
+//
+// Fetches the peer's /manifest, runs the pure diff, and returns
+// `{ available, reason?, records: [{ id, name, status }] }`.
+router.get('/integrity', asyncHandler(async (req, res) => {
+  if (typeof req.query.peerId !== 'string') {
+    throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (!validKind(req.query.kind)) {
+    throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  res.json(await getPeerIntegrity({ peerId: req.query.peerId, kind: req.query.kind }));
 }));
 
 export default router;

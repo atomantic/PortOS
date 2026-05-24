@@ -94,6 +94,7 @@ export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
 export * from './sharingOrigin.js';
+export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
 

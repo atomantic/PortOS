@@ -11,9 +11,16 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+  PEER_SUBSCRIBABLE_KINDS: Object.freeze(['universe', 'series', 'mediaCollection']),
+}));
+
+vi.mock('../services/sharing/integrity.js', () => ({
+  buildLocalManifest: vi.fn(),
+  getPeerIntegrity: vi.fn(),
 }));
 
 import * as svc from '../services/sharing/peerSync.js';
+import * as integritySvc from '../services/sharing/integrity.js';
 import peerSyncRoutes from './peerSync.js';
 
 const buildApp = () => {
@@ -29,6 +36,8 @@ const serviceError = (msg, code) => Object.assign(new Error(msg), { code });
 describe('peer-sync routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    integritySvc.buildLocalManifest.mockResolvedValue([]);
+    integritySvc.getPeerIntegrity.mockResolvedValue({ available: false, reason: 'peer-not-found', records: [] });
   });
 
   describe('POST /api/peer-sync/push', () => {
@@ -311,6 +320,97 @@ describe('peer-sync routes', () => {
       const res = await request(buildApp())
         .delete('/api/peer-sync/subscriptions/x');
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/peer-sync/manifest', () => {
+    it('200 with records for a valid kind', async () => {
+      const records = [
+        { id: 'col-1', name: 'My Collection', updatedAt: '2026-05-23T00:00:00.000Z', deleted: false, assetHashes: [] },
+      ];
+      integritySvc.buildLocalManifest.mockResolvedValue(records);
+
+      const res = await request(buildApp())
+        .get('/api/peer-sync/manifest?kind=mediaCollection');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ records });
+      expect(integritySvc.buildLocalManifest).toHaveBeenCalledWith('mediaCollection');
+    });
+
+    it('400 when kind is missing', async () => {
+      const res = await request(buildApp())
+        .get('/api/peer-sync/manifest');
+      expect(res.status).toBe(400);
+      expect(integritySvc.buildLocalManifest).not.toHaveBeenCalled();
+    });
+
+    it('400 when kind is invalid', async () => {
+      const res = await request(buildApp())
+        .get('/api/peer-sync/manifest?kind=unknown');
+      expect(res.status).toBe(400);
+      expect(integritySvc.buildLocalManifest).not.toHaveBeenCalled();
+    });
+
+    it('accepts all valid subscribable kinds', async () => {
+      for (const kind of ['universe', 'series', 'mediaCollection']) {
+        integritySvc.buildLocalManifest.mockResolvedValue([]);
+        const res = await request(buildApp())
+          .get(`/api/peer-sync/manifest?kind=${kind}`);
+        expect(res.status).toBe(200);
+      }
+    });
+  });
+
+  describe('GET /api/peer-sync/integrity', () => {
+    it('200 with available:false when peer is not found', async () => {
+      integritySvc.getPeerIntegrity.mockResolvedValue({
+        available: false,
+        reason: 'peer-not-found',
+        records: [],
+      });
+
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=no-such-peer&kind=mediaCollection');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ available: false, reason: 'peer-not-found', records: [] });
+      expect(integritySvc.getPeerIntegrity).toHaveBeenCalledWith({
+        peerId: 'no-such-peer',
+        kind: 'mediaCollection',
+      });
+    });
+
+    it('200 with available:true and records when peer responds', async () => {
+      integritySvc.getPeerIntegrity.mockResolvedValue({
+        available: true,
+        records: [{ id: 'col-1', name: 'My Collection', status: 'in-parity' }],
+      });
+
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=peer-x&kind=mediaCollection');
+      expect(res.status).toBe(200);
+      expect(res.body.available).toBe(true);
+      expect(res.body.records).toHaveLength(1);
+    });
+
+    it('400 when peerId is missing', async () => {
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?kind=mediaCollection');
+      expect(res.status).toBe(400);
+      expect(integritySvc.getPeerIntegrity).not.toHaveBeenCalled();
+    });
+
+    it('400 when kind is missing', async () => {
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=peer-x');
+      expect(res.status).toBe(400);
+      expect(integritySvc.getPeerIntegrity).not.toHaveBeenCalled();
+    });
+
+    it('400 when kind is invalid', async () => {
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=peer-x&kind=issue');
+      expect(res.status).toBe(400);
+      expect(integritySvc.getPeerIntegrity).not.toHaveBeenCalled();
     });
   });
 });

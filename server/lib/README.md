@@ -110,6 +110,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
+| `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `INTEGRITY_STATUS` constants + `computeRecordIntegrity(localList, remoteList)` — classifies each record as `in-parity`, `local-only`, `peer-only`, `diverged`, or `assets-missing`. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
 | `tailscale.js` | Locate the Tailscale CLI binary and flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container). |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
