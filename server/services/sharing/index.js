@@ -17,6 +17,7 @@ import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
 export { attachWatcher, detachWatcher, listAttachedWatchers };
+export { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
 
 let initialized = false;
 let io = null;

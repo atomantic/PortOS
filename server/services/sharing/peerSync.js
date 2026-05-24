@@ -46,6 +46,8 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
+import { imageSidecarName } from './buckets.js';
+import { pullSidecarForImage } from './sidecarSync.js';
 import { recordEvents } from './recordEvents.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -538,7 +540,20 @@ async function hashImageForManifest(filename) {
   const fullPath = join(PATHS.images, safeName);
   const result = await getOrComputeImageSha256(fullPath);
   if (!result) return null;
-  return { filename: safeName, kind: 'image', sha256: result.hash };
+  // Include the sidecar hash only when the sidecar carries gen-params content
+  // beyond the sha256 cache entry that `getOrComputeImageSha256` always writes.
+  // A pure hash-cache sidecar (only `{ sha256: {...} }`) means there are no
+  // gen-params to sync; advertising a sidecarSha256 for it would cause peers to
+  // pull a cache artifact with no prompt/model data. We detect gen-params by
+  // checking that the sidecar has at least one key other than `sha256`.
+  const sidecar = result.sidecar;
+  const hasGenParams = isPlainObject(sidecar) && Object.keys(sidecar).some((k) => k !== 'sha256');
+  let sidecarSha256 = null;
+  if (hasGenParams) {
+    const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
+    sidecarSha256 = existsSync(sidecarPath) ? await sha256File(sidecarPath).catch(() => null) : null;
+  }
+  return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}) };
 }
 
 async function hashSimpleAsset(filename, kind, sourceDir) {
@@ -575,8 +590,8 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // entry. Reject anything that isn't a bare basename before any FS op.
     const safeName = sanitizeAssetFilename(entry.filename);
     if (!safeName) continue;
-    // Build a sanitized projection: only the three fields the sender needs
-    // back to pull. Echoing the raw peer-supplied entry would amplify any
+    // Build a sanitized projection: only the known fields the receiver needs
+    // to pull. Echoing the raw peer-supplied entry would amplify any
     // junk fields it shipped (large strings, extra kinds, prototype-pollution
     // attempts) into the response — wire-symmetry should not let untrusted
     // input round-trip through our process untouched.
@@ -584,6 +599,7 @@ export async function diffAssetManifestAgainstLocal(manifest) {
       filename: safeName,
       kind: entry.kind,
       ...(isStr(entry.sha256) ? { sha256: entry.sha256 } : {}),
+      ...(isStr(entry.sidecarSha256) ? { sidecarSha256: entry.sidecarSha256 } : {}),
     };
     const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
@@ -600,7 +616,21 @@ export async function diffAssetManifestAgainstLocal(manifest) {
       const localHash = entry.kind === 'image'
         ? (await getOrComputeImageSha256(fullPath))?.hash ?? null
         : await sha256File(fullPath).catch(() => null);
-      if (localHash !== entry.sha256) missing.push(sanitizedEntry);
+      if (localHash !== entry.sha256) {
+        missing.push(sanitizedEntry);
+        continue;
+      }
+    }
+    // Sidecar-only divergence: image bytes are already present and hash-match,
+    // but the peer has a gen-params sidecar we're missing or have stale.
+    // Pull the entry so the worker can fetch ONLY the sidecar (it checks the
+    // image hash before deciding whether to re-pull the image bytes).
+    if (entry.kind === 'image' && isStr(entry.sidecarSha256)) {
+      const localSidecarPath = join(PATHS.images, imageSidecarName(safeName));
+      const localSidecarHash = existsSync(localSidecarPath)
+        ? await sha256File(localSidecarPath).catch(() => null)
+        : null;
+      if (localSidecarHash !== entry.sidecarSha256) missing.push(sanitizedEntry);
     }
   }
   return missing;
@@ -1489,6 +1519,23 @@ async function pullOneAsset(peer, base, entry) {
 }
 
 async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) {
+  // Sidecar-only divergence: image bytes are already present and hash-match
+  // the sender's manifest (diffAssetManifestAgainstLocal still returned this
+  // entry because the local sidecar is absent or stale). Skip the image
+  // re-pull and go straight to the sidecar fetch — avoids re-downloading a
+  // potentially large PNG for a metadata-only update.
+  if (entry.kind === 'image' && isStr(entry.sha256)) {
+    const localFullPath = join(localDir, safeName);
+    if (existsSync(localFullPath)) {
+      const localHash = (await getOrComputeImageSha256(localFullPath))?.hash ?? null;
+      if (localHash === entry.sha256) {
+        // Image bytes already up-to-date — pull sidecar only.
+        await pullSidecarForImage(peer, base, safeName).catch(() => {});
+        return;
+      }
+    }
+  }
+
   const url = `${base}${urlPrefix}/${encodeURIComponent(safeName)}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
@@ -1556,6 +1603,12 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
     peerId: peer.instanceId,
   });
   console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+  // After a successful image pull, also fetch the gen-params sidecar if present
+  // on the sender. Best-effort: the image is already safely written above;
+  // a missing sidecar just means the image lands in Unsorted without a prompt.
+  if (entry.kind === 'image') {
+    await pullSidecarForImage(peer, base, safeName).catch(() => {});
+  }
 }
 
 // --- Listener install + debounced trigger -------------------------------

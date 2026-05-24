@@ -1,0 +1,178 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdir, rm, writeFile, readFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+
+// Mock peerFetch for network isolation.
+vi.mock('../../lib/peerHttpClient.js', async () => ({
+  peerFetch: vi.fn(),
+  peerSocketOptions: {},
+}));
+
+// Mock instances.js so backfillMissingSidecars can be tested without live peers.
+vi.mock('../instances.js', async () => ({
+  UNKNOWN_INSTANCE_ID: 'unknown',
+  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
+  getPeers: vi.fn(),
+}));
+
+// Mock peerUrl so base URL generation is deterministic in tests.
+vi.mock('../../lib/peerUrl.js', async () => ({
+  peerBaseUrl: vi.fn((peer) => `http://${peer.instanceId}.test:5555`),
+}));
+
+import { PATHS } from '../../lib/fileUtils.js';
+import { peerFetch } from '../../lib/peerHttpClient.js';
+import { getPeers } from '../instances.js';
+import { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
+
+let tmp;
+let originalImagesPath;
+
+beforeEach(async () => {
+  originalImagesPath = PATHS.images;
+  tmp = join(tmpdir(), `portos-sidecar-test-${Date.now()}-${Math.random()}`);
+  await mkdir(join(tmp, 'images'), { recursive: true });
+  PATHS.images = join(tmp, 'images');
+  vi.mocked(peerFetch).mockReset();
+  vi.mocked(getPeers).mockReset();
+});
+
+afterEach(async () => {
+  await rm(tmp, { recursive: true, force: true });
+  PATHS.images = originalImagesPath;
+});
+
+const fakePeer = { instanceId: 'peer-x', name: 'Peer X' };
+const fakeBase = 'http://peer-x.test:5555';
+
+describe('pullSidecarForImage', () => {
+  it('fetches and writes sidecar when peer returns ok', async () => {
+    const sidecarBody = JSON.stringify({ prompt: 'a cat', model: 'flux' });
+    const buf = Buffer.from(sidecarBody);
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+    });
+
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'test.png');
+    expect(result).toBe(true);
+
+    const sidecarPath = join(PATHS.images, 'test.metadata.json');
+    expect(existsSync(sidecarPath)).toBe(true);
+    const written = JSON.parse(await readFile(sidecarPath, 'utf8'));
+    expect(written.prompt).toBe('a cat');
+  });
+
+  it('returns false and writes nothing when peer returns !ok (404)', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 404 });
+
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'missing.png');
+    expect(result).toBe(false);
+    expect(existsSync(join(PATHS.images, 'missing.metadata.json'))).toBe(false);
+  });
+
+  it('returns false and does not throw when peerFetch rejects', async () => {
+    vi.mocked(peerFetch).mockRejectedValue(new Error('network error'));
+
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'error.png');
+    expect(result).toBe(false);
+    expect(existsSync(join(PATHS.images, 'error.metadata.json'))).toBe(false);
+  });
+
+  it('returns false when peer returns an empty body', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'empty.png');
+    expect(result).toBe(false);
+  });
+
+  it('constructs the correct URL including encoded sidecar name', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 404 });
+    await pullSidecarForImage(fakePeer, fakeBase, 'my image.png');
+    expect(peerFetch).toHaveBeenCalledWith(
+      `${fakeBase}/data/images/${encodeURIComponent('my image.metadata.json')}`,
+      expect.objectContaining({ maxBytes: expect.any(Number) })
+    );
+  });
+});
+
+describe('backfillMissingSidecars', () => {
+  it('attempts only images without sidecars and skips already-present ones', async () => {
+    // Create two images: one with a sidecar already, one bare.
+    await writeFile(join(PATHS.images, 'with-sidecar.png'), Buffer.from('img1'));
+    await writeFile(join(PATHS.images, 'with-sidecar.metadata.json'), Buffer.from('{}'));
+    await writeFile(join(PATHS.images, 'bare.png'), Buffer.from('img2'));
+
+    const sidecarBuf = Buffer.from(JSON.stringify({ prompt: 'recovered' }));
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
+    ]);
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => sidecarBuf.buffer.slice(
+        sidecarBuf.byteOffset, sidecarBuf.byteOffset + sidecarBuf.byteLength
+      ),
+    });
+
+    const result = await backfillMissingSidecars({
+      filenames: ['with-sidecar.png', 'bare.png'],
+    });
+
+    // Only the bare image was attempted.
+    expect(result.attempted).toBe(1);
+    expect(result.recovered).toBe(1);
+    // The sidecar that was already present was NOT re-fetched.
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    // The recovered sidecar is now on disk.
+    expect(existsSync(join(PATHS.images, 'bare.metadata.json'))).toBe(true);
+  });
+
+  it('returns { attempted: 0, recovered: 0 } when all sidecars already exist', async () => {
+    await writeFile(join(PATHS.images, 'all.png'), Buffer.from('img'));
+    await writeFile(join(PATHS.images, 'all.metadata.json'), Buffer.from('{}'));
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
+    ]);
+
+    const result = await backfillMissingSidecars({ filenames: ['all.png'] });
+    expect(result.attempted).toBe(0);
+    expect(result.recovered).toBe(0);
+    expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('returns { attempted: 1, recovered: 0 } when no peer has the sidecar', async () => {
+    await writeFile(join(PATHS.images, 'bare2.png'), Buffer.from('img'));
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
+    ]);
+    vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 404 });
+
+    const result = await backfillMissingSidecars({ filenames: ['bare2.png'] });
+    expect(result.attempted).toBe(1);
+    expect(result.recovered).toBe(0);
+  });
+
+  it('skips offline peers', async () => {
+    await writeFile(join(PATHS.images, 'bare3.png'), Buffer.from('img'));
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-offline', name: 'Offline', status: 'offline' },
+    ]);
+
+    const result = await backfillMissingSidecars({ filenames: ['bare3.png'] });
+    expect(result.attempted).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('handles non-array filenames gracefully (returns zeros)', async () => {
+    vi.mocked(getPeers).mockResolvedValue([]);
+    const result = await backfillMissingSidecars({ filenames: null });
+    expect(result.attempted).toBe(0);
+    expect(result.recovered).toBe(0);
+  });
+});

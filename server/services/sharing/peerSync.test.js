@@ -687,6 +687,23 @@ describe('peerSync', () => {
       const manifest = await buildAssetManifest({ id: 'u1', name: 'Bare' });
       expect(manifest).toEqual([]);
     });
+
+    it('includes sidecarSha256 in the manifest entry when sidecar is present', async () => {
+      await writeFile(join(PATHS.images, 'with-sidecar.png'), Buffer.from('image bytes'));
+      await writeFile(join(PATHS.images, 'with-sidecar.metadata.json'), Buffer.from(JSON.stringify({ prompt: 'a cat' })));
+      const record = { id: 'u1', characters: [{ imageRefs: ['with-sidecar.png'] }] };
+      const manifest = await buildAssetManifest(record);
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0].sidecarSha256).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('omits sidecarSha256 from the manifest entry when no sidecar exists', async () => {
+      await writeFile(join(PATHS.images, 'no-sidecar.png'), Buffer.from('image bytes'));
+      const record = { id: 'u1', characters: [{ imageRefs: ['no-sidecar.png'] }] };
+      const manifest = await buildAssetManifest(record);
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0]).not.toHaveProperty('sidecarSha256');
+    });
   });
 
   describe('diffAssetManifestAgainstLocal', () => {
@@ -782,6 +799,70 @@ describe('peerSync', () => {
       ]);
       expect(missing).toHaveLength(2);
       expect(missing.map((m) => m.filename).sort()).toEqual(['clip.mp4', 'ref.png']);
+    });
+
+    it('returns image entry as missing when image hash matches but sidecar is absent', async () => {
+      // The image file is already present and hash-matches; BUT the sender
+      // carries a sidecarSha256 and we have no local sidecar. The diff must
+      // still include the entry so the worker pulls the sidecar.
+      const imageBytes = Buffer.from('hello world');
+      await writeFile(join(PATHS.images, 'nosidecar.png'), imageBytes);
+      // Actual sha256 of "hello world"
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'nosidecar.png', kind: 'image', sha256: imageHash, sidecarSha256: 'a'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].filename).toBe('nosidecar.png');
+      expect(missing[0].sidecarSha256).toBe('a'.repeat(64));
+    });
+
+    it('does NOT return an image as missing when image hash matches and sidecar hash also matches', async () => {
+      // Both image and sidecar are present and hash-match — no pull needed.
+      // We seed the sidecar with gen-params content matching what getOrComputeImageSha256
+      // would produce (it merges in the sha256 cache field alongside existing content).
+      const imageBytes = Buffer.from('hello world');
+      await writeFile(join(PATHS.images, 'fullmatch.png'), imageBytes);
+      await writeFile(join(PATHS.images, 'fullmatch.metadata.json'), Buffer.from(JSON.stringify({ prompt: 'cat' })));
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      // Prime the sidecar: calling diffAssetManifestAgainstLocal will call
+      // getOrComputeImageSha256 which merges the sha256 cache into the sidecar.
+      // After that, sha256File gives the "stable" hash that both sender and receiver see.
+      const { sha256File } = await import('../../lib/fileUtils.js');
+      // Run diff once to trigger the sidecar cache write.
+      await diffAssetManifestAgainstLocal([
+        { filename: 'fullmatch.png', kind: 'image', sha256: imageHash },
+      ]);
+      // Now compute the hash of the sidecar as the sender would see it.
+      const localSidecarHash = await sha256File(join(PATHS.images, 'fullmatch.metadata.json'));
+      // Second diff with the exact sidecar hash should yield nothing missing.
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'fullmatch.png', kind: 'image', sha256: imageHash, sidecarSha256: localSidecarHash },
+      ]);
+      expect(missing).toEqual([]);
+    });
+
+    it('returns image entry as missing when sidecar hash differs (peer has updated metadata)', async () => {
+      const imageBytes = Buffer.from('hello world');
+      const sidecarBytes = Buffer.from(JSON.stringify({ prompt: 'old prompt' }));
+      await writeFile(join(PATHS.images, 'staleside.png'), imageBytes);
+      await writeFile(join(PATHS.images, 'staleside.metadata.json'), sidecarBytes);
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'staleside.png', kind: 'image', sha256: imageHash, sidecarSha256: 'b'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].filename).toBe('staleside.png');
+    });
+
+    it('preserves sidecarSha256 in the sanitized missing entry (no untrusted round-trip loss)', async () => {
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'absent.png', kind: 'image', sha256: 'a'.repeat(64), sidecarSha256: 'b'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].sidecarSha256).toBe('b'.repeat(64));
+      // Junk fields still stripped.
+      expect(missing[0]).not.toHaveProperty('gigantic');
     });
   });
 
