@@ -489,7 +489,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
   const tuiCompletionSection = isTui
     ? buildTuiCompletionSection({
-        willOpenPR, willReviewLoop, simplifyEnabled,
+        willOpenPR, willReviewLoop, simplifyEnabled, providerId,
         sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
         reviewers: taskReviewers,
         reviewStopMode: taskReviewStopMode,
@@ -763,7 +763,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
-      willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      willOpenPR, willReviewLoop, simplifyEnabled, providerId, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
       reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
@@ -836,7 +836,7 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
@@ -846,7 +846,13 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
         : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
     : '';
-  const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
+  // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
+  // (codex-tui, gemini-tui) can't run it, so give them the inline equivalent.
+  // Default (no providerId) stays Claude-shaped for backward compatibility.
+  const canRunSimplifyCommand = !providerId || /claude/i.test(providerId);
+  const simplifyStep = simplifyEnabled
+    ? (canRunSimplifyCommand ? '1. `/simplify`' : `1. Self-review — ${SIMPLIFY_INLINE_REVIEW}, and fix any findings.`)
+    : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode }) : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;

@@ -399,7 +399,7 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
 
   'plan-task': `[Plan Task: {appName}] Claim and ship next PLAN.md item
 
-Pick the next available unclaimed PLAN.md item by its \`[<slug>]\` ID, **create your own worktree at \`claim/<slug>\`**, implement, ship a PR, and clean up. Mirrors the \`/claim\` slash command — same in-flight scan, same branch naming, same no-local-merge cleanup. **YOU pick the item in Phase 1 — the scheduler does not reserve one for you.** Picking at execution time and immediately creating the \`claim/<slug>\` branch is what stops two concurrent runs from colliding on the same slug; a dispatch-time pre-pick would let both runs target the same item before either has claimed it. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+Pick the next available unclaimed PLAN.md item by its \`[<slug>]\` ID, **create your own worktree at \`claim/<slug>\`**, implement, ship a PR, and clean up. Mirrors the \`/claim\` slash command — same in-flight scan, same branch naming, same no-local-merge cleanup. **YOU pick the item in Phase 1 — the scheduler does not reserve one for you.** Picking at execution time and immediately creating the \`claim/<slug>\` branch **narrows** the window for two concurrent runs to collide on the same slug — it does NOT eliminate it: two runs can still complete Phase 1 before either creates a branch, then race at \`git worktree add\`. That race is handled in Phase 2 — the loser re-picks the next item. (A dispatch-time pre-pick is strictly worse: it commits both runs to the same slug long before any branch exists.) Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
 
 **How claiming works.** Every PLAN.md checkbox carries a \`[<slug>]\` ID. A slug is "in flight" when it appears as the slug-position segment in either a \`claim/<slug>\` ref (the human/TUI pattern) or a \`cos/<task>/<slug>/<agent>\` ref (the CoS sub-agent pattern) — across local branches, remote branches, or open PR head refs. The \`claim/<slug>\` branch you create IS the claim, visible to every other agent and to the human running \`/claim\` in a TUI.
 
@@ -440,6 +440,8 @@ git fetch origin main
 git worktree add -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
 cd "\${WORKTREE}"
 \`\`\`
+
+**If the worktree-creation command fails because the claim/<slug> branch already exists** (a concurrent run won the branch-creation race, or a remote claim/<slug> is now visible), do NOT force or reuse it — that branch IS another run's claim. Treat the slug as in-flight, return to Phase 1, and pick the next eligible item; if nothing else is eligible, exit cleanly.
 
 Stash the worktree path; you'll need it for Phase 7 cleanup.
 
