@@ -1139,6 +1139,52 @@ describe('createCollection — event emission', () => {
   });
 });
 
+describe('mutators — mediaCollection updated emission (standalone per-record sync)', () => {
+  // A standalone collection (no universe/series link) reaches a directly-
+  // subscribed peer ONLY through the per-record mediaCollection push pipeline,
+  // so every content mutator must emit a mediaCollection 'updated' event or the
+  // edit silently never propagates.
+  const collectMediaUpdates = async (fn) => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const ids = [];
+    const handler = (evt) => { if (evt.recordKind === 'mediaCollection') ids.push(evt.recordId); };
+    recordEvents.on('updated', handler);
+    try {
+      await fn();
+    } finally {
+      recordEvents.off('updated', handler);
+    }
+    return ids;
+  };
+
+  it('updateCollection emits a mediaCollection updated event', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    const ids = await collectMediaUpdates(() => svc.updateCollection(c.id, { description: 'changed' }));
+    expect(ids).toContain(c.id);
+  });
+
+  it('addItem emits a mediaCollection updated event', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    const ids = await collectMediaUpdates(() => svc.addItem(c.id, { kind: 'image', ref: 'x.png' }));
+    expect(ids).toContain(c.id);
+  });
+
+  it('removeItem emits a mediaCollection updated event', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });
+    const ids = await collectMediaUpdates(() => svc.removeItem(c.id, 'image:x.png'));
+    expect(ids).toContain(c.id);
+  });
+
+  it('bulkUpdateCollectionItems emits a mediaCollection updated event when items change', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    const ids = await collectMediaUpdates(() =>
+      svc.bulkUpdateCollectionItems(c.id, { add: [{ kind: 'image', ref: 'y.png' }] }),
+    );
+    expect(ids).toContain(c.id);
+  });
+});
+
 describe('pruneTombstonedCollections', () => {
   beforeEach(() => {
     fileStore.clear();

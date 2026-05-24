@@ -27,11 +27,11 @@ const hashesEqual = (a, b) => {
  *
  * Each entry shape: `{ id, name?, updatedAt, deleted?, assetHashes }`.
  *
- * Tombstones (deleted === true) are excluded from "missing on other side"
- * checks so a record deleted on one side doesn't surface as local-only or
- * peer-only — both sides eventually see the tombstone and both sides agree
- * the record is gone. When both sides are tombstoned the pair is omitted
- * from the output entirely.
+ * Tombstone handling: when BOTH sides are tombstoned (deleted === true) the
+ * pair is omitted from the output entirely — both agree the record is gone, so
+ * there's nothing to reconcile. A live-vs-tombstoned mismatch IS surfaced as
+ * LOCAL_ONLY / PEER_ONLY (the live side still holds a record the other side
+ * deleted), so the user can decide whether to propagate the delete or re-push.
  *
  * @param {Array} localList  - Local manifest rows.
  * @param {Array} remoteList - Remote manifest rows.

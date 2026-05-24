@@ -507,7 +507,7 @@ export async function renameCollectionForUniverse(universeId, newUniverseName) {
 }
 
 export async function updateCollection(id, patch) {
-  return serializeFileWrite(async () => {
+  const merged = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -550,6 +550,15 @@ export async function updateCollection(id, patch) {
     await writeAll(next);
     return merged;
   });
+  // A standalone collection (no universe/series link) reaches peers ONLY via a
+  // direct per-record mediaCollection subscription — without this emit a
+  // rename/description/cover edit never propagates. For linked collections the
+  // universe/series emit nudges the share-bucket re-export. Emit outside the
+  // serialized critical section so subscribers' own reads don't deadlock the tail.
+  emitRecordUpdated('mediaCollection', merged.id);
+  if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
+  if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
+  return merged;
 }
 
 export async function deleteCollection(id) {
@@ -634,6 +643,9 @@ export async function addItem(id, item) {
   });
   // Emit outside the serialized critical section — subscribers may issue
   // their own collection reads and we don't want to deadlock the tail.
+  // mediaCollection covers standalone direct subscriptions; universe/series
+  // nudge the bundled share-bucket re-export for linked collections.
+  emitRecordUpdated('mediaCollection', merged.id);
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
   if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
   return merged;
@@ -715,6 +727,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     return { collection: merged, added: additions.length, removed };
   });
   if (result.added || result.removed) {
+    emitRecordUpdated('mediaCollection', result.collection.id);
     if (result.collection.universeId) emitRecordUpdated('universe', result.collection.universeId);
     if (result.collection.seriesId) emitRecordUpdated('series', result.collection.seriesId);
   }
@@ -744,6 +757,7 @@ export async function removeItem(id, key) {
     await writeAll(next);
     return updated;
   });
+  emitRecordUpdated('mediaCollection', merged.id);
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
   if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
   return merged;
