@@ -91,13 +91,32 @@ describe('pullSidecarForImage', () => {
     expect(result).toBe(false);
   });
 
-  it('constructs the correct URL including encoded sidecar name', async () => {
+  it('constructs the correct URL including encoded sidecar name + abort signal', async () => {
     vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 404 });
     await pullSidecarForImage(fakePeer, fakeBase, 'my image.png');
     expect(peerFetch).toHaveBeenCalledWith(
       `${fakeBase}/data/images/${encodeURIComponent('my image.metadata.json')}`,
-      expect.objectContaining({ maxBytes: expect.any(Number) })
+      expect.objectContaining({ maxBytes: expect.any(Number), signal: expect.any(AbortSignal) })
     );
+  });
+
+  it('returns false and writes nothing when the body is not valid JSON (HTML error page guard)', async () => {
+    const htmlBody = Buffer.from('<!DOCTYPE html><html><body>500 oops</body></html>');
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => htmlBody.buffer.slice(htmlBody.byteOffset, htmlBody.byteOffset + htmlBody.byteLength),
+    });
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'htmlpage.png');
+    expect(result).toBe(false);
+    expect(existsSync(join(PATHS.images, 'htmlpage.metadata.json'))).toBe(false);
+  });
+
+  it('rejects path-traversal filenames before any fetch or FS op', async () => {
+    vi.mocked(peerFetch).mockResolvedValue({ ok: true, arrayBuffer: async () => Buffer.from('{}').buffer });
+    const result = await pullSidecarForImage(fakePeer, fakeBase, '../../etc/passwd.png');
+    expect(result).toBe(false);
+    // Never even hit the network for a traversal name.
+    expect(peerFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -174,5 +193,17 @@ describe('backfillMissingSidecars', () => {
     const result = await backfillMissingSidecars({ filenames: null });
     expect(result.attempted).toBe(0);
     expect(result.recovered).toBe(0);
+  });
+
+  it('skips path-traversal filenames (never attempts them)', async () => {
+    vi.mocked(getPeers).mockResolvedValue([
+      { instanceId: 'peer-a', name: 'Peer A', status: 'online' },
+    ]);
+    const result = await backfillMissingSidecars({
+      filenames: ['../../etc/passwd.png', 'sub/dir/asset.png'],
+    });
+    expect(result.attempted).toBe(0);
+    expect(result.recovered).toBe(0);
+    expect(peerFetch).not.toHaveBeenCalled();
   });
 });

@@ -97,4 +97,28 @@ describe('sharing/buckets', () => {
       rmSync(b, { recursive: true, force: true });
     }
   });
+
+  describe('sanitizeAssetFilename', () => {
+    it('returns the name for a safe bare basename', () => {
+      expect(buckets.sanitizeAssetFilename('abc-123.png')).toBe('abc-123.png');
+      // `..` inside a basename is legitimate (gallery validator permits it).
+      expect(buckets.sanitizeAssetFilename('my..render.png')).toBe('my..render.png');
+    });
+
+    it('rejects path separators, parent-dir tokens, and non-basename values', () => {
+      expect(buckets.sanitizeAssetFilename('../../etc/passwd')).toBeNull();
+      expect(buckets.sanitizeAssetFilename('..\\windows\\system32')).toBeNull();
+      expect(buckets.sanitizeAssetFilename('sub/dir/asset.png')).toBeNull();
+      expect(buckets.sanitizeAssetFilename('/etc/hosts')).toBeNull();
+      expect(buckets.sanitizeAssetFilename('.')).toBeNull();
+      expect(buckets.sanitizeAssetFilename('..')).toBeNull();
+    });
+
+    it('rejects non-string and empty inputs', () => {
+      expect(buckets.sanitizeAssetFilename('')).toBeNull();
+      expect(buckets.sanitizeAssetFilename(null)).toBeNull();
+      expect(buckets.sanitizeAssetFilename(undefined)).toBeNull();
+      expect(buckets.sanitizeAssetFilename(42)).toBeNull();
+    });
+  });
 });

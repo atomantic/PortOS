@@ -18,28 +18,53 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { imageSidecarName } from './buckets.js';
+import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 
 const SIDECAR_MAX_BYTES = 256 * 1024;
+// Mirror the image-pull timeout (peerSync.js ASSET_PULL_TIMEOUT_MS) so a hung
+// peer connection aborts instead of holding the pull open indefinitely.
+const SIDECAR_PULL_TIMEOUT_MS = 60000;
 
 /**
  * Pull `<image-basename>.metadata.json` from a peer's /data/images mount and
  * write it alongside the image. Best-effort: a 404 (no sidecar on the sender)
- * is normal and silently ignored. `imageFilename` must already be sanitized by
- * the caller (it is — doPullOneAsset sanitizes before this is reached).
+ * is normal and silently ignored.
  *
- * Returns true if the sidecar was successfully fetched and written.
+ * Defense-in-depth: the filename is sanitized HERE (not only by callers) so the
+ * function is safe regardless of entry point — `backfillMissingSidecars` is a
+ * future client-POST surface and `encodeURIComponent` only protects the URL,
+ * not the local `join(PATHS.images, …)` path. A `../`-bearing filename is
+ * rejected before any FS op.
+ *
+ * Returns true if the sidecar was successfully fetched, parsed, and written.
  */
 export async function pullSidecarForImage(peer, base, imageFilename) {
-  const sidecarName = imageSidecarName(imageFilename);
+  const safeName = sanitizeAssetFilename(imageFilename);
+  if (!safeName) return false;
+  const sidecarName = imageSidecarName(safeName);
   const url = `${base}/data/images/${encodeURIComponent(sidecarName)}`;
-  const res = await peerFetch(url, { maxBytes: SIDECAR_MAX_BYTES }).catch(() => null);
+  // Abort a hung connection after the timeout — mirrors the image pull worker.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SIDECAR_PULL_TIMEOUT_MS);
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes: SIDECAR_MAX_BYTES })
+    .finally(() => clearTimeout(timeoutId))
+    .catch(() => null);
   if (!res || !res.ok) return false;
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length === 0 || buf.length > SIDECAR_MAX_BYTES) return false;
+  // JSON-parse gate: a peer (or an intermediary) could serve an HTML error
+  // page with a 200, which we'd otherwise write as `<base>.metadata.json` and
+  // corrupt the gallery's gen-params reader. Only write if the body is valid
+  // JSON. Wrapped in try/catch because JSON.parse throws (this runs outside the
+  // Express request lifecycle, so an uncaught throw would crash the worker).
+  try {
+    JSON.parse(buf.toString('utf8'));
+  } catch {
+    return false;
+  }
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, sidecarName), buf);
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);
@@ -52,7 +77,8 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
  *
  * `filenames` should be an array of image filenames (with extension) already
  * present in PATHS.images. Only images whose sidecar is absent are attempted —
- * images that already have a sidecar are silently skipped.
+ * images that already have a sidecar are silently skipped. Filenames that fail
+ * sanitization (path traversal) are skipped entirely.
  */
 export async function backfillMissingSidecars({ filenames }) {
   const peers = (await getPeers().catch(() => [])).filter(
@@ -61,11 +87,13 @@ export async function backfillMissingSidecars({ filenames }) {
   let attempted = 0;
   let recovered = 0;
   for (const filename of Array.isArray(filenames) ? filenames : []) {
-    const sidecarPath = join(PATHS.images, imageSidecarName(filename));
+    const safeName = sanitizeAssetFilename(filename);
+    if (!safeName) continue;
+    const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
     if (existsSync(sidecarPath)) continue;
     attempted++;
     for (const peer of peers) {
-      const ok = await pullSidecarForImage(peer, peerBaseUrl(peer), filename).catch(() => false);
+      const ok = await pullSidecarForImage(peer, peerBaseUrl(peer), safeName).catch(() => false);
       if (ok) {
         recovered++;
         break;

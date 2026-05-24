@@ -35,7 +35,7 @@
  * and tombstone GC (Stage 5; `sharing/tombstoneGc.js`).
  */
 
-import { join, basename } from 'path';
+import { join } from 'path';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
@@ -43,10 +43,10 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
-import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
+import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
-import { imageSidecarName } from './buckets.js';
+import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
 import { recordEvents } from './recordEvents.js';
 import {
@@ -540,19 +540,16 @@ async function hashImageForManifest(filename) {
   const fullPath = join(PATHS.images, safeName);
   const result = await getOrComputeImageSha256(fullPath);
   if (!result) return null;
-  // Include the sidecar hash only when the sidecar carries gen-params content
-  // beyond the sha256 cache entry that `getOrComputeImageSha256` always writes.
-  // A pure hash-cache sidecar (only `{ sha256: {...} }`) means there are no
-  // gen-params to sync; advertising a sidecarSha256 for it would cause peers to
-  // pull a cache artifact with no prompt/model data. We detect gen-params by
-  // checking that the sidecar has at least one key other than `sha256`.
-  const sidecar = result.sidecar;
-  const hasGenParams = isPlainObject(sidecar) && Object.keys(sidecar).some((k) => k !== 'sha256');
-  let sidecarSha256 = null;
-  if (hasGenParams) {
-    const sidecarPath = join(PATHS.images, imageSidecarName(safeName));
-    sidecarSha256 = existsSync(sidecarPath) ? await sha256File(sidecarPath).catch(() => null) : null;
-  }
+  // Advertise a sidecarSha256 only when the sidecar carries gen-params beyond
+  // the `sha256` cache block. CRITICAL: we hash the GEN-PARAMS ONLY (sorted-key
+  // canonical form, `sha256` cache key stripped) via `sidecarGenParamsHash` —
+  // NOT the raw sidecar file. The `sha256` block embeds the LOCAL image's
+  // mtime+size, so hashing the whole file would never converge across machines
+  // (the receiver re-stamps its own mtime after every pull and re-diverges,
+  // re-pulling the sidecar every sync cycle). `sidecarGenParamsHash` returns
+  // null when there are no gen-params, so we never advertise a hash for a
+  // pure cache-only sidecar.
+  const sidecarSha256 = sidecarGenParamsHash(result.sidecar);
   return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}) };
 }
 
@@ -625,11 +622,15 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // but the peer has a gen-params sidecar we're missing or have stale.
     // Pull the entry so the worker can fetch ONLY the sidecar (it checks the
     // image hash before deciding whether to re-pull the image bytes).
+    //
+    // We MUST recompute the local sidecar hash the SAME way the sender did
+    // (`sidecarGenParamsHash` — gen-params only, sorted-key canonical, `sha256`
+    // cache block stripped). Hashing the raw sidecar file would never match the
+    // sender's gen-params-only hash and would re-flag the image every cycle.
     if (entry.kind === 'image' && isStr(entry.sidecarSha256)) {
       const localSidecarPath = join(PATHS.images, imageSidecarName(safeName));
-      const localSidecarHash = existsSync(localSidecarPath)
-        ? await sha256File(localSidecarPath).catch(() => null)
-        : null;
+      const localSidecar = await readJSONFile(localSidecarPath, null, { logError: false });
+      const localSidecarHash = sidecarGenParamsHash(localSidecar);
       if (localSidecarHash !== entry.sidecarSha256) missing.push(sanitizedEntry);
     }
   }
@@ -641,25 +642,6 @@ function directoryForAssetKind(kind) {
   if (kind === 'image-ref') return PATHS.imageRefs;
   if (kind === 'video') return PATHS.videos;
   return null;
-}
-
-/**
- * Returns the filename if it's safe to use as a path segment under the asset
- * directory, otherwise null. Rejects path separators, parent-directory
- * tokens, and any value that doesn't match its own basename — same posture
- * as `jobFromSidecar` in services/sharing/exporter.js for symmetry with
- * how the share-bucket importer validates inbound asset filenames.
- */
-function sanitizeAssetFilename(name) {
-  if (typeof name !== 'string' || !name) return null;
-  // Reject separators and exact parent-directory segments (`.` / `..`
-  // as the whole basename). A basename like `my..render.png` is
-  // legitimate (the gallery filename validator permits `..` inside a
-  // basename) — only the path-segment forms are traversal.
-  if (name.includes('/') || name.includes('\\')) return null;
-  if (name === '.' || name === '..') return null;
-  if (basename(name) !== name) return null;
-  return name;
 }
 
 // --- Push pipeline (sender side) ----------------------------------------

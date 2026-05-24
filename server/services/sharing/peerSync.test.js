@@ -817,29 +817,63 @@ describe('peerSync', () => {
       expect(missing[0].sidecarSha256).toBe('a'.repeat(64));
     });
 
-    it('does NOT return an image as missing when image hash matches and sidecar hash also matches', async () => {
-      // Both image and sidecar are present and hash-match — no pull needed.
-      // We seed the sidecar with gen-params content matching what getOrComputeImageSha256
-      // would produce (it merges in the sha256 cache field alongside existing content).
+    it('does NOT return an image as missing when image hash matches and sidecar gen-params match', async () => {
+      // Both image and sidecar are present; the gen-params are identical — no pull needed.
       const imageBytes = Buffer.from('hello world');
       await writeFile(join(PATHS.images, 'fullmatch.png'), imageBytes);
       await writeFile(join(PATHS.images, 'fullmatch.metadata.json'), Buffer.from(JSON.stringify({ prompt: 'cat' })));
       const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
-      // Prime the sidecar: calling diffAssetManifestAgainstLocal will call
-      // getOrComputeImageSha256 which merges the sha256 cache into the sidecar.
-      // After that, sha256File gives the "stable" hash that both sender and receiver see.
-      const { sha256File } = await import('../../lib/fileUtils.js');
-      // Run diff once to trigger the sidecar cache write.
-      await diffAssetManifestAgainstLocal([
-        { filename: 'fullmatch.png', kind: 'image', sha256: imageHash },
-      ]);
-      // Now compute the hash of the sidecar as the sender would see it.
-      const localSidecarHash = await sha256File(join(PATHS.images, 'fullmatch.metadata.json'));
-      // Second diff with the exact sidecar hash should yield nothing missing.
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      // The sender advertises the gen-params hash (NOT the raw-file hash).
+      const senderSidecarHash = sidecarGenParamsHash({ prompt: 'cat' });
       const missing = await diffAssetManifestAgainstLocal([
-        { filename: 'fullmatch.png', kind: 'image', sha256: imageHash, sidecarSha256: localSidecarHash },
+        { filename: 'fullmatch.png', kind: 'image', sha256: imageHash, sidecarSha256: senderSidecarHash },
       ]);
       expect(missing).toEqual([]);
+    });
+
+    it('CONVERGENCE: image NOT re-flagged when gen-params match but the sha256 cache block differs', async () => {
+      // CRITICAL regression for the churn bug. Two machines with byte-identical
+      // gen-params but different per-machine `sha256` cache blocks (mtimeMs/size
+      // differ) must NOT perpetually re-pull. The sidecar hash is computed over
+      // gen-params ONLY (sha256 cache stripped), so it converges regardless of
+      // the local cache block.
+      const imageBytes = Buffer.from('hello world');
+      await writeFile(join(PATHS.images, 'converge.png'), imageBytes);
+      // Local sidecar: SAME gen-params, but a DIFFERENT sha256 cache block than
+      // whatever the sender stamped (simulates the receiver re-stamping its own
+      // local image mtime+size after a prior pull).
+      await writeFile(join(PATHS.images, 'converge.metadata.json'), Buffer.from(JSON.stringify({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'c'.repeat(64), mtimeMs: 111111, size: 222 },
+      })));
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      // The SENDER computes the gen-params hash over its OWN sidecar, which has
+      // the SAME gen-params but a DIFFERENT sha256 cache block (different mtime/size).
+      const senderSidecarHash = sidecarGenParamsHash({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'd'.repeat(64), mtimeMs: 999999, size: 888 },
+      });
+      // The receiver computes its local gen-params hash the same way.
+      const localSidecarHash = sidecarGenParamsHash({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'c'.repeat(64), mtimeMs: 111111, size: 222 },
+      });
+      // The two MUST be equal despite differing cache blocks — proves convergence.
+      expect(senderSidecarHash).toBe(localSidecarHash);
+      // And the diff must NOT flag the image as missing (no re-pull churn).
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'converge.png', kind: 'image', sha256: imageHash, sidecarSha256: senderSidecarHash },
+      ]);
+      expect(missing).toEqual([]);
+    });
+
+    it('CONVERGENCE: key-order differences across machines do not break the gen-params hash', async () => {
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      const a = sidecarGenParamsHash({ prompt: 'x', model: 'flux', steps: 30 });
+      const b = sidecarGenParamsHash({ steps: 30, prompt: 'x', model: 'flux' });
+      expect(a).toBe(b);
     });
 
     it('returns image entry as missing when sidecar hash differs (peer has updated metadata)', async () => {

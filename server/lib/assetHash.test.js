@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
-import { sidecarPathForImage, getOrComputeImageSha256 } from './assetHash.js';
+import { sidecarPathForImage, getOrComputeImageSha256, sidecarGenParamsHash } from './assetHash.js';
 
 // PATHS.images is resolved at module-load from fileUtils and we deliberately
 // do NOT monkey-patch it — the absent-file tests use a tmpdir-rooted dir for
@@ -136,6 +136,51 @@ describe('assetHash', () => {
         await rm(imagePath, { force: true });
         await rm(sidecarPath, { force: true });
       }
+    });
+  });
+
+  describe('sidecarGenParamsHash', () => {
+    it('returns null when the sidecar has no gen-params (only the sha256 cache)', () => {
+      expect(sidecarGenParamsHash({ sha256: { value: 'a'.repeat(64), mtimeMs: 1, size: 2 } })).toBeNull();
+      expect(sidecarGenParamsHash({})).toBeNull();
+    });
+
+    it('returns null for non-object inputs', () => {
+      expect(sidecarGenParamsHash(null)).toBeNull();
+      expect(sidecarGenParamsHash(undefined)).toBeNull();
+      expect(sidecarGenParamsHash('x')).toBeNull();
+      expect(sidecarGenParamsHash([1, 2])).toBeNull();
+    });
+
+    it('returns a hex64 hash when gen-params exist', () => {
+      const h = sidecarGenParamsHash({ prompt: 'a cat', model: 'flux' });
+      expect(h).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('CONVERGENCE: identical gen-params hash regardless of the sha256 cache block', () => {
+      // The core fix: two machines with byte-identical gen-params but DIFFERENT
+      // per-machine sha256 cache blocks (mtimeMs/size) must produce the SAME hash.
+      const a = sidecarGenParamsHash({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'a'.repeat(64), mtimeMs: 111, size: 222 },
+      });
+      const b = sidecarGenParamsHash({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'b'.repeat(64), mtimeMs: 999, size: 888 },
+      });
+      expect(a).toBe(b);
+    });
+
+    it('CONVERGENCE: identical hash regardless of key order', () => {
+      const a = sidecarGenParamsHash({ prompt: 'x', model: 'flux', steps: 30 });
+      const b = sidecarGenParamsHash({ steps: 30, model: 'flux', prompt: 'x' });
+      expect(a).toBe(b);
+    });
+
+    it('different gen-params produce different hashes', () => {
+      const a = sidecarGenParamsHash({ prompt: 'a cat' });
+      const b = sidecarGenParamsHash({ prompt: 'a dog' });
+      expect(a).not.toBe(b);
     });
   });
 });

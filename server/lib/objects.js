@@ -54,3 +54,34 @@ export const deepMerge = (base, patch) => {
   }
   return out;
 };
+
+/**
+ * Stable, canonical JSON serialization: recursively sorts object keys so two
+ * structurally-equal values produce byte-identical strings regardless of the
+ * key-insertion order they happened to be built with. Use this when a string
+ * (or hash of a string) must be COMPARABLE ACROSS MACHINES — e.g. content-
+ * hashing a sidecar's gen-params on a sender and re-deriving the same hash on
+ * a receiver where the object was rebuilt in a different key order.
+ *
+ * Arrays preserve order (order is semantic for arrays); object keys are sorted
+ * lexicographically. Non-plain values (primitives, null) serialize via the
+ * native `JSON.stringify` rules. `undefined` and functions are dropped exactly
+ * as `JSON.stringify` drops them.
+ */
+export const canonicalStringify = (value) => {
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonicalStringify(v) ?? 'null').join(',')}]`;
+  }
+  if (isPlainObject(value)) {
+    const parts = [];
+    for (const key of Object.keys(value).sort()) {
+      const serialized = canonicalStringify(value[key]);
+      // Skip keys whose value serializes to undefined (functions / undefined)
+      // — matches JSON.stringify dropping them from objects.
+      if (serialized === undefined) continue;
+      parts.push(`${JSON.stringify(key)}:${serialized}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return JSON.stringify(value);
+};

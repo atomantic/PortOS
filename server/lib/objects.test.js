@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deepMerge, isPlainObject } from './objects.js';
+import { deepMerge, isPlainObject, canonicalStringify } from './objects.js';
 
 describe('isPlainObject', () => {
   it('returns true for plain `{}`-shaped values', () => {
@@ -92,5 +92,45 @@ describe('deepMerge', () => {
     expect(deepMerge(42, { a: 1 })).toEqual({ a: 1 });
     expect(deepMerge('string', { a: 1 })).toEqual({ a: 1 });
     expect(deepMerge([1, 2], { a: 1 })).toEqual({ a: 1 });
+  });
+});
+
+describe('canonicalStringify', () => {
+  it('produces identical output regardless of key insertion order', () => {
+    const a = canonicalStringify({ b: 1, a: 2, c: 3 });
+    const b = canonicalStringify({ c: 3, a: 2, b: 1 });
+    expect(a).toBe(b);
+  });
+
+  it('sorts keys recursively in nested objects', () => {
+    const a = canonicalStringify({ outer: { z: 1, a: 2 }, first: true });
+    const b = canonicalStringify({ first: true, outer: { a: 2, z: 1 } });
+    expect(a).toBe(b);
+  });
+
+  it('preserves array order (order is semantic for arrays)', () => {
+    expect(canonicalStringify([3, 1, 2])).toBe('[3,1,2]');
+    expect(canonicalStringify([1, 2, 3])).not.toBe(canonicalStringify([3, 2, 1]));
+  });
+
+  it('serializes primitives via native JSON rules', () => {
+    expect(canonicalStringify('hi')).toBe('"hi"');
+    expect(canonicalStringify(42)).toBe('42');
+    expect(canonicalStringify(true)).toBe('true');
+    expect(canonicalStringify(null)).toBe('null');
+  });
+
+  it('drops undefined / function values inside objects (matches JSON.stringify)', () => {
+    expect(canonicalStringify({ a: 1, b: undefined, c: () => {} })).toBe('{"a":1}');
+  });
+
+  it('serializes undefined array elements as null (matches JSON.stringify)', () => {
+    expect(canonicalStringify([1, undefined, 2])).toBe('[1,null,2]');
+  });
+
+  it('handles nested arrays of objects with sorted keys', () => {
+    const a = canonicalStringify({ items: [{ y: 1, x: 2 }] });
+    const b = canonicalStringify({ items: [{ x: 2, y: 1 }] });
+    expect(a).toBe(b);
   });
 });
