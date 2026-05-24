@@ -85,7 +85,13 @@ export async function getPeerIntegrity({ peerId, kind }) {
   if (!res.ok) return { available: false, reason: 'fetch-failed', records: [] };
 
   const body = await res.json().catch(() => null);
-  const remote = Array.isArray(body?.records) ? body.records : [];
+  // The peer response is untrusted — computeRecordIntegrity assumes every entry
+  // is a non-null object with a string `id` (it reads `r.id` and keys a Map on
+  // it). A hostile/malformed manifest (nulls, scalars, id-less objects) would
+  // otherwise throw and 500 this endpoint, so filter to well-formed rows first.
+  const remote = (Array.isArray(body?.records) ? body.records : []).filter(
+    (r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id,
+  );
 
   const local = await buildLocalManifest(kind);
   return { available: true, records: computeRecordIntegrity(local, remote) };

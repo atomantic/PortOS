@@ -193,18 +193,25 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   // warnings. Never reset to true — handles dev-mode double-mount cleanly.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+  // Generation counter so only the LATEST in-flight fetch commits state — a
+  // rapid recordId change (or switch to empty) bumps this, and an older fetch
+  // that resolves afterward fails the equality check and is dropped, instead
+  // of overwriting the newer record with a stale name/preview.
+  const loadGenRef = useRef(0);
 
   const loadRecord = useCallback(() => {
     if (!fetcher) return;
+    const gen = ++loadGenRef.current; // invalidates any prior in-flight fetch
+    const fresh = () => mountedRef.current && gen === loadGenRef.current;
     // An empty recordId (e.g. a param-less route mount) would fetch
     // `/media/collections/` and 404/toast — skip the request, and clear any
     // previously-loaded record so a stale name/preview can't linger.
     if (!recordId) { setRecord(null); setRecordLoading(false); return; }
     setRecordLoading(true);
     fetcher(recordId)
-      .then((data) => { if (mountedRef.current) setRecord(data); })
-      .catch(() => { if (mountedRef.current) setRecord(null); })
-      .finally(() => { if (mountedRef.current) setRecordLoading(false); });
+      .then((data) => { if (fresh()) setRecord(data); })
+      .catch(() => { if (fresh()) setRecord(null); })
+      .finally(() => { if (fresh()) setRecordLoading(false); });
   }, [fetcher, recordId]);
 
   useEffect(() => { loadRecord(); }, [loadRecord]);

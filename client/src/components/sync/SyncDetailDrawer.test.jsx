@@ -100,6 +100,22 @@ describe('SyncDetailDrawer', () => {
     expect(mockGetMediaCollection).not.toHaveBeenCalled();
   });
 
+  it('drops a stale in-flight fetch when recordId changes mid-flight (latest wins)', async () => {
+    let resolveFirst;
+    mockGetMediaCollection
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = () => r({ id: 'col-A', name: 'Alpha Collection', items: [] }); }))
+      .mockImplementationOnce(() => Promise.resolve({ id: 'col-B', name: 'Beta Collection', items: [] }));
+
+    const { rerender } = render(<SyncDetailDrawer kind="mediaCollection" recordId="col-A" onClose={() => {}} />);
+    // Switch to col-B before col-A's fetch resolves.
+    rerender(<SyncDetailDrawer kind="mediaCollection" recordId="col-B" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText('Beta Collection').length).toBeGreaterThan(0));
+    // Now let the stale col-A fetch resolve — it must NOT overwrite Beta.
+    resolveFirst();
+    await waitFor(() => expect(screen.queryAllByText('Alpha Collection')).toHaveLength(0));
+    expect(screen.getAllByText('Beta Collection').length).toBeGreaterThan(0);
+  });
+
   it('clears a previously-loaded record when recordId becomes empty (no stale name/preview)', async () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     const { rerender } = render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);

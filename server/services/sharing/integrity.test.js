@@ -195,6 +195,32 @@ describe('getPeerIntegrity', () => {
     });
   });
 
+  it('does not throw on a hostile/malformed peer manifest (nulls, scalars, id-less objects)', async () => {
+    const peer = makePeer('peer-x');
+    vi.mocked(getPeers).mockResolvedValue([peer]);
+    const ts = '2026-05-23T00:00:00.000Z';
+    vi.mocked(listCollections).mockResolvedValue([makeCollection({ id: 'col-1', updatedAt: ts })]);
+    vi.mocked(assetShaListForRecord).mockResolvedValue([]);
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ records: [
+        null,
+        'not-an-object',
+        42,
+        { name: 'no id here' },          // missing id
+        { id: 42 },                       // non-string id
+        { id: 'col-1', name: 'My Collection', updatedAt: ts, deleted: false, assetHashes: [] }, // the only valid one
+      ] }),
+    });
+
+    const result = await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' });
+    expect(result.available).toBe(true);
+    // Only the one well-formed remote row is diffed; the junk is filtered out.
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({ id: 'col-1', status: INTEGRITY_STATUS.IN_PARITY });
+  });
+
   it('surfaces PEER_ONLY records from peer that are absent locally', async () => {
     const peer = makePeer('peer-x');
     vi.mocked(getPeers).mockResolvedValue([peer]);
