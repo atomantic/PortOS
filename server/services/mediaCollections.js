@@ -167,6 +167,21 @@ const writeAll = async (collections) => {
   return collections;
 };
 
+// Announce a newly-created collection to the per-record peer-sync pipeline:
+// emit the 'updated' event so any existing subscription pushes it, AND
+// auto-subscribe every mediaCollections-enabled peer so brand-new collections
+// (and their later tombstones) propagate even when that peer has universe/series
+// sync disabled. Dynamic import avoids a module cycle — peerSync imports
+// mergeMediaCollectionsFromSync from here, so a static import would close one.
+// Call ONLY when a brand-new record was persisted — never on a find-existing
+// hit, or every render would re-announce and churn the pipeline.
+const announceNewCollection = (id) => {
+  emitRecordUpdated('mediaCollection', id);
+  import('./sharing/peerSync.js')
+    .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('mediaCollection', id))
+    .catch(() => {});
+};
+
 export async function createCollection({ name, description = '' }) {
   // Service-layer guards mirror sanitizeCollection so a direct caller
   // (tests, future internal usage) can't persist a record that the next
@@ -193,14 +208,7 @@ export async function createCollection({ name, description = '' }) {
     await writeAll([...all, next]);
     return next;
   });
-  emitRecordUpdated('mediaCollection', created.id);
-  // Fire-and-forget auto-subscribe to every peer with mediaCollections-sync
-  // enabled. Dynamic import keeps peerSync.js out of the mediaCollections
-  // module-load graph — peerSync imports mergeMediaCollectionsFromSync from
-  // here, so a static import would close a cycle.
-  import('./sharing/peerSync.js')
-    .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('mediaCollection', created.id))
-    .catch(() => {});
+  announceNewCollection(created.id);
   return created;
 }
 
@@ -224,7 +232,8 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  return serializeFileWrite(async () => {
+  let createdId = null;
+  const result = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
     const needle = trimmed.toLowerCase();
     // Do not match (or reuse) tombstoned records — a deleted collection
@@ -252,9 +261,12 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
       createdAt: now,
       updatedAt: now,
     };
+    createdId = next.id;
     await writeAll([...all, next]);
     return next;
   });
+  if (createdId) announceNewCollection(createdId);
+  return result;
 }
 
 // Naming convention for the auto-managed universe collection. Single source
@@ -320,7 +332,8 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  return serializeFileWrite(async () => {
+  let createdId = null;
+  const result = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
     // Do not adopt a tombstoned universe-linked collection — deleted means gone.
     const linked = all.find((c) => !c.deleted && c.universeId === normalizedUniverseId);
@@ -347,9 +360,15 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
       createdAt: now,
       updatedAt: now,
     };
+    createdId = next.id;
     await writeAll([...all, next]);
     return next;
   });
+  // Announce only when a NEW record was persisted (not a find-existing hit), so
+  // a mediaCollections-enabled peer receives universe-linked collections even
+  // with universe sync off.
+  if (createdId) announceNewCollection(createdId);
+  return result;
 }
 
 // Series-side mirror of the universe collection helpers above
@@ -379,7 +398,8 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  return serializeFileWrite(async () => {
+  let createdId = null;
+  const result = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
     // Do not adopt a tombstoned series-linked collection — deleted means gone.
     const linked = all.find((c) => !c.deleted && c.seriesId === normalizedSeriesId);
@@ -395,9 +415,12 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
       createdAt: now,
       updatedAt: now,
     };
+    createdId = next.id;
     await writeAll([...all, next]);
     return next;
   });
+  if (createdId) announceNewCollection(createdId);
+  return result;
 }
 
 export async function unlinkCollectionsForSeries(seriesId) {

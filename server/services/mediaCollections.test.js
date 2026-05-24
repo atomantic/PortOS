@@ -1165,6 +1165,49 @@ describe('createCollection — event emission', () => {
   });
 });
 
+describe('findOrCreate* — announces new collections to the sync pipeline', () => {
+  // A newly-created universe/series-linked (or named) collection must emit a
+  // mediaCollection 'updated' event so a peer with mediaCollections syncing
+  // enabled (but universe/series sync off) still receives it via per-record sync.
+  // It must NOT re-announce on a find-existing hit (would churn every render).
+  const collectMediaUpdateIds = async (fn) => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const ids = [];
+    const handler = (evt) => { if (evt.recordKind === 'mediaCollection') ids.push(evt.recordId); };
+    recordEvents.on('updated', handler);
+    try { await fn(); } finally { recordEvents.off('updated', handler); }
+    return ids;
+  };
+
+  it('findOrCreateUniverseCollection announces on create, stays quiet on find-existing', async () => {
+    const created = await collectMediaUpdateIds(() =>
+      svc.findOrCreateUniverseCollection({ universeId: 'u1', universeName: 'Iron Veil' }));
+    const c = await svc.findCollectionByUniverseId('u1');
+    expect(created).toEqual([c.id]);
+    const again = await collectMediaUpdateIds(() =>
+      svc.findOrCreateUniverseCollection({ universeId: 'u1', universeName: 'Iron Veil' }));
+    expect(again).toEqual([]);
+  });
+
+  it('findOrCreateSeriesCollection announces on create, stays quiet on find-existing', async () => {
+    const created = await collectMediaUpdateIds(() =>
+      svc.findOrCreateSeriesCollection({ seriesId: 's1', seriesName: 'Salt Run' }));
+    expect(created).toHaveLength(1);
+    const again = await collectMediaUpdateIds(() =>
+      svc.findOrCreateSeriesCollection({ seriesId: 's1', seriesName: 'Salt Run' }));
+    expect(again).toEqual([]);
+  });
+
+  it('findOrCreateCollectionByName announces on create, stays quiet on find-existing', async () => {
+    const created = await collectMediaUpdateIds(() =>
+      svc.findOrCreateCollectionByName({ name: 'Loose Bucket' }));
+    expect(created).toHaveLength(1);
+    const again = await collectMediaUpdateIds(() =>
+      svc.findOrCreateCollectionByName({ name: 'Loose Bucket' }));
+    expect(again).toEqual([]);
+  });
+});
+
 describe('mutators — mediaCollection updated emission (standalone per-record sync)', () => {
   // A standalone collection (no universe/series link) reaches a directly-
   // subscribed peer ONLY through the per-record mediaCollection push pipeline,

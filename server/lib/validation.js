@@ -1368,7 +1368,11 @@ export const peerSyncNowSchema = z.object({
 
 export const peerPullMetadataSchema = z.object({
   // Backfill tries every online peer; no per-peer scoping field today.
-  filenames: z.array(z.string().min(1).max(300)).max(5000),
+  // .trim() so a stray-whitespace filename ('  a.png  ') normalizes to the real
+  // name instead of passing validation and then failing sanitization/disk
+  // lookup (a confusing 200 with attempted>0, recovered=0). Matches the
+  // manifest-entry filename handling.
+  filenames: z.array(z.string().trim().min(1).max(300)).max(5000),
 }).strict();
 
 // =============================================================================

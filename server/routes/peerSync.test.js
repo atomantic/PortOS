@@ -569,6 +569,17 @@ describe('peer-sync routes', () => {
       expect(sidecarSvc.backfillMissingSidecars).toHaveBeenCalledWith({ filenames: ['a.png', 'b.png', 'c.png'] });
     });
 
+    it('trims surrounding whitespace from filenames before the service call', async () => {
+      sidecarSvc.backfillMissingSidecars.mockResolvedValue({ attempted: 1, recovered: 1 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/pull-metadata')
+        .send({ filenames: ['  a.png  ', 'b.png'] });
+      expect(res.status).toBe(200);
+      // Whitespace would otherwise yield a real-but-different name that fails
+      // disk lookup (confusing attempted>0, recovered=0).
+      expect(sidecarSvc.backfillMissingSidecars).toHaveBeenCalledWith({ filenames: ['a.png', 'b.png'] });
+    });
+
     it('400 when filenames is not an array', async () => {
       const res = await request(buildApp())
         .post('/api/peer-sync/pull-metadata')
