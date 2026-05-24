@@ -125,10 +125,12 @@ const sanitizeCollection = (raw) => {
     : null;
   const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString();
   const updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : createdAt;
-  return { id: raw.id, name, description, coverKey, universeId, seriesId, items, createdAt, updatedAt };
+  const deleted = raw.deleted === true;
+  const deletedAt = deleted && typeof raw.deletedAt === 'string' ? raw.deletedAt : (deleted ? createdAt : null);
+  return { id: raw.id, name, description, coverKey, universeId, seriesId, items, createdAt, updatedAt, deleted, deletedAt };
 };
 
-export async function listCollections() {
+export async function listCollections({ includeDeleted = false } = {}) {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
   if (!Array.isArray(raw.collections)) return [];
@@ -138,6 +140,7 @@ export async function listCollections() {
     const s = sanitizeCollection(c);
     if (!s || seen.has(s.id)) continue;
     seen.add(s.id);
+    if (!includeDeleted && s.deleted === true) continue;
     out.push(s);
   }
   return out;
@@ -172,7 +175,7 @@ export async function createCollection({ name, description = '' }) {
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const now = new Date().toISOString();
     const next = {
       id: randomUUID(),
@@ -209,9 +212,11 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const needle = trimmed.toLowerCase();
-    const existing = all.find((c) => c.name.toLowerCase() === needle);
+    // Do not match (or reuse) tombstoned records — a deleted collection
+    // should not be resurrected by name.
+    const existing = all.find((c) => !c.deleted && c.name.toLowerCase() === needle);
     if (existing) {
       if (universeId && !existing.universeId) {
         // Lazy backfill so legacy "Universe: <name>" collections gain the
@@ -303,8 +308,9 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
   return serializeFileWrite(async () => {
-    const all = await listCollections();
-    const linked = all.find((c) => c.universeId === normalizedUniverseId);
+    const all = await listCollections({ includeDeleted: true });
+    // Do not adopt a tombstoned universe-linked collection — deleted means gone.
+    const linked = all.find((c) => !c.deleted && c.universeId === normalizedUniverseId);
     if (linked) return linked;
     // No universeId match — always create fresh. The runtime intentionally
     // does NOT adopt a same-named unlinked collection here: it can't tell
@@ -361,8 +367,9 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
   return serializeFileWrite(async () => {
-    const all = await listCollections();
-    const linked = all.find((c) => c.seriesId === normalizedSeriesId);
+    const all = await listCollections({ includeDeleted: true });
+    // Do not adopt a tombstoned series-linked collection — deleted means gone.
+    const linked = all.find((c) => !c.deleted && c.seriesId === normalizedSeriesId);
     if (linked) return linked;
     const now = new Date().toISOString();
     const next = {
@@ -384,7 +391,7 @@ export async function unlinkCollectionsForSeries(seriesId) {
   if (typeof seriesId !== 'string' || !seriesId) return [];
   const needle = seriesId.slice(0, SERIES_ID_MAX);
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const matches = all
       .map((c, i) => (c.seriesId === needle ? i : -1))
       .filter((i) => i >= 0);
@@ -405,7 +412,7 @@ export async function renameCollectionForSeries(seriesId, newSeriesName) {
   if (typeof seriesId !== 'string' || !seriesId) return null;
   const needle = seriesId.slice(0, SERIES_ID_MAX);
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const matchIdxs = all
       .map((c, i) => (c.seriesId === needle ? i : -1))
       .filter((i) => i >= 0);
@@ -435,7 +442,7 @@ export async function unlinkCollectionsForUniverse(universeId) {
   if (typeof universeId !== 'string' || !universeId) return [];
   const needle = universeId.slice(0, UNIVERSE_ID_MAX);
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const matches = all
       .map((c, i) => (c.universeId === needle ? i : -1))
       .filter((i) => i >= 0);
@@ -465,7 +472,7 @@ export async function renameCollectionForUniverse(universeId, newUniverseName) {
   if (typeof universeId !== 'string' || !universeId) return null;
   const needle = universeId.slice(0, UNIVERSE_ID_MAX);
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const matchIdxs = all
       .map((c, i) => (c.universeId === needle ? i : -1))
       .filter((i) => i >= 0);
@@ -488,7 +495,7 @@ export async function renameCollectionForUniverse(universeId, newUniverseName) {
 
 export async function updateCollection(id, patch) {
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
@@ -533,7 +540,7 @@ export async function updateCollection(id, patch) {
 
 export async function deleteCollection(id) {
   const { universeId: deletedUniverseId, seriesId: deletedSeriesId } = await serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const target = all.find((c) => c.id === id);
     if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     await writeAll(all.filter((c) => c.id !== id));
@@ -579,7 +586,7 @@ const validateItemInput = (item) => {
 export async function addItem(id, item) {
   const { kind, ref } = validateItemInput(item);
   const merged = await serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
@@ -639,7 +646,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
   }
 
   const result = await serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
@@ -691,7 +698,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
 
 export async function removeItem(id, key) {
   const merged = await serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
@@ -738,7 +745,7 @@ export async function removeItem(id, key) {
 export async function mergeMediaCollectionsFromSync(remoteCollections) {
   if (!Array.isArray(remoteCollections)) return { applied: false, count: 0 };
   return serializeFileWrite(async () => {
-    const all = await listCollections();
+    const all = await listCollections({ includeDeleted: true });
     const localById = new Map(all.map((c) => [c.id, c]));
     let changed = 0;
     for (const remote of remoteCollections) {

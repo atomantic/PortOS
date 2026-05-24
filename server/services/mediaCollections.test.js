@@ -946,6 +946,20 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(merged.description).toBe('local');
   });
 
+  it('preserves deleted + deletedAt through sync merge', async () => {
+    await svc.mergeMediaCollectionsFromSync([{
+      id: 'c1', name: 'C1', items: [],
+      deleted: true, deletedAt: '2026-05-23T00:00:00.000Z',
+      updatedAt: '2026-05-23T00:00:00.000Z',
+    }]);
+    const live = await svc.listCollections();
+    expect(live.find((c) => c.id === 'c1')).toBeUndefined();
+    const all = await svc.listCollections({ includeDeleted: true });
+    const c = all.find((x) => x.id === 'c1');
+    expect(c?.deleted).toBe(true);
+    expect(c?.deletedAt).toBe('2026-05-23T00:00:00.000Z');
+  });
+
   it('compares addedAt as parsed milliseconds (not lexicographic) when picking the earlier item', async () => {
     // sanitizeItem accepts any Date.parse-able string, not strictly ISO-8601.
     // Lexicographic compare would order "05/22/2026 ..." AFTER "2026-..." (the
