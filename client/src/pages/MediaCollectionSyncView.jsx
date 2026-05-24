@@ -20,7 +20,9 @@ export default function MediaCollectionSyncView() {
   return (
     <SyncDetailDrawer
       kind="mediaCollection"
-      recordId={id}
+      // Default to '' (matching SyncView) so a route mounted without the param
+      // never flows `undefined` into the per-kind fetcher calls.
+      recordId={id ?? ''}
       onClose={handleClose}
     />
   );

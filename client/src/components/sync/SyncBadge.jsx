@@ -44,7 +44,9 @@ const STATUS_CONFIG = {
     label: 'Not syncing',
     className: 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30',
     Icon: WifiOff,
-    title: 'No sync-enabled peers configured — enable syncing?',
+    // True when no online peer is syncing THIS category — either no peers are
+    // sync-enabled at all, or they are but have this category turned off.
+    title: 'No peers syncing this category — enable it for a peer?',
   },
 };
 

@@ -11,8 +11,9 @@
  *     static mount and writes it locally. Best-effort; 404 = no sidecar on
  *     the sender, silently ignored.
  *   - `backfillMissingSidecars` — walks a list of local image filenames and
- *     tries each online peer until the sidecar is recovered. For use by a
- *     manual "Backfill sidecars" action in the Instances UI.
+ *     tries each online peer until the sidecar is recovered. Drives the manual
+ *     "Pull missing prompts" action (Unsorted view in MediaCollectionDetail +
+ *     the sync drawer) via POST /api/peer-sync/pull-metadata.
  */
 
 import { existsSync } from 'fs';
