@@ -70,7 +70,7 @@ import {
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -264,6 +264,7 @@ export async function unsubscribePeer(id) {
 const KIND_TO_CATEGORY = Object.freeze({
   universe: 'universe',
   series: 'pipeline',
+  mediaCollection: 'mediaCollections',
 });
 
 function peerAllowsOutbound(peer) {

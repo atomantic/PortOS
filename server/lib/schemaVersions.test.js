@@ -23,6 +23,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(1);
     expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(1);
   });
+
+  it('declares mediaCollections layout version', () => {
+    expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
+  });
 });
 
 describe('buildPortosMeta', () => {

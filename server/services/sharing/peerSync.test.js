@@ -173,10 +173,12 @@ afterEach(async () => {
 
 describe('peerSync', () => {
   describe('PEER_SUBSCRIBABLE_KINDS', () => {
-    it('exposes the canonical kinds (universe + series only)', () => {
+    it('includes universe, series, and mediaCollection', () => {
       // Issues piggyback on series subscriptions — direct issue subs are
       // intentionally rejected per the Stage 2 design.
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toContain('universe');
+      expect(PEER_SUBSCRIBABLE_KINDS).toContain('series');
+      expect(PEER_SUBSCRIBABLE_KINDS).toContain('mediaCollection');
     });
   });
 

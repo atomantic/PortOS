@@ -35,7 +35,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // layout for issues and series.
   pipelineIssues: 1,
   pipelineSeries: 1,
-  // future: mediaCollections: N, ...
+  mediaCollections: 1,
 });
 
 /**

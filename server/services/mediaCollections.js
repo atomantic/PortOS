@@ -174,7 +174,7 @@ export async function createCollection({ name, description = '' }) {
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  return serializeFileWrite(async () => {
+  const created = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
     const now = new Date().toISOString();
     const next = {
@@ -189,6 +189,15 @@ export async function createCollection({ name, description = '' }) {
     await writeAll([...all, next]);
     return next;
   });
+  emitRecordUpdated('mediaCollection', created.id);
+  // Fire-and-forget auto-subscribe to every peer with mediaCollections-sync
+  // enabled. Dynamic import keeps peerSync.js out of the mediaCollections
+  // module-load graph — peerSync imports mergeMediaCollectionsFromSync from
+  // here, so a static import would close a cycle.
+  import('./sharing/peerSync.js')
+    .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('mediaCollection', created.id))
+    .catch(() => {});
+  return created;
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create

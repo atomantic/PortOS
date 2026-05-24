@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 
@@ -9,6 +10,11 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => fileStore.has(path) ? fileStore.get(path) : fallback),
 }));
+
+// Suppress the fire-and-forget dynamic import so tests don't load the real
+// peerSync module graph (which reads the live peer registry and imports
+// universe/series services).
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -1073,5 +1079,22 @@ describe('mergeMediaCollectionsFromSync', () => {
     // The 08:00 slash-format timestamp is earlier than 10:00 ISO; numeric
     // compare picks it. Lexicographic compare would have picked the ISO one.
     expect(Date.parse(merged.items[0].addedAt)).toBe(Date.parse('05/22/2026 08:00:00 UTC'));
+  });
+});
+
+describe('createCollection — event emission', () => {
+  it('emits a mediaCollection updated event with the created record id', async () => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const updatedEvts = [];
+    const handler = (evt) => updatedEvts.push(evt);
+    recordEvents.on('updated', handler);
+    try {
+      const c = await svc.createCollection({ name: 'New' });
+      expect(updatedEvts).toContainEqual(
+        expect.objectContaining({ recordKind: 'mediaCollection', recordId: c.id }),
+      );
+    } finally {
+      recordEvents.off('updated', handler);
+    }
   });
 });
