@@ -53,3 +53,52 @@ export const sweepTombstonesNow = ({ graceMs } = {}, options) =>
     body: JSON.stringify(graceMs !== undefined ? { graceMs } : {}),
     ...options,
   });
+
+// ---------------------------------------------------------------------------
+// Integrity checking + manual sync (Group 4 — federated media sync integrity)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch integrity diff for a single kind against a specific peer.
+ * Uses `silent: true` because the hook caller owns the failure UI (it just
+ * marks the peer as unavailable rather than toasting on every poll tick).
+ */
+export const fetchSyncIntegrity = (peerId, kind) =>
+  request(
+    `/peer-sync/integrity?peerId=${encodeURIComponent(peerId)}&kind=${encodeURIComponent(kind)}`,
+    { silent: true },
+  );
+
+/**
+ * Trigger a one-record sync push to a specific peer.
+ * Accepts an optional `options` spread so callers that own their error UI can
+ * pass `{ silent: true }`; defaults to letting the helper toast on failure.
+ */
+export const syncRecordToPeer = (peerId, recordKind, recordId, options = {}) =>
+  request('/peer-sync/sync-record', {
+    method: 'POST',
+    body: JSON.stringify({ peerId, recordKind, recordId }),
+    ...options,
+  });
+
+/**
+ * Trigger a full sync-now for all subscribed records to a peer.
+ * Same silent-capable pattern as `syncRecordToPeer`.
+ */
+export const syncNowForPeer = (peerId, options = {}) =>
+  request('/peer-sync/sync-now', {
+    method: 'POST',
+    body: JSON.stringify({ peerId }),
+    ...options,
+  });
+
+/**
+ * Request the server to pull metadata for a list of filenames from peers.
+ * Same silent-capable pattern.
+ */
+export const pullMissingMetadata = (filenames, options = {}) =>
+  request('/peer-sync/pull-metadata', {
+    method: 'POST',
+    body: JSON.stringify({ filenames }),
+    ...options,
+  });

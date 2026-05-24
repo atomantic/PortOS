@@ -97,6 +97,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useProviderModels` | AI providers + two-step provider→model selection. | Any UI that picks a provider + model. |
 | `useTheme` | Dark/light theme + paired-theme switching. | Theme picker. |
+| `useSyncIntegrity` | Fetches per-kind integrity diff from every eligible online peer; reduces to worst-case `statusById` + `byPeer` breakdown maps. | Federated media sync integrity UI — badges, drawers, peer breakdown. |
 | `useUniverseAction` | LLM-driven universe mutation scaffolding. | Universe Builder action UIs. |
 | `useUniverseNav` | `goToWorld(id)` → navigate to `/universes/:id`, preserve `location.search`. | Any Universe Builder caller that needs to switch worlds via URL. |
 | `useVoiceUiSync` | Keeps voice server's UI index in sync with current page. | Wire once at root for voice agent support. |
