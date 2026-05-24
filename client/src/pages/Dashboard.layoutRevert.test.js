@@ -1,23 +1,31 @@
 import { describe, it, expect } from 'vitest';
 
 // Faithful inline model of Dashboard.jsx's active-layout switch+revert state
-// machine (selectLayout + the serverConfirmedLayoutIdRef). The real Dashboard
-// page renders lazy Suspense widgets and a live socket, which makes the
-// optimistic-set / async-revert timing hard to assert deterministically — so
-// this models just the revert logic. Keep it in sync with Dashboard.jsx:
-//   - optimistic setActiveLayoutId(id) up front
-//   - on PUT success: serverConfirmedLayoutIdRef.current = id
+// machine (selectLayout + serverConfirmedLayoutIdRef + switchGenerationRef).
+// The real Dashboard page renders lazy Suspense widgets and a live socket,
+// which makes the optimistic-set / async-revert timing hard to assert
+// deterministically — so this models just the switch logic. Keep it in sync
+// with Dashboard.jsx:
+//   - increment switchGenerationRef and capture the generation up front
+//   - optimistic setActiveLayoutId(id)
+//   - on PUT success: stamp serverConfirmedLayoutIdRef = id ONLY if this is
+//     still the latest generation (guards against out-of-order resolution)
 //   - on PUT failure: revert via functional setState, current === id ? confirmed : current
 function createLayoutSwitcher(serverActiveId) {
   let displayed = serverActiveId;                       // activeLayoutId
   const serverConfirmed = { current: serverActiveId };  // serverConfirmedLayoutIdRef
+  const generation = { current: 0 };                    // switchGenerationRef
 
   // Mirrors: await api.setActiveDashboardLayout(id).then(...).catch(...)
   // `put` is a promise the caller resolves/rejects to stand in for the PUT.
   const selectLayout = (id, put) => {
+    const myGen = ++generation.current;
     displayed = id; // optimistic
     return put
-      .then(() => { serverConfirmed.current = id; })
+      .then(() => {
+        // only stamp the ref when this is still the latest switch
+        if (generation.current === myGen) serverConfirmed.current = id;
+      })
       .catch(() => {
         // functional setState — only revert if still showing the failed id
         displayed = displayed === id ? serverConfirmed.current : displayed;
@@ -59,6 +67,23 @@ describe('Dashboard active-layout revert', () => {
     await sw.selectLayout('C', Promise.reject(new Error('boom')));
     expect(sw.displayed).toBe('B'); // reverts to the now-confirmed B, not A
     expect(sw.confirmed).toBe('B');
+  });
+
+  it('an out-of-order successful resolution does not stamp the ref with a superseded id', async () => {
+    // B then C both succeed, but B's PUT resolves AFTER C's. Without the
+    // generation guard, B's late success would overwrite the ref back to B
+    // even though C is the displayed + latest layout.
+    const sw = createLayoutSwitcher('A');
+    let resolveB;
+    let resolveC;
+    const pB = sw.selectLayout('B', new Promise((r) => { resolveB = r; })); // gen 1
+    const pC = sw.selectLayout('C', new Promise((r) => { resolveC = r; })); // gen 2
+    resolveC();
+    await pC;
+    resolveB(); // late
+    await pB;
+    expect(sw.confirmed).toBe('C'); // B's stale success is generation-guarded out
+    expect(sw.displayed).toBe('C');
   });
 
   it('a stale failure does not clobber a later in-flight selection', async () => {
