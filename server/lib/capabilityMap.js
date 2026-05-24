@@ -63,24 +63,45 @@ export function providersRow(providers = [], statuses = {}) {
   });
 }
 
-export function calendarRow(accounts = []) {
+// Calendar and Messages share the same account-list shape: each account has an
+// `enabled` flag and a persisted `lastSyncStatus`. An enabled account whose last
+// sync ended in 'error' or 'partial' degrades the row to WARN so the page can't
+// claim "Ready" while a sync is actively failing.
+function accountListRow(id, label, settingsPath, accounts) {
   const list = Array.isArray(accounts) ? accounts : [];
   if (list.length === 0) {
-    return row('calendar', 'Calendar', '/calendar/config', {
+    return row(id, label, settingsPath, {
       status: UNCONFIGURED,
       configured: false,
-      summary: 'No calendar accounts connected',
+      summary: `No ${label} accounts connected`,
     });
   }
-  const enabled = list.filter((a) => a && a.enabled).length;
-  return row('calendar', 'Calendar', '/calendar/config', {
-    status: enabled > 0 ? OK : WARN,
+  const enabledAccounts = list.filter((a) => a && a.enabled);
+  const enabled = enabledAccounts.length;
+  const failing = enabledAccounts.filter(
+    (a) => a.lastSyncStatus === 'error' || a.lastSyncStatus === 'partial',
+  ).length;
+  let status = OK;
+  let summary;
+  if (enabled === 0) {
+    status = WARN;
+    summary = `${list.length} ${plural(list.length, 'account')}, none enabled`;
+  } else if (failing > 0) {
+    status = WARN;
+    summary = `${enabled} of ${list.length} syncing · ${failing} failing`;
+  } else {
+    summary = `${enabled} of ${list.length} ${plural(list.length, 'account')} syncing`;
+  }
+  return row(id, label, settingsPath, {
+    status,
     configured: true,
-    summary: enabled > 0
-      ? `${enabled} of ${list.length} ${plural(list.length, 'account')} syncing`
-      : `${list.length} ${plural(list.length, 'account')}, none enabled`,
-    detail: { total: list.length, enabled },
+    summary,
+    detail: { total: list.length, enabled, failing },
   });
+}
+
+export function calendarRow(accounts = []) {
+  return accountListRow('calendar', 'Calendar', '/calendar/config', accounts);
 }
 
 export function brainRow({ memoryCount = 0, embeddingProviderConfigured = false } = {}) {
@@ -183,23 +204,7 @@ export function telegramRow({ hasToken = false, hasChatId = false, connected = f
 }
 
 export function messagesRow(accounts = []) {
-  const list = Array.isArray(accounts) ? accounts : [];
-  if (list.length === 0) {
-    return row('messages', 'Messages', '/messages/config', {
-      status: UNCONFIGURED,
-      configured: false,
-      summary: 'No message accounts connected',
-    });
-  }
-  const enabled = list.filter((a) => a && a.enabled).length;
-  return row('messages', 'Messages', '/messages/config', {
-    status: enabled > 0 ? OK : WARN,
-    configured: true,
-    summary: enabled > 0
-      ? `${enabled} of ${list.length} ${plural(list.length, 'account')} syncing`
-      : `${list.length} ${plural(list.length, 'account')}, none enabled`,
-    detail: { total: list.length, enabled },
-  });
+  return accountListRow('messages', 'Messages', '/messages/config', accounts);
 }
 
 export function appsRow(summary = {}) {
@@ -213,12 +218,17 @@ export function appsRow(summary = {}) {
   }
   const online = Number(summary?.online) || 0;
   const stopped = Number(summary?.stopped) || 0;
+  // notStarted = registered but never launched / no matching PM2 process — a
+  // setup gap this page exists to surface, so it degrades the row too. unmanaged
+  // (Xcode/native projects with no runtime state) is intentionally NOT counted.
+  const notStarted = Number(summary?.notStarted) || 0;
   return row('apps', 'Apps & Processes', '/apps', {
-    status: stopped > 0 ? WARN : OK,
+    status: stopped > 0 || notStarted > 0 ? WARN : OK,
     configured: true,
     summary: `${total} ${plural(total, 'app')} · ${online} online`
-      + (stopped > 0 ? ` · ${stopped} stopped` : ''),
-    detail: { total, online, stopped },
+      + (stopped > 0 ? ` · ${stopped} stopped` : '')
+      + (notStarted > 0 ? ` · ${notStarted} not started` : ''),
+    detail: { total, online, stopped, notStarted },
   });
 }
 

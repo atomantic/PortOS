@@ -62,6 +62,17 @@ describe('calendarRow / messagesRow', () => {
   it('warns when accounts exist but none enabled', () => {
     expect(calendarRow([{ enabled: false }]).status).toBe(WARN);
   });
+
+  it('warns when an enabled account last sync failed', () => {
+    const r = calendarRow([{ enabled: true, lastSyncStatus: 'error' }, { enabled: true, lastSyncStatus: 'success' }]);
+    expect(r.status).toBe(WARN);
+    expect(r.detail.failing).toBe(1);
+    expect(r.summary).toContain('1 failing');
+    // 'partial' also counts as failing
+    expect(messagesRow([{ enabled: true, lastSyncStatus: 'partial' }]).status).toBe(WARN);
+    // a never-synced (null) account is not a failure
+    expect(calendarRow([{ enabled: true, lastSyncStatus: null }]).status).toBe(OK);
+  });
 });
 
 describe('brainRow', () => {
@@ -146,6 +157,13 @@ describe('appsRow', () => {
   it('ok when all online, warns when some stopped', () => {
     expect(appsRow({ total: 3, online: 3, stopped: 0 }).status).toBe(OK);
     expect(appsRow({ total: 3, online: 2, stopped: 1 }).status).toBe(WARN);
+  });
+
+  it('warns when apps are registered but never started', () => {
+    const r = appsRow({ total: 3, online: 0, stopped: 0, notStarted: 3 });
+    expect(r.status).toBe(WARN);
+    expect(r.summary).toContain('3 not started');
+    expect(r.detail.notStarted).toBe(3);
   });
 });
 
