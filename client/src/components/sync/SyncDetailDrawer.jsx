@@ -324,10 +324,13 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
               <p className="text-port-error text-sm">Failed to load sync status.</p>
             )}
 
+            {/* noSyncingPeers is also true when peers EXIST but this category's
+                toggle is off — so the copy must not imply "no peers at all"
+                (mirrors the SyncBadge 'not-syncing' tooltip). */}
             {!loading && !error && noSyncingPeers && (
               <div className="flex items-center gap-2 text-gray-500 text-sm">
                 <WifiOff className="w-4 h-4" />
-                No sync-enabled peers configured.
+                No peers are syncing this category — enable it for a peer to sync this record.
               </div>
             )}
 

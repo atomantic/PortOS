@@ -214,10 +214,10 @@ describe('SyncDetailDrawer', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('shows "No sync-enabled peers" when noSyncingPeers is true', async () => {
+  it('shows a category-accurate message (not "no peers at all") when noSyncingPeers is true', async () => {
     mockUseSyncIntegrity.mockReturnValue(defaultHookState({ noSyncingPeers: true, byPeer: new Map() }));
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/no sync-enabled peers/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no peers are syncing this category/i)).toBeInTheDocument());
   });
 
   it('shows loading spinner while integrity data is loading', async () => {
