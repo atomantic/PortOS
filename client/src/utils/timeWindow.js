@@ -1,5 +1,8 @@
 // Time-window helpers for dashboard layout auto-activation.
-// Predicate logic is mirrored on the server (`server/services/dashboardLayouts.js`).
+// Predicate logic (`isInTimeWindow`) mirrors the server's `isWithinTimeWindow`
+// in `server/lib/timezone.js`; the regex below mirrors that file's strict,
+// zero-padded `HHMM_STRICT_RE`. Keep the two literals in sync (parity-tested
+// in timeWindow.test.js and timezone.test.js).
 
 export const TIME_STRING_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
