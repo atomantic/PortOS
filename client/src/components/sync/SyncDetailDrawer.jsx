@@ -2,16 +2,15 @@
  * SyncDetailDrawer — deep-linkable right-side panel showing per-peer sync
  * status for a single record, plus action buttons.
  *
- * Reusable across kinds: currently 'mediaCollection'; will support 'universe'
- * and 'series' in the next unit.
+ * Reusable across kinds: 'mediaCollection', 'universe', 'series'.
  *
  * Props:
  *   kind       — record kind ('mediaCollection' | 'universe' | 'series')
  *   recordId   — the record's id (from URL param)
  *   onClose    — called to navigate back (e.g. useNavigate() back to list)
  *
- * Deep-linkability: this component is mounted under `collections/:id/sync`.
- * It fetches all its own data so it loads standalone from a direct URL.
+ * Deep-linkability: mounted under kind-specific routes via SyncView.
+ * Fetches all its own data so it loads standalone from a direct URL.
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -19,8 +18,17 @@ import { X, RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, Wif
 import toast from '../ui/Toast';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { getMediaCollection, syncRecordToPeer, pullMissingMetadata } from '../../services/api';
+import { getMediaCollection, getUniverse, getPipelineSeries, syncRecordToPeer, pullMissingMetadata } from '../../services/api';
 import MediaImage from '../MediaImage';
+
+// ── Per-kind record fetcher ──────────────────────────────────────────────────
+// Returns a promise resolving to { name, ...rest } for use in the drawer header.
+// Only mediaCollection additionally exposes an `items` array for the thumbnail grid.
+const KIND_FETCHER = {
+  mediaCollection: getMediaCollection,
+  universe: getUniverse,
+  series: getPipelineSeries,
+};
 
 // ── Per-status display config ────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -147,24 +155,36 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   const { byPeer, noSyncingPeers, loading, error, refresh } = useSyncIntegrity(kind);
   const peerEntries = byPeer.get(recordId) ?? [];
 
-  // Collection state is owned here (fetched once) so the preview and the
+  // Record state is owned here (fetched once) so the preview and the
   // "Pull missing metadata" action share the same record — no second fetch
-  // and no double-toast (getMediaCollection has no {silent} support).
-  const [collection, setCollection] = useState(null);
-  const [collectionLoading, setCollectionLoading] = useState(kind === 'mediaCollection');
+  // and no double-toast (kind fetchers have no {silent} support).
+  // For non-mediaCollection kinds we still fetch to show the record name in
+  // the header, but skip the thumbnail grid and pull-metadata button.
+  const fetcher = KIND_FETCHER[kind] ?? null;
+  const [record, setRecord] = useState(null);
+  const [recordLoading, setRecordLoading] = useState(!!fetcher);
 
-  const loadCollection = useCallback(() => {
-    if (kind !== 'mediaCollection') return;
-    setCollectionLoading(true);
-    getMediaCollection(recordId)
-      .then((data) => setCollection(data))
-      .catch(() => setCollection(null))
-      .finally(() => setCollectionLoading(false));
-  }, [kind, recordId]);
+  const loadRecord = useCallback(() => {
+    if (!fetcher) return;
+    setRecordLoading(true);
+    fetcher(recordId)
+      .then((data) => setRecord(data))
+      .catch(() => setRecord(null))
+      .finally(() => setRecordLoading(false));
+  }, [fetcher, recordId]);
 
-  useEffect(() => { loadCollection(); }, [loadCollection]);
+  useEffect(() => { loadRecord(); }, [loadRecord]);
+
+  // Keep the mediaCollection-specific alias in scope so the pull action below
+  // can read it without changing its reference to `collection`.
+  const collection = kind === 'mediaCollection' ? record : null;
+  const collectionLoading = kind === 'mediaCollection' ? recordLoading : false;
+
+  // Convenience alias so the header can show `record?.name` regardless of kind.
+  const recordName = record?.name ?? null;
 
   // Read the image filenames from the already-loaded collection state.
+  // Only runs for mediaCollection — the button is gated to that kind below.
   const [pullMissing, pulling] = useAsyncAction(async () => {
     if (!collection) { toast.error('Collection not loaded yet'); return; }
     const filenames = (collection.items ?? [])
@@ -176,7 +196,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     const attempted = result?.attempted ?? filenames.length;
     toast.success(`Pulled ${recovered}/${attempted} metadata items`);
     refresh();
-    loadCollection(); // refresh the preview thumbnails post-pull
+    loadRecord(); // refresh the preview thumbnails post-pull
   }, { errorMessage: 'Failed to pull missing metadata' });
 
   // Esc key support
@@ -213,7 +233,15 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
       >
         {/* Header */}
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <h2 className="text-base font-medium text-white">Sync Details</h2>
+          <div className="min-w-0">
+            <h2 className="text-base font-medium text-white">Sync Details</h2>
+            {recordName && (
+              <p className="text-xs text-gray-400 truncate">{recordName}</p>
+            )}
+            {!recordName && recordLoading && (
+              <p className="text-xs text-gray-500">Loading…</p>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -285,23 +313,25 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
             )}
           </section>
 
-          {/* Actions */}
-          <section>
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Actions</h3>
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => pullMissing()}
-                disabled={pulling}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
-              >
-                {pulling
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <Download className="w-4 h-4" />}
-                Pull missing metadata
-              </button>
-            </div>
-          </section>
+          {/* Actions — only mediaCollection has pull-metadata right now */}
+          {kind === 'mediaCollection' && (
+            <section>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Actions</h3>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => pullMissing()}
+                  disabled={pulling}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
+                >
+                  {pulling
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <Download className="w-4 h-4" />}
+                  Pull missing metadata
+                </button>
+              </div>
+            </section>
+          )}
         </div>
       </aside>
     </>

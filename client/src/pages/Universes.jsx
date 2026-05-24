@@ -9,14 +9,16 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
+import SyncBadge from '../components/sync/SyncBadge';
 import { timeAgo } from '../utils/formatters';
 import { listUniverses, deleteUniverse, listPipelineSeries } from '../services/api';
+import { useSyncIntegrity } from '../hooks/useSyncIntegrity';
 
 // Named canon entities across all trunks — the "Canon" column reflects the
 // characters/places/objects the user has registered, not the looser variation
@@ -44,9 +46,12 @@ function DeleteButton({ universe, armed, onDelete }) {
 }
 
 export default function Universes() {
+  const navigate = useNavigate();
   const [universes, setUniverses] = useState([]);
   const [series, setSeries] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const { statusById, noSyncingPeers } = useSyncIntegrity('universe');
 
   useEffect(() => {
     // Guard setState against a navigate-away before the fetch resolves —
@@ -158,15 +163,21 @@ export default function Universes() {
                 {universes.map((u) => (
                   <tr key={u.id} className="border-b border-port-border/50 last:border-0 hover:bg-port-bg/40 transition-colors">
                     <td className="px-4 py-3 align-top">
-                      <Link to={`/universes/${encodeURIComponent(u.id)}`} className="block min-w-0 group">
-                        <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
-                          <span>{u.name || '(untitled universe)'}</span>
-                          {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
-                        </div>
-                        {u.logline ? (
-                          <div className="text-xs text-gray-500 mt-0.5 line-clamp-1 break-words">{u.logline}</div>
-                        ) : null}
-                      </Link>
+                      <div className="flex items-start gap-2 min-w-0">
+                        <Link to={`/universes/${encodeURIComponent(u.id)}`} className="block min-w-0 group flex-1">
+                          <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
+                            <span>{u.name || '(untitled universe)'}</span>
+                            {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
+                          </div>
+                          {u.logline ? (
+                            <div className="text-xs text-gray-500 mt-0.5 line-clamp-1 break-words">{u.logline}</div>
+                          ) : null}
+                        </Link>
+                        <SyncBadge
+                          status={noSyncingPeers ? 'not-syncing' : statusById.get(u.id)}
+                          onClick={() => navigate(`/universes/${encodeURIComponent(u.id)}/sync`)}
+                        />
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{canonCount(u)}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{seriesCountByUniverse[u.id] || 0}</td>
@@ -208,6 +219,10 @@ export default function Universes() {
                 <div className="flex items-center gap-1 mt-2">
                   <ShareToButton kind="universe" ids={[u.id]} compact />
                   <SyncToPeerButton recordKind="universe" recordId={u.id} compact />
+                  <SyncBadge
+                    status={noSyncingPeers ? 'not-syncing' : statusById.get(u.id)}
+                    onClick={() => navigate(`/universes/${encodeURIComponent(u.id)}/sync`)}
+                  />
                 </div>
               </li>
             ))}

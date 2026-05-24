@@ -10,11 +10,15 @@ vi.mock('../../hooks/useSyncIntegrity', () => ({
 
 // ── Mock API calls ───────────────────────────────────────────────────────────
 const mockGetMediaCollection = vi.fn();
+const mockGetUniverse = vi.fn();
+const mockGetPipelineSeries = vi.fn();
 const mockSyncRecordToPeer = vi.fn();
 const mockPullMissingMetadata = vi.fn();
 
 vi.mock('../../services/api', () => ({
   getMediaCollection: (...args) => mockGetMediaCollection(...args),
+  getUniverse: (...args) => mockGetUniverse(...args),
+  getPipelineSeries: (...args) => mockGetPipelineSeries(...args),
   syncRecordToPeer: (...args) => mockSyncRecordToPeer(...args),
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),
 }));
@@ -68,9 +72,11 @@ const pendingPromise = () => new Promise(() => {});
 beforeEach(() => {
   vi.clearAllMocks();
   mockUseSyncIntegrity.mockReturnValue(defaultHookState());
-  // Default: never resolve (safe for tests that don't assert on collection content).
-  // Individual tests that need collection data override this with mockResolvedValue.
+  // Default: never resolve (safe for tests that don't assert on record content).
+  // Individual tests that need record data override this with mockResolvedValue.
   mockGetMediaCollection.mockImplementation(pendingPromise);
+  mockGetUniverse.mockImplementation(pendingPromise);
+  mockGetPipelineSeries.mockImplementation(pendingPromise);
   mockSyncRecordToPeer.mockResolvedValue({ ok: true });
   mockPullMissingMetadata.mockResolvedValue({ recovered: 2, attempted: 2 });
 });
@@ -193,5 +199,125 @@ describe('SyncDetailDrawer', () => {
     // pull triggers a post-pull preview refresh (the 2nd fetch), but the
     // action itself did not add a redundant fetch before pulling.
     expect(mockGetMediaCollection).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── universe kind ────────────────────────────────────────────────────────────
+describe('SyncDetailDrawer — kind="universe"', () => {
+  const UNIVERSE_ID = 'uni-abc';
+  const UNIVERSE_DATA = { id: UNIVERSE_ID, name: 'Iron Veil' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseSyncIntegrity.mockReturnValue({
+      byPeer: (() => {
+        const m = new Map();
+        m.set(UNIVERSE_ID, [
+          { peerId: 'peer-a', peerName: 'void', status: 'diverged' },
+          { peerId: 'peer-b', peerName: 'null', status: 'in-parity' },
+        ]);
+        return m;
+      })(),
+      noSyncingPeers: false,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+    });
+    mockGetUniverse.mockResolvedValue(UNIVERSE_DATA);
+    mockGetPipelineSeries.mockImplementation(pendingPromise);
+    mockGetMediaCollection.mockImplementation(pendingPromise);
+    mockSyncRecordToPeer.mockResolvedValue({ ok: true });
+    mockPullMissingMetadata.mockResolvedValue({ recovered: 0, attempted: 0 });
+  });
+
+  it('shows the universe name in the header', async () => {
+    render(<SyncDetailDrawer kind="universe" recordId={UNIVERSE_ID} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Iron Veil')).toBeInTheDocument());
+  });
+
+  it('shows per-peer breakdown', async () => {
+    render(<SyncDetailDrawer kind="universe" recordId={UNIVERSE_ID} onClose={() => {}} />);
+    expect(screen.getByText('void')).toBeInTheDocument();
+    expect(screen.getByText('null')).toBeInTheDocument();
+    expect(screen.getByText('Diverged')).toBeInTheDocument();
+  });
+
+  it('calls syncRecordToPeer with kind="universe" when "Sync to peer" is clicked', async () => {
+    render(<SyncDetailDrawer kind="universe" recordId={UNIVERSE_ID} onClose={() => {}} />);
+    const [syncBtn] = screen.getAllByRole('button', { name: /sync to peer/i });
+    fireEvent.click(syncBtn);
+    await waitFor(() => expect(mockSyncRecordToPeer).toHaveBeenCalledWith(
+      'peer-a', 'universe', UNIVERSE_ID, { silent: true },
+    ));
+  });
+
+  it('does NOT render the thumbnail grid or pull-prompts button', async () => {
+    render(<SyncDetailDrawer kind="universe" recordId={UNIVERSE_ID} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Iron Veil')).toBeInTheDocument());
+    expect(screen.queryByTestId('media-image')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pull missing metadata/i })).not.toBeInTheDocument();
+  });
+
+  it('calls getUniverse (not getMediaCollection or getPipelineSeries)', async () => {
+    render(<SyncDetailDrawer kind="universe" recordId={UNIVERSE_ID} onClose={() => {}} />);
+    await waitFor(() => expect(mockGetUniverse).toHaveBeenCalledWith(UNIVERSE_ID));
+    expect(mockGetMediaCollection).not.toHaveBeenCalled();
+    expect(mockGetPipelineSeries).not.toHaveBeenCalled();
+  });
+});
+
+// ── series kind ──────────────────────────────────────────────────────────────
+describe('SyncDetailDrawer — kind="series"', () => {
+  const SERIES_ID = 'ser-xyz';
+  const SERIES_DATA = { id: SERIES_ID, name: 'Salt Run' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseSyncIntegrity.mockReturnValue({
+      byPeer: (() => {
+        const m = new Map();
+        m.set(SERIES_ID, [
+          { peerId: 'peer-a', peerName: 'NaN', status: 'local-only' },
+        ]);
+        return m;
+      })(),
+      noSyncingPeers: false,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+    });
+    mockGetPipelineSeries.mockResolvedValue(SERIES_DATA);
+    mockGetUniverse.mockImplementation(pendingPromise);
+    mockGetMediaCollection.mockImplementation(pendingPromise);
+    mockSyncRecordToPeer.mockResolvedValue({ ok: true });
+    mockPullMissingMetadata.mockResolvedValue({ recovered: 0, attempted: 0 });
+  });
+
+  it('shows the series name in the header', async () => {
+    render(<SyncDetailDrawer kind="series" recordId={SERIES_ID} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Salt Run')).toBeInTheDocument());
+  });
+
+  it('calls syncRecordToPeer with kind="series"', async () => {
+    render(<SyncDetailDrawer kind="series" recordId={SERIES_ID} onClose={() => {}} />);
+    const [syncBtn] = screen.getAllByRole('button', { name: /sync to peer/i });
+    fireEvent.click(syncBtn);
+    await waitFor(() => expect(mockSyncRecordToPeer).toHaveBeenCalledWith(
+      'peer-a', 'series', SERIES_ID, { silent: true },
+    ));
+  });
+
+  it('does NOT render the thumbnail grid or pull-prompts button', async () => {
+    render(<SyncDetailDrawer kind="series" recordId={SERIES_ID} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Salt Run')).toBeInTheDocument());
+    expect(screen.queryByTestId('media-image')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pull missing metadata/i })).not.toBeInTheDocument();
+  });
+
+  it('calls getPipelineSeries (not getMediaCollection or getUniverse)', async () => {
+    render(<SyncDetailDrawer kind="series" recordId={SERIES_ID} onClose={() => {}} />);
+    await waitFor(() => expect(mockGetPipelineSeries).toHaveBeenCalledWith(SERIES_ID));
+    expect(mockGetMediaCollection).not.toHaveBeenCalled();
+    expect(mockGetUniverse).not.toHaveBeenCalled();
   });
 });
