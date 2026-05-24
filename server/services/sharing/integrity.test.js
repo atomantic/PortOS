@@ -146,13 +146,13 @@ describe('getPeerIntegrity', () => {
     expect(result).toEqual({ available: false, reason: 'peer-too-old', records: [] });
   });
 
-  it('returns available:false with reason peer-too-old when peerFetch throws', async () => {
+  it('returns available:false with reason peer-unreachable when peerFetch throws', async () => {
     const peer = makePeer('peer-x');
     vi.mocked(getPeers).mockResolvedValue([peer]);
     vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
 
     const result = await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' });
-    expect(result).toEqual({ available: false, reason: 'peer-too-old', records: [] });
+    expect(result).toEqual({ available: false, reason: 'peer-unreachable', records: [] });
   });
 
   it('returns available:false with reason fetch-failed on non-404 error status', async () => {

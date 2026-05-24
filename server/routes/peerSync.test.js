@@ -406,6 +406,15 @@ describe('peer-sync routes', () => {
       expect(integritySvc.getPeerIntegrity).not.toHaveBeenCalled();
     });
 
+    it('400 when peerId is an empty / whitespace string', async () => {
+      for (const peerId of ['', '%20%20']) {
+        const res = await request(buildApp())
+          .get(`/api/peer-sync/integrity?peerId=${peerId}&kind=mediaCollection`);
+        expect(res.status).toBe(400);
+      }
+      expect(integritySvc.getPeerIntegrity).not.toHaveBeenCalled();
+    });
+
     it('400 when kind is missing', async () => {
       const res = await request(buildApp())
         .get('/api/peer-sync/integrity?peerId=peer-x');

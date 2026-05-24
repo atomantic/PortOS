@@ -146,7 +146,7 @@ router.get('/manifest', asyncHandler(async (req, res) => {
 // Fetches the peer's /manifest, runs the pure diff, and returns
 // `{ available, reason?, records: [{ id, name, status }] }`.
 router.get('/integrity', asyncHandler(async (req, res) => {
-  if (typeof req.query.peerId !== 'string') {
+  if (typeof req.query.peerId !== 'string' || !req.query.peerId.trim()) {
     throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (!validKind(req.query.kind)) {

@@ -620,6 +620,15 @@ export async function diffAssetManifestAgainstLocal(manifest) {
       missing.push(sanitizedEntry);
       continue;
     }
+    // For images, compute the hash result once up front: it carries both the
+    // sha256 AND the parsed sidecar JSON, so the sidecarSha256 comparison below
+    // reuses it instead of re-reading the same file (one sidecar read per image
+    // instead of two). Only touch the cache machinery when a comparison will
+    // actually use it (sha256 or sidecarSha256 advertised by the peer).
+    let imageHashResult = null;
+    if (entry.kind === 'image' && (isStr(entry.sha256) || isStr(entry.sidecarSha256))) {
+      imageHashResult = await getOrComputeImageSha256(fullPath);
+    }
     // Compare SHA when the manifest carries one — for ALL kinds, not just
     // images. The image path uses the sidecar cache (fast for the common
     // ~200-asset universe case); image-ref/video stream-hash on demand.
@@ -628,7 +637,7 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // ONLY thing that would catch it 60s later — better to detect on push.
     if (isStr(entry.sha256)) {
       const localHash = entry.kind === 'image'
-        ? (await getOrComputeImageSha256(fullPath))?.hash ?? null
+        ? imageHashResult?.hash ?? null
         : await sha256File(fullPath).catch(() => null);
       if (localHash !== entry.sha256) {
         missing.push(sanitizedEntry);
@@ -645,8 +654,11 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // cache block stripped). Hashing the raw sidecar file would never match the
     // sender's gen-params-only hash and would re-flag the image every cycle.
     if (entry.kind === 'image' && isStr(entry.sidecarSha256)) {
-      const localSidecarPath = join(PATHS.images, imageSidecarName(safeName));
-      const localSidecar = await readJSONFile(localSidecarPath, null, { logError: false });
+      // Reuse the sidecar already loaded by getOrComputeImageSha256; only fall
+      // back to a direct read if that result was unavailable (e.g. the image
+      // became unreadable between the existsSync check and the stat).
+      const localSidecar = imageHashResult?.sidecar
+        ?? await readJSONFile(join(PATHS.images, imageSidecarName(safeName)), null, { logError: false });
       const localSidecarHash = sidecarGenParamsHash(localSidecar);
       if (localSidecarHash !== entry.sidecarSha256) missing.push(sanitizedEntry);
     }

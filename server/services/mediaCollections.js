@@ -126,7 +126,11 @@ const sanitizeCollection = (raw) => {
   const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString();
   const updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : createdAt;
   const deleted = raw.deleted === true;
-  const deletedAt = deleted && typeof raw.deletedAt === 'string' ? raw.deletedAt : (deleted ? createdAt : null);
+  // When a tombstone is missing its explicit deletedAt, fall back to updatedAt
+  // (the most-recent timestamp we have) rather than createdAt — the deletion
+  // happened at or after the last edit, so createdAt would make the tombstone
+  // look far older than it is and skew LWW merges + the GC cutoff window.
+  const deletedAt = deleted && typeof raw.deletedAt === 'string' ? raw.deletedAt : (deleted ? updatedAt : null);
   return { id: raw.id, name, description, coverKey, universeId, seriesId, items, createdAt, updatedAt, deleted, deletedAt };
 };
 

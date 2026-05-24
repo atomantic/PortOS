@@ -13,7 +13,7 @@
  * Fetches all its own data so it loads standalone from a direct URL.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, WifiOff, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
@@ -164,13 +164,19 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   const [record, setRecord] = useState(null);
   const [recordLoading, setRecordLoading] = useState(!!fetcher);
 
+  // Drop async results that resolve after the drawer unmounts (fast route
+  // change / close while a fetch is in flight) to avoid setState-on-unmounted
+  // warnings. Never reset to true — handles dev-mode double-mount cleanly.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const loadRecord = useCallback(() => {
     if (!fetcher) return;
     setRecordLoading(true);
     fetcher(recordId)
-      .then((data) => setRecord(data))
-      .catch(() => setRecord(null))
-      .finally(() => setRecordLoading(false));
+      .then((data) => { if (mountedRef.current) setRecord(data); })
+      .catch(() => { if (mountedRef.current) setRecord(null); })
+      .finally(() => { if (mountedRef.current) setRecordLoading(false); });
   }, [fetcher, recordId]);
 
   useEffect(() => { loadRecord(); }, [loadRecord]);

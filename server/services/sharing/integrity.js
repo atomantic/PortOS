@@ -63,7 +63,12 @@ export async function getPeerIntegrity({ peerId, kind }) {
     `${peerBaseUrl(peer)}/api/peer-sync/manifest?kind=${encodeURIComponent(kind)}`,
   ).catch(() => null);
 
-  if (!res || res.status === 404) return { available: false, reason: 'peer-too-old', records: [] };
+  // Distinguish a network failure (peerFetch threw / returned null) from a 404.
+  // A null result means the peer is offline/unreachable — NOT that it's running
+  // an older PortOS without the /manifest route. Lumping them together would
+  // tell the user "peer too old, upgrade it" when the peer is simply down.
+  if (!res) return { available: false, reason: 'peer-unreachable', records: [] };
+  if (res.status === 404) return { available: false, reason: 'peer-too-old', records: [] };
   if (!res.ok) return { available: false, reason: 'fetch-failed', records: [] };
 
   const body = await res.json().catch(() => null);

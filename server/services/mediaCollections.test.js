@@ -1075,6 +1075,26 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(found?.deleted).toBe(true);
   });
 
+  it('a tombstone missing deletedAt falls back to updatedAt (not the older createdAt)', async () => {
+    // A hand-edited / legacy tombstone may carry deleted:true with no explicit
+    // deletedAt. The effective deletion time should align with the most-recent
+    // timestamp (updatedAt), not createdAt — otherwise LWW + GC see it as far
+    // older than it really is.
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1', name: 'Gone', description: '', coverKey: null,
+        universeId: null, seriesId: null, items: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-05-22T03:00:00.000Z',
+        deleted: true,
+        // deletedAt intentionally omitted
+      }],
+    });
+    const [c] = await svc.listCollections({ includeDeleted: true });
+    expect(c.deleted).toBe(true);
+    expect(c.deletedAt).toBe('2026-05-22T03:00:00.000Z');
+  });
+
   it('compares addedAt as parsed milliseconds (not lexicographic) when picking the earlier item', async () => {
     // sanitizeItem accepts any Date.parse-able string, not strictly ISO-8601.
     // Lexicographic compare would order "05/22/2026 ..." AFTER "2026-..." (the
