@@ -367,6 +367,7 @@ async function categoriesCoveredByPeerSync(peerId) {
   for (const sub of subs) {
     if (sub.recordKind === 'universe') skip.add('universe');
     if (sub.recordKind === 'series') skip.add('pipeline');
+    if (sub.recordKind === 'mediaCollection') skip.add('mediaCollections');
   }
   return skip;
 }
@@ -574,11 +575,12 @@ async function runTombstoneSweep() {
     console.error(`❌ Tombstone sweep failed: ${err.message}`);
     return null;
   });
-  if (result && (result.universes > 0 || result.series > 0 || result.issues > 0)) {
+  if (result && (result.universes > 0 || result.series > 0 || result.issues > 0 || result.collections > 0)) {
     // "series" is already its own plural so no s-suffix toggle needed there.
     const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
     const issues = `${result.issues} issue${result.issues === 1 ? '' : 's'}`;
-    console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}`);
+    const collections = `${result.collections} collection${result.collections === 1 ? '' : 's'}`;
+    console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}, ${collections}`);
   }
 }
 

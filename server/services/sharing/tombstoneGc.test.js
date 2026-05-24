@@ -13,6 +13,9 @@ vi.mock('../pipeline/series.js', () => ({
 vi.mock('../pipeline/issues.js', () => ({
   pruneTombstonedIssues: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
+vi.mock('../mediaCollections.js', () => ({
+  pruneTombstonedCollections: vi.fn().mockResolvedValue({ pruned: 0 }),
+}));
 vi.mock('./peerSync.js', () => ({
   listPeerSubscriptions: vi.fn(),
 }));
@@ -31,6 +34,7 @@ import {
 import { pruneTombstonedUniverses } from '../universeBuilder.js';
 import { pruneTombstonedSeries } from '../pipeline/series.js';
 import { pruneTombstonedIssues } from '../pipeline/issues.js';
+import { pruneTombstonedCollections } from '../mediaCollections.js';
 import { listPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
 import { getPeers } from '../instances.js';
@@ -201,20 +205,22 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedUniverses.mockResolvedValueOnce({ pruned: 2 });
     pruneTombstonedSeries.mockResolvedValueOnce({ pruned: 0 });
     pruneTombstonedIssues.mockResolvedValueOnce({ pruned: 5 });
+    pruneTombstonedCollections.mockResolvedValueOnce({ pruned: 3 });
     const result = await sweepTombstones({ now: NOW });
-    expect(result).toEqual({ universes: 2, series: 0, issues: 5, refused: [] });
+    expect(result).toEqual({ universes: 2, series: 0, issues: 5, collections: 3, refused: [] });
   });
 
   it('lists kinds whose cutoff was null in `refused` so the manual-trigger UI can explain why nothing pruned', async () => {
     listPeerSubscriptions.mockResolvedValue([]);
     getPeers.mockResolvedValue([
-      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: true } },
+      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: true, mediaCollections: true } },
     ]);
     const result = await sweepTombstones({ now: NOW });
-    expect(result.refused.sort()).toEqual(['issue', 'series', 'universe']);
+    expect(result.refused.sort()).toEqual(['issue', 'mediaCollection', 'series', 'universe']);
     expect(result.universes).toBe(0);
     expect(result.series).toBe(0);
     expect(result.issues).toBe(0);
+    expect(result.collections).toBe(0);
   });
 });
 
@@ -282,13 +288,14 @@ describe('getSweepStatus — dry-run for UI button gating', () => {
   it('returns refused kinds without invoking any prune helper', async () => {
     listPeerSubscriptions.mockResolvedValue([]);
     getPeers.mockResolvedValue([
-      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: true } },
+      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: true, mediaCollections: true } },
     ]);
     const result = await getSweepStatus({ now: NOW });
-    expect(result.refused.sort()).toEqual(['issue', 'series', 'universe']);
+    expect(result.refused.sort()).toEqual(['issue', 'mediaCollection', 'series', 'universe']);
     expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
     expect(pruneTombstonedSeries).not.toHaveBeenCalled();
     expect(pruneTombstonedIssues).not.toHaveBeenCalled();
+    expect(pruneTombstonedCollections).not.toHaveBeenCalled();
   });
 
   it('returns an empty refused list when every kind has an ack horizon', async () => {
@@ -378,5 +385,49 @@ describe('sweepTombstones — resurrection safety against snapshot-mode peers', 
     await sweepTombstones({ now: NOW });
     expect(pruneTombstonedUniverses).toHaveBeenCalled();
     expect(pruneTombstonedSeries).toHaveBeenCalled();
+  });
+});
+
+describe('sweepTombstones — mediaCollection GC (Task 1.10b)', () => {
+  it('prunes collection tombstones when no peers are subscribed (grace satisfied)', async () => {
+    // No subs → peerIdsSubscribedToKind returns [] → getMinAckAcrossPeers([])
+    // returns Infinity → cutoff = min(Infinity, NOW) - GRACE + 1 = NOW - GRACE + 1.
+    // pruneTombstonedCollections is called; universe/series/issues also run with
+    // their own grace-only cutoffs.
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedCollections).toHaveBeenCalledWith(NOW - TOMBSTONE_GRACE_MS + 1);
+  });
+
+  it('does NOT prune collection tombstones when a subscribed peer has not acked', async () => {
+    // Peer-a has a per-record mediaCollection sub but its ack cursor is far
+    // behind. The cutoff must clamp to the peer's ack water-mark so we can't
+    // prune a tombstone the peer hasn't received yet.
+    const minAck = NOW - 48 * 60 * 60 * 1000; // 48h behind now
+    mockSubs({ mediaCollection: [{ peerId: 'peer-a' }] });
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    getMinAckAcrossPeers.mockImplementation(async (peerIds) => {
+      if (peerIds.includes('peer-a')) return minAck;
+      return Infinity;
+    });
+    await sweepTombstones({ now: NOW });
+    // Cutoff must be clamped to the laggiest peer's ack, not now-GRACE.
+    expect(pruneTombstonedCollections).toHaveBeenCalledWith(minAck - TOMBSTONE_GRACE_MS + 1);
+    // Verify this is older than the grace-only cutoff — i.e. we DID clamp.
+    const calledWith = pruneTombstonedCollections.mock.calls[0][0];
+    expect(calledWith).toBeLessThan(NOW - TOMBSTONE_GRACE_MS + 1);
+  });
+
+  it('refuses to prune collection tombstones when a snapshot-mode peer exists for mediaCollections but has no per-record sub', async () => {
+    // A snapshot-only peer for mediaCollections can resurrect a pruned record
+    // via its next snapshot push — must refuse the prune until a per-record sub
+    // gives us an ack horizon.
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncCategories: { mediaCollections: true } },
+    ]);
+    const result = await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedCollections).not.toHaveBeenCalled();
+    expect(result.refused).toContain('mediaCollection');
+    expect(result.collections).toBe(0);
   });
 });

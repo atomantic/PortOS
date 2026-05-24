@@ -739,6 +739,23 @@ export async function removeItem(id, key) {
   return merged;
 }
 
+// Hard-remove tombstoned collections whose deletedAt is older than the cutoff.
+// Called by tombstoneGc once every subscribed peer has acked the deletion.
+export async function pruneTombstonedCollections(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
+  return serializeFileWrite(async () => {
+    const all = await listCollections({ includeDeleted: true });
+    const keep = all.filter((c) => {
+      if (c.deleted !== true) return true;
+      const ms = Date.parse(c.deletedAt || '');
+      return !(Number.isFinite(ms) && ms < olderThanMs);
+    });
+    if (keep.length === all.length) return { pruned: 0 };
+    await writeAll(keep);
+    return { pruned: all.length - keep.length };
+  });
+}
+
 /**
  * Merge an incoming list of collections from a peer (snapshot sync OR the
  * per-record push payload's `linkedCollection` field). Per-collection

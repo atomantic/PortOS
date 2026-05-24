@@ -1098,3 +1098,66 @@ describe('createCollection — event emission', () => {
     }
   });
 });
+
+describe('pruneTombstonedCollections', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+  });
+
+  it('prunes tombstoned collections older than the cutoff and returns the count', async () => {
+    // Create a live collection and soft-delete it with an old timestamp by
+    // injecting the tombstone directly into the file store.
+    const c = await svc.createCollection({ name: 'ToDelete' });
+    const oldTs = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // Overwrite the file store with a tombstone carrying an old deletedAt.
+    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
+    const path = '/mock/data/media-collections.json';
+    const current = await readJSONFile(path, { collections: [] });
+    const withTombstone = current.collections.map((col) =>
+      col.id === c.id
+        ? { ...col, deleted: true, deletedAt: oldTs, updatedAt: oldTs, items: [] }
+        : col,
+    );
+    await atomicWrite(path, { collections: withTombstone });
+
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 1 });
+    expect(await svc.listCollections({ includeDeleted: true })).toHaveLength(0);
+  });
+
+  it('does NOT prune a live collection', async () => {
+    await svc.createCollection({ name: 'Live' });
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 0 });
+    expect(await svc.listCollections()).toHaveLength(1);
+  });
+
+  it('does NOT prune a tombstone newer than the cutoff', async () => {
+    const c = await svc.createCollection({ name: 'RecentDelete' });
+    // Soft-delete with a future timestamp (simulating a delete that just happened).
+    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
+    const path = '/mock/data/media-collections.json';
+    const current = await readJSONFile(path, { collections: [] });
+    const futureTs = new Date(Date.now() + 60 * 1000).toISOString();
+    const withTombstone = current.collections.map((col) =>
+      col.id === c.id
+        ? { ...col, deleted: true, deletedAt: futureTs, updatedAt: futureTs, items: [] }
+        : col,
+    );
+    await atomicWrite(path, { collections: withTombstone });
+
+    // Cut-off is now; the tombstone's deletedAt is in the future → not pruned.
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 0 });
+    const all = await svc.listCollections({ includeDeleted: true });
+    expect(all).toHaveLength(1);
+    expect(all[0].deleted).toBe(true);
+  });
+
+  it('returns { pruned: 0 } without touching the file when cutoff is not a finite number', async () => {
+    await svc.createCollection({ name: 'A' });
+    expect(await svc.pruneTombstonedCollections(NaN)).toEqual({ pruned: 0 });
+    expect(await svc.pruneTombstonedCollections(Infinity)).toEqual({ pruned: 0 });
+  });
+});

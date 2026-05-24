@@ -29,6 +29,7 @@
 import { pruneTombstonedUniverses } from '../universeBuilder.js';
 import { pruneTombstonedSeries } from '../pipeline/series.js';
 import { pruneTombstonedIssues } from '../pipeline/issues.js';
+import { pruneTombstonedCollections } from '../mediaCollections.js';
 import { listPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
 import { getPeers } from '../instances.js';
@@ -61,6 +62,7 @@ function peerIdsSubscribedToKind(subs, peers, recordKind) {
 function snapshotCategoryForKind(recordKind) {
   if (recordKind === 'universe') return 'universe';
   if (recordKind === 'series' || recordKind === 'issue') return 'pipeline';
+  if (recordKind === 'mediaCollection') return 'mediaCollections';
   return null;
 }
 
@@ -113,7 +115,7 @@ async function loadState() {
   return { peers, subs };
 }
 
-function refusedFromCutoffs(universeCutoff, seriesCutoff) {
+function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
   const refused = [];
   if (universeCutoff === null) refused.push('universe');
   // Issue tombstones ride series pushes — refused exactly when series is.
@@ -121,6 +123,7 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff) {
     refused.push('series');
     refused.push('issue');
   }
+  if (collectionCutoff === null) refused.push('mediaCollection');
   return refused;
 }
 
@@ -134,21 +137,24 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff) {
  */
 export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, collectionCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs }),
     cutoffForKind('series', { peers, subs, now, graceMs }),
+    cutoffForKind('mediaCollection', { peers, subs, now, graceMs }),
   ]);
   const issueCutoff = seriesCutoff;
-  const [u, s, i] = await Promise.all([
+  const [u, s, i, c] = await Promise.all([
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
+    collectionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCollections(collectionCutoff),
   ]);
   return {
     universes: u.pruned,
     series: s.pruned,
     issues: i.pruned,
-    refused: refusedFromCutoffs(universeCutoff, seriesCutoff),
+    collections: c.pruned,
+    refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff),
   };
 }
 
@@ -157,11 +163,12 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 // coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, collectionCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('series', { peers, subs, now, graceMs: 0 }),
+    cutoffForKind('mediaCollection', { peers, subs, now, graceMs: 0 }),
   ]);
-  return { refused: refusedFromCutoffs(universeCutoff, seriesCutoff) };
+  return { refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) };
 }
 
 export const TOMBSTONE_GRACE_MS = GRACE_MS;
