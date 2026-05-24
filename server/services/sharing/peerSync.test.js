@@ -758,6 +758,19 @@ describe('peerSync', () => {
       expect(result.pulled).toBe(true);
       expect(typeof result.missingAssets).toBe('number');
     });
+
+    it('invalid-payload when sourceInstanceId does not match the contacted peer', async () => {
+      // We fetched from peer-a, but the payload claims to originate from someone
+      // else — applying it would bind our reverse-subscription/asset-pull to a
+      // peer we never contacted. Reject rather than trust the self-reported origin.
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-b' }),
+      });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'invalid-payload' });
+    });
   });
 
   describe('syncNowForPeer', () => {

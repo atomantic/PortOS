@@ -1814,6 +1814,14 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // /push route uses before handing it to applyIncomingPush.
   const parsed = peerSyncPushSchema.safeParse(body);
   if (!parsed.success) return { pulled: false, reason: 'invalid-payload' };
+  // The payload self-reports its origin via `sourceInstanceId`; applyIncomingPush
+  // uses it to wire the reverse subscription + pull asset bytes. We fetched from
+  // `peer`, so the origin MUST be that peer — a record claiming to originate
+  // elsewhere (misconfigured/buggy peer returning the wrong record) would bind
+  // our subscription/asset-pull to a peer we never contacted. Reject the mismatch.
+  if (parsed.data.sourceInstanceId !== peer.instanceId) {
+    return { pulled: false, reason: 'invalid-payload' };
+  }
 
   console.log(`🔄 peerSync: pull-record ${recordKind}/${recordId} ← ${peer.name || peerId}`);
   const result = await applyIncomingPush(parsed.data);
