@@ -32,7 +32,7 @@
  * Idempotent: a second run finds every linked id already canonical → no-op.
  */
 
-import { mkdir, readFile, writeFile, stat } from 'fs/promises';
+import { mkdir, readFile, writeFile, rename, stat } from 'fs/promises';
 import { join } from 'path';
 
 // Inlined copy of services/mediaCollections.js#linkedCollectionId — migrations
@@ -144,7 +144,7 @@ const readJson = async (p, fallback) => {
 const writeJsonAtomic = async (p, value) => {
   const tmp = `${p}.tmp-038`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
-  await (await import('fs/promises')).rename(tmp, p);
+  await rename(tmp, p);
 };
 
 export default {

@@ -1796,7 +1796,15 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   if (!peer) return { pulled: false, reason: 'peer-not-found' };
 
   const url = `${peerBaseUrl(peer)}/api/peer-sync/record?kind=${encodeURIComponent(recordKind)}&id=${encodeURIComponent(recordId)}`;
-  const res = await peerFetch(url).catch(() => null);
+  // Abort a hung peer after PUSH_TIMEOUT_MS — peerFetch has no built-in timeout,
+  // so without this a stalled peer would hang the pull (and the UI action)
+  // indefinitely. Mirrors the push path; an abort rejects → caught as null →
+  // 'peer-unreachable'.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
+  const res = await peerFetch(url, { signal: controller.signal })
+    .finally(() => clearTimeout(timeoutId))
+    .catch(() => null);
   if (!res) return { pulled: false, reason: 'peer-unreachable' };
   if (res.status === 404) return { pulled: false, reason: 'not-on-peer' };
   if (!res.ok) return { pulled: false, reason: `http-${res.status}` };

@@ -426,6 +426,30 @@ describe('mediaCollections service', () => {
         expect(s.id).toBe('sc-s-9');
       });
 
+      it('findOrCreateCollectionByName canonicalizes the id when backfilling a universe link onto an orphan', async () => {
+        const orphan = await svc.findOrCreateCollectionByName({ name: 'Universe: Legacy' });
+        expect(orphan.id).not.toMatch(/^uc-/); // standalone → random id
+        // Referencing it WITH a universeId must adopt the deterministic id, not
+        // keep the random one (which couldn't converge across peers).
+        const linked = await svc.findOrCreateCollectionByName({ name: 'Universe: Legacy', universeId: 'u-legacy' });
+        expect(linked.id).toBe('uc-u-legacy');
+        expect(linked.universeId).toBe('u-legacy');
+        const all = await svc.listCollections();
+        expect(all.filter((c) => c.name === 'Universe: Legacy')).toHaveLength(1);
+        expect(all.some((c) => c.id === orphan.id)).toBe(false); // old random id gone
+      });
+
+      it('backfill prefers an existing live canonical collection over promoting a same-named orphan', async () => {
+        // Universe already has its canonical collection (with items)…
+        const canonical = await svc.findOrCreateUniverseCollection({ universeId: 'u-x', universeName: 'X' });
+        await svc.addItem(canonical.id, { kind: 'image', ref: 'keep.png' });
+        // …plus a same-named orphan. A name-first backfill must NOT clobber the
+        // canonical record's items — it returns the canonical one.
+        const result = await svc.findOrCreateCollectionByName({ name: 'Universe: X', universeId: 'u-x' });
+        expect(result.id).toBe('uc-u-x');
+        expect(result.items.map((i) => i.ref)).toContain('keep.png');
+      });
+
       it('revives the deterministic id after delete instead of duplicating it (tombstone reclaim)', async () => {
         const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
         await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });

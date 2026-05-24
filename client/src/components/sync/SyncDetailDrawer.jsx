@@ -379,8 +379,8 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Peer Status</h3>
               <button
                 type="button"
-                onClick={refresh}
-                title="Refresh sync status"
+                onClick={() => { refresh(); loadRecord(); }}
+                title="Refresh sync status + reload record"
                 className="p-1 text-gray-500 hover:text-gray-300 rounded"
               >
                 <RefreshCw className="w-3.5 h-3.5" />

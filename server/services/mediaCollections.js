@@ -241,12 +241,24 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
     const existing = all.find((c) => !c.deleted && c.name.toLowerCase() === needle);
     if (existing) {
       if (universeId && !existing.universeId) {
-        // Lazy backfill so legacy "Universe: <name>" collections gain the
-        // link the first time a universe-builder render references them.
-        const idx = all.findIndex((c) => c.id === existing.id);
-        all[idx] = { ...existing, universeId, updatedAt: new Date().toISOString() };
-        await writeAll(all);
-        return all[idx];
+        // Lazy backfill so legacy "Universe: <name>" collections gain the link
+        // the first time a universe-builder render references them. Adopt the
+        // DETERMINISTIC id at the same time — keeping the old random id would
+        // leave a universe-linked collection that can't converge across peers
+        // (the very bug deterministic ids fix).
+        const canonId = linkedCollectionId({ universeId });
+        // If the universe ALREADY has its canonical collection, don't promote a
+        // same-named orphan over it (that would clobber the canonical record's
+        // items) — return the canonical one; the orphan is a duplicate the merge
+        // / migration 038 reconciles.
+        const liveCanonical = all.find((c) => c.id === canonId && !c.deleted);
+        if (liveCanonical) return liveCanonical;
+        // No live canonical — rename the orphan to the deterministic id,
+        // reclaiming a tombstone at that id if one exists.
+        const linked = { ...existing, id: canonId, universeId, updatedAt: new Date().toISOString() };
+        await writeAll([...all.filter((c) => c.id !== existing.id && c.id !== canonId), linked]);
+        if (canonId !== existing.id) createdId = canonId; // announce the newly-linked record
+        return linked;
       }
       return existing;
     }
