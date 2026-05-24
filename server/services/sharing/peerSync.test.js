@@ -1193,6 +1193,91 @@ describe('peerSync', () => {
       const manifestFilenames = (captured.assetManifest || []).map(a => a.filename);
       expect(manifestFilenames).toEqual([]);
     });
+
+    // --- Standalone mediaCollection push payload --------------------------
+    // A peer subscribed directly to a mediaCollection record (NOT via a
+    // universe/series's linkedCollection bundle). The peer must have the
+    // `mediaCollections` syncCategory enabled or the push gate short-circuits.
+    const enableCollectionPeer = () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+          enabled: true, syncEnabled: true,
+          directions: ['outbound', 'inbound'],
+          syncCategories: { universe: true, pipeline: true, mediaCollections: true },
+        },
+      ]);
+    };
+
+    it('emits BOTH image and video manifest entries for a live mediaCollection push', async () => {
+      // Regression (Bug 2): video collection items store the bare videoId; the
+      // on-disk file is `<id>.mp4`. The standalone push manifest builder must
+      // append `.mp4` (same as the linkedCollection bundle path) or every
+      // collection video is silently dropped and receivers never pull bytes.
+      enableCollectionPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.images, 'pic.png'), Buffer.from('image bytes'));
+      await writeFile(join(PATHS.videos, 'vid-xyz.mp4'), Buffer.from('mp4 bytes'));
+
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-9', name: 'Standalone', description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [
+          { kind: 'image', ref: 'pic.png', addedAt: '2026-05-22T01:00:00Z' },
+          { kind: 'video', ref: 'vid-xyz', addedAt: '2026-05-22T02:00:00Z' },
+        ],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-col', peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'col-9',
+      });
+      expect(captured.kind).toBe('mediaCollection');
+      expect(captured.record.id).toBe('col-9');
+      const imageEntries = captured.assetManifest.filter(a => a.kind === 'image');
+      const videoEntries = captured.assetManifest.filter(a => a.kind === 'video');
+      expect(imageEntries.map(a => a.filename)).toEqual(['pic.png']);
+      // The .mp4 must have been appended to the bare videoId.
+      expect(videoEntries.map(a => a.filename)).toEqual(['vid-xyz.mp4']);
+    });
+
+    it('ships an empty asset manifest for a tombstone mediaCollection push', async () => {
+      enableCollectionPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      // Real files on disk would otherwise hash into the manifest — the
+      // deleted gate must skip the manifest builder entirely.
+      await writeFile(join(PATHS.images, 'doomed.png'), Buffer.from('bytes'));
+      await writeFile(join(PATHS.videos, 'vid-doom.mp4'), Buffer.from('bytes'));
+
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-tomb', name: 'Doomed', description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [
+          { kind: 'image', ref: 'doomed.png', addedAt: '2026-05-22T01:00:00Z' },
+          { kind: 'video', ref: 'vid-doom', addedAt: '2026-05-22T02:00:00Z' },
+        ],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T03:00:00Z',
+        deleted: true, deletedAt: '2026-05-22T03:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-tomb', peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'col-tomb',
+      });
+      expect(captured.record.id).toBe('col-tomb');
+      expect(captured.record.deleted).toBe(true);
+      expect(captured.assetManifest).toEqual([]);
+    });
   });
 
   describe('applyIncomingPush', () => {
@@ -1777,6 +1862,42 @@ describe('peerSync', () => {
       expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
         expect.objectContaining({ id: 'col-y' }),
       ]);
+    });
+
+    it('auto-creates a reverse subscription back to the sender for a syncable local collection', async () => {
+      // Regression (Bug 1): classifyLocalRecord had no mediaCollection branch,
+      // so it returned 'missing' and maybeCreateReverseSubscription's
+      // `localState !== 'syncable'` guard never bootstrapped bidirectional
+      // collection sync. The merge landed the record locally, so the
+      // classifyLocalRecord lookup must resolve it as 'syncable'.
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-rev', name: 'Synced', items: [], updatedAt: '2026-05-23T00:00:00.000Z',
+        deleted: false, deletedAt: null,
+      });
+      const result = await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-rev', name: 'Synced', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.reverseSubscriptionCreated).toBe(true);
+      const sub = await findPeerSubscription('peer-a', 'mediaCollection', 'col-rev');
+      expect(sub).not.toBeNull();
+      expect(sub.adoptedFromReverse).toBe(true);
+    });
+
+    it('does NOT create a reverse subscription when the local collection is missing (merge dropped it)', async () => {
+      // The default getCollection mock rejects (NOT_FOUND) → classifyLocalRecord
+      // returns 'missing' → no orphan reverse-sub.
+      const result = await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-gone', name: 'Gone', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.reverseSubscriptionCreated).toBe(false);
+      const sub = await findPeerSubscription('peer-a', 'mediaCollection', 'col-gone');
+      expect(sub).toBeNull();
     });
   });
 

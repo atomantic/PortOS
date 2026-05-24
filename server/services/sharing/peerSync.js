@@ -500,6 +500,19 @@ export function collectCollectionAssetReferences(collection) {
   return { directImageFilenames, directImageRefFilenames: [], directVideoFilenames };
 }
 
+// Video collection items store the BARE video id (e.g. a UUID), while the
+// on-disk file is `<id>.mp4` (today every PortOS-managed video is mp4 —
+// confirmed by inspecting video-history.json). The image side stores refs
+// WITH the extension already. Append `.mp4` unless the ref already carries an
+// extension (defensive — older state may have stamped a filename instead of an
+// id, and a future video format would land as `.webm` etc.). Shared by BOTH
+// collection manifest builders (`buildCollectionAssetManifest` for standalone
+// mediaCollection pushes, `buildAssetManifestForCollection` for the
+// linkedCollection bundle) so the two can't diverge on the extension rule.
+function collectionVideoRefToFilename(ref) {
+  return /\.[a-z0-9]+$/i.test(ref) ? ref : `${ref}.mp4`;
+}
+
 async function buildCollectionAssetManifest(collection) {
   const refs = collectCollectionAssetReferences(collection);
   const out = [];
@@ -507,8 +520,8 @@ async function buildCollectionAssetManifest(collection) {
     const entry = await hashImageForManifest(filename);
     if (entry) out.push(entry);
   }
-  for (const filename of refs.directVideoFilenames) {
-    const entry = await hashSimpleAsset(filename, 'video', PATHS.videos);
+  for (const ref of refs.directVideoFilenames) {
+    const entry = await hashSimpleAsset(collectionVideoRefToFilename(ref), 'video', PATHS.videos);
     if (entry) out.push(entry);
   }
   return out;
@@ -1047,15 +1060,10 @@ async function buildAssetManifestForCollection(collection) {
     const safeName = sanitizeAssetFilename(it.ref);
     if (!safeName) continue;
     if (it.kind === 'video') {
-      // Video collection items store the bare video id (e.g. a UUID), while
-      // the on-disk file is `<id>.mp4` (today every PortOS-managed video is
-      // mp4 — confirmed by inspecting video-history.json). The image side
-      // stores refs WITH the extension already, so it works as-is. Append
-      // `.mp4` here unless the ref already carries an extension (defensive
-      // — older state may have stamped a filename instead of an id, and a
-      // future video format would land as `.webm` etc.).
-      const filename = /\.[a-z0-9]+$/i.test(safeName) ? safeName : `${safeName}.mp4`;
-      const entry = await hashSimpleAsset(filename, 'video', PATHS.videos);
+      // Bare videoId → `<id>.mp4` via the shared helper (see
+      // collectionVideoRefToFilename). `sanitizeAssetFilename` already ran on
+      // `it.ref` above; the extension append is purely the on-disk naming rule.
+      const entry = await hashSimpleAsset(collectionVideoRefToFilename(safeName), 'video', PATHS.videos);
       if (entry) out.push(entry);
     } else {
       // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
@@ -1374,6 +1382,16 @@ async function classifyLocalRecord(recordKind, recordId) {
     const s = await getSeries(recordId, { includeDeleted: true }).catch(() => undefined);
     if (!s) return 'missing';
     return s.ephemeral === true ? 'ephemeral' : 'syncable';
+  }
+  if (recordKind === 'mediaCollection') {
+    // Collections have no `ephemeral` concept, so a found record is always
+    // 'syncable'. Without this branch, maybeCreateReverseSubscription's
+    // `localState !== 'syncable'` guard would never bootstrap bidirectional
+    // collection sync from an inbound push. No ping-pong risk — the
+    // lastPushedHash short-circuit + LWW same-`updatedAt` no-op merge prevent
+    // it, same as universe/series.
+    const c = await getCollection(recordId, { includeDeleted: true }).catch(() => null);
+    return c ? 'syncable' : 'missing';
   }
   return 'missing';
 }
