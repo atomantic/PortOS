@@ -102,22 +102,22 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   // isolated state and a rewire starts fresh.
   const lastSpokenAt = new Map();
 
-  // Single async boundary — never rejects, so the synchronous listeners that
-  // call it can't leak an unhandled rejection. Advances the source's bucket
-  // only when a line actually went out.
+  // Speak one line, advancing the source's rate-limit bucket only when it
+  // actually went out (a quiet-hours/disabled suppression returns ok:false and
+  // doesn't consume the budget). May reject if synthesis throws — the caller
+  // owns the catch.
   const dispatch = async (source, text, priority) => {
     if (!text) return;
     const now = Date.now();
     if (!allowBySource(source, lastSpokenAt.get(source), now, limits)) return;
-    const result = await speak({ io, text, priority, source }).catch((err) => {
-      console.error(`🔕 voice: proactive ${source} synth failed: ${err?.message || err}`);
-      return { ok: false, reason: 'error' };
-    });
+    const result = await speak({ io, text, priority, source });
     if (result?.ok) lastSpokenAt.set(source, Date.now());
   };
 
-  // Backstop: if dispatch itself somehow throws synchronously, swallow + log
-  // rather than letting an unhandled rejection escape the listener.
+  // EventEmitter doesn't await async listeners, so a rejected dispatch would
+  // surface as a process-killing unhandled rejection. The synchronous listeners
+  // call dispatch fire-and-forget with this single explicit catch as the error
+  // boundary — never let a TTS failure escape.
   const fire = (source, text, priority) => {
     dispatch(source, text, priority).catch((err) =>
       console.error(`🔕 voice: proactive ${source} trigger failed: ${err?.message || err}`),
