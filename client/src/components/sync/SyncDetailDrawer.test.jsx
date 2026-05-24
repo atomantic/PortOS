@@ -93,6 +93,13 @@ describe('SyncDetailDrawer', () => {
     await waitFor(() => expect(screen.getByRole('dialog', { name: /sync details/i })).toBeInTheDocument());
   });
 
+  it('does not fetch the record when recordId is empty (param-less mount)', async () => {
+    render(<SyncDetailDrawer kind="mediaCollection" recordId="" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /sync details/i })).toBeInTheDocument());
+    // The per-kind fetcher must not be hit with an empty id (would 404 on `/media/collections/`).
+    expect(mockGetMediaCollection).not.toHaveBeenCalled();
+  });
+
   it('shows an "integrity unavailable" message (not "No peer data") when every peer is unreachable', async () => {
     mockUseSyncIntegrity.mockReturnValue(defaultHookState({
       byPeer: new Map(), // no peer contributed records

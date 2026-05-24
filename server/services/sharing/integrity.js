@@ -37,9 +37,14 @@ async function recordsForKind(kind) {
  */
 export async function buildLocalManifest(kind) {
   const records = await recordsForKind(kind);
-  return Promise.all(records.map(async (r) => {
+  // Hash records SEQUENTIALLY (for...of, not Promise.all(map)) so a large
+  // library can't fan out an unbounded number of concurrent file-hash reads and
+  // spike CPU/disk. Each assetShaListForRecord already reads many files; doing
+  // every record's pass at once would multiply that.
+  const out = [];
+  for (const r of records) {
     const deleted = r.deleted === true;
-    return {
+    out.push({
       id: r.id,
       name: r.name,
       updatedAt: r.updatedAt,
@@ -49,8 +54,9 @@ export async function buildLocalManifest(kind) {
       // deleted-vs-deleted pairs entirely). Hashing a deleted record's
       // still-on-disk assets is pure wasted file I/O.
       assetHashes: deleted ? [] : await assetShaListForRecord(kind, r),
-    };
-  }));
+    });
+  }
+  return out;
 }
 
 /**

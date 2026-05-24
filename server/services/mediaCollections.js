@@ -574,7 +574,9 @@ export async function deleteCollection(id) {
     if (target.deleted === true) return { universeId: null, seriesId: null, alreadyDeleted: true };
     const now = new Date().toISOString();
     const next = [...all];
-    next[idx] = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], universeId: null, seriesId: null };
+    // Clear coverKey too — with items emptied it would otherwise dangle
+    // (point at a non-existent item) and leak into the tombstone's wire payload.
+    next[idx] = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], coverKey: null, universeId: null, seriesId: null };
     await writeAll(next);
     return { universeId: target.universeId || null, seriesId: target.seriesId || null, alreadyDeleted: false };
   });

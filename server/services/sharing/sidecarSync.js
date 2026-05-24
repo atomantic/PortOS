@@ -32,19 +32,6 @@ const SIDECAR_MAX_BYTES = 256 * 1024;
 const SIDECAR_PULL_TIMEOUT_MS = 60000;
 
 /**
- * Pull `<image-basename>.metadata.json` from a peer's /data/images mount and
- * write it alongside the image. Best-effort: a 404 (no sidecar on the sender)
- * is normal and silently ignored.
- *
- * Defense-in-depth: the filename is sanitized HERE (not only by callers) so the
- * function is safe regardless of entry point — `backfillMissingSidecars` is a
- * future client-POST surface and `encodeURIComponent` only protects the URL,
- * not the local `join(PATHS.images, …)` path. A `../`-bearing filename is
- * rejected before any FS op.
- *
- * Returns true if the sidecar was successfully fetched, parsed, and written.
- */
-/**
  * Read a fetch Response body into a Buffer, aborting once `maxBytes` is
  * exceeded. peerFetch's HTTPS shim already enforces maxBytes mid-stream, but the
  * plain-HTTP path falls back to native fetch, which does NOT — a peer that lies
@@ -79,6 +66,19 @@ async function readBodyCapped(res, maxBytes) {
   return Buffer.concat(chunks);
 }
 
+/**
+ * Pull `<image-basename>.metadata.json` from a peer's /data/images mount and
+ * write it alongside the image. Best-effort: a 404 (no sidecar on the sender)
+ * is normal and silently ignored.
+ *
+ * Defense-in-depth: the filename is sanitized HERE (not only by callers) so the
+ * function is safe regardless of entry point — `backfillMissingSidecars` is a
+ * future client-POST surface and `encodeURIComponent` only protects the URL,
+ * not the local `join(PATHS.images, …)` path. A `../`-bearing filename is
+ * rejected before any FS op.
+ *
+ * Returns true if the sidecar was successfully fetched, parsed, and written.
+ */
 export async function pullSidecarForImage(peer, base, imageFilename) {
   const safeName = sanitizeAssetFilename(imageFilename);
   if (!safeName) return false;

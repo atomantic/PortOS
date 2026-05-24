@@ -108,6 +108,19 @@ describe('mediaCollections service', () => {
     expect(all[0].id).toBe(c.id);
   });
 
+  it('deleteCollection clears coverKey on the persisted tombstone (no dangling cover in the wire record)', async () => {
+    const c = await svc.createCollection({ name: 'WithCover' });
+    await svc.addItem(c.id, { kind: 'image', ref: 'cover.png' });
+    await svc.updateCollection(c.id, { coverKey: 'image:cover.png' });
+    await svc.deleteCollection(c.id);
+    // Assert on the PERSISTED record — listCollections' sanitizer would null a
+    // dangling coverKey on read regardless, so inspect storage directly.
+    const stored = fileStore.get('/mock/data/media-collections.json').collections.find((x) => x.id === c.id);
+    expect(stored.deleted).toBe(true);
+    expect(stored.items).toEqual([]);
+    expect(stored.coverKey).toBeNull();
+  });
+
   it('deleteCollection emits recordDeleted for mediaCollection and receivable via recordEvents', async () => {
     const { recordEvents } = await import('./sharing/recordEvents.js');
     const deletedEvts = [];
