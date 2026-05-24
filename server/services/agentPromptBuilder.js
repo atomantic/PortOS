@@ -155,6 +155,11 @@ ${hints.map(h => `- ${h}`).join('\n')}
  */
 const LIGHT_CONTEXT_PROVIDER_TYPES = new Set([PROVIDER_TYPES.TUI, PROVIDER_TYPES.CLI]);
 
+// Inline reuse/quality/efficiency self-review wording for agents that can't run
+// the Claude Code `/simplify` built-in (API providers + codex/gemini CLIs).
+// Shared by both prompt paths so the two phrasings can't drift apart.
+const SIMPLIFY_INLINE_REVIEW = 'review your changed code for reuse, quality, and efficiency (DRY, dead code, naming, simpler equivalents, missed edge cases)';
+
 /**
  * Build the shared task block — the description plus optional `**Target App**`
  * and `**Screenshots**` fields. Used by BOTH the light and full prompt paths
@@ -458,9 +463,16 @@ Use the findings from the previous stage to inform your work. If the previous st
   // section above. TUI agents own the full simplify+push+PR sequence in the
   // Completion Workflow section below, so this section is suppressed for TUI.
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
+  // `/simplify` is a Claude Code built-in slash command — only Claude providers
+  // can run it. Everyone else (API/CLI) gets the inline equivalent describing the
+  // same reuse/quality/efficiency self-review so the pass still happens.
+  const canRunSlashCommands = providerId === 'claude-code' || providerId === 'claude-code-bedrock';
+  const simplifyInstruction = canRunSlashCommands
+    ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
+    : SIMPLIFY_INLINE_REVIEW;
   const simplifySection = simplifyEnabled && !isTui ? `
 ## Simplify Step
-After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
+After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
 
   // Resolve the user's ordered reviewer list + flags (default `[copilot]`). Declared
@@ -477,7 +489,7 @@ After completing your work and before committing, run \`/simplify\` to review th
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
   const tuiCompletionSection = isTui
     ? buildTuiCompletionSection({
-        willOpenPR, willReviewLoop, simplifyEnabled,
+        willOpenPR, willReviewLoop, simplifyEnabled, providerId,
         sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
         reviewers: taskReviewers,
         reviewStopMode: taskReviewStopMode,
@@ -751,7 +763,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
-      willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      willOpenPR, willReviewLoop, simplifyEnabled, providerId, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
       reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
@@ -824,7 +836,7 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
@@ -834,7 +846,13 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
         : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
     : '';
-  const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
+  // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
+  // (codex-tui, gemini-tui) can't run it, so give them the inline equivalent.
+  // Default (no providerId) stays Claude-shaped for backward compatibility.
+  const canRunSimplifyCommand = !providerId || /claude/i.test(providerId);
+  const simplifyStep = simplifyEnabled
+    ? (canRunSimplifyCommand ? '1. `/simplify`' : `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`)
+    : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode }) : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
@@ -909,7 +927,13 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = fals
   } else {
     body = 'Commit and push your changes (`git pull --rebase && git push`, conventional commit prefix, no `git add -A`).';
   }
-  return `## Completion\n${body}`;
+  // Non-slashdo CLIs (codex/gemini) have no `/simplify` command; when the task
+  // enabled simplify, inline the equivalent self-review so the quality pass still
+  // runs before they commit.
+  const simplifyLine = simplifyEnabled
+    ? `Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings. `
+    : '';
+  return `## Completion\n${simplifyLine}${body}`;
 }
 
 /**

@@ -182,6 +182,19 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/MERGED/);
     });
 
+    it('TUI simplify step is provider-aware — non-Claude TUI (codex-tui) gets the inline equivalent, not /simplify', () => {
+      // /simplify is a Claude Code TUI built-in; codex-tui / gemini-tui can't run it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'codex-tui' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
+    });
+
     it('renders the Completion Workflow with /do:push when openPR is false', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: false } }),
@@ -202,6 +215,22 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/quit`/);
+      expect(prompt).toMatch(/PortOS will push and open the PR/);
+    });
+
+    it('inlines a simplify-equivalent self-review (no /simplify command) for non-Claude CLI agents', () => {
+      // /simplify is a Claude Code built-in; codex/gemini can't run it. With
+      // simplify enabled they must still get the reuse/quality/efficiency pass,
+      // phrased inline so any CLI can perform it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false }); // no providerId → not Claude → no slashdo
+      expect(prompt).toMatch(/^## Completion$/m);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
       expect(prompt).toMatch(/PortOS will push and open the PR/);
     });
 

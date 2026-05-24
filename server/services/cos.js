@@ -104,10 +104,22 @@ let initialStartup = false;
 import { pruneOldAgentArchives, archiveStaleAgents as _archiveStaleAgents, loadAgentIndex } from './cosAgents.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 
-// Task types where the scheduler pre-picks a PLAN.md item by ID so the agent's
-// worktree branch encodes the claim. `do-replan` is excluded — it assigns IDs
-// rather than picking one off the list.
+// Task types where the scheduler reads PLAN.md to find an in-flight-aware pick.
+// `do-replan` is excluded — it assigns IDs rather than picking one off the list.
 const PLAN_PICK_TASK_TYPES = new Set(['feature-ideas', 'plan-task']);
+
+// Subset of PLAN_PICK_TASK_TYPES where the AGENT picks (and claims) its own slug
+// at execution time — mirroring the `/claim` slash command. For these, the
+// scheduler must NOT stamp `metadata.planId`: a dispatch-time pre-pick happens
+// before the agent creates its `claim/<slug>` branch (the real lock), so two
+// near-simultaneous dispatches would both target the same first-available item.
+// We still run the in-flight scan below purely as a DISPATCH GATE (skip the run
+// when nothing is pickable), but leave the actual pick to the agent's Phase 1
+// scan, which immediately precedes branch creation. The 2026-05-21 duplicate-PR
+// incident (see cos.test.js) is guarded by the full Phase 1–7 self-pick prompt,
+// not by the pre-pick. `feature-ideas` is intentionally NOT in this set — it
+// uses a scheduler-managed worktree whose branch name encodes `planId`.
+const PLAN_SELF_CLAIM_TASK_TYPES = new Set(['plan-task']);
 
 // Subset of PLAN_PICK_TASK_TYPES where the dispatch should be skipped entirely
 // when no PLAN.md item is dispatchable. `feature-ideas` is intentionally
@@ -120,7 +132,9 @@ const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
  * For feature-ideas / plan-task, read the target repo's PLAN.md, find which
  * item IDs are already in flight via branch/PR scan, and pick the first
  * available item. Mutates `metadata` in place by setting `planId` when a
- * pick succeeds.
+ * pick succeeds — EXCEPT for self-claiming task types (PLAN_SELF_CLAIM_TASK_TYPES),
+ * where the agent picks its own slug at execution time and the scan is used
+ * only as the dispatch gate (no `planId` stamp).
  *
  * Returns `{ skipReason }` so the caller can short-circuit the LLM dispatch
  * for `plan-task` when there's literally nothing to do (empty plan, all
@@ -152,7 +166,12 @@ async function applyPlanIdMetadata(taskType, repoPath, metadata) {
   const inFlight = await findInProgressIds(repoPath, knownIds).catch(() => new Set());
   const pick = pickFirstAvailable(items, inFlight);
   if (pick?.id) {
-    metadata.planId = pick.id;
+    // Self-claiming task types pick their own slug at execution time (like
+    // `/claim`); stamping it here would pin concurrent dispatches to the same
+    // item. For them this scan only serves as the gate above.
+    if (!PLAN_SELF_CLAIM_TASK_TYPES.has(taskType)) {
+      metadata.planId = pick.id;
+    }
     return { skipReason: null };
   }
   if (!gateDispatch) return { skipReason: null };
@@ -1703,7 +1722,7 @@ Your goal is to implement ONE feature.
    - Follow existing patterns in the codebase
    - Run tests to ensure nothing is broken
 
-9. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+9. **Review your changed code for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix any findings. Claude Code can run \`/simplify\` for this pass; on other CLIs, do the equivalent diff review by hand.
 
 10. Commit with a clear description of the feature and rationale
 
