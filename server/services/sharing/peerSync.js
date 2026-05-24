@@ -1814,14 +1814,17 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // maxBytes caps the HTTPS shim's in-memory buffering (see lib/httpClient.js);
   // a buggy/misbehaving peer streaming an oversized body is aborted mid-stream
   // rather than buffered whole. The shim rejects with an "exceed" Error.
+  let tooLarge = false;
   const res = await peerFetch(url, { signal: controller.signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES })
     .finally(() => clearTimeout(timeoutId))
     .catch((err) => {
       if (err?.message?.includes('exceed')) {
+        tooLarge = true; // HTTPS shim tripped the cap — same condition as the Content-Length check
         console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} exceeded payload cap — ${err.message}`);
       }
       return null;
     });
+  if (tooLarge) return { pulled: false, reason: 'payload-too-large' };
   if (!res) return { pulled: false, reason: 'peer-unreachable' };
   if (res.status === 404) return { pulled: false, reason: 'not-on-peer' };
   if (!res.ok) return { pulled: false, reason: `http-${res.status}` };

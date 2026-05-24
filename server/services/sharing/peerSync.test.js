@@ -797,6 +797,14 @@ describe('peerSync', () => {
         .toEqual({ pulled: false, reason: 'payload-too-large' });
     });
 
+    it('payload-too-large (not peer-unreachable) when the HTTPS shim trips the maxBytes cap', async () => {
+      // The shim rejects with an "exceed" Error — must map to payload-too-large,
+      // consistent with the Content-Length path, not be misread as offline.
+      vi.mocked(peerFetch).mockRejectedValue(new Error('Response body exceeded maxBytes 16777216 (got 99999999)'));
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
     it('invalid-payload when the returned record is not the one we requested', async () => {
       // Asked for universe/u-pull but the peer returned a different record id —
       // applying it would merge unexpected data under the requested key.
