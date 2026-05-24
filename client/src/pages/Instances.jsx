@@ -515,7 +515,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
-function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered }) {
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered, subsLoaded = true }) {
   // `livePushCovered` is true when this peer has at least one per-record
   // peer-sync subscription for a record kind that maps to this category
   // (universe-subs → 'universe', series-subs → 'pipeline'). The orchestrator
@@ -525,7 +525,10 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   // would always read "behind" even when the records are actually converged.
   // Render a distinct "live-push" state instead so the badge stops lying.
   const synced = cursorChecksum && remoteChecksum && cursorChecksum === remoteChecksum;
-  const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
+  // Suppress "behind" until peer subs have loaded — `livePushCovered` is derived
+  // from them, so before they resolve a live-push category would briefly mislabel
+  // itself "behind". Until then it falls through to the neutral "pending" state.
+  const behind = subsLoaded && cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
 
   return (
     <div className="flex items-center gap-1.5 text-xs">
@@ -558,7 +561,7 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   );
 }
 
-function SyncStatusSection({ peer, syncStatus, peerSubs = [] }) {
+function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = true }) {
   if (!syncStatus || !peer.instanceId) return null;
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
@@ -634,6 +637,7 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [] }) {
               cursorChecksum={cursorChecksums[cat]}
               remoteChecksum={remoteChecksums[cat]}
               livePushCovered={livePushCovered.has(cat)}
+              subsLoaded={peerSubsLoaded}
             />
           );
         })}
@@ -759,10 +763,15 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
   // per-record "Live-pushed records" list that used to render these was removed
   // — it grew unbounded and the Sync Details drawer covers per-record status.)
   const [peerSubs, setPeerSubs] = useState([]);
+  // Track whether the first subs fetch has settled — until it has, `peerSubs`
+  // is [] and SyncStatusSection can't tell a live-push category from a behind
+  // one, so it would flash "behind". Gates the snapshot badges' "behind" state.
+  const [peerSubsLoaded, setPeerSubsLoaded] = useState(false);
 
   useEffect(() => {
     if (!peer.instanceId) {
       setPeerSubs([]);
+      setPeerSubsLoaded(true); // no instanceId → nothing to load; don't suppress forever
       return;
     }
     let cancelled = false;
@@ -772,6 +781,9 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
       })
       .catch(() => {
         if (!cancelled) setPeerSubs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPeerSubsLoaded(true);
       });
     refetch();
     // When a per-record schema block is persisted server-side, the
@@ -933,7 +945,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
 
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
-      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} />
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} />
 
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (

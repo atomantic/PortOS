@@ -236,6 +236,27 @@ describe('SyncDetailDrawer', () => {
     }
   });
 
+  it('keeps the latest load timeout armed when an earlier fetch settles after a re-load (no stuck Loading…)', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveA;
+      mockGetMediaCollection
+        .mockImplementationOnce(() => new Promise((r) => { resolveA = () => r({ id: 'col-A', name: 'Alpha Collection', items: [] }); }))
+        .mockImplementationOnce(() => new Promise(() => {})); // col-B hangs forever
+      const { rerender } = render(<SyncDetailDrawer kind="mediaCollection" recordId="col-A" onClose={() => {}} />);
+      // Switch to col-B (its fetch hangs) before col-A settles.
+      rerender(<SyncDetailDrawer kind="mediaCollection" recordId="col-B" onClose={() => {}} />);
+      // Now the stale col-A fetch settles — its cleanup must clear ONLY its own
+      // timer, NOT col-B's. If it cleared the ref blindly, col-B's hard timeout
+      // would be disabled and the drawer would hang on "Loading…" forever.
+      resolveA();
+      await vi.advanceTimersByTimeAsync(12001);
+      expect(screen.getByText(/couldn.t load this collection/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('calls pullMissingMetadata and refresh when "Pull missing metadata" is clicked', async () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);

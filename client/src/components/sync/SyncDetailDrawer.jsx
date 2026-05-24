@@ -272,13 +272,22 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     setRecordLoading(true);
     // Hard timeout so a hung request can never leave the drawer on a permanent
     // "Loading…" spinner. Bumping the generation also drops a late response.
-    loadTimeoutRef.current = setTimeout(() => {
+    // Capture THIS invocation's timer locally: a later loadRecord() overwrites
+    // loadTimeoutRef.current, so clearing the ref here would kill the newer
+    // request's timeout. Clear only our own timer, and null the ref only while
+    // it still points at us (so unmount/rapid-reload cleanup stays correct).
+    const timeout = setTimeout(() => {
       if (fresh()) { loadGenRef.current += 1; setRecordError(true); setRecordLoading(false); }
     }, RECORD_LOAD_TIMEOUT_MS);
+    loadTimeoutRef.current = timeout;
     fetcher(recordId)
       .then((data) => { if (fresh()) { setRecord(data); setRecordError(false); } })
       .catch(() => { if (fresh()) { setRecord(null); setRecordError(true); } })
-      .finally(() => { clearTimeout(loadTimeoutRef.current); if (fresh()) setRecordLoading(false); });
+      .finally(() => {
+        clearTimeout(timeout);
+        if (loadTimeoutRef.current === timeout) loadTimeoutRef.current = null;
+        if (fresh()) setRecordLoading(false);
+      });
   }, [fetcher, recordId]);
 
   // Run on mount/recordId change; clear any pending load timer on unmount.
