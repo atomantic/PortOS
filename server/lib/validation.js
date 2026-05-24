@@ -1326,22 +1326,27 @@ const peerSyncPushBase = {
   assetManifest: z.array(peerAssetManifestEntrySchema).max(2000),
   sourceInstanceId: z.string().trim().min(1).max(120),
   portosMeta: portosMetaSchema,
-  // Optional bundled media collection — Stage 5 media-collections sync
-  // attaches the universe / series's linked collection so collection-only
-  // edits propagate via the per-record push pipeline. Same shape as a
-  // record on the wire (id required, sanitizer handles the rest); without
-  // this field on both push branches the strict() rejection drops every
-  // production push from a universe / series with images. See
-  // peerSync.js buildPushPayload and applyIncomingPush.
-  linkedCollection: peerWireRecordSchema.optional(),
 };
+// Optional bundled media collection — Stage 5 media-collections sync attaches
+// the universe / series's linked collection so collection-only edits propagate
+// via the per-record push pipeline. Same shape as a record on the wire (id
+// required, sanitizer handles the rest). ONLY valid on universe/series pushes:
+// a mediaCollection push IS the collection, so accepting linkedCollection there
+// would let a sender smuggle an arbitrary EXTRA collection that the receiver's
+// applyIncomingPush merges — a side-channel to overwrite collections outside the
+// explicit per-record subscription. The mediaCollection branch's .strict()
+// therefore rejects it. See peerSync.js buildPushPayload (never sets it for the
+// mediaCollection kind) and applyIncomingPush.
+const linkedCollectionField = { linkedCollection: peerWireRecordSchema.optional() };
 const universePushSchema = z.object({
   kind: z.literal('universe'),
   ...peerSyncPushBase,
+  ...linkedCollectionField,
 }).strict();
 const seriesPushSchema = z.object({
   kind: z.literal('series'),
   ...peerSyncPushBase,
+  ...linkedCollectionField,
   issues: z.array(peerWireRecordSchema).max(1000).optional(),
 }).strict();
 const mediaCollectionPushSchema = z.object({

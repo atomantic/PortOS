@@ -150,6 +150,36 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
     });
 
+    it('accepts linkedCollection on a universe push (parent-bundled collection)', async () => {
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'universe',
+          record: { id: 'u1' },
+          assetManifest: [],
+          linkedCollection: { id: 'col-bundled' },
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+    });
+
+    it('400s when a mediaCollection push carries linkedCollection (no smuggled extra collection)', async () => {
+      // A mediaCollection push IS the collection — accepting linkedCollection
+      // would be a side-channel to overwrite an unrelated collection.
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'mediaCollection',
+          record: { id: 'c1' },
+          assetManifest: [],
+          linkedCollection: { id: 'col-smuggled' },
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(400);
+      expect(svc.applyIncomingPush).not.toHaveBeenCalled();
+    });
+
     it('400s when a non-image manifest entry carries sidecarSha256 (discriminated union)', async () => {
       const res = await request(buildApp())
         .post('/api/peer-sync/push')
