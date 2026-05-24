@@ -44,6 +44,41 @@ const SIDECAR_PULL_TIMEOUT_MS = 60000;
  *
  * Returns true if the sidecar was successfully fetched, parsed, and written.
  */
+/**
+ * Read a fetch Response body into a Buffer, aborting once `maxBytes` is
+ * exceeded. peerFetch's HTTPS shim already enforces maxBytes mid-stream, but the
+ * plain-HTTP path falls back to native fetch, which does NOT — a peer that lies
+ * about Content-Length (or uses chunked transfer) could otherwise buffer an
+ * unbounded body via `res.arrayBuffer()` before any post-read size check runs.
+ * When a ReadableStream reader is available (native fetch) we cap mid-stream;
+ * otherwise we fall back to arrayBuffer (the shim already bounded it, or it's a
+ * test mock). Returns null on over-cap or any read error (best-effort, runs
+ * outside the Express request lifecycle so a throw must not escape).
+ */
+async function readBodyCapped(res, maxBytes) {
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    return res.arrayBuffer().then((ab) => Buffer.from(ab)).catch(() => null);
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch {
+    return null;
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function pullSidecarForImage(peer, base, imageFilename) {
   const safeName = sanitizeAssetFilename(imageFilename);
   if (!safeName) return false;
@@ -64,8 +99,10 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   if (!res.headers.has('content-length')) return false;
   const contentLength = Number(res.headers.get('content-length'));
   if (!Number.isFinite(contentLength) || contentLength <= 0 || contentLength > SIDECAR_MAX_BYTES) return false;
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length === 0 || buf.length > SIDECAR_MAX_BYTES || buf.length !== contentLength) return false;
+  // Stream with a hard cap so a peer lying about Content-Length can't blow
+  // memory on the native-fetch (plain-HTTP) path before the size checks below.
+  const buf = await readBodyCapped(res, SIDECAR_MAX_BYTES);
+  if (!buf || buf.length === 0 || buf.length > SIDECAR_MAX_BYTES || buf.length !== contentLength) return false;
   // JSON-parse gate: a peer (or an intermediary) could serve an HTML error
   // page with a 200, which we'd otherwise write as `<base>.metadata.json` and
   // corrupt the gallery's gen-params reader. Only write if the body is valid

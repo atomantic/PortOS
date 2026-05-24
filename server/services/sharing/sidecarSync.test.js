@@ -131,6 +131,44 @@ describe('pullSidecarForImage', () => {
     expect(existsSync(join(PATHS.images, 'scalar.metadata.json'))).toBe(false);
   });
 
+  // Build a fetch-style Response whose body streams `chunks` via getReader(),
+  // and whose arrayBuffer() throws (so the test proves the streaming path is used).
+  const streamingRes = (contentLength, ...chunks) => {
+    let i = 0;
+    return {
+      ok: true,
+      headers: new Headers({ 'content-length': String(contentLength) }),
+      body: {
+        getReader: () => ({
+          read: async () => (i < chunks.length
+            ? { done: false, value: chunks[i++] }
+            : { done: true, value: undefined }),
+          cancel: async () => {},
+        }),
+      },
+      arrayBuffer: async () => { throw new Error('should stream via getReader, not arrayBuffer'); },
+    };
+  };
+
+  it('streams the body via getReader (native-fetch path) and writes a valid sidecar', async () => {
+    const body = Buffer.from(JSON.stringify({ prompt: 'streamed' }));
+    vi.mocked(peerFetch).mockResolvedValue(streamingRes(body.byteLength, new Uint8Array(body)));
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'streamed.png');
+    expect(result).toBe(true);
+    const written = JSON.parse(await readFile(join(PATHS.images, 'streamed.metadata.json'), 'utf8'));
+    expect(written.prompt).toBe('streamed');
+  });
+
+  it('aborts the stream and writes nothing when the body exceeds the cap despite a small Content-Length (lying peer)', async () => {
+    // Content-Length LIES (100 bytes, passes the cap check) but the streamed
+    // body is 300KB (> 256KB cap). The streaming reader must abort, not buffer.
+    const oversized = new Uint8Array(300 * 1024);
+    vi.mocked(peerFetch).mockResolvedValue(streamingRes(100, oversized));
+    const result = await pullSidecarForImage(fakePeer, fakeBase, 'liar.png');
+    expect(result).toBe(false);
+    expect(existsSync(join(PATHS.images, 'liar.metadata.json'))).toBe(false);
+  });
+
   it('returns false and writes nothing when the peer sidecar is cache-only (sha256 block, no prompt)', async () => {
     // A cache-only sidecar has no prompt to recover and could clobber a
     // prompt-bearing local one — must not be written.
