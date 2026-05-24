@@ -16,7 +16,7 @@
 
 import { request } from './apiCore.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection']);
 
 export const listPeerSubscriptions = (filter = {}, options) => {
   const qs = new URLSearchParams();
