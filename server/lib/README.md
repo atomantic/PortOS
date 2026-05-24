@@ -141,6 +141,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `capabilityMap.js` | Pure row builders for the Capability Map (per-integration status tiers + rollup); fed by `routes/capabilities.js`. |
 | `civitai.js` | Civitai URL parsing + API client. |
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |

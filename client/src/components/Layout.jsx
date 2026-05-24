@@ -297,6 +297,7 @@ const navItems = [
     icon: HardDrive,
     defaultTo: '/data',
     children: [
+      { to: '/capabilities', label: 'Capabilities', icon: Compass },
       { to: '/data', label: 'Data', icon: HardDrive },
       { to: '/instances', label: 'Instances', icon: Network },
       { to: '/loops', label: 'Loops', icon: RefreshCw },

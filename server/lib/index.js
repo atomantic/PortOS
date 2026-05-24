@@ -111,6 +111,7 @@ export * from './taskParser.js';
 export * from './curatedGenomeMarkers.js';
 
 // === Domain utilities ===
+export * from './capabilityMap.js';
 export * from './civitai.js';
 export * from './issueLength.js';
 export * from './mediaItemKey.js';

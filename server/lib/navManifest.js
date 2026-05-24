@@ -133,6 +133,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
 
   { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'System', aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
+  { id: 'nav.capabilities', path: '/capabilities', label: 'Capabilities', section: 'System', aliases: ['capabilities', 'capability-map', 'integrations'], keywords: ['status', 'setup', 'checklist', 'connected systems', 'integrations', 'providers', 'health overview'] },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'System', aliases: ['data'] },
   { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'System', aliases: ['instances'] },
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'System', aliases: ['loops'] },

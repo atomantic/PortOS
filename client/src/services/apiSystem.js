@@ -7,6 +7,7 @@ export const getAlertsSummary = (options) => request('/alerts/summary', options)
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
+export const getCapabilities = (options) => request('/capabilities', options);
 export const updateHealthThresholds = (thresholds) => request('/system/health/thresholds', {
   method: 'PUT',
   body: JSON.stringify(thresholds)
