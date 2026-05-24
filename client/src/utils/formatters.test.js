@@ -35,12 +35,6 @@ describe('formatEventDateTime', () => {
   // the test runtime's timezone.
   const sample = '2026-04-01T13:30:00';
 
-  it('returns empty string for missing/invalid input', () => {
-    expect(formatEventDateTime(null)).toBe('');
-    expect(formatEventDateTime('')).toBe('');
-    expect(formatEventDateTime('not-a-date')).toBe('');
-  });
-
   it('renders a timed event with short weekday + time', () => {
     expect(formatEventDateTime(sample)).toBe(
       new Date(sample).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })

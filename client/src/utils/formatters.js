@@ -263,16 +263,19 @@ export function formatDurationMin(minutes, options = {}) {
  * time (e.g. "Sat, Apr 1, 1:30 PM"); all-day events show a full weekday and
  * year (e.g. "Saturday, April 1, 2026"). Kept separate from `formatDateTime`
  * because the weekday-led shape is event-specific.
+ * Behavior-identical to the local formatter it replaced: any input is passed
+ * straight to `new Date(...)`, so malformed/empty values render the same
+ * `Invalid Date` / epoch string the original did. The two call sites always
+ * pass a real event time, so this degenerate path is never exercised — kept
+ * faithful so the migration introduces zero visual change.
  * @param {string|Date|null} dateStr - ISO timestamp or Date object
  * @param {object} [options]
  * @param {boolean} [options.allDay=false] - Render date-only (all-day event).
- * @returns {string} Formatted event date/time, or '' for missing/invalid input
+ * @returns {string} Formatted event date/time
  */
 export function formatEventDateTime(dateStr, options = {}) {
-  if (!dateStr) return '';
   const { allDay = false } = options ?? {};
   const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return '';
   // All-day events render exactly like `formatDateFull` (full weekday + year).
   if (allDay) return formatDateFull(date);
   return date.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
