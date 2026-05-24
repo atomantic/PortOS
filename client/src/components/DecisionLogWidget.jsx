@@ -18,6 +18,7 @@ import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo } from '../utils/formatters';
+import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 
 /**
  * DecisionLogWidget - Shows transparency into CoS decision-making
@@ -44,48 +45,19 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
       // below — including the timestamp fields in this comparator would
       // pointlessly break dedup on every backend mtime nudge. Keep this tuple
       // in sync with the JSX above.
-      compare: (prev, next) => {
-        if (prev.last24Hours?.total !== next.last24Hours?.total
-          || prev.last24Hours?.skipped !== next.last24Hours?.skipped
-          || prev.last24Hours?.switched !== next.last24Hours?.switched
-          || prev.last24Hours?.capacityFull !== next.last24Hours?.capacityFull
-          || prev.last24Hours?.cooldownActive !== next.last24Hours?.cooldownActive
-          || prev.last24Hours?.selected !== next.last24Hours?.selected
-          || prev.last24Hours?.adjusted !== next.last24Hours?.adjusted
-          || prev.transparencyScore !== next.transparencyScore) return false;
-        const a = Array.isArray(prev.impactfulDecisions) ? prev.impactfulDecisions : null;
-        const b = Array.isArray(next.impactfulDecisions) ? next.impactfulDecisions : null;
-        if (a === null || b === null) return a === b;
-        if (a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i++) {
-          const da = a[i];
-          const db = b[i];
-          if (
-            da.id !== db?.id
-            || da.type !== db?.type
-            || da.reason !== db?.reason
-            || (da.count ?? 1) !== (db?.count ?? 1)
-          ) return false;
-          const ca = da.context;
-          const cb = db?.context;
-          if (
-            ca?.running !== cb?.running
-            || ca?.max !== cb?.max
-            || ca?.project !== cb?.project
-            || ca?.limit !== cb?.limit
-            || ca?.appId !== cb?.appId
-            || ca?.cooldownMs !== cb?.cooldownMs
-            || ca?.fromTask !== cb?.fromTask
-            || ca?.toTask !== cb?.toTask
-            || ca?.attempts !== cb?.attempts
-            || ca?.runningAgents !== cb?.runningAgents
-            || ca?.awaitingApproval !== cb?.awaitingApproval
-            || ca?.taskType !== cb?.taskType
-            || ca?.successRate !== cb?.successRate
-          ) return false;
-        }
-        return true;
-      },
+      compare: (prev, next) =>
+        equalByKeys(prev.last24Hours, next.last24Hours, [
+          'total', 'skipped', 'switched', 'capacityFull',
+          'cooldownActive', 'selected', 'adjusted',
+        ])
+        && prev.transparencyScore === next.transparencyScore
+        && equalListByKeys(prev.impactfulDecisions, next.impactfulDecisions, [
+          'id', 'type', 'reason', (d) => d?.count ?? 1,
+          'context.running', 'context.max', 'context.project', 'context.limit',
+          'context.appId', 'context.cooldownMs', 'context.fromTask', 'context.toTask',
+          'context.attempts', 'context.runningAgents', 'context.awaitingApproval',
+          'context.taskType', 'context.successRate',
+        ]),
     },
   );
   const [expanded, setExpanded] = useState(false);

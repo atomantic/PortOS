@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 
 const SEVERITY_STYLES = {
   critical: { bg: 'bg-port-error/10', text: 'text-port-error', border: 'border-port-error/30' },
@@ -41,22 +42,11 @@ const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {
       // field are unchanged. Each alert row renders title, detail, severity
       // (style class), type (icon), and link (href), so all five participate
       // in the comparison — keep this list in sync with the JSX below.
-      compare: (prev, next) => {
-        if (prev.counts?.total !== next.counts?.total
-          || prev.counts?.critical !== next.counts?.critical
-          || prev.counts?.high !== next.counts?.high
-          || prev.counts?.medium !== next.counts?.medium) return false;
-        const a = Array.isArray(prev.alerts) ? prev.alerts : null;
-        const b = Array.isArray(next.alerts) ? next.alerts : null;
-        if (a === null || b === null) return a === b;
-        return a.length === b.length && a.every((al, i) => (
-          al.title === b[i]?.title
-            && al.severity === b[i]?.severity
-            && al.detail === b[i]?.detail
-            && al.type === b[i]?.type
-            && al.link === b[i]?.link
-        ));
-      },
+      compare: (prev, next) =>
+        equalByKeys(prev.counts, next.counts, ['total', 'critical', 'high', 'medium'])
+        && equalListByKeys(prev.alerts, next.alerts, [
+          'title', 'severity', 'detail', 'type', 'link',
+        ]),
     },
   );
 
