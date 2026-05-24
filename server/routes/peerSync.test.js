@@ -8,6 +8,8 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   subscribePeer: vi.fn(),
   unsubscribePeer: vi.fn(),
   applyIncomingPush: vi.fn(),
+  forcePushRecord: vi.fn(),
+  syncNowForPeer: vi.fn(),
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
@@ -19,8 +21,13 @@ vi.mock('../services/sharing/integrity.js', () => ({
   getPeerIntegrity: vi.fn(),
 }));
 
+vi.mock('../services/sharing/sidecarSync.js', () => ({
+  backfillMissingSidecars: vi.fn(),
+}));
+
 import * as svc from '../services/sharing/peerSync.js';
 import * as integritySvc from '../services/sharing/integrity.js';
+import * as sidecarSvc from '../services/sharing/sidecarSync.js';
 import peerSyncRoutes from './peerSync.js';
 
 const buildApp = () => {
@@ -411,6 +418,107 @@ describe('peer-sync routes', () => {
         .get('/api/peer-sync/integrity?peerId=peer-x&kind=issue');
       expect(res.status).toBe(400);
       expect(integritySvc.getPeerIntegrity).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/peer-sync/sync-record', () => {
+    it('200 with the result when body is valid', async () => {
+      svc.forcePushRecord.mockResolvedValue({ pushed: true, hash: 'abc' });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-record')
+        .send({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      expect(res.status).toBe(200);
+      expect(res.body.pushed).toBe(true);
+      expect(svc.forcePushRecord).toHaveBeenCalledWith('peer-a', 'universe', 'u1');
+    });
+
+    it('400 when recordId is missing', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-record')
+        .send({ peerId: 'peer-a', recordKind: 'universe' });
+      expect(res.status).toBe(400);
+      expect(svc.forcePushRecord).not.toHaveBeenCalled();
+    });
+
+    it('400 when recordKind is invalid', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-record')
+        .send({ peerId: 'peer-a', recordKind: 'issue', recordId: 'i1' });
+      expect(res.status).toBe(400);
+      expect(svc.forcePushRecord).not.toHaveBeenCalled();
+    });
+
+    it('400 when peerId is missing', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-record')
+        .send({ recordKind: 'universe', recordId: 'u1' });
+      expect(res.status).toBe(400);
+      expect(svc.forcePushRecord).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/peer-sync/sync-now', () => {
+    it('200 with {ok:true} for a valid peerId', async () => {
+      svc.syncNowForPeer.mockResolvedValue({ ok: true });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-now')
+        .send({ peerId: 'peer-a' });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(svc.syncNowForPeer).toHaveBeenCalledWith('peer-a');
+    });
+
+    it('200 with {ok:false} when peer has no instanceId', async () => {
+      svc.syncNowForPeer.mockResolvedValue({ ok: false });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-now')
+        .send({ peerId: 'ghost-peer' });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(false);
+    });
+
+    it('400 when peerId is missing', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/sync-now')
+        .send({});
+      expect(res.status).toBe(400);
+      expect(svc.syncNowForPeer).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/peer-sync/pull-metadata', () => {
+    it('200 with backfill result for valid body', async () => {
+      sidecarSvc.backfillMissingSidecars.mockResolvedValue({ attempted: 3, recovered: 2 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/pull-metadata')
+        .send({ filenames: ['a.png', 'b.png', 'c.png'] });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ attempted: 3, recovered: 2 });
+      expect(sidecarSvc.backfillMissingSidecars).toHaveBeenCalledWith({ filenames: ['a.png', 'b.png', 'c.png'] });
+    });
+
+    it('400 when filenames is not an array', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/pull-metadata')
+        .send({ filenames: 'not-an-array' });
+      expect(res.status).toBe(400);
+      expect(sidecarSvc.backfillMissingSidecars).not.toHaveBeenCalled();
+    });
+
+    it('400 when filenames is missing', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/pull-metadata')
+        .send({});
+      expect(res.status).toBe(400);
+      expect(sidecarSvc.backfillMissingSidecars).not.toHaveBeenCalled();
+    });
+
+    it('400 when filenames exceeds 5000 entries', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/pull-metadata')
+        .send({ filenames: Array.from({ length: 5001 }, (_, i) => `f${i}.png`) });
+      expect(res.status).toBe(400);
+      expect(sidecarSvc.backfillMissingSidecars).not.toHaveBeenCalled();
     });
   });
 });

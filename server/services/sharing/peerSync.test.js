@@ -67,6 +67,8 @@ import {
   autoSubscribeRecordToAllPeers,
   autoSubscribePeerToAllRecords,
   retryPendingPushesForPeer,
+  forcePushRecord,
+  syncNowForPeer,
   __resetForTests,
   __drainForTests,
 } from './peerSync.js';
@@ -657,6 +659,81 @@ describe('peerSync', () => {
     it('returns {walked: 0, pushed: 0} for invalid peerId', async () => {
       expect(await retryPendingPushesForPeer('')).toEqual({ walked: 0, pushed: 0 });
       expect(await retryPendingPushesForPeer(null)).toEqual({ walked: 0, pushed: 0 });
+    });
+  });
+
+  describe('forcePushRecord', () => {
+    beforeEach(() => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Forced', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(findCollectionByUniverseId).mockResolvedValue(null);
+    });
+
+    it('pushes even when existing sub lastPushedHash matches (bypasses unchanged short-circuit)', async () => {
+      // First subscribe + initial push — record gets a lastPushedHash.
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // Wait for the fire-and-forget initial push to settle.
+      await new Promise((r) => setTimeout(r, 20));
+
+      const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(sub.lastPushedHash).toBeTruthy(); // hash was recorded
+
+      // Clear the mock call count — we care only about calls from forcePushRecord.
+      vi.mocked(peerFetch).mockClear();
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      // forcePushRecord MUST hit the network despite the hash being unchanged.
+      const result = await forcePushRecord('peer-a', 'universe', 'u1');
+      expect(result.pushed).toBe(true);
+      expect(vi.mocked(peerFetch)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(peerFetch)).toHaveBeenCalledWith(
+        expect.stringContaining('/api/peer-sync/push'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('creates a subscription and pushes when no sub existed yet', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      const result = await forcePushRecord('peer-a', 'universe', 'u1');
+      expect(result.pushed).toBe(true);
+
+      // Subscription should now exist.
+      const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(sub).not.toBeNull();
+    });
+  });
+
+  describe('syncNowForPeer', () => {
+    it('returns {ok:false} when the peer has no instanceId', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: null, name: 'No ID Peer', enabled: true, syncEnabled: true },
+      ]);
+      const result = await syncNowForPeer('no-such-peer');
+      expect(result).toEqual({ ok: false });
+    });
+
+    it('returns {ok:false} when the peer is not found', async () => {
+      const result = await syncNowForPeer('ghost-peer');
+      expect(result).toEqual({ ok: false });
+    });
+
+    it('calls backfill+retry for a peer with enabled categories and returns {ok:true}', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+          enabled: true, syncEnabled: true,
+          directions: ['outbound', 'inbound'],
+          syncCategories: { universe: true, pipeline: false, mediaCollections: false },
+        },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1', name: 'Universe 1' }]);
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe 1', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      const result = await syncNowForPeer('peer-a');
+      expect(result).toEqual({ ok: true });
     });
   });
 

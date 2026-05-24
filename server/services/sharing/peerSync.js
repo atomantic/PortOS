@@ -1732,6 +1732,45 @@ export async function retryPendingPushesForPeer(peerId) {
   return { walked: subs.length, pushed };
 }
 
+/**
+ * Force a push for a specific (peer, kind, record) regardless of the
+ * unchanged-hash short-circuit. Resolves or creates the subscription first,
+ * then pushes with lastPushedHash nulled so pushRecordToPeer always fires a
+ * network call (idempotent LWW on the receiver).
+ *
+ * `subscribePeer` fires its own initial push on first insert; `forcePushRecord`
+ * then force-pushes again. The double-push is acceptable — the receiver's
+ * merge*FromSync paths are LWW and the second push is a no-op content-wise.
+ */
+export async function forcePushRecord(peerId, recordKind, recordId) {
+  const existing = await findPeerSubscription(peerId, recordKind, recordId);
+  const sub = existing || await subscribePeer({ peerId, recordKind, recordId });
+  // Null the lastPushedHash to bypass the unchanged short-circuit in pushRecordToPeer.
+  console.log(`🔄 peerSync: force-push ${recordKind}/${recordId} → ${peerId}`);
+  return pushRecordToPeer({ ...sub, lastPushedHash: null }, { bypassSchemaCooldown: true });
+}
+
+/**
+ * Trigger an immediate full-sync for a single peer: backfill subscriptions for
+ * every enabled category and then retry all pending/stale pushes. Best-effort
+ * — per-kind failures are swallowed so one bad kind doesn't block the rest.
+ */
+export async function syncNowForPeer(peerId) {
+  const peer = await findPeerById(peerId);
+  if (!peer?.instanceId) return { ok: false };
+  for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+    if (peerHasCategory(peer, kind)) {
+      await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch((err) => {
+        console.log(`⚠️ peerSync: syncNow backfill ${kind} → ${peerId} failed: ${err.message}`);
+      });
+    }
+  }
+  await retryPendingPushesForPeer(peer.instanceId).catch((err) => {
+    console.log(`⚠️ peerSync: syncNow retry pushes → ${peerId} failed: ${err.message}`);
+  });
+  return { ok: true };
+}
+
 let onUpdated = null;
 let onDeleted = null;
 let onPeerOnline = null;

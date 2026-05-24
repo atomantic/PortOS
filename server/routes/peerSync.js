@@ -28,12 +28,17 @@ import {
   validateRequest,
   peerSubscribeSchema,
   peerSyncPushSchema,
+  peerSyncRecordSchema,
+  peerSyncNowSchema,
+  peerPullMetadataSchema,
 } from '../lib/validation.js';
 import {
   listPeerSubscriptions,
   subscribePeer,
   unsubscribePeer,
   applyIncomingPush,
+  forcePushRecord,
+  syncNowForPeer,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -148,6 +153,34 @@ router.get('/integrity', asyncHandler(async (req, res) => {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
   res.json(await getPeerIntegrity({ peerId: req.query.peerId, kind: req.query.kind }));
+}));
+
+// --- POST /sync-record --- force a push for a specific record to a specific peer.
+//
+// Bypasses the unchanged-hash short-circuit so the receiver always gets the
+// latest state. Creates the subscription if it doesn't exist yet.
+router.post('/sync-record', asyncHandler(async (req, res) => {
+  const { peerId, recordKind, recordId } = validateRequest(peerSyncRecordSchema, req.body || {});
+  res.json(await forcePushRecord(peerId, recordKind, recordId).catch(mapAndRethrow));
+}));
+
+// --- POST /sync-now --- trigger an immediate full-sync for a peer.
+//
+// Backfills subscriptions for every enabled category then retries all pending
+// pushes. Best-effort — per-kind failures are swallowed server-side.
+router.post('/sync-now', asyncHandler(async (req, res) => {
+  const { peerId } = validateRequest(peerSyncNowSchema, req.body || {});
+  res.json(await syncNowForPeer(peerId).catch(mapAndRethrow));
+}));
+
+// --- POST /pull-metadata --- backfill missing sidecar metadata for images.
+//
+// Accepts a list of image filenames and attempts to pull their .metadata.json
+// sidecar from any peer that has a copy. Delegates to sidecarSync.js.
+router.post('/pull-metadata', asyncHandler(async (req, res) => {
+  const { filenames } = validateRequest(peerPullMetadataSchema, req.body || {});
+  const { backfillMissingSidecars } = await import('../services/sharing/sidecarSync.js');
+  res.json(await backfillMissingSidecars({ filenames }));
 }));
 
 export default router;

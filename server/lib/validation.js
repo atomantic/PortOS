@@ -1341,6 +1341,23 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   mediaCollectionPushSchema,
 ]);
 
+// Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
+
+export const peerSyncRecordSchema = z.object({
+  peerId: z.string().trim().min(1).max(120),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection']),
+  recordId: z.string().trim().min(1).max(200),
+}).strict();
+
+export const peerSyncNowSchema = z.object({
+  peerId: z.string().trim().min(1).max(120),
+}).strict();
+
+export const peerPullMetadataSchema = z.object({
+  peerId: z.string().trim().min(1).max(120).optional(),
+  filenames: z.array(z.string().min(1).max(300)).max(5000),
+}).strict();
+
 // =============================================================================
 // CREATIVE DIRECTOR SCHEMAS
 // =============================================================================
