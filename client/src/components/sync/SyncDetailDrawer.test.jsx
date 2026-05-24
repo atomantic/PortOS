@@ -169,4 +169,29 @@ describe('SyncDetailDrawer', () => {
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/failed to load sync status/i)).toBeInTheDocument());
   });
+
+  it('locks body scroll while open and restores it on unmount', async () => {
+    document.body.style.overflow = 'scroll';
+    mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
+    const { unmount } = render(
+      <SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />,
+    );
+    await waitFor(() => expect(document.body.style.overflow).toBe('hidden'));
+    unmount();
+    expect(document.body.style.overflow).toBe('scroll');
+  });
+
+  it('fetches the collection only once (preview + pull share the same state)', async () => {
+    mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    await waitFor(() => screen.getByText('My Collection'));
+    expect(mockGetMediaCollection).toHaveBeenCalledTimes(1);
+    // Clicking pull reads from the already-loaded state — must NOT re-fetch
+    // the collection before calling pullMissingMetadata.
+    fireEvent.click(screen.getByRole('button', { name: /pull missing metadata/i }));
+    await waitFor(() => expect(mockPullMissingMetadata).toHaveBeenCalled());
+    // pull triggers a post-pull preview refresh (the 2nd fetch), but the
+    // action itself did not add a redundant fetch before pulling.
+    expect(mockGetMediaCollection).toHaveBeenCalledTimes(2);
+  });
 });

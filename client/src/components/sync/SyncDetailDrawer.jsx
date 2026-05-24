@@ -64,18 +64,10 @@ function StatusPill({ status }) {
 }
 
 // ── Collection preview (mediaCollection kind) ────────────────────────────────
-function CollectionPreview({ recordId }) {
-  const [collection, setCollection] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    getMediaCollection(recordId)
-      .then((data) => setCollection(data))
-      .catch(() => setCollection(null))
-      .finally(() => setLoading(false));
-  }, [recordId]);
-
+// Presentational only — the collection state is owned by the drawer (fetched
+// once there) and passed down, so the "Pull missing metadata" action can read
+// the same already-loaded record without a second fetch.
+function CollectionPreview({ collection, loading }) {
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
@@ -155,12 +147,27 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   const { byPeer, noSyncingPeers, loading, error, refresh } = useSyncIntegrity(kind);
   const peerEntries = byPeer.get(recordId) ?? [];
 
-  // Collect image filenames for "Pull missing metadata" action.
-  // We re-read from the collection inside the action to stay fresh.
+  // Collection state is owned here (fetched once) so the preview and the
+  // "Pull missing metadata" action share the same record — no second fetch
+  // and no double-toast (getMediaCollection has no {silent} support).
+  const [collection, setCollection] = useState(null);
+  const [collectionLoading, setCollectionLoading] = useState(kind === 'mediaCollection');
+
+  const loadCollection = useCallback(() => {
+    if (kind !== 'mediaCollection') return;
+    setCollectionLoading(true);
+    getMediaCollection(recordId)
+      .then((data) => setCollection(data))
+      .catch(() => setCollection(null))
+      .finally(() => setCollectionLoading(false));
+  }, [kind, recordId]);
+
+  useEffect(() => { loadCollection(); }, [loadCollection]);
+
+  // Read the image filenames from the already-loaded collection state.
   const [pullMissing, pulling] = useAsyncAction(async () => {
-    const col = await getMediaCollection(recordId).catch(() => null);
-    if (!col) { toast.error('Could not load collection'); return; }
-    const filenames = (col.items ?? [])
+    if (!collection) { toast.error('Collection not loaded yet'); return; }
+    const filenames = (collection.items ?? [])
       .filter((it) => it.kind === 'image')
       .map((it) => it.ref);
     if (filenames.length === 0) { toast.info('No image files to pull'); return; }
@@ -169,6 +176,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     const attempted = result?.attempted ?? filenames.length;
     toast.success(`Pulled ${recovered}/${attempted} metadata items`);
     refresh();
+    loadCollection(); // refresh the preview thumbnails post-pull
   }, { errorMessage: 'Failed to pull missing metadata' });
 
   // Esc key support
@@ -179,6 +187,13 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
+
+  // Lock the body scroll while the drawer is open (matches Drawer.jsx).
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prevOverflow; };
+  }, []);
 
   return (
     <>
@@ -215,7 +230,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
           {kind === 'mediaCollection' && (
             <section>
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Collection</h3>
-              <CollectionPreview recordId={recordId} />
+              <CollectionPreview collection={collection} loading={collectionLoading} />
             </section>
           )}
 
