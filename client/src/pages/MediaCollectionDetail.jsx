@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckSquare, Copy, FolderInput, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
+import { ArrowLeft, CheckSquare, Copy, DatabaseZap, FolderInput, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
 import ShareToButton from '../components/sharing/ShareToButton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
@@ -8,6 +8,7 @@ import MediaPreview from '../components/media/MediaPreview';
 import BulkTargetPicker from '../components/media/BulkTargetPicker';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
 import {
   getMediaCollection, updateMediaCollection,
@@ -15,6 +16,7 @@ import {
   addMediaCollectionItem, removeMediaCollectionItem,
   listImageGallery, listVideoHistory,
   deleteImage, deleteVideoHistoryItem,
+  pullMissingMetadata,
 } from '../services/api';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -103,6 +105,26 @@ export default function MediaCollectionDetail() {
     [collection, imagesByName, videosById]
   );
   const [preview, setPreview] = usePreviewRoute(items);
+
+  // Unsorted-only action: pull gen-params sidecars for bare images from peers.
+  const unsortedImageFilenames = useMemo(
+    () => (isUnsorted && collection
+      ? (collection.items || []).filter((it) => it.kind === 'image').map((it) => it.ref)
+      : []),
+    [isUnsorted, collection],
+  );
+  const [runPullPrompts, pullingPrompts] = useAsyncAction(async () => {
+    const result = await pullMissingMetadata(unsortedImageFilenames, { silent: true });
+    if (!result) return null;
+    const { attempted = 0, recovered = 0 } = result;
+    if (recovered > 0) {
+      toast.success(`Recovered prompts for ${recovered}/${attempted} image${attempted === 1 ? '' : 's'}`);
+    } else {
+      toast(`No missing prompts found (${attempted} checked)`);
+    }
+    await refresh();
+    return result;
+  }, { errorMessage: 'Pull missing prompts failed' });
 
   const handleRename = async () => {
     const trimmed = nameDraft.trim();
@@ -340,15 +362,33 @@ export default function MediaCollectionDetail() {
         </Link>
         {renderTitle()}
         <span className="text-xs text-gray-500">{items.length} item{items.length === 1 ? '' : 's'}</span>
-        {items.length > 0 && !selectMode && (
-          <button
-            type="button"
-            onClick={() => setSelectMode(true)}
-            className="ml-auto px-2.5 py-1 text-xs bg-port-border hover:bg-port-border/70 text-white rounded flex items-center gap-1.5"
-            title="Select multiple to move, copy, star, or remove"
-          >
-            <CheckSquare className="w-3.5 h-3.5" /> Select
-          </button>
+        {!selectMode && (
+          <div className="ml-auto flex items-center gap-2">
+            {isUnsorted && (
+              <button
+                type="button"
+                onClick={runPullPrompts}
+                disabled={pullingPrompts || unsortedImageFilenames.length === 0}
+                className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1.5 disabled:opacity-40"
+                title={unsortedImageFilenames.length === 0
+                  ? 'No unsorted images to check'
+                  : 'Fetch gen-params sidecars for images that synced without prompts'}
+              >
+                <DatabaseZap className="w-3.5 h-3.5" />
+                {pullingPrompts ? 'Pulling…' : 'Pull missing prompts'}
+              </button>
+            )}
+            {items.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectMode(true)}
+                className="px-2.5 py-1 text-xs bg-port-border hover:bg-port-border/70 text-white rounded flex items-center gap-1.5"
+                title="Select multiple to move, copy, star, or remove"
+              >
+                <CheckSquare className="w-3.5 h-3.5" /> Select
+              </button>
+            )}
+          </div>
         )}
       </div>
 
