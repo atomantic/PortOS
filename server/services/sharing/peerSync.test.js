@@ -39,6 +39,8 @@ vi.mock('../pipeline/issues.js', async () => ({
 }));
 
 vi.mock('../mediaCollections.js', async () => ({
+  getCollection: vi.fn(),
+  listCollections: vi.fn(),
   findCollectionByUniverseId: vi.fn(),
   findCollectionBySeriesId: vi.fn(),
   mergeMediaCollectionsFromSync: vi.fn(),
@@ -61,6 +63,7 @@ import {
   applyIncomingPush,
   diffAssetManifestAgainstLocal,
   buildAssetManifest,
+  collectCollectionAssetReferences,
   autoSubscribeRecordToAllPeers,
   autoSubscribePeerToAllRecords,
   retryPendingPushesForPeer,
@@ -73,6 +76,8 @@ import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeB
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import {
+  getCollection,
+  listCollections,
   findCollectionByUniverseId,
   findCollectionBySeriesId,
   mergeMediaCollectionsFromSync,
@@ -143,6 +148,8 @@ beforeEach(async () => {
   vi.mocked(listIssues).mockReset().mockResolvedValue([]);
   // Default: no linked collection for any record. Tests that exercise the
   // bundle path override these per-call.
+  vi.mocked(getCollection).mockReset().mockRejectedValue(Object.assign(new Error('Collection not found'), { code: 'NOT_FOUND' }));
+  vi.mocked(listCollections).mockReset().mockResolvedValue([]);
   vi.mocked(findCollectionByUniverseId).mockReset().mockResolvedValue(null);
   vi.mocked(findCollectionBySeriesId).mockReset().mockResolvedValue(null);
   vi.mocked(mergeMediaCollectionsFromSync).mockReset().mockResolvedValue({ applied: false, count: 0 });
@@ -1703,6 +1710,94 @@ describe('peerSync', () => {
         // Only ONE call — no retry.
         expect(vi.mocked(peerFetch).mock.calls.length).toBe(1);
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // mediaCollection push + receiver
+  // -------------------------------------------------------------------------
+  describe('collectCollectionAssetReferences', () => {
+    it('maps items to image/video refs with an empty directImageRefFilenames', () => {
+      const refs = collectCollectionAssetReferences({ items: [
+        { kind: 'image', ref: 'a.png' },
+        { kind: 'video', ref: 'vid123' },
+        { kind: 'image', ref: 'b.png' },
+      ] });
+      expect(refs.directImageFilenames).toEqual(['a.png', 'b.png']);
+      expect(refs.directVideoFilenames).toEqual(['vid123']);
+      expect(refs.directImageRefFilenames).toEqual([]);
+    });
+
+    it('returns empty arrays for a collection with no items', () => {
+      const refs = collectCollectionAssetReferences({ items: [] });
+      expect(refs.directImageFilenames).toEqual([]);
+      expect(refs.directVideoFilenames).toEqual([]);
+      expect(refs.directImageRefFilenames).toEqual([]);
+    });
+
+    it('returns empty arrays for null/undefined input', () => {
+      expect(collectCollectionAssetReferences(null).directImageFilenames).toEqual([]);
+      expect(collectCollectionAssetReferences(undefined).directImageFilenames).toEqual([]);
+    });
+  });
+
+  describe('applyIncomingPush — mediaCollection', () => {
+    it('applies an incoming mediaCollection push into local collections', async () => {
+      // Use the real mergeMediaCollectionsFromSync via importActual so the
+      // write lands in the tmpdir and listCollections can confirm persistence.
+      const real = await vi.importActual('../mediaCollections.js');
+      vi.mocked(mergeMediaCollectionsFromSync).mockImplementationOnce(real.mergeMediaCollectionsFromSync);
+      vi.mocked(listCollections).mockImplementationOnce(real.listCollections);
+
+      await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-x', name: 'Synced', items: [], updatedAt: '2026-05-23T00:00:00.000Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-abc',
+      });
+
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'col-x', name: 'Synced' }),
+      ]);
+
+      // Confirm the record landed on disk via the real listCollections.
+      const all = await real.listCollections();
+      const found = all.find((c) => c.id === 'col-x');
+      expect(found).toBeDefined();
+      expect(found.name).toBe('Synced');
+    });
+
+    it('routes a mediaCollection push through mergeMediaCollectionsFromSync (mock assertion)', async () => {
+      await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-y', name: 'Test', items: [], updatedAt: '2026-05-23T00:00:00.000Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-abc',
+      });
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'col-y' }),
+      ]);
+    });
+  });
+
+  describe('peerSyncPushSchema — mediaCollection validation', () => {
+    it('accepts a valid mediaCollection push payload', async () => {
+      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      expect(() => peerSyncPushSchema.parse({
+        kind: 'mediaCollection',
+        record: { id: 'col-x', name: 'My Collection', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-abc',
+      })).not.toThrow();
+    });
+
+    it('rejects a mediaCollection push payload missing sourceInstanceId', async () => {
+      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      expect(() => peerSyncPushSchema.parse({
+        kind: 'mediaCollection',
+        record: { id: 'col-x' },
+        assetManifest: [],
+      })).toThrow();
     });
   });
 });

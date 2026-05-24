@@ -60,6 +60,8 @@ import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import {
+  getCollection,
+  listCollections,
   findCollectionByUniverseId,
   findCollectionBySeriesId,
   mergeMediaCollectionsFromSync,
@@ -343,6 +345,8 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   } else if (recordKind === 'series') {
     const { listSeries } = await import('../pipeline/series.js');
     records = await listSeries({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'mediaCollection') {
+    records = await listCollections({ includeDeleted: false }).catch(() => []);
   }
   // Drop ephemeral records before the set-difference / sub creation. The wire
   // sanitizer would short-circuit any push anyway, but creating a sub that
@@ -470,6 +474,37 @@ export async function buildAssetManifest(record) {
   }
   for (const filename of refs.directImageRefFilenames) {
     const entry = await hashSimpleAsset(filename, 'image-ref', PATHS.imageRefs);
+    if (entry) out.push(entry);
+  }
+  for (const filename of refs.directVideoFilenames) {
+    const entry = await hashSimpleAsset(filename, 'video', PATHS.videos);
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * Map a collection's items array to the `{ directImageFilenames,
+ * directImageRefFilenames, directVideoFilenames }` shape consumed by the
+ * per-item manifest hashers. Collections store items as
+ * `{ kind:'image'|'video', ref, addedAt }` and carry no image-ref kind.
+ */
+export function collectCollectionAssetReferences(collection) {
+  const items = Array.isArray(collection?.items) ? collection.items : [];
+  const directImageFilenames = [];
+  const directVideoFilenames = [];
+  for (const it of items) {
+    if (it?.kind === 'image' && typeof it.ref === 'string') directImageFilenames.push(it.ref);
+    else if (it?.kind === 'video' && typeof it.ref === 'string') directVideoFilenames.push(it.ref);
+  }
+  return { directImageFilenames, directImageRefFilenames: [], directVideoFilenames };
+}
+
+async function buildCollectionAssetManifest(collection) {
+  const refs = collectCollectionAssetReferences(collection);
+  const out = [];
+  for (const filename of refs.directImageFilenames) {
+    const entry = await hashImageForManifest(filename);
     if (entry) out.push(entry);
   }
   for (const filename of refs.directVideoFilenames) {
@@ -938,6 +973,14 @@ async function buildPushPayload(sub, sourceInstanceId) {
       ...(linkedCollection ? { linkedCollection } : {}),
     };
   }
+  if (sub.recordKind === 'mediaCollection') {
+    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('mediaCollection', record);
+    if (!sanitized) return null;
+    const assetManifest = record.deleted === true ? [] : await buildCollectionAssetManifest(record);
+    return { kind: 'mediaCollection', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+  }
   return null;
 }
 
@@ -1157,6 +1200,8 @@ export async function applyIncomingPush(payload) {
     if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
       await mergeIssuesFromSync(issues);
     }
+  } else if (kind === 'mediaCollection') {
+    await mergeMediaCollectionsFromSync([record]);
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items

@@ -1255,7 +1255,7 @@ export const subscriptionCreateSchema = z.object({
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -1330,9 +1330,14 @@ const seriesPushSchema = z.object({
   ...peerSyncPushBase,
   issues: z.array(peerWireRecordSchema).max(1000).optional(),
 }).strict();
+const mediaCollectionPushSchema = z.object({
+  kind: z.literal('mediaCollection'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
+  mediaCollectionPushSchema,
 ]);
 
 // =============================================================================

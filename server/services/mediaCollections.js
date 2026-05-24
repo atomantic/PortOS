@@ -146,8 +146,8 @@ export async function listCollections({ includeDeleted = false } = {}) {
   return out;
 }
 
-export async function getCollection(id) {
-  const all = await listCollections();
+export async function getCollection(id, { includeDeleted = false } = {}) {
+  const all = await listCollections({ includeDeleted });
   const c = all.find((x) => x.id === id);
   if (!c) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
   return c;
