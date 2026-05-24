@@ -2,7 +2,7 @@ import { stat } from 'fs/promises';
 import { basename, join } from 'path';
 import { createHash } from 'crypto';
 import { atomicWrite, readJSONFile, sha256File, PATHS } from './fileUtils.js';
-import { isPlainObject, canonicalStringify } from './objects.js';
+import { isPlainObject, canonicalStringify, POLLUTING_KEYS } from './objects.js';
 
 // Each image at `data/images/{uuid}.png` has a sibling `.metadata.json`
 // sidecar carrying its generation provenance (model, prompt, dimensions, etc).
@@ -109,11 +109,18 @@ export async function getOrComputeImageSha256(imagePath) {
  */
 export function sidecarGenParamsHash(sidecar) {
   if (!isPlainObject(sidecar)) return null;
-  const genParams = {};
+  // Object.create(null) so a peer-supplied `__proto__` key can't mutate the
+  // temp object's prototype via `genParams[key] = …` (prototype-pollution
+  // footgun). POLLUTING_KEYS (__proto__/constructor/prototype) are skipped
+  // outright — legitimate gen-params never use them, so the hash is identical
+  // for real sidecars while a hostile one stays inert and deterministic.
+  const genParams = Object.create(null);
+  let count = 0;
   for (const key of Object.keys(sidecar)) {
-    if (key === 'sha256') continue;
+    if (key === 'sha256' || POLLUTING_KEYS.has(key)) continue;
     genParams[key] = sidecar[key];
+    count += 1;
   }
-  if (Object.keys(genParams).length === 0) return null;
+  if (count === 0) return null;
   return createHash('sha256').update(canonicalStringify(genParams)).digest('hex');
 }

@@ -182,5 +182,21 @@ describe('assetHash', () => {
       const b = sidecarGenParamsHash({ prompt: 'a dog' });
       expect(a).not.toBe(b);
     });
+
+    it('SECURITY: a hostile __proto__/constructor/prototype key does not pollute Object.prototype', () => {
+      // JSON.parse creates these as OWN keys; sidecarGenParamsHash must skip them
+      // and never mutate any prototype. Build via JSON.parse so __proto__ is a
+      // real own property (an object literal would invoke the proto setter).
+      const hostile = JSON.parse('{"prompt":"x","__proto__":{"polluted":true},"constructor":{"y":1},"prototype":{"z":2}}');
+      sidecarGenParamsHash(hostile);
+      expect({}.polluted).toBeUndefined();
+      expect(Object.prototype.polluted).toBeUndefined();
+    });
+
+    it('SECURITY: the hash ignores polluting keys (identical to a sidecar without them)', () => {
+      const withPolluting = JSON.parse('{"prompt":"a wizard","model":"flux","__proto__":{"a":1},"constructor":{"b":2},"prototype":{"c":3}}');
+      const clean = sidecarGenParamsHash({ prompt: 'a wizard', model: 'flux' });
+      expect(sidecarGenParamsHash(withPolluting)).toBe(clean);
+    });
   });
 });
