@@ -366,6 +366,14 @@ describe('peer-sync routes', () => {
         expect(res.status).toBe(200);
       }
     });
+
+    it('trims surrounding whitespace from kind before validation + the service call', async () => {
+      integritySvc.buildLocalManifest.mockResolvedValue([]);
+      const res = await request(buildApp())
+        .get('/api/peer-sync/manifest?kind=%20universe%20');
+      expect(res.status).toBe(200);
+      expect(integritySvc.buildLocalManifest).toHaveBeenCalledWith('universe');
+    });
   });
 
   describe('GET /api/peer-sync/integrity', () => {
@@ -397,6 +405,19 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.available).toBe(true);
       expect(res.body.records).toHaveLength(1);
+    });
+
+    it('trims surrounding whitespace from peerId and kind before the service call', async () => {
+      integritySvc.getPeerIntegrity.mockResolvedValue({ available: true, records: [] });
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=%20peer-x%20&kind=%20mediaCollection%20');
+      expect(res.status).toBe(200);
+      // Service receives the trimmed values — otherwise ' peer-x ' silently
+      // fails to match the peer registry and returns peer-not-found.
+      expect(integritySvc.getPeerIntegrity).toHaveBeenCalledWith({
+        peerId: 'peer-x',
+        kind: 'mediaCollection',
+      });
     });
 
     it('400 when peerId is missing', async () => {

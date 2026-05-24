@@ -135,10 +135,13 @@ const validKind = (k) => typeof k === 'string' && PEER_SUBSCRIBABLE_KINDS.includ
 // including tombstones so deletes diff correctly. Asset hashes are sorted
 // sha256 strings so the diff is order-independent.
 router.get('/manifest', asyncHandler(async (req, res) => {
-  if (!validKind(req.query.kind)) {
+  // Trim once and validate/use the trimmed value — a padded `?kind= universe `
+  // should resolve like `universe`, not 400 on whitespace.
+  const kind = typeof req.query.kind === 'string' ? req.query.kind.trim() : '';
+  if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  res.json({ records: await buildLocalManifest(req.query.kind) });
+  res.json({ records: await buildLocalManifest(kind) });
 }));
 
 // --- GET /integrity --- compare this instance's records against a peer's.
@@ -146,13 +149,19 @@ router.get('/manifest', asyncHandler(async (req, res) => {
 // Fetches the peer's /manifest, runs the pure diff, and returns
 // `{ available, reason?, records: [{ id, name, status }] }`.
 router.get('/integrity', asyncHandler(async (req, res) => {
-  if (typeof req.query.peerId !== 'string' || !req.query.peerId.trim()) {
+  // Trim ONCE and use the trimmed values for both validation AND the service
+  // call. Validating the trimmed value but passing the raw one let
+  // `?peerId=%20peer-a%20` pass the emptiness check yet fail to match the peer
+  // registry, returning a confusing `peer-not-found`.
+  const peerId = typeof req.query.peerId === 'string' ? req.query.peerId.trim() : '';
+  const kind = typeof req.query.kind === 'string' ? req.query.kind.trim() : '';
+  if (!peerId) {
     throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (!validKind(req.query.kind)) {
+  if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  res.json(await getPeerIntegrity({ peerId: req.query.peerId, kind: req.query.kind }));
+  res.json(await getPeerIntegrity({ peerId, kind }));
 }));
 
 // --- POST /sync-record --- force a push for a specific record to a specific peer.
