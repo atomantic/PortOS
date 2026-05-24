@@ -192,6 +192,24 @@ describe('SyncDetailDrawer', () => {
     expect(thumbs.length).toBeGreaterThan(0);
   });
 
+  it('shows an error state (not a stuck spinner) when the collection fetch rejects', async () => {
+    mockGetMediaCollection.mockRejectedValue(new Error('boom'));
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/couldn.t load this collection/i)).toBeInTheDocument());
+  });
+
+  it('times out a hung collection fetch into an error state (no permanent Loading…)', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetMediaCollection.mockImplementation(() => new Promise(() => {})); // never settles
+      render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+      await vi.advanceTimersByTimeAsync(12001);
+      expect(screen.getByText(/couldn.t load this collection/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('calls pullMissingMetadata and refresh when "Pull missing metadata" is clicked', async () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);

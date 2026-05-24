@@ -30,6 +30,10 @@ const KIND_FETCHER = {
   series: getPipelineSeries,
 };
 
+// Cap how long the drawer waits on the record fetch before surfacing an error
+// state — guarantees the "Loading…" spinner can't hang forever if a request stalls.
+const RECORD_LOAD_TIMEOUT_MS = 12000;
+
 // ── Per-status display config ────────────────────────────────────────────────
 const STATUS_CONFIG = {
   'in-parity': {
@@ -75,12 +79,20 @@ function StatusPill({ status }) {
 // Presentational only — the collection state is owned by the drawer (fetched
 // once there) and passed down, so the "Pull missing metadata" action can read
 // the same already-loaded record without a second fetch.
-function CollectionPreview({ collection, loading }) {
+function CollectionPreview({ collection, loading, error }) {
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
         <Loader2 className="w-4 h-4 animate-spin" />
         Loading…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="flex items-center gap-2 text-port-warning text-sm py-2">
+        <AlertTriangle className="w-4 h-4" />
+        Couldn’t load this collection — try Refresh.
       </div>
     );
   }
@@ -187,6 +199,10 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   const fetcher = KIND_FETCHER[kind] ?? null;
   const [record, setRecord] = useState(null);
   const [recordLoading, setRecordLoading] = useState(!!fetcher);
+  // True when the record fetch failed or timed out (distinct from "loaded but
+  // empty"). Drives an explicit error state so the drawer can never sit on a
+  // permanent "Loading…" spinner if the request hangs.
+  const [recordError, setRecordError] = useState(false);
 
   // Drop async results that resolve after the drawer unmounts (fast route
   // change / close while a fetch is in flight) to avoid setState-on-unmounted
@@ -206,12 +222,18 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     // An empty recordId (e.g. a param-less route mount) would fetch
     // `/media/collections/` and 404/toast — skip the request, and clear any
     // previously-loaded record so a stale name/preview can't linger.
-    if (!recordId) { setRecord(null); setRecordLoading(false); return; }
+    if (!recordId) { setRecord(null); setRecordError(false); setRecordLoading(false); return; }
+    setRecordError(false);
     setRecordLoading(true);
+    // Hard timeout so a hung request can never leave the drawer on a permanent
+    // "Loading…" spinner. Bumping the generation also drops a late response.
+    const timeout = setTimeout(() => {
+      if (fresh()) { loadGenRef.current += 1; setRecordError(true); setRecordLoading(false); }
+    }, RECORD_LOAD_TIMEOUT_MS);
     fetcher(recordId)
-      .then((data) => { if (fresh()) setRecord(data); })
-      .catch(() => { if (fresh()) setRecord(null); })
-      .finally(() => { if (fresh()) setRecordLoading(false); });
+      .then((data) => { if (fresh()) { setRecord(data); setRecordError(false); } })
+      .catch(() => { if (fresh()) { setRecord(null); setRecordError(true); } })
+      .finally(() => { clearTimeout(timeout); if (fresh()) setRecordLoading(false); });
   }, [fetcher, recordId]);
 
   useEffect(() => { loadRecord(); }, [loadRecord]);
@@ -220,6 +242,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
   // can read it without changing its reference to `collection`.
   const collection = kind === 'mediaCollection' ? record : null;
   const collectionLoading = kind === 'mediaCollection' ? recordLoading : false;
+  const collectionError = kind === 'mediaCollection' ? recordError : false;
 
   // Convenience alias so the header can show `record?.name` regardless of kind.
   const recordName = record?.name ?? null;
@@ -306,7 +329,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
           {kind === 'mediaCollection' && (
             <section>
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Collection</h3>
-              <CollectionPreview collection={collection} loading={collectionLoading} />
+              <CollectionPreview collection={collection} loading={collectionLoading} error={collectionError} />
             </section>
           )}
 
