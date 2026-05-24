@@ -674,11 +674,15 @@ describe('peerSync', () => {
       // First subscribe + initial push — record gets a lastPushedHash.
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      // Deterministically await the fire-and-forget initial push tail instead
-      // of sleeping a fixed interval (flaky under slow CI).
-      await __drainForTests();
-
-      const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+      // Poll for the fire-and-forget initial push to persist its hash. A fixed
+      // sleep OR a single writeTail drain (__drainForTests) is racy in slower CI
+      // because the push's peerFetch + persistPushSuccess chain may not have even
+      // started when we read — vi.waitFor retries the real condition deterministically.
+      let sub;
+      await vi.waitFor(async () => {
+        sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(sub?.lastPushedHash).toBeTruthy();
+      });
       expect(sub.lastPushedHash).toBeTruthy(); // hash was recorded
 
       // Clear the mock call count — we care only about calls from forcePushRecord.
