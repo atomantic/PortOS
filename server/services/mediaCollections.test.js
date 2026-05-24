@@ -92,10 +92,35 @@ describe('mediaCollections service', () => {
       .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
   });
 
-  it('deleteCollection removes the entry', async () => {
+  it('deleteCollection soft-deletes: absent from live list, present with deleted===true in includeDeleted list', async () => {
     const c = await svc.createCollection({ name: 'A' });
     await svc.deleteCollection(c.id);
     expect(await svc.listCollections()).toEqual([]);
+    const all = await svc.listCollections({ includeDeleted: true });
+    expect(all).toHaveLength(1);
+    expect(all[0].deleted).toBe(true);
+    expect(all[0].id).toBe(c.id);
+  });
+
+  it('deleteCollection emits recordDeleted for mediaCollection and receivable via recordEvents', async () => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const deletedEvts = [];
+    const handler = (evt) => deletedEvts.push(evt);
+    recordEvents.on('deleted', handler);
+    try {
+      const c = await svc.createCollection({ name: 'B' });
+      await svc.deleteCollection(c.id);
+      expect(deletedEvts).toContainEqual(expect.objectContaining({ recordKind: 'mediaCollection', recordId: c.id }));
+    } finally {
+      recordEvents.off('deleted', handler);
+    }
+  });
+
+  it('updateCollection throws ERR_NOT_FOUND on a soft-deleted collection', async () => {
+    const c = await svc.createCollection({ name: 'Live' });
+    await svc.deleteCollection(c.id);
+    await expect(svc.updateCollection(c.id, { name: 'Revived' }))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
   it('deleteCollection emits recordUpdated on the universe when the deleted collection was linked', async () => {
@@ -958,6 +983,70 @@ describe('mergeMediaCollectionsFromSync', () => {
     const c = all.find((x) => x.id === 'c1');
     expect(c?.deleted).toBe(true);
     expect(c?.deletedAt).toBe('2026-05-23T00:00:00.000Z');
+  });
+
+  it('a newer remote tombstone deletes a local live collection', async () => {
+    const c = await svc.createCollection({ name: 'WillDie' });
+    const tombstone = {
+      id: c.id,
+      name: 'WillDie',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: c.createdAt,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2099-01-01T00:00:00.000Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([tombstone]);
+    expect(await svc.listCollections()).toEqual([]);
+    const all = await svc.listCollections({ includeDeleted: true });
+    const found = all.find((x) => x.id === c.id);
+    expect(found?.deleted).toBe(true);
+  });
+
+  it('an older remote tombstone does NOT delete a newer local collection', async () => {
+    const c = await svc.createCollection({ name: 'Survivor' });
+    const tombstone = {
+      id: c.id,
+      name: 'Survivor',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: c.createdAt,
+      updatedAt: '2000-01-01T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2000-01-01T00:00:00.000Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([tombstone]);
+    const live = await svc.listCollections();
+    expect(live.find((x) => x.id === c.id)).toBeTruthy();
+    expect(live.find((x) => x.id === c.id)?.deleted).toBeFalsy();
+  });
+
+  it('a remote tombstone for an unknown id is recorded as a tombstone (no resurrection)', async () => {
+    const tombstone = {
+      id: 'ghost-id',
+      name: 'Ghost',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: '2026-05-23T00:00:00.000Z',
+      updatedAt: '2026-05-23T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2026-05-23T00:00:00.000Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([tombstone]);
+    expect(await svc.listCollections()).toEqual([]);
+    const all = await svc.listCollections({ includeDeleted: true });
+    const found = all.find((x) => x.id === 'ghost-id');
+    expect(found?.deleted).toBe(true);
   });
 
   it('compares addedAt as parsed milliseconds (not lexicographic) when picking the earlier item', async () => {

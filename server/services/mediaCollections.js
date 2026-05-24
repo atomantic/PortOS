@@ -25,7 +25,7 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
-import { emitRecordUpdated } from './sharing/recordEvents.js';
+import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
 
 // Lazy resolution — PATHS.data may not be available at module-load time
 // (e.g. tests that swap it through a Proxy mock so different cases get
@@ -499,6 +499,7 @@ export async function updateCollection(id, patch) {
     const idx = all.findIndex((c) => c.id === id);
     if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     const cur = all[idx];
+    if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // Product/UI constraint: universe-linked collections own their visible
     // name. The name is the user-facing identity of a universe's bucket, so
     // renaming it independent of the universe is confusing — the supported
@@ -541,9 +542,13 @@ export async function updateCollection(id, patch) {
 export async function deleteCollection(id) {
   const { universeId: deletedUniverseId, seriesId: deletedSeriesId } = await serializeFileWrite(async () => {
     const all = await listCollections({ includeDeleted: true });
-    const target = all.find((c) => c.id === id);
-    if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    await writeAll(all.filter((c) => c.id !== id));
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    const target = all[idx];
+    const now = new Date().toISOString();
+    const next = [...all];
+    next[idx] = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], universeId: null, seriesId: null };
+    await writeAll(next);
     return { universeId: target.universeId || null, seriesId: target.seriesId || null };
   });
   // Mirror addItem/removeItem/bulkUpdateCollectionItems — universe-linked
@@ -553,6 +558,7 @@ export async function deleteCollection(id) {
   // own reads don't deadlock the tail.
   if (deletedUniverseId) emitRecordUpdated('universe', deletedUniverseId);
   if (deletedSeriesId) emitRecordUpdated('series', deletedSeriesId);
+  emitRecordDeleted('mediaCollection', id);
   return { id };
 }
 
@@ -774,19 +780,22 @@ export async function mergeMediaCollectionsFromSync(remoteCollections) {
       // Cover key: only adopt the scalar source's coverKey if it points at an
       // item that survives the union — otherwise sanitizeCollection on next
       // read would drop it back to null and we'd churn updatedAt forever.
+      const scalarDeleted = scalarSource.deleted === true;
       const presentKeys = new Set(mergedItems.map(itemKey));
-      const coverKey = scalarSource.coverKey && presentKeys.has(scalarSource.coverKey)
+      const coverKey = !scalarDeleted && scalarSource.coverKey && presentKeys.has(scalarSource.coverKey)
         ? scalarSource.coverKey
         : null;
       const next = {
         ...local,
         name: scalarSource.name,
         description: scalarSource.description,
-        coverKey,
-        universeId: scalarSource.universeId,
-        seriesId: scalarSource.seriesId,
-        items: mergedItems,
+        coverKey: scalarDeleted ? null : coverKey,
+        universeId: scalarDeleted ? null : scalarSource.universeId,
+        seriesId: scalarDeleted ? null : scalarSource.seriesId,
+        items: scalarDeleted ? [] : mergedItems,
         updatedAt: remoteWins ? remoteTs : localTs,
+        deleted: scalarDeleted,
+        deletedAt: scalarDeleted ? (scalarSource.deletedAt || (remoteWins ? remoteTs : localTs)) : null,
       };
       if (collectionsEqual(local, next)) continue;
       localById.set(sanitized.id, next);
