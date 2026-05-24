@@ -851,7 +851,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
   // Default (no providerId) stays Claude-shaped for backward compatibility.
   const canRunSimplifyCommand = !providerId || /claude/i.test(providerId);
   const simplifyStep = simplifyEnabled
-    ? (canRunSimplifyCommand ? '1. `/simplify`' : `1. Self-review — ${SIMPLIFY_INLINE_REVIEW}, and fix any findings.`)
+    ? (canRunSimplifyCommand ? '1. `/simplify`' : `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`)
     : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode }) : { lines: [], nextStep: 3 };
