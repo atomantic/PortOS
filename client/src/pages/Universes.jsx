@@ -54,7 +54,8 @@ export default function Universes() {
     let cancelled = false;
     // Universes drive the page; resolve `loading` as soon as they land so a
     // slow/hung series fetch can't keep the list stuck on "Loading…".
-    listUniverses()
+    // silent: the custom catch below owns the error toast (CLAUDE.md).
+    listUniverses({ silent: true })
       .catch((err) => {
         toast.error(err.message || 'Failed to load universes');
         return [];
@@ -66,8 +67,8 @@ export default function Universes() {
       });
     // Series counts are a nice-to-have join, fetched independently — a failed
     // or slow request should never block the universe list (counts just show
-    // 0). Silent on failure.
-    listPipelineSeries()
+    // 0). silent: swallowed to [] with no toast, so suppress request()'s.
+    listPipelineSeries({ silent: true })
       .catch(() => [])
       .then((s) => {
         if (cancelled) return;

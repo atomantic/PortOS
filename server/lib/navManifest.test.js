@@ -47,9 +47,10 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(resolveNavCommand('goals')?.path).toBe('/goals/list');
   });
 
-  it('resolves Universe Builder to its new standalone Create path', () => {
+  it('resolves Universe Builder to the /universes index path', () => {
     // Promoted out of /media/universe-builder; renamed to /universes when the
-    // list/table index landed. Nav alias must follow.
+    // list/table index landed (command id stays nav.create.universe-builder).
+    // Nav alias must follow.
     const hit = resolveNavCommand('world builder');
     expect(hit?.path).toBe('/universes');
     expect(hit?.command?.id).toBe('nav.create.universe-builder');
