@@ -1592,6 +1592,166 @@ describe('sharing round-trip', () => {
     expect(restoredUni.characters.map((c) => c.name)).toContain('Ghost');
   });
 
+  it('tombstoned collection universe: manifest advances cursor with collectionTombstonedUniverse (not pending forever)', async () => {
+    // Regression: before the fix, getUniverse(id) on a tombstoned record threw
+    // ERR_NOT_FOUND (same as absent), which resolved to null via .catch(()=>null),
+    // returning { missingUniverse: true }. The manifest stayed pending indefinitely
+    // because the universe IS on disk — just soft-deleted. The fix uses
+    // includeDeleted:true to distinguish tombstoned from truly absent, and
+    // advances the cursor immediately with a clear collectionTombstonedUniverse signal.
+    const { hasBeenProcessed, readCursor } = await import('./manifest.js');
+    const bucket = await buckets.createBucket({ name: 'TombstonedUniBucket', path: tempBucket, mode: 'auto-merge' });
+
+    // Create a universe, then delete it — leaves a tombstone on disk.
+    const uni = await universeSvc.createUniverse({ name: 'Deleted Universe' });
+    await universeSvc.deleteUniverse(uni.id);
+    // Confirm it's tombstoned (not truly absent).
+    const tombstoned = await universeSvc.getUniverse(uni.id, { includeDeleted: true });
+    expect(tombstoned.deleted).toBe(true);
+
+    // Hand-write a collection-only manifest that references the tombstoned universe.
+    mkdirSync(join(tempBucket, 'manifests'), { recursive: true });
+    const collectionManifest = {
+      id: 'mfst-tombstoned-uni-collection',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'universe',
+      senderInstanceId: 'tombstone-peer',
+      source: 'Tombstone Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [],
+      assetRefs: [],
+      collection: {
+        universeId: uni.id,
+        name: `Universe: Deleted Universe`,
+        description: '',
+        items: [
+          { kind: 'image', ref: 'fakeasset.png' },
+          { kind: 'image', ref: 'other.png' },
+        ],
+      },
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-tombstone-peer-${collectionManifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(collectionManifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+
+    // Must be processed (cursor advanced), NOT stuck pending.
+    expect(result.processed).toBe(true);
+    expect(result.pending).toBeFalsy();
+    // Outcome carries the distinct tombstoned sentinel, not missingUniverse.
+    expect(result.outcome.collectionTombstonedUniverse).toBe(uni.id);
+    // Cursor was advanced — a replay is a no-op (not re-attempted endlessly).
+    const cursor = await readCursor(bucket.id);
+    expect(hasBeenProcessed(cursor, filename, collectionManifest.id)).toBe(true);
+  });
+
+  it('tombstoned collection universe via series link: manifest advances cursor (not pending)', async () => {
+    // Same fix applied to the series→universe re-route path: when a local series
+    // links to a tombstoned universe, the importer must NOT return missingSeries
+    // (which would loop pending forever). It returns tombstonedUniverse and the
+    // manifest cursor advances.
+    const { hasBeenProcessed, readCursor } = await import('./manifest.js');
+    const bucket = await buckets.createBucket({ name: 'TombstonedUniViaSeriesBucket', path: tempBucket, mode: 'auto-merge' });
+
+    // Create universe + linked series, then delete the universe.
+    const uni = await universeSvc.createUniverse({ name: 'Gone Universe' });
+    const s = await series.createSeries({ name: 'Linked Series', logline: 'x', universeId: uni.id });
+    await universeSvc.deleteUniverse(uni.id);
+
+    // Hand-write a collection manifest referencing the series id (the exporter
+    // normally resolves series→universe, but a legacy peer may emit seriesId).
+    mkdirSync(join(tempBucket, 'manifests'), { recursive: true });
+    const collectionManifest = {
+      id: 'mfst-tombstoned-uni-via-series',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'tombstone-via-series-peer',
+      source: 'Tombstone Via Series Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [],
+      assetRefs: [],
+      collection: {
+        seriesId: s.id,
+        name: `Series: Linked Series`,
+        description: '',
+        items: [{ kind: 'image', ref: 'fakeasset.png' }],
+      },
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-tombstone-via-series-peer-${collectionManifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(collectionManifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+
+    // Cursor must advance — no infinite pending loop.
+    expect(result.processed).toBe(true);
+    expect(result.pending).toBeFalsy();
+    expect(result.outcome.collectionTombstonedUniverse).toBe(uni.id);
+    const cursor = await readCursor(bucket.id);
+    expect(hasBeenProcessed(cursor, filename, collectionManifest.id)).toBe(true);
+  });
+
+  it('promoteInboxItem throws SHARING_UNIVERSE_TOMBSTONED when collection universe is deleted locally', async () => {
+    const bucket = await buckets.createBucket({ name: 'TombstonedUniInboxBucket', path: tempBucket, mode: 'inbox' });
+
+    // Create universe, export a collection manifest, then delete the universe.
+    const uni = await universeSvc.createUniverse({ name: 'Soon Deleted Universe' });
+    mkdirSync(join(tempBucket, 'manifests'), { recursive: true });
+    mkdirSync(join(tempBucket, 'records'), { recursive: true });
+    const collectionManifest = {
+      id: 'mfst-tombstone-promote',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'universe',
+      senderInstanceId: 'tombstone-inbox-peer',
+      source: 'Tombstone Inbox Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [],
+      assetRefs: [],
+      collection: {
+        universeId: uni.id,
+        name: `Universe: Soon Deleted Universe`,
+        description: '',
+        items: [],
+      },
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-tombstone-inbox-peer-${collectionManifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(collectionManifest));
+
+    // First import into inbox while universe is live.
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+    expect(result.outcome.queued).toBe(true);
+
+    // Now delete the universe locally (soft-delete / tombstone).
+    await universeSvc.deleteUniverse(uni.id);
+
+    // Attempt to promote — must throw with the distinct tombstoned code.
+    const promoteErr = await importer.promoteInboxItem(bucket.id, collectionManifest.id).catch((e) => e);
+    expect(promoteErr).toBeInstanceOf(Error);
+    expect(promoteErr.code).toBe('SHARING_UNIVERSE_TOMBSTONED');
+    expect(promoteErr.collectionTombstonedUniverse).toBe(uni.id);
+    // Inbox item must NOT be consumed — user can retry after restoring the universe.
+    const inbox = await importer.listInbox(bucket.id);
+    expect(inbox.some((it) => it.manifestId === collectionManifest.id)).toBe(true);
+  });
+
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {
     const { SHARING_SCHEMA_VERSION } = await import('./version.js');
     const { sharingEvents } = await import('./importer.js');
