@@ -43,7 +43,10 @@ function normalizeBaseUrl(raw) {
 
 let config = { ...DEFAULT_CONFIG }
 let isAvailable = null
-let installedModels = []
+// null = not yet fetched; an array (even empty) = a cached fetch result. Using a
+// null sentinel (not `.length`) lets a genuine "0 models installed" result cache
+// too — otherwise the catalog-overlay path re-hits /api/tags on every keystroke.
+let installedModels = null
 let lastCheckAt = null
 
 const status = { lastError: null, lastSuccessAt: null, consecutiveErrors: 0 }
@@ -91,7 +94,7 @@ async function checkOllamaAvailable() {
  * @returns {Promise<Array<{ id, name, size, family, params, quantization, modifiedAt }>>}
  */
 async function getInstalledModels(forceRefresh = false) {
-  if (!forceRefresh && installedModels.length > 0) return installedModels
+  if (!forceRefresh && installedModels !== null) return installedModels
   if (!(await checkOllamaAvailable())) return []
 
   const data = await ollamaRequest('/api/tags').catch(() => null)
@@ -151,7 +154,7 @@ async function pullModel(modelId, onProgress) {
   if (lastError) {
     return { success: false, error: lastError, modelId }
   }
-  installedModels = []  // bust cache so the new model shows on next list
+  installedModels = null  // bust cache so the new model shows on next list
   console.log(`✅ Ollama pull complete: ${modelId}`)
   return { success: true, modelId }
 }
@@ -221,7 +224,7 @@ async function deleteModel(modelId) {
   if (result._err) {
     return { success: false, error: result._err, modelId }
   }
-  installedModels = []
+  installedModels = null
   console.log(`🗑️ Ollama deleted: ${modelId}`)
   return { success: true, modelId }
 }
@@ -298,7 +301,7 @@ async function importModelFromGguf({ name, ggufPath }) {
   }
   const lastError = await streamNdjson(response)
   if (lastError) return { success: false, error: lastError }
-  installedModels = []
+  installedModels = null
   console.log(`✅ Ollama import complete: ${name}`)
   return { success: true, modelId: name }
 }
