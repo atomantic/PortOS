@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
     getStatus: vi.fn(async () => ({ available: true, baseUrl: 'x', version: '1', modelCount: 0, models: [] })),
     // No local GGUF found by default → migrate falls back to re-pull.
     resolveLocalModel: vi.fn(async () => null),
-    importModelFromGguf: vi.fn(async ({ name }) => ({ success: true, modelId: name }))
+    // Echo the requested mode as the real outcome (link mode "succeeds" in tests).
+    importModelFromGguf: vi.fn(async ({ name, mode }) => ({ success: true, modelId: name, linked: mode === 'link' }))
   },
   lmstudio: {
     getAvailableModels: vi.fn(async () => []),
@@ -28,7 +29,7 @@ const mocks = vi.hoisted(() => ({
     isAppInstalled: vi.fn(() => false),
     getLastListError: vi.fn(() => null),
     resolveLocalModel: vi.fn(async () => null),
-    importModelFromGguf: vi.fn(async ({ lmstudioId }) => ({ success: true, modelId: lmstudioId }))
+    importModelFromGguf: vi.fn(async ({ lmstudioId, mode }) => ({ success: true, modelId: lmstudioId, linked: mode === 'link' }))
   },
   providers: {
     getProviderById: vi.fn(async () => ({ id: 'ollama', enabled: false })),
@@ -111,37 +112,51 @@ describe('localLlm', () => {
   });
 
   describe('migrateBackend', () => {
-    it('re-provisions known source models on the target and flips the marker', async () => {
-      writeEnv('LLM_BACKEND=lmstudio\n');
+    it('moves the OTHER backend\'s known models onto the target WITHOUT changing the default', async () => {
+      writeEnv('LLM_BACKEND=lmstudio\n'); // default stays lmstudio throughout
+      // Source is always the opposite of the target — here ollama is the target,
+      // so lmstudio is the source regardless of which is the default.
       mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
         { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' },
         { id: 'someorg/Totally-Unknown-GGUF' } // best-effort → ollama bare name
       ]);
 
       const events = [];
-      const r = await svc.migrateBackend('ollama', (e) => events.push(e));
+      const r = await svc.migrateBackend('ollama', { onProgress: (e) => events.push(e) });
 
       expect(r.success).toBe(true);
-      expect(r.backend).toBe('ollama');
+      expect(r.from).toBe('lmstudio');
+      expect(r.to).toBe('ollama');
       expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function));
       expect(r.results.find((x) => x.target === 'llama3.2').status).toBe('installed');
-      expect(svc.getBackend()).toBe('ollama');
+      expect(svc.getBackend()).toBe('lmstudio'); // default marker untouched
+      expect(mocks.providers.updateProvider).not.toHaveBeenCalled(); // providers untouched
       expect(events.at(-1).event).toBe('complete');
     });
 
+    it('returns success with no results when the source backend has no models', async () => {
+      // Target ollama → source lmstudio (empty).
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([]);
+      const r = await svc.migrateBackend('ollama');
+      expect(r.success).toBe(true);
+      expect(r.results).toEqual([]);
+      expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
+      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+    });
+
     it('skips a model with no known target equivalent (→ LM Studio)', async () => {
-      writeEnv('LLM_BACKEND=ollama\n');
+      // Target lmstudio → source ollama.
       mocks.ollama.getInstalledModels.mockResolvedValueOnce([
         { id: 'custom-unlisted:latest', name: 'custom-unlisted:latest' }
       ]);
 
       const r = await svc.migrateBackend('lmstudio');
+      expect(r.from).toBe('ollama');
       expect(r.results.find((x) => x.source === 'custom-unlisted:latest').status).toBe('skipped');
       expect(mocks.lmstudio.downloadModel).not.toHaveBeenCalled();
     });
 
-    it('copies a local GGUF to the target instead of downloading (fast path)', async () => {
-      writeEnv('LLM_BACKEND=lmstudio\n');
+    it('links a local GGUF to the target instead of downloading (default link mode)', async () => {
       mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
         { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' }
       ]);
@@ -149,18 +164,33 @@ describe('localLlm', () => {
         ggufPath: '/models/llama-3.2-3b.gguf', projectorPath: null, isMlx: false, isSharded: false
       });
 
-      const r = await svc.migrateBackend('ollama');
+      const r = await svc.migrateBackend('ollama'); // mode defaults to 'link'
       expect(r.results[0].status).toBe('imported');
-      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf' });
+      expect(r.results[0].linked).toBe(true);
+      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'link' });
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled(); // no network download
     });
 
-    it('does not local-copy an MLX model — falls back to re-pull', async () => {
-      writeEnv('LLM_BACKEND=lmstudio\n');
+    it('copies (not links) the local GGUF when mode is "copy"', async () => {
       mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
         { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' }
       ]);
-      // MLX dir has no GGUF to copy → must re-pull the catalog equivalent.
+      mocks.lmstudio.resolveLocalModel.mockResolvedValueOnce({
+        ggufPath: '/models/llama-3.2-3b.gguf', projectorPath: null, isMlx: false, isSharded: false
+      });
+
+      const r = await svc.migrateBackend('ollama', { mode: 'copy' });
+      expect(r.mode).toBe('copy');
+      expect(r.results[0].status).toBe('imported');
+      expect(r.results[0].linked).toBe(false);
+      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'copy' });
+    });
+
+    it('does not local-import an MLX model — falls back to re-pull', async () => {
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
+        { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' }
+      ]);
+      // MLX dir has no GGUF to link/copy → must re-pull the catalog equivalent.
       mocks.lmstudio.resolveLocalModel.mockResolvedValueOnce({
         ggufPath: null, projectorPath: null, isMlx: true, isSharded: false
       });
@@ -172,7 +202,6 @@ describe('localLlm', () => {
     });
 
     it('re-pulls when an Ollama-target import would drop a separate projector', async () => {
-      writeEnv('LLM_BACKEND=lmstudio\n');
       mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
         { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' }
       ]);
@@ -186,7 +215,7 @@ describe('localLlm', () => {
       expect(r.results[0].status).toBe('installed');
     });
 
-    it('does not flip the marker when every provision fails (target unusable)', async () => {
+    it('fails (without touching the default or providers) when every provision fails', async () => {
       writeEnv('LLM_BACKEND=lmstudio\n');
       mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
         { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' }
@@ -197,18 +226,8 @@ describe('localLlm', () => {
       const r = await svc.migrateBackend('ollama');
       expect(r.success).toBe(false);
       expect(r.error).toMatch(/no models could be provisioned/);
-      expect(svc.getBackend()).toBe('lmstudio'); // marker left unchanged
-      expect(mocks.providers.updateProvider).not.toHaveBeenCalled(); // provider not flipped either
-    });
-
-    it('rejects migrating to the already-active backend (no-op)', async () => {
-      writeEnv('LLM_BACKEND=ollama\n');
-      const r = await svc.migrateBackend('ollama');
-      expect(r.success).toBe(false);
-      expect(r.error).toMatch(/already the active backend/);
-      // No source read, no installs attempted.
-      expect(mocks.ollama.getInstalledModels).not.toHaveBeenCalled();
-      expect(mocks.lmstudio.getAvailableModels).not.toHaveBeenCalled();
+      expect(svc.getBackend()).toBe('lmstudio'); // default left unchanged
+      expect(mocks.providers.updateProvider).not.toHaveBeenCalled(); // providers untouched
     });
   });
 

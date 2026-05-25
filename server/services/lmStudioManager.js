@@ -8,7 +8,7 @@
 import { homedir } from 'os'
 import { join, basename } from 'path'
 import { existsSync } from 'fs'
-import { readdir, stat, mkdir, copyFile } from 'fs/promises'
+import { readdir, stat, mkdir, copyFile, link } from 'fs/promises'
 import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import {
@@ -513,34 +513,45 @@ async function resolveLocalModel(modelId) {
 }
 
 /**
- * Copy a local GGUF into LM Studio's model tree (no download). LM Studio indexes
- * loose GGUF files dropped under `<publisher>/<repo>/` on its next scan.
- * @param {{ lmstudioId: string, ggufPath: string, projectorPath?: string|null }} args
- * @returns {Promise<{ success: boolean, modelId?: string, error?: string }>}
+ * Place a local GGUF into LM Studio's model tree (no download). LM Studio indexes
+ * loose GGUF files dropped under `<publisher>/<repo>/` on its next scan. In `link`
+ * mode the file is hardlinked (shared on disk with the source backend's copy);
+ * `copy` mode duplicates it. Link falls back to copy on any error (notably EXDEV
+ * across filesystems).
+ * @param {{ lmstudioId: string, ggufPath: string, projectorPath?: string|null, mode?: 'link'|'copy' }} args
+ * @returns {Promise<{ success: boolean, modelId?: string, linked?: boolean, error?: string }>}
  */
-async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath }) {
+async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath, mode = 'copy' }) {
   const modelsDir = await getModelsDir()
   const { publisher, repo } = lmStudioPublisherRepo(lmstudioId)
   const destDir = join(modelsDir, publisher, repo)
   // Report the actual on-disk id (sanitized) rather than the raw input, so
   // migrate results / follow-up ops match where the file really landed.
   const resolvedId = `${publisher}/${repo}`
+  // Hardlink when asked; fall back to copy on any link error. Returns whether
+  // the file ended up hardlinked (so the caller can report disk-sharing).
+  const place = async (src, dest) => {
+    if (mode === 'link' && await link(src, dest).then(() => true).catch(() => false)) return true
+    await copyFile(src, dest)
+    return false
+  }
+  let linked = false
   const r = await mkdir(destDir, { recursive: true })
     .then(async () => {
       const base = basename(ggufPath)
       const destName = /\.gguf$/i.test(base) ? base : `${repo}.gguf`
-      await copyFile(ggufPath, join(destDir, destName))
+      linked = await place(ggufPath, join(destDir, destName))
       if (projectorPath) {
         const projBase = basename(projectorPath)
-        await copyFile(projectorPath, join(destDir, /\.gguf$/i.test(projBase) ? projBase : `${repo}-mmproj.gguf`))
+        await place(projectorPath, join(destDir, /\.gguf$/i.test(projBase) ? projBase : `${repo}-mmproj.gguf`))
       }
     })
     .then(() => ({ ok: true }))
     .catch((err) => ({ _err: err.message }))
   if (r._err) return { success: false, error: r._err, modelId: resolvedId }
   resetCache()
-  console.log(`📦 LM Studio import (local): ${resolvedId} ← ${ggufPath}`)
-  return { success: true, modelId: resolvedId }
+  console.log(`📦 LM Studio import (${linked ? 'hardlink' : 'copy'}): ${resolvedId} ← ${ggufPath}`)
+  return { success: true, modelId: resolvedId, linked }
 }
 
 export {

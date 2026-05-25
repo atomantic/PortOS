@@ -15,10 +15,10 @@
  */
 
 import { homedir } from 'os'
-import { join } from 'path'
-import { readdir, stat } from 'fs/promises'
+import { join, dirname } from 'path'
+import { readdir, stat, link, mkdir } from 'fs/promises'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
-import { readJSONFile } from '../lib/fileUtils.js'
+import { readJSONFile, sha256File } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
 } from '../lib/localLlmDisk.js'
@@ -285,16 +285,37 @@ async function resolveLocalModel(modelId) {
 }
 
 /**
- * Register a local GGUF file as an Ollama model via `/api/create` (no download).
- * @param {{ name: string, ggufPath: string }} args
- * @returns {Promise<{ success: boolean, modelId?: string, error?: string }>}
+ * Pre-place the source GGUF as a hardlink at `blobs/sha256-<hash>` so the
+ * subsequent `/api/create` reuses the existing (content-addressed) blob instead
+ * of copying the multi-GB weights — zero extra disk, the file is shared with the
+ * source backend's copy. Best-effort: a cross-filesystem hardlink (EXDEV) or any
+ * error returns false and the caller's `/api/create` just copies as usual.
+ * @returns {Promise<boolean>} whether the blob is now hardlinked
  */
-async function importModelFromGguf({ name, ggufPath }) {
+async function prelinkBlob(ggufPath) {
+  const hex = await sha256File(ggufPath)
+  const blobPath = join(getModelsDir(), 'blobs', digestToBlobFilename(`sha256:${hex}`))
+  if (await fileExists(blobPath)) return true // already present (content-addressed dedup)
+  await mkdir(dirname(blobPath), { recursive: true })
+  await link(ggufPath, blobPath)
+  return true
+}
+
+/**
+ * Register a local GGUF file as an Ollama model via `/api/create` (no download).
+ * In `link` mode the blob is hardlinked into Ollama's store first so create
+ * dedups against it (shared on disk); `copy` mode lets create copy the blob.
+ * @param {{ name: string, ggufPath: string, mode?: 'link'|'copy' }} args
+ * @returns {Promise<{ success: boolean, modelId?: string, linked?: boolean, error?: string }>}
+ */
+async function importModelFromGguf({ name, ggufPath, mode = 'copy' }) {
   if (!(await checkOllamaAvailable())) {
     return { success: false, error: 'Ollama not available' }
   }
-  console.log(`📦 Ollama import (local): ${name} ← ${ggufPath}`)
-  // No timeout — create copies the (multi-GB) blob into the store.
+  const linked = mode === 'link' ? await prelinkBlob(ggufPath).catch(() => false) : false
+  console.log(`📦 Ollama import (${linked ? 'hardlink' : 'copy'}): ${name} ← ${ggufPath}`)
+  // No timeout — create may copy the (multi-GB) blob into the store (skipped
+  // when we pre-hardlinked a matching blob above).
   const response = await fetchWithTimeout(`${config.baseUrl}/api/create`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -308,8 +329,8 @@ async function importModelFromGguf({ name, ggufPath }) {
   const lastError = await streamNdjson(response)
   if (lastError) return { success: false, error: lastError }
   installedModels = null
-  console.log(`✅ Ollama import complete: ${name}`)
-  return { success: true, modelId: name }
+  console.log(`✅ Ollama import complete: ${name}${linked ? ' (hardlinked blob — no extra disk)' : ''}`)
+  return { success: true, modelId: name, linked }
 }
 
 /**

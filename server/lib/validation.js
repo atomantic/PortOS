@@ -1054,6 +1054,13 @@ export const localLlmInstallSchema = z.object({
 });
 export const localLlmDeleteSchema = localLlmInstallSchema;
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
+// Migrate moves models from the OTHER backend onto `to` (bidirectional, never
+// flips the default marker). `mode` picks how the GGUF lands on disk: 'link'
+// hardlinks/shares it (default), 'copy' duplicates it.
+export const localLlmMigrateSchema = z.object({
+  to: localLlmBackendSchema,
+  mode: z.enum(['link', 'copy']).optional().default('link'),
+});
 export const localLlmInstallBackendSchema = z.object({ backend: localLlmBackendSchema });
 
 /**

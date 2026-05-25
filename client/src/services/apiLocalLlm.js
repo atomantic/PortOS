@@ -16,8 +16,12 @@ export const deleteLocalLlmModel = (backend, modelId) =>
 export const installLocalLlmBackend = (backend) =>
   request('/local-llm/install-backend', { method: 'POST', body: JSON.stringify({ backend }) });
 
+// Set the default backend (which one PortOS routes local runs to) — does not move models.
 export const switchLocalLlmBackend = (to) =>
   request('/local-llm/switch', { method: 'POST', body: JSON.stringify({ to }) });
 
-export const migrateLocalLlmBackend = (to) =>
-  request('/local-llm/migrate', { method: 'POST', body: JSON.stringify({ to }) });
+// Move the OTHER backend's models onto `to`. mode: 'link' shares GGUF weights on
+// disk (default, zero extra space, falls back to copy across filesystems);
+// 'copy' makes an independent duplicate. Never changes the default backend.
+export const migrateLocalLlmBackend = (to, mode = 'link') =>
+  request('/local-llm/migrate', { method: 'POST', body: JSON.stringify({ to, mode }) });

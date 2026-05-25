@@ -15,6 +15,7 @@ import {
   localLlmInstallSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
+  localLlmMigrateSchema,
   localLlmInstallBackendSchema
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
@@ -93,26 +94,27 @@ router.post('/delete', asyncHandler(async (req, res) => {
   res.json({ success: true, ...result })
 }))
 
-// POST /api/local-llm/switch — flip active backend without moving models
+// POST /api/local-llm/switch — set the default backend without moving models
 router.post('/switch', asyncHandler(async (req, res) => {
   const { to } = validateRequest(localLlmSwitchSchema, req.body)
   const emit = emitter(req)
-  emit('start', `Switching to ${to}…`)
+  emit('start', `Setting ${to} as default…`)
   const result = await switchBackend(to)
   if (!result.success) {
     emit('error', result.error || 'Switch failed')
     return res.status(500).json({ error: result.error || 'Switch failed' })
   }
-  emit('complete', `Switched to ${to}`)
+  emit('complete', `${to} is now the default backend`)
   res.json(result)
 }))
 
-// POST /api/local-llm/migrate — provision models on target (copy GGUF locally
-// where possible, else re-pull), then switch the active backend
+// POST /api/local-llm/migrate — move the OTHER backend's models onto `to`
+// (bidirectional; link/share or copy GGUF locally where possible, else re-pull).
+// Does NOT change the default backend — use /switch for that.
 router.post('/migrate', asyncHandler(async (req, res) => {
-  const { to } = validateRequest(localLlmSwitchSchema, req.body)
+  const { to, mode } = validateRequest(localLlmMigrateSchema, req.body)
   const emit = emitter(req)
-  const result = await migrateBackend(to, ({ event, message }) => emit(event, message))
+  const result = await migrateBackend(to, { mode, onProgress: ({ event, message }) => emit(event, message) })
   if (!result.success) {
     emit('error', result.error || 'Migration failed')
     return res.status(500).json({ error: result.error || 'Migration failed' })

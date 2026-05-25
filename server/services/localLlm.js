@@ -1,19 +1,23 @@
 /**
  * Local LLM orchestration — unifies the Ollama and LM Studio backends behind
- * one shape so the UI can list / search / install / delete models and migrate
- * or switch the active backend (mirroring the Docker↔native Postgres flow).
+ * one shape so the UI can list / search / install / delete models, move models
+ * between backends, and pick the default backend. Both backends can be installed
+ * and running at the same time; the "default" is just which one PortOS routes
+ * local runs to.
  *
- * The active backend is recorded in `.env` as `LLM_BACKEND` (parallel to
+ * The default backend is recorded in `.env` as `LLM_BACKEND` (parallel to
  * `PGMODE`), so it survives restarts and is readable by the setup script. The
  * matching aiToolkit provider (`ollama` / `lmstudio`) is enabled whenever a
- * backend becomes active.
+ * backend becomes the default (each provider stays independently enabled — we
+ * never disable the other, so both remain usable concurrently).
  *
  * The GGUF weights ARE portable between the two backends — only the on-disk
  * layout differs (Ollama's content-addressed blob store vs LM Studio's plain
- * file tree). So "migrate" copies each model's GGUF across locally (no
- * download) when it can, and re-pulls the cross-backend catalog equivalent only
- * for models it can't copy (LM Studio MLX-format, sharded, or multimodal), then
- * flips the active marker. See `server/lib/localLlmDisk.js` for the disk logic.
+ * file tree). So `migrateBackend` (bidirectional, independent of the default
+ * marker) hardlinks each model's GGUF across — sharing it on disk with zero
+ * extra space — or copies it, and re-pulls the cross-backend catalog equivalent
+ * only for models it can't share/copy (LM Studio MLX-format, sharded, or
+ * multimodal). See `server/lib/localLlmDisk.js` for the disk logic.
  */
 
 import { execFile, spawn } from 'child_process'
@@ -355,7 +359,7 @@ export async function switchBackend(to) {
  * the caller to fall back to a re-pull (no local file, MLX-only, multi-file
  * sharded, a multimodal projector we can't carry into Ollama, or a copy error).
  */
-async function tryLocalImport(to, model, targetId, resolved, onProgress) {
+async function tryLocalImport(to, model, targetId, resolved, mode, onProgress) {
   // Fast path requires a single-file GGUF on disk. MLX (no GGUF) and sharded
   // models fall through; a separate projector can be copied to LM Studio but
   // not cleanly imported into Ollama, so that case re-pulls too.
@@ -365,48 +369,63 @@ async function tryLocalImport(to, model, targetId, resolved, onProgress) {
   const name = to === 'ollama'
     ? sanitizeOllamaName(targetId || model.id)
     : (targetId || `imported/${model.id.split('/').pop()}`)
-  onProgress({ event: 'start', message: `Importing ${name} on ${to} (local copy, no download)…` })
+  const verb = mode === 'link' ? 'Linking' : 'Copying'
+  onProgress({ event: 'start', message: `${verb} ${name} onto ${to} (no download)…` })
   const r = to === 'ollama'
-    ? await ollamaManager.importModelFromGguf({ name, ggufPath: resolved.ggufPath })
-    : await lmStudioManager.importModelFromGguf({ lmstudioId: name, ggufPath: resolved.ggufPath, projectorPath: resolved.projectorPath })
+    ? await ollamaManager.importModelFromGguf({ name, ggufPath: resolved.ggufPath, mode })
+    : await lmStudioManager.importModelFromGguf({ lmstudioId: name, ggufPath: resolved.ggufPath, projectorPath: resolved.projectorPath, mode })
   if (!r.success) {
     onProgress({ event: 'start', message: `Local import of ${model.id} failed (${r.error}); re-pulling…` })
     return null
   }
-  onProgress({ event: 'start', message: `Imported ${r.modelId} on ${to} (no download)` })
-  return { source: model.id, target: r.modelId, status: 'imported', reason: null }
+  // `linked` reflects what actually happened on disk — link mode falls back to a
+  // copy across filesystems, so report the real outcome, not the requested mode.
+  onProgress({ event: 'start', message: `${r.linked ? 'Linked' : 'Copied'} ${r.modelId} onto ${to} (no download)` })
+  return { source: model.id, target: r.modelId, status: 'imported', linked: !!r.linked, reason: null }
 }
 
+/** The other of the two backends (migration source for a given target). */
+const otherBackend = (backend) => (backend === 'ollama' ? 'lmstudio' : 'ollama')
+
 /**
- * Migrate to a backend: provision the active backend's installed models on the
- * target, then flip the active marker. The underlying GGUF weights ARE portable
- * across backends, so each model is first copied locally (no download) when it's
- * a single-file GGUF; models that can't be copied (LM Studio MLX-format, sharded,
- * or with a separate projector) fall back to re-pulling the catalog equivalent.
- * Per-model results are reported; an individual failure doesn't abort the switch.
+ * Provision the OTHER backend's installed models onto `to`. This is bidirectional
+ * (source is simply the opposite backend, NOT the active one) and decoupled from
+ * the default-backend marker — it never flips it. Use `switchBackend` ("Set as
+ * Default") for routing. The underlying GGUF weights ARE portable across backends:
+ *
+ *   • `mode: 'link'` (default) — hardlink the GGUF so both backends share one file
+ *     on disk (zero extra space), falling back to a copy where a hardlink isn't
+ *     possible (different filesystem).
+ *   • `mode: 'copy'` — make an independent duplicate.
+ *
+ * Either way there's no re-download for portable single-file GGUFs; models that
+ * can't be shared/copied (LM Studio MLX-format, sharded, or with a separate
+ * projector when targeting Ollama) fall back to re-pulling the catalog
+ * equivalent. Per-model results are reported; an individual failure doesn't abort.
  *
  * @param {string} to - target backend
- * @param {(p: { event: string, message: string }) => void} [onProgress]
+ * @param {{ mode?: 'link'|'copy', onProgress?: (p: { event: string, message: string }) => void }} [opts]
  */
-export async function migrateBackend(to, onProgress = () => {}) {
+export async function migrateBackend(to, { mode = 'link', onProgress = () => {} } = {}) {
   if (!isBackend(to)) return { success: false, error: `Unknown backend: ${to}` }
-  // Source is whatever's active now — we're moving away from it. Migrating to
-  // the already-active backend is a no-op, not "re-provision from the other".
-  const from = getBackend()
-  if (from === to) {
-    return { success: false, error: `${to} is already the active backend — nothing to migrate.` }
-  }
+  if (mode !== 'link' && mode !== 'copy') mode = 'link'
+  const from = otherBackend(to)
 
   onProgress({ event: 'start', message: `Reading models installed on ${from}…` })
   const sourceModels = await listModels(from, true) // fresh source list for an accurate migration
+  if (sourceModels.length === 0) {
+    const message = `No models installed on ${from} to move.`
+    onProgress({ event: 'complete', message })
+    return { success: true, from, to, mode, results: [] }
+  }
 
   const results = []
   for (const model of sourceModels) {
     const { targetId, exact } = mapModelToBackend(from, model.id, to)
     const resolved = await manager(from).resolveLocalModel(model.id).catch(() => null)
 
-    // 1) Fast path — copy the GGUF locally (no download) when we can.
-    const imported = await tryLocalImport(to, model, targetId, resolved, onProgress)
+    // 1) Fast path — link/copy the GGUF locally (no download) when we can.
+    const imported = await tryLocalImport(to, model, targetId, resolved, mode, onProgress)
     if (imported) { results.push(imported); continue }
 
     // 2) Fallback — re-pull the catalog equivalent.
@@ -426,35 +445,33 @@ export async function migrateBackend(to, onProgress = () => {}) {
     results.push({ source: model.id, target: targetId, status, reason: r.error })
   }
 
-  const imported = results.filter((r) => r.status === 'imported').length
+  const linked = results.filter((r) => r.status === 'imported' && r.linked).length
+  const copied = results.filter((r) => r.status === 'imported' && !r.linked).length
   const installed = results.filter((r) => r.status === 'installed').length
   const started = results.filter((r) => r.status === 'started').length
   const failed = results.filter((r) => r.status === 'failed').length
-  const skipped = results.length - imported - installed - started - failed
-  const succeeded = imported + installed + started
+  const skipped = results.filter((r) => r.status === 'skipped').length
+  const succeeded = linked + copied + installed + started
 
-  // Don't flip the active marker onto a backend we couldn't provision anything
-  // on — if every attempt failed (target not installed/running), switching would
-  // leave PortOS pointed at an unusable backend. All-skipped is fine (the target
-  // itself works; we just had no equivalent to move).
+  // Surface a hard failure when nothing could be provisioned (e.g. target not
+  // installed/running). All-skipped is fine — the target works, we just had no
+  // equivalent to move.
   if (failed > 0 && succeeded === 0) {
-    const error = `Migration to ${to} failed — no models could be provisioned (is ${to} installed and running?). Active backend left unchanged.`
+    const error = `Migration ${from} → ${to} failed — no models could be provisioned (is ${to} installed and running?).`
     onProgress({ event: 'error', message: error })
-    console.error(`⚠️ Migration to ${to} aborted: ${failed} failed, 0 succeeded — marker unchanged`)
-    return { success: false, error, results }
+    console.error(`⚠️ Migration ${from} → ${to} aborted: ${failed} failed, 0 succeeded`)
+    return { success: false, from, to, mode, error, results }
   }
 
-  writeBackend(to)
-  await ensureBackendProvider(to)
-
   const parts = [
-    imported ? `${imported} copied locally` : null,
+    linked ? `${linked} linked (shared on disk)` : null,
+    copied ? `${copied} copied` : null,
     installed ? `${installed} downloaded` : null,
     started ? `${started} downloading` : null,
     failed ? `${failed} failed` : null,
     skipped ? `${skipped} skipped` : null
   ].filter(Boolean)
-  onProgress({ event: 'complete', message: `Migrated to ${to} — ${parts.join(', ') || 'no models to move'}` })
-  console.log(`🔀 Migrated local LLM backend → ${to} (${imported} copied, ${installed} downloaded, ${failed} failed)`)
-  return { success: true, backend: to, results }
+  onProgress({ event: 'complete', message: `Moved ${from} → ${to} — ${parts.join(', ') || 'no models to move'}` })
+  console.log(`🔀 Moved models ${from} → ${to} (${linked} linked, ${copied} copied, ${installed} downloaded, ${failed} failed)`)
+  return { success: true, from, to, mode, results }
 }

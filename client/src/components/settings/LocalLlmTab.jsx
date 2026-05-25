@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes } from '../../utils/formatters';
@@ -17,10 +17,29 @@ const labelFor = (id) => BACKENDS.find((b) => b.id === id)?.label || id;
 
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 
-function BackendCard({ backend, status, isActive, busy, actionInProgress, runAction, setConfirmAction }) {
+// Summarize a migrate result for the success toast (per-model statuses → counts).
+function summarizeMigrate(r) {
+  const c = { linked: 0, copied: 0, installed: 0, started: 0, failed: 0, skipped: 0 };
+  for (const x of r?.results || []) {
+    if (x.status === 'imported') c[x.linked ? 'linked' : 'copied']++;
+    else if (c[x.status] != null) c[x.status]++;
+  }
+  const parts = [
+    c.linked && `${c.linked} linked`,
+    c.copied && `${c.copied} copied`,
+    c.installed && `${c.installed} downloaded`,
+    c.started && `${c.started} downloading`,
+    c.failed && `${c.failed} failed`,
+    c.skipped && `${c.skipped} skipped`
+  ].filter(Boolean);
+  return `${labelFor(r.from)} → ${labelFor(r.to)}: ${parts.join(', ') || 'nothing to move'}`;
+}
+
+function BackendCard({ backend, status, isDefault, busy, actionInProgress, runAction, setConfirmAction }) {
   const data = status?.[backend.id];
   const Icon = backend.icon;
   const other = backend.id === 'ollama' ? 'lmstudio' : 'ollama';
+  const otherData = status?.[other];
   const statusLabel = data?.available ? 'Running' : data?.installed ? 'Installed (stopped)' : 'Not installed';
   const statusColor = data?.available ? 'bg-port-success' : data?.installed ? 'bg-port-warning' : 'bg-gray-600';
 
@@ -32,8 +51,15 @@ function BackendCard({ backend, status, isActive, busy, actionInProgress, runAct
           {backend.label}
         </div>
         <div className="flex items-center gap-1.5">
-          {isActive && <span className="text-xs px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">Active</span>}
-          <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+          {isDefault && (
+            <span
+              className="text-xs px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded"
+              title="PortOS routes local-LLM runs here by default. This is independent of whether the server is running (see the status dot)."
+            >
+              Default
+            </span>
+          )}
+          <span className={`w-2 h-2 rounded-full ${statusColor}`} title={statusLabel} />
         </div>
       </div>
 
@@ -73,30 +99,36 @@ function BackendCard({ backend, status, isActive, busy, actionInProgress, runAct
         </div>
       )}
 
-      {data?.installed && !isActive && (
+      {data?.installed && (
         <div className="flex flex-wrap gap-1.5 pt-1 border-t border-port-border/50">
-          <button
-            onClick={() => setConfirmAction({
-              type: 'migrate',
-              label: `Migrate to ${backend.label}?`,
-              detail: `Provisions the models you have on ${labelFor(other)} onto ${backend.label}, then makes ${backend.label} the active backend. GGUF weights are copied locally (no re-download) where possible; anything that can't be copied (LM Studio MLX-format, sharded, or multimodal models) is re-pulled, which can take a while.`,
-              action: () => runAction(`migrate-${backend.id}`, () => migrateLocalLlmBackend(backend.id), `Migrated to ${backend.label}`)
-            })}
-            disabled={busy}
-            className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
-          >
-            <ArrowRightLeft size={12} />
-            Migrate to {backend.label}
-          </button>
-          <button
-            onClick={() => runAction(`switch-${backend.id}`, () => switchLocalLlmBackend(backend.id), `Switched to ${backend.label}`)}
-            disabled={busy}
-            className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
-            title="Make this the active backend without moving any models"
-          >
-            {actionInProgress === `switch-${backend.id}` ? <BrailleSpinner /> : <ArrowRightLeft size={12} />}
-            Switch
-          </button>
+          {!isDefault && (
+            <button
+              onClick={() => runAction(`switch-${backend.id}`, () => switchLocalLlmBackend(backend.id), `${backend.label} is now the default backend`)}
+              disabled={busy}
+              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
+              title="Route PortOS local-LLM runs here by default — doesn't move any models or stop the other backend"
+            >
+              {actionInProgress === `switch-${backend.id}` ? <BrailleSpinner /> : <Star size={12} />}
+              Set as Default
+            </button>
+          )}
+          {otherData?.available && (
+            <button
+              onClick={() => setConfirmAction({
+                type: 'migrate',
+                to: backend.id,
+                from: other,
+                label: `Bring ${labelFor(other)}'s models onto ${backend.label}?`,
+                detail: `Provisions the ${otherData.modelCount ?? 0} model${(otherData.modelCount ?? 0) === 1 ? '' : 's'} on ${labelFor(other)} onto ${backend.label} — your default backend is unchanged. Link shares each GGUF on disk (no extra space, falls back to a copy across filesystems); Copy makes an independent duplicate. Portable single-file GGUF models move with no re-download; MLX-format, sharded, or multimodal models that can't be shared/copied are re-pulled.`
+              })}
+              disabled={busy}
+              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
+              title={`Copy or link the models installed on ${labelFor(other)} onto ${backend.label}`}
+            >
+              <ArrowRightLeft size={12} />
+              Import from {labelFor(other)}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -197,6 +229,9 @@ export function LocalLlmTab() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
+        <p className="text-xs text-gray-500">
+          Both backends can be installed and running at the same time — <span className="text-gray-400">Default</span> just sets which one PortOS routes local-LLM runs to. Use <span className="text-gray-400">Import from…</span> to copy or link models between them without re-downloading.
+        </p>
 
         {loading && !status ? (
           <BrailleSpinner text="Loading local LLM status" />
@@ -205,7 +240,7 @@ export function LocalLlmTab() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {BACKENDS.map((b) => (
                 <BackendCard
-                  key={b.id} backend={b} status={status} isActive={status.backend === b.id}
+                  key={b.id} backend={b} status={status} isDefault={status.backend === b.id}
                   busy={busy} actionInProgress={actionInProgress}
                   runAction={runAction} setConfirmAction={setConfirmAction}
                 />
@@ -223,14 +258,24 @@ export function LocalLlmTab() {
               <div className="bg-port-bg border border-port-warning/30 rounded-lg p-4 space-y-3">
                 <p className="text-sm text-white">{confirmAction.label}</p>
                 {confirmAction.detail && <p className="text-xs text-gray-400">{confirmAction.detail}</p>}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
-                    onClick={confirmAction.action}
+                    onClick={() => runAction(`migrate-${confirmAction.to}-link`, () => migrateLocalLlmBackend(confirmAction.to, 'link'), summarizeMigrate)}
                     disabled={busy}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-warning/20 hover:bg-port-warning/30 text-port-warning"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent"
+                    title="Hardlink each GGUF so both backends share one file on disk (no extra space; falls back to a copy across filesystems)"
                   >
-                    {busy ? <BrailleSpinner /> : <ArrowRightLeft size={14} />}
-                    Confirm
+                    {actionInProgress === `migrate-${confirmAction.to}-link` ? <BrailleSpinner /> : <Link2 size={14} />}
+                    Link (share disk)
+                  </button>
+                  <button
+                    onClick={() => runAction(`migrate-${confirmAction.to}-copy`, () => migrateLocalLlmBackend(confirmAction.to, 'copy'), summarizeMigrate)}
+                    disabled={busy}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-border hover:bg-port-border/70 text-white"
+                    title="Make an independent duplicate on the target (uses extra disk; survives deleting the source backend's copy)"
+                  >
+                    {actionInProgress === `migrate-${confirmAction.to}-copy` ? <BrailleSpinner /> : <Copy size={14} />}
+                    Copy (independent)
                   </button>
                   <button onClick={() => setConfirmAction(null)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors">
                     Cancel
