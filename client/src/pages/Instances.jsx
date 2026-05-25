@@ -805,10 +805,18 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
     };
     socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
     socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
+    // An incoming push from this peer auto-created a reverse subscription
+    // back to it (`maybeCreateReverseSubscription`). The new row lives in
+    // peer_subscriptions.json but this card cached `peerSubs` on mount, so
+    // refetch this peer's subs to surface the adopted-from-reverse sub
+    // without a manual page reload. Carries `peerId`, so the same filter
+    // keeps every other card from refetching needlessly.
+    socket.on('peerSync:subscription:created', handleSchemaSubChange);
     return () => {
       cancelled = true;
       socket.off('peerSync:subscription-blocked', handleSchemaSubChange);
       socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
+      socket.off('peerSync:subscription:created', handleSchemaSubChange);
     };
   }, [peer.instanceId]);
 

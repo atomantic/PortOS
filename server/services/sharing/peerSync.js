@@ -82,7 +82,11 @@ export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'med
  * emits `asset-arrived` ({ filename, kind, peerId }) when a previously-missing
  * file lands locally; `sharing/index.js` wires that to a socket emission so
  * the client's MediaImage component can swap its "syncing" placeholder for
- * the real bytes without polling.
+ * the real bytes without polling. `maybeCreateReverseSubscription` emits
+ * `subscription-created` ({ peerId, recordKind, recordId, subId }) when an
+ * incoming push auto-creates a reverse subscription, which `sharing/index.js`
+ * relays as the `peerSync:subscription:created` socket event so the Instances
+ * page can re-fetch that peer's subscriptions without a manual reload.
  */
 export const peerSyncEvents = new EventEmitter();
 peerSyncEvents.setMaxListeners(100);
@@ -1462,7 +1466,22 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   const localState = await classifyLocalRecord(recordKind, recordId);
   if (localState !== 'syncable') return false;
 
-  await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
+  const sub = await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
+  // subscribePeer is idempotent — only announce when a row was genuinely
+  // inserted (created=true). The existing-sub short-circuit at the top of
+  // this function already returns early, but guarding on `created` keeps the
+  // event honest if a race ever lands an identical row between the
+  // findPeerSubscription check and the insert. `sharing/index.js` wires this
+  // to the `peerSync:subscription:created` socket event so the Instances page
+  // re-fetches that peer's subs without a manual reload.
+  if (sub?.created) {
+    peerSyncEvents.emit('subscription-created', {
+      peerId,
+      recordKind,
+      recordId,
+      subId: sub.id,
+    });
+  }
   return true;
 }
 
