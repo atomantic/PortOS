@@ -16,7 +16,7 @@
  * flips the active marker. See `server/lib/localLlmDisk.js` for the disk logic.
  */
 
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -35,6 +35,21 @@ const DEFAULT_BACKEND = 'ollama'
 // stalled connection (or an unexpected interactive prompt) can't hang the
 // request forever. Large models on a slow link still fit comfortably.
 const LMS_INSTALL_TIMEOUT_MS = 60 * 60 * 1000
+
+// Backend (app/binary) installs go through a package manager and can pull a
+// large cask; bound them so a wedged installer can't hang the request forever.
+const BACKEND_INSTALL_TIMEOUT_MS = 30 * 60 * 1000
+
+const DOWNLOAD_URL = { ollama: 'https://ollama.com/download', lmstudio: 'https://lmstudio.ai/download' }
+
+// Which (platform, backend) pairs PortOS can install automatically. macOS uses
+// Homebrew for both; Linux has an official Ollama script but no clean LM Studio
+// CLI install; Windows is download-only.
+function canAutoInstall(backend) {
+  if (process.platform === 'darwin') return true
+  if (process.platform === 'linux') return backend === 'ollama'
+  return false
+}
 
 // aiToolkit provider id that pairs with each backend.
 const PROVIDER_ID = { ollama: 'ollama', lmstudio: 'lmstudio' }
@@ -104,6 +119,94 @@ async function commandExists(cmd, args) {
 
 const manager = (backend) => (backend === 'ollama' ? ollamaManager : lmStudioManager)
 
+/**
+ * Spawn a command and stream its stdout/stderr lines to `onLine`, resolving
+ * `{ success }` on exit. Used for package-manager installs where live output is
+ * the only progress signal. Never rejects (errors resolve as `{ success:false }`)
+ * and guards the `onLine` hook — this runs outside the request lifecycle.
+ */
+function runStreaming(cmd, args, onLine, timeoutMs = 0) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let buffer = ''
+    let settled = false
+    const safeLine = (line) => {
+      if (!line || typeof onLine !== 'function') return
+      try { onLine(line) } catch (err) { console.error(`⚠️ install progress hook failed: ${err.message}`) }
+    }
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+    const timer = timeoutMs > 0
+      ? setTimeout(() => { child.kill('SIGKILL'); finish({ success: false, error: `timed out after ${Math.round(timeoutMs / 1000)}s` }) }, timeoutMs)
+      : null
+    const onData = (chunk) => {
+      buffer += chunk.toString()
+      let nl
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        safeLine(buffer.slice(0, nl).trim())
+        buffer = buffer.slice(nl + 1)
+      }
+    }
+    child.stdout.on('data', onData)
+    child.stderr.on('data', onData)
+    child.on('error', (err) => finish({ success: false, error: err.message }))
+    child.on('close', (code) => {
+      safeLine(buffer.trim())
+      finish(code === 0 ? { success: true } : { success: false, error: `exited with code ${code}` })
+    })
+  })
+}
+
+/**
+ * Install a backend's app/binary via the platform package manager (Homebrew on
+ * macOS for both; the official script for Ollama on Linux). Streams installer
+ * output via `onProgress`. Returns `{ success, note? }` — `note` tells the user
+ * how to start it (installing the binary doesn't start the server/app).
+ *
+ * @param {string} backend - 'ollama' | 'lmstudio'
+ * @param {(p: { event: string, message: string }) => void} [onProgress]
+ */
+export async function installBackend(backend, onProgress = () => {}) {
+  if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
+  const emit = (message) => onProgress({ event: 'start', message })
+  const downloadHint = `Download it from ${DOWNLOAD_URL[backend]}.`
+
+  if (!canAutoInstall(backend)) {
+    return { success: false, error: `Automatic install isn't supported on this platform. ${downloadHint}` }
+  }
+
+  // Linux Ollama: official install script.
+  if (process.platform === 'linux') {
+    emit('Installing Ollama via the official install script…')
+    const r = await runStreaming('bash', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], emit, BACKEND_INSTALL_TIMEOUT_MS)
+    if (!r.success) return { success: false, error: `Ollama install failed: ${r.error}. ${downloadHint}` }
+    console.log('⬇️ Installed Ollama (linux script)')
+    return { success: true, backend }
+  }
+
+  // macOS: Homebrew (formula for Ollama, cask for LM Studio).
+  if (!(await commandExists('brew', ['--version']))) {
+    return { success: false, error: `Homebrew not found — install it from https://brew.sh first, or download the app: ${DOWNLOAD_URL[backend]}` }
+  }
+  const label = backend === 'ollama' ? 'Ollama' : 'LM Studio'
+  const args = backend === 'ollama' ? ['install', 'ollama'] : ['install', '--cask', 'lm-studio']
+  emit(`Installing ${label} via Homebrew (this can take a few minutes)…`)
+  const r = await runStreaming('brew', args, emit, BACKEND_INSTALL_TIMEOUT_MS)
+  if (!r.success) return { success: false, error: `Homebrew install failed: ${r.error}` }
+  console.log(`🍺 Installed ${label} via Homebrew`)
+  return {
+    success: true,
+    backend,
+    note: backend === 'ollama'
+      ? 'Start it with `ollama serve` (or `brew services start ollama`), then refresh.'
+      : 'Launch LM Studio, enable the local server (Developer tab), then run `lms bootstrap`.'
+  }
+}
+
 /** Normalize each backend's installed-model shape into one card shape. */
 function normalizeModels(backend, models) {
   if (backend === 'ollama') {
@@ -155,7 +258,9 @@ export async function getStatus() {
       version: ollamaStatus.version,
       baseUrl: ollamaStatus.baseUrl,
       modelCount: ollamaStatus.modelCount,
-      models: normalizeModels('ollama', ollamaStatus.models)
+      models: normalizeModels('ollama', ollamaStatus.models),
+      canAutoInstall: canAutoInstall('ollama'),
+      downloadUrl: DOWNLOAD_URL.ollama
     },
     lmstudio: {
       installed: lmsCli || lmStudioStatus.available,
@@ -164,7 +269,9 @@ export async function getStatus() {
       baseUrl: lmStudioStatus.baseUrl,
       modelCount: lmStudioModels.models.length,
       models: lmStudioModels.models,
-      modelsError: lmStudioModels.error
+      modelsError: lmStudioModels.error,
+      canAutoInstall: canAutoInstall('lmstudio'),
+      downloadUrl: DOWNLOAD_URL.lmstudio
     }
   }
 }

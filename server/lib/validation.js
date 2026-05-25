@@ -1054,6 +1054,7 @@ export const localLlmInstallSchema = z.object({
 });
 export const localLlmDeleteSchema = localLlmInstallSchema;
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
+export const localLlmInstallBackendSchema = z.object({ backend: localLlmBackendSchema });
 
 /**
  * Validate data against a Zod schema, throwing on failure.

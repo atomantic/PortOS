@@ -14,11 +14,12 @@ import {
   validateRequest,
   localLlmInstallSchema,
   localLlmDeleteSchema,
-  localLlmSwitchSchema
+  localLlmSwitchSchema,
+  localLlmInstallBackendSchema
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import {
-  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend
+  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend
 } from '../services/localLlm.js'
 
 const router = Router()
@@ -47,6 +48,24 @@ router.get('/catalog', asyncHandler(async (req, res) => {
   const installed = (await listModels(backend)).map((m) => m.id)
   const models = q ? searchCatalog(backend, q, installed) : getCatalog(backend, installed)
   res.json({ backend, models })
+}))
+
+// POST /api/local-llm/install-backend — install the backend app/binary itself
+// (Homebrew on macOS, official script for Ollama on Linux). Streams progress.
+router.post('/install-backend', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(localLlmInstallBackendSchema, req.body)
+  const emit = emitter(req)
+  const result = await installBackend(backend, ({ event, message }) => emit(event, message))
+    .catch((err) => {
+      emit('error', `Install failed: ${err.message}`)
+      throw err
+    })
+  if (!result.success) {
+    emit('error', result.error || 'Install failed')
+    return res.status(502).json({ error: result.error || 'Install failed', backend })
+  }
+  emit('complete', `${backend === 'ollama' ? 'Ollama' : 'LM Studio'} installed${result.note ? ` — ${result.note}` : ''}`)
+  res.json(result)
 }))
 
 // POST /api/local-llm/install — pull/download a model (streams progress)

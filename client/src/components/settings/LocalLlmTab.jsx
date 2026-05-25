@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes } from '../../utils/formatters';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, installLocalLlmModel,
-  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend
+  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend
 } from '../../services/api';
 import socket from '../../services/socket';
 
@@ -43,7 +43,37 @@ function BackendCard({ backend, status, isActive, busy, actionInProgress, runAct
         {data?.version && <> · v{data.version}</>}
       </div>
 
-      {!isActive && (
+      {!data?.installed && (
+        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-port-border/50">
+          {data?.canAutoInstall ? (
+            <button
+              onClick={() => runAction(
+                `install-backend-${backend.id}`,
+                () => installLocalLlmBackend(backend.id),
+                (r) => r?.note ? `Installed ${backend.label} — ${r.note}` : `Installed ${backend.label}`
+              )}
+              disabled={busy}
+              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
+              title="Install via Homebrew (macOS) / official installer (Linux)"
+            >
+              {actionInProgress === `install-backend-${backend.id}` ? <BrailleSpinner /> : <Download size={12} />}
+              Install {backend.label}
+            </button>
+          ) : (
+            <a
+              href={data?.downloadUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white no-underline`}
+            >
+              <ExternalLink size={12} />
+              Get {backend.label}
+            </a>
+          )}
+        </div>
+      )}
+
+      {data?.installed && !isActive && (
         <div className="flex flex-wrap gap-1.5 pt-1 border-t border-port-border/50">
           <button
             onClick={() => setConfirmAction({

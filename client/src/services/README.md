@@ -42,7 +42,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
-| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status, model list/catalog/install/delete, switch/migrate. |
+| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status, model list/catalog/install/delete, backend install (Homebrew/script), switch/migrate. |
 | `apiGit.js` | Git operations. |
 | `apiGithub.js` | GitHub repo metadata. |
 | `apiHistory.js` | Historical logs / runs. |

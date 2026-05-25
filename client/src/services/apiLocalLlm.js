@@ -15,6 +15,9 @@ export const installLocalLlmModel = (backend, modelId) =>
 export const deleteLocalLlmModel = (backend, modelId) =>
   request('/local-llm/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }) });
 
+export const installLocalLlmBackend = (backend) =>
+  request('/local-llm/install-backend', { method: 'POST', body: JSON.stringify({ backend }) });
+
 export const switchLocalLlmBackend = (to) =>
   request('/local-llm/switch', { method: 'POST', body: JSON.stringify({ to }) });
 

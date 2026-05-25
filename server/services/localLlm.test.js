@@ -184,4 +184,22 @@ describe('localLlm', () => {
       expect(mocks.lmstudio.getAvailableModels).not.toHaveBeenCalled();
     });
   });
+
+  describe('installBackend', () => {
+    it('rejects an unknown backend', async () => {
+      expect((await svc.installBackend('nope')).success).toBe(false);
+    });
+
+    it('returns a download hint on an unsupported platform (no install attempted)', async () => {
+      const orig = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      try {
+        const r = await svc.installBackend('lmstudio');
+        expect(r.success).toBe(false);
+        expect(r.error).toMatch(/lmstudio\.ai/); // surfaces the manual download link
+      } finally {
+        Object.defineProperty(process, 'platform', orig);
+      }
+    });
+  });
 });
