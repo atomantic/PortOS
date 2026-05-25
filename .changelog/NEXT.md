@@ -8,6 +8,8 @@ TBD
 
 ## Added
 
+- **Writers Room Guide.** A new deep-linkable documentation page at `/writers-room/guide` (reachable via a "Guide" link in the Writers Room header and from `⌘K` / voice). It documents the literary length ladder — Microfiction, Flash Fiction, Standard Short Story, Novelette, plus Novella/Novel for context — with both word and character bands, a page-based book-length estimate table (200/300 pages), and craft principles grouped by structure, character, prose, and revision. The length targets and principles live in a single canonical data module (`client/src/lib/writingGuide.js`, with a `classifyByWordCount()` helper) so forthcoming editor analyses — including the planned **emotional-roadmap evaluator** that charts the reader's emotional journey beat by beat — read the same source the docs render from.
+
 - **Use a different Chrome variant for the PortOS-managed browser.** PortOS now reads a `chromePath` (and `macAppBundle` on macOS) from `data/browser-config.json`, so you can point it at Chrome Canary, Chromium, Brave, Edge, or any Chromium-based browser — separating the automation surface from your daily-driver Chrome. Setup (`./setup.sh` / `setup.ps1`) and update (`./update.sh` / `./update.ps1`) now offer to install and configure Chrome Canary automatically: on macOS via `brew install --cask google-chrome@canary`, on Windows via `winget install Google.Chrome.Canary`. The prompt is interactive-only (CI / non-TTY runs skip silently), idempotent (won't re-prompt once configured), and supports `PORTOS_USE_CANARY=1` for headless opt-in. The Browser page's Config panel exposes both fields for after-the-fact edits.
 
 ## Changed

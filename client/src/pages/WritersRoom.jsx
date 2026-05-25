@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { NotebookPen, PanelLeftOpen } from 'lucide-react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { NotebookPen, PanelLeftOpen, BookOpen } from 'lucide-react';
 import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
@@ -144,12 +144,28 @@ export default function WritersRoom() {
           </button>
           <NotebookPen className="w-4 h-4 text-port-accent" />
           <span className="text-sm font-semibold text-white">Writers Room</span>
+          <Link
+            to="/writers-room/guide"
+            className="ml-auto flex items-center gap-1 text-xs text-gray-400 hover:text-port-accent transition-colors"
+            title="Writing guide: length targets & craft rules"
+          >
+            <BookOpen size={14} />
+            <span className="hidden sm:inline">Guide</span>
+          </Link>
         </div>
       ) : (
         <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card">
           <NotebookPen className="w-5 h-5 text-port-accent" />
           <h1 className="text-xl font-bold text-white">Writers Room</h1>
-          <span className="text-xs text-gray-500 hidden md:inline ml-auto">Folders, works, drafts, storyboard, and write-for-10 sprints</span>
+          <span className="text-xs text-gray-500 hidden lg:inline">Folders, works, drafts, storyboard, and write-for-10 sprints</span>
+          <Link
+            to="/writers-room/guide"
+            className="ml-auto flex items-center gap-1 text-xs text-gray-400 hover:text-port-accent transition-colors"
+            title="Writing guide: length targets & craft rules"
+          >
+            <BookOpen size={15} />
+            <span>Guide</span>
+          </Link>
         </div>
       )}
 
