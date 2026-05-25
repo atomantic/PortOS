@@ -13,35 +13,12 @@ import { execFileSync } from 'child_process';
 import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { readFileSync, writeFileSync } from 'fs';
+import { parseEnvFile, upsertEnvKey } from './lib/envFile.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 
-// Parse .env into a key/value map. Tolerates blank lines, # comments, and
-// optional surrounding single/double quotes around values. Returns {} when
-// the file is missing.
-function parseEnvFile() {
-  const result = {};
-  let content = '';
-  try { content = readFileSync(join(rootDir, '.env'), 'utf8'); } catch { return result; }
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) continue;
-    const key = trimmed.slice(0, idx).trim();
-    let value = trimmed.slice(idx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    result[key] = value;
-  }
-  return result;
-}
-
-const envFile = parseEnvFile();
+const envFile = parseEnvFile(join(rootDir, '.env'));
 // Resolve PG config from process.env first, then .env, then defaults — so a
 // user who sets PGPASSWORD in .env (without exporting it into the shell) is
 // respected the same way getMode() respects PGMODE in .env.
@@ -192,18 +169,7 @@ function getDockerHints(issue) {
 
 // Write PGMODE to .env (create or update)
 function setPgMode(mode) {
-  const envPath = join(rootDir, '.env');
-  let content = '';
-  try {
-    content = readFileSync(envPath, 'utf8');
-  } catch { /* no .env yet */ }
-
-  if (content.match(/^PGMODE=/m)) {
-    content = content.replace(/^PGMODE=.*/m, `PGMODE=${mode}`);
-  } else {
-    content = `PGMODE=${mode}\n${content}`;
-  }
-  writeFileSync(envPath, content);
+  upsertEnvKey(join(rootDir, '.env'), 'PGMODE', mode);
 }
 
 // Prompt user to choose storage mode (TTY only)

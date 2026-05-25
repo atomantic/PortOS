@@ -17,39 +17,15 @@ import { execFileSync } from 'child_process';
 import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync } from 'fs';
+import { parseEnvFile, upsertEnvKey } from './lib/envFile.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 const envPath = join(rootDir, '.env');
 
-function parseEnvFile() {
-  const result = {};
-  let content = '';
-  try { content = readFileSync(envPath, 'utf8'); } catch { return result; }
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) continue;
-    let value = trimmed.slice(idx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    result[trimmed.slice(0, idx).trim()] = value;
-  }
-  return result;
-}
-
 function setBackend(backend) {
-  let content = '';
-  try { content = readFileSync(envPath, 'utf8'); } catch { /* no .env yet */ }
-  if (/^LLM_BACKEND=/m.test(content)) {
-    content = content.replace(/^LLM_BACKEND=.*/m, `LLM_BACKEND=${backend}`);
-  } else {
-    content = `LLM_BACKEND=${backend}\n${content}`;
-  }
-  writeFileSync(envPath, content);
+  upsertEnvKey(envPath, 'LLM_BACKEND', backend);
   console.log(`✅ Local LLM backend set to ${backend} (LLM_BACKEND in .env)`);
 }
 
@@ -126,7 +102,7 @@ function promptYesNo(question) {
   });
 }
 
-const env = parseEnvFile();
+const env = parseEnvFile(envPath);
 const existing = env.LLM_BACKEND || process.env.LLM_BACKEND;
 
 if (existing === 'ollama' || existing === 'lmstudio') {
