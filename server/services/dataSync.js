@@ -41,6 +41,14 @@ const PIPELINE_ISSUES_DIR = join(PATHS.data, 'pipeline-issues');
 // fingerprint walker descends into the dir so per-record edits invalidate.
 const UNIVERSE_BUILDER_DIR = join(PATHS.data, 'universes');
 const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
+// Outbound peer subscriptions drive the per-peer snapshot exclude-set (see
+// getSnapshot's `forPeerId` scoping). A subscribe/unsubscribe changes which
+// records ride the scoped snapshot, so it must invalidate the per-peer
+// checksum cache for the universe / pipeline / mediaCollections categories
+// even when no record file itself moved (e.g. ephemeralize-then-delete tears
+// down a sub WITHOUT touching the other records). Added to those categories'
+// CHECKSUM_PATHS below.
+const PEER_SUBSCRIPTIONS_FILE = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -359,12 +367,32 @@ async function applyMeatspaceRemote(remoteData) {
 
 // --- Category: Universe ---
 
-async function getUniverseSnapshot() {
+// Normalize an `excludeRecordIds` option into a Set. Accepts a Set, an array,
+// or null/undefined (→ empty Set = no exclusion = legacy full snapshot).
+function toExcludeSet(exclude) {
+  if (exclude instanceof Set) return exclude;
+  if (Array.isArray(exclude)) return new Set(exclude);
+  return new Set();
+}
+
+async function getUniverseSnapshot({ exclude } = {}) {
   // listUniverses() loads via the collection store — every per-record JSON
   // under `data/universes/<id>/index.json` plus the sanitizer pass. Same
   // input shape sanitizeStateForWire expects (it reads `state.universes`).
   const universes = await listUniverses({ includeDeleted: true });
-  const { data } = sanitizeStateForWire('universe', { universes });
+  // Drop records the requesting peer already receives per-record via the
+  // push pipeline (its INBOUND coverage). The filter runs on the RAW records
+  // by `id` BEFORE sanitize so a subscribed-but-deleted record's tombstone is
+  // also excluded here (the push pipeline carries that tombstone). Everything
+  // un-subscribed — including tombstones for records whose sub was torn down
+  // (ephemeralize-then-delete) — still rides the snapshot. This is the single
+  // mechanism that fixes BOTH the partial-subscription gap (Item A) and the
+  // stranded-tombstone stall (Item B).
+  const excludeSet = toExcludeSet(exclude);
+  const scoped = excludeSet.size > 0
+    ? universes.filter((u) => !excludeSet.has(u?.id))
+    : universes;
+  const { data } = sanitizeStateForWire('universe', { universes: scoped });
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -385,15 +413,29 @@ async function applyUniverseRemote(remoteData) {
 
 // --- Category: Pipeline ---
 
-async function getPipelineSnapshot() {
+async function getPipelineSnapshot({ exclude } = {}) {
   const [series, issues] = await Promise.all([
     listSeries({ includeDeleted: true }),
     listIssues({ includeDeleted: true }),
   ]);
+  // The pipeline category bundles series + their child issues — a `series`
+  // subscription covers the whole sub-tree via the per-record push (which
+  // ships the series + every child issue). So excluding a covered series id
+  // ALSO drops every issue whose `seriesId` matches; otherwise the snapshot
+  // would still carry the child issues the push pipeline already delivers,
+  // re-introducing the redundant transfer this fix removes. Un-subscribed
+  // series (and their issues), plus tombstones for torn-down subs, still ride.
+  const excludeSet = toExcludeSet(exclude);
+  const scopedSeries = excludeSet.size > 0
+    ? series.filter((s) => !excludeSet.has(s?.id))
+    : series;
+  const scopedIssues = excludeSet.size > 0
+    ? issues.filter((i) => !excludeSet.has(i?.seriesId))
+    : issues;
   // Wire-projection lives in `server/lib/syncWire.js` — see getUniverseSnapshot.
   const { data } = sanitizeStateForWire('pipeline', {
-    series,
-    issues,
+    series: scopedSeries,
+    issues: scopedIssues,
   });
   return { data, checksum: computeChecksum(data) };
 }
@@ -436,7 +478,7 @@ async function applyPipelineRemote(remoteData) {
 // so image bytes flow via the existing asset-pull worker — the snapshot path
 // covers the JSON, the push path covers the image bytes.
 
-async function getMediaCollectionsSnapshot() {
+async function getMediaCollectionsSnapshot({ exclude } = {}) {
   // listCollections re-reads + sanitizes from disk; we don't cache here since
   // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
   // circuits the I/O when the file hasn't moved.
@@ -463,7 +505,13 @@ async function getMediaCollectionsSnapshot() {
       .filter((s) => s?.ephemeral === true)
       .map((s) => s.id),
   );
+  // Exclude collections the requesting peer already receives per-record via
+  // the push pipeline (its INBOUND coverage). Keyed on the collection's own
+  // id — `mediaCollection` subscriptions target the collection record itself.
+  // Un-subscribed collections + tombstones for torn-down subs still ride.
+  const excludeSet = toExcludeSet(exclude);
   const filtered = collections.filter((c) => {
+    if (excludeSet.has(c?.id)) return false;
     if (c.universeId && ephemeralUniverseIds.has(c.universeId)) return false;
     if (c.seriesId && ephemeralSeriesIds.has(c.seriesId)) return false;
     return true;
@@ -541,14 +589,18 @@ const CHECKSUM_PATHS = {
   character: [CHARACTER_FILE],
   digitalTwin: Object.values(DIGITAL_TWIN_FILES).map((f) => f.path),
   meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
-  universe: [UNIVERSE_BUILDER_DIR],
-  pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR],
+  // PEER_SUBSCRIPTIONS_FILE is in the scoped categories' paths so a
+  // subscribe/unsubscribe invalidates the per-peer snapshot checksum cache —
+  // the exclude-set is derived from subscriptions, so the scoped snapshot's
+  // content (and checksum) can change even when no record file moved.
+  universe: [UNIVERSE_BUILDER_DIR, PEER_SUBSCRIPTIONS_FILE],
+  pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR, PEER_SUBSCRIPTIONS_FILE],
   // mediaCollections invalidates on its own file AND on the parent record
   // files — `getMediaCollectionsSnapshot` filters collections whose linked
   // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
   // must re-checksum the collections snapshot even though
   // media-collections.json itself didn't move. Same goes for un-ephemeral.
-  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR],
+  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
 };
 
 const CATEGORIES = {
@@ -626,28 +678,79 @@ export function getSupportedCategories() {
   return Object.keys(CATEGORIES);
 }
 
-export async function getChecksum(category) {
+// Map a `dataSync` category to the `getOutboundCoverageForPeer` coverage key.
+// Only the three per-record-subscribable categories scope by peer; everything
+// else (goals/character/digitalTwin/meatspace) has no per-record sub path, so
+// it never excludes and never needs the dynamic peerSync import.
+const SCOPED_COVERAGE_KEY = {
+  universe: 'universe',
+  pipeline: 'pipeline',
+  mediaCollections: 'mediaCollections',
+};
+
+/**
+ * Resolve the per-peer exclude-set for a scoped snapshot. Returns a
+ * `Set<recordId>` of records the requesting peer (`forPeerId`) already
+ * receives from us via the per-record push pipeline — those are excluded
+ * from the snapshot we serve it. Returns an EMPTY set (→ full snapshot,
+ * legacy behavior) when:
+ *   - the category isn't peer-scoped, or
+ *   - `forPeerId` is absent (a non-peer caller, or an OLDER peer that doesn't
+ *     send `forPeer` — it gets the full snapshot, applied idempotently), or
+ *   - the peerSync lookup fails (best-effort; full snapshot is always safe).
+ *
+ * Dynamic import keeps `sharing/peerSync.js` (and its transitive merge*FromSync
+ * graph) OUT of dataSync's module-load path — same rationale as the
+ * orchestrator's dynamic import of the same module.
+ */
+async function resolveExcludeSet(category, forPeerId) {
+  const coverageKey = SCOPED_COVERAGE_KEY[category];
+  if (!coverageKey || typeof forPeerId !== 'string' || forPeerId.length === 0) return new Set();
+  const { getOutboundCoverageForPeer } = await import('./sharing/peerSync.js');
+  const coverage = await getOutboundCoverageForPeer(forPeerId).catch(() => null);
+  return coverage?.[coverageKey] instanceof Set ? coverage[coverageKey] : new Set();
+}
+
+export async function getChecksum(category, { forPeerId } = {}) {
   const cat = CATEGORIES[category];
   if (!cat) return null;
+  const exclude = await resolveExcludeSet(category, forPeerId);
   const paths = CHECKSUM_PATHS[category];
   if (paths) {
     const fingerprints = await readFingerprintMap(paths);
-    const cached = checksumCache.get(category);
+    // Cache keyed by (category, forPeerId): different requesting peers get
+    // different exclude-sets → different scoped snapshots → different
+    // checksums. A single per-category cache slot would let peer-B's checksum
+    // mask peer-C's. `*` is the unscoped key (no forPeerId).
+    const cacheKey = `${category}:${forPeerId || '*'}`;
+    const cached = checksumCache.get(cacheKey);
     if (cached && fingerprintsEqual(cached.fingerprints, fingerprints)) {
       return { checksum: cached.checksum };
     }
-    const snapshot = await cat.getSnapshot();
-    checksumCache.set(category, { fingerprints, checksum: snapshot.checksum });
+    const snapshot = await cat.getSnapshot({ exclude });
+    checksumCache.set(cacheKey, { fingerprints, checksum: snapshot.checksum });
     return { checksum: snapshot.checksum };
   }
-  const snapshot = await cat.getSnapshot();
+  const snapshot = await cat.getSnapshot({ exclude });
   return { checksum: snapshot.checksum };
 }
 
-export async function getSnapshot(category) {
+/**
+ * Produce a category snapshot + checksum + portosMeta envelope.
+ *
+ * `options.forPeerId` (the requesting peer's instanceId) scopes the snapshot
+ * to EXCLUDE records that peer already receives from us per-record via the
+ * push pipeline (its inbound coverage). When absent — a non-peer caller, or
+ * an OLDER peer that doesn't yet send `forPeer` — the snapshot is the full
+ * category (legacy behavior), which the receiver applies idempotently. This
+ * additive, ignore-if-unknown query param is what keeps the change
+ * forward/backward compatible across independently-upgrading installs.
+ */
+export async function getSnapshot(category, { forPeerId } = {}) {
   const cat = CATEGORIES[category];
   if (!cat) return null;
-  const snap = await cat.getSnapshot();
+  const exclude = await resolveExcludeSet(category, forPeerId);
+  const snap = await cat.getSnapshot({ exclude });
   // Stamp the sender's PortOS version + schema versions on every outbound
   // snapshot. Receivers compare against their own PORTOS_SCHEMA_VERSIONS in
   // `applyRemote` and reject ahead-mismatches before any data is merged.

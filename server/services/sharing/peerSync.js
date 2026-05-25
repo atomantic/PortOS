@@ -160,6 +160,45 @@ export async function findPeerSubscription(peerId, recordKind, recordId) {
 }
 
 /**
+ * Coverage map for the snapshot-sync exclude-set, grouped by snapshot
+ * CATEGORY (universe / pipeline / mediaCollections) — NOT by record kind.
+ * `series` subscriptions roll into the `pipeline` category (series + its
+ * child issues are bundled by the per-record push pipeline), matching the
+ * single composite `getPipelineSnapshot` produces.
+ *
+ * DIRECTION — this is the crux of the Item-A fix. The returned ids are the
+ * records THIS instance has OUTBOUND subscriptions for to `peerId` (i.e.
+ * records we push to that peer via the per-record pipeline). When THIS
+ * instance is the SNAPSHOT SOURCE answering a pull from `peerId`, those
+ * exact records are the ones the requester already receives from us via
+ * push — so they are the requester's INBOUND coverage and must be excluded
+ * from the snapshot we serve it. Everything NOT in these sets (un-subscribed
+ * records, and tombstones for records whose sub was torn down) still rides
+ * the snapshot, which is what fixes both the partial-subscription gap and
+ * the ephemeralize-then-delete tombstone stall.
+ *
+ * Why outbound-at-the-source and not inbound-at-the-puller: only the source
+ * authoritatively knows which records it pushes per-record to the requester.
+ * The puller cannot infer that from its own subscription store (every local
+ * sub is outbound from the puller's view; a local sub to peer-A does NOT
+ * prove peer-A pushes back). Computing the exclude-set at the source closes
+ * the inbound-vs-outbound conflation with zero extra round-trips.
+ *
+ * Returns `{ universe, pipeline, mediaCollections }`, each a `Set<recordId>`.
+ */
+export async function getOutboundCoverageForPeer(peerId) {
+  const coverage = { universe: new Set(), pipeline: new Set(), mediaCollections: new Set() };
+  if (!isNonEmptyStr(peerId)) return coverage;
+  const subs = await listPeerSubscriptions({ peerId });
+  for (const sub of subs) {
+    const category = KIND_TO_CATEGORY[sub.recordKind];
+    if (!category || !isNonEmptyStr(sub.recordId)) continue;
+    coverage[category]?.add(sub.recordId);
+  }
+  return coverage;
+}
+
+/**
  * Create a peer subscription. Idempotent — re-subscribing returns the existing
  * record. The first subscribe also initializes the tombstone cursor with
  * `subscribedSince=now` so tombstones older than the subscription aren't
@@ -1894,17 +1933,19 @@ export function installPeerSyncListener() {
     });
   };
   recordEvents.on('updated', onUpdated);
-  // ALSO listen for `deleted` events so soft-deletes propagate via the
-  // per-record push pipeline. Without this, `deleteUniverse` /
-  // `deleteSeries` (which emit `recordEvents.deleted`, NOT `updated`) only
-  // reached peers via the 60s snapshot loop — and that loop is skipped for
-  // any (peer, kind) pair covered by a per-record sub
-  // (syncOrchestrator.categoriesCoveredByPeerSync). The result was that
-  // every soft-delete on a record with active peer subs got stranded
-  // locally. Route delete events through the same `triggerPushForRecord`
-  // path: pushRecordToPeer reads the record with `includeDeleted: true`
-  // and the wire sanitizer (now updated) lets tombstones cross even for
-  // ephemeral records.
+  // ALSO listen for `deleted` events so soft-deletes propagate immediately via
+  // the per-record push pipeline. `deleteUniverse` / `deleteSeries` emit
+  // `recordEvents.deleted` (NOT `updated`); without this listener a delete on
+  // a still-subscribed record would only reach peers on the next 60s snapshot
+  // cycle (and historically not at all, when the snapshot category was skipped
+  // wholesale for subscribed peers). Route delete events through the same
+  // `triggerPushForRecord` path: pushRecordToPeer reads the record with
+  // `includeDeleted: true` and the wire sanitizer lets tombstones cross even
+  // for ephemeral records. (Tombstones for records whose sub was ALREADY torn
+  // down — the ephemeralize-then-delete case — have no live sub to push, so
+  // they ride the per-peer-scoped snapshot instead: the source no longer
+  // excludes them once their sub is gone. See dataSync.getSnapshot's
+  // `forPeerId` scoping.)
   onDeleted = ({ recordKind, recordId }) => {
     triggerPushForRecord(recordKind, recordId).catch((err) => {
       console.log(`⚠️ peerSync: delete listener error for ${recordKind}/${recordId}: ${err.message}`);

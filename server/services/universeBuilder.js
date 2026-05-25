@@ -1204,10 +1204,11 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //             peer_subscriptions.json free of orphan rows.
   // true→false: fire autoSubscribeRecordToAllPeers so the now-shareable
   //             record reaches every peer with the universe category
-  //             enabled. The 60s snapshot loop is skipped for kinds covered
-  //             by per-record subs (see syncOrchestrator.categoriesCoveredByPeerSync),
-  //             so without this re-subscribe the record would be silently
-  //             invisible to those peers.
+  //             enabled via the responsive per-record push pipeline. (The 60s
+  //             snapshot loop would also carry it now — the source only
+  //             excludes records it ALREADY pushes per-record, so an
+  //             un-subscribed record rides the snapshot — but the push path
+  //             converges it immediately instead of waiting up to a cycle.)
   // Await the dynamic import — fire-and-forget .then() resolves on a
   // microtask AFTER the synchronous emitRecordUpdated below, so the
   // peerSync 'updated' listener would schedule pushes against subs the
