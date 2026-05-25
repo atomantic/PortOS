@@ -200,7 +200,7 @@ const navItems = [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
-      { to: '/universes', label: 'Universes', icon: Globe },
+      { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
   },
@@ -257,7 +257,7 @@ const navItems = [
       { to: '/meatspace/blood', label: 'Blood', icon: HeartPulse },
       { to: '/meatspace/body', label: 'Body', icon: Scale },
       { to: '/meatspace/genome', label: 'Genome', icon: Dna },
-      { to: '/meatspace/health', label: 'Health', icon: Heart },
+      { to: '/meatspace/health', label: 'Body Health', icon: Heart },
       { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
       { to: '/meatspace/nicotine', label: 'Nicotine', icon: Cigarette },
       { to: '/meatspace/overview', label: 'Overview', icon: Activity },
@@ -403,7 +403,7 @@ export default function Layout() {
     let lastSuccessAt = 0;
     const sigOf = (items) => items.map((s) => `${s.id}|${s.name}`).join('||');
     const loadSeries = () => {
-      api.listPipelineSeries()
+      api.listPipelineSeries({ silent: true })
         .then((items) => {
           lastSuccessAt = Date.now();
           const next = (Array.isArray(items) ? items : []).slice().sort((a, b) =>
@@ -419,6 +419,36 @@ export default function Layout() {
     const onFocus = () => {
       if (Date.now() - lastSuccessAt < 30_000) return;
       loadSeries();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  // Fetch all universes for the Create > Universes grandchildren.
+  // Refresh on focus (debounced 30s) so freshly-created or renamed universes
+  // surface without a reload. Signature guard avoids re-rendering the whole
+  // sidebar tree when nothing changed.
+  const [universes, setUniverses] = useState([]);
+  useEffect(() => {
+    let lastSuccessAt = 0;
+    const sigOf = (items) => items.map((u) => `${u.id}|${u.name}`).join('||');
+    const loadUniverses = () => {
+      api.listUniverses({ silent: true })
+        .then((items) => {
+          lastSuccessAt = Date.now();
+          const next = (Array.isArray(items) ? items : []).slice().sort((a, b) =>
+            (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }),
+          );
+          setUniverses((prev) => sigOf(prev) === sigOf(next) ? prev : next);
+        })
+        .catch((err) => {
+          console.warn(`⚠️ Sidebar universes fetch failed: ${err?.message || err}`);
+        });
+    };
+    loadUniverses();
+    const onFocus = () => {
+      if (Date.now() - lastSuccessAt < 30_000) return;
+      loadUniverses();
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
@@ -449,6 +479,18 @@ export default function Layout() {
         })),
       };
     };
+    const decorateUniverseChild = (child) => {
+      if (child.dynamic !== 'universes') return child;
+      return {
+        ...child,
+        grandChildren: universes.map((u) => ({
+          to: `/universes/${u.id}`,
+          label: u.name || '(untitled universe)',
+          title: u.name || '(untitled universe)',
+          activePathPrefix: `/universes/${u.id}`,
+        })),
+      };
+    };
     return navItems.map((item) => {
       if (item.dynamic === 'apps') {
         return {
@@ -465,11 +507,11 @@ export default function Layout() {
         };
       }
       if (Array.isArray(item.children)) {
-        return { ...item, children: item.children.map(decoratePipelineChild) };
+        return { ...item, children: item.children.map((c) => decoratePipelineChild(decorateUniverseChild(c))) };
       }
       return item;
     });
-  }, [sidebarApps, pipelineSeries]);
+  }, [sidebarApps, pipelineSeries, universes]);
 
   // Auto-expand sections when on a child page
   useEffect(() => {

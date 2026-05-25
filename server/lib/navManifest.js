@@ -107,7 +107,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Digital Twin', aliases: ['time-capsule', 'twin-time-capsule', 'capsule'], keywords: ['legacy', 'archive', 'snapshot'] },
 
   { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'MeatSpace', aliases: ['meatspace'] },
-  { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Health', section: 'MeatSpace', aliases: ['meatspace-health'] },
+  { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Body Health', section: 'MeatSpace', aliases: ['meatspace-health', 'body-health'], keywords: ['health', 'vitals', 'wellbeing', 'biometrics'] },
   { id: 'nav.meatspace.body', path: '/meatspace/body', label: 'Body', section: 'MeatSpace', aliases: ['meatspace-body', 'body'] },
   { id: 'nav.meatspace.alcohol', path: '/meatspace/alcohol', label: 'Alcohol', section: 'MeatSpace', aliases: ['meatspace-alcohol', 'alcohol'] },
   { id: 'nav.meatspace.nicotine', path: '/meatspace/nicotine', label: 'Nicotine', section: 'MeatSpace', aliases: ['meatspace-nicotine', 'nicotine'] },
