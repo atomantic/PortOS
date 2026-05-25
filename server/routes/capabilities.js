@@ -63,7 +63,7 @@ router.get('/', asyncHandler(async (req, res) => {
     Promise.resolve().then(() => getAllProviderStatuses()).catch(() => ({})),
     listCalendarAccounts().catch(() => []),
     listMessageAccounts().catch(() => []),
-    getMemories({ status: 'active' }).catch(() => []),
+    getMemories({ status: 'active' }).catch(() => ({ total: 0 })),
     resolveEmbeddingProviderConfigured().catch(() => false),
     getVoiceConfig().catch(() => ({})),
     getGenomeSummary().catch(() => ({ uploaded: false })),
@@ -79,7 +79,8 @@ router.get('/', asyncHandler(async (req, res) => {
     providerStatuses,
     calendarAccounts,
     messageAccounts,
-    memoryCount: Array.isArray(memories) ? memories.length : 0,
+    // getMemories returns { total, memories } — use the count, not the wrapper.
+    memoryCount: Number(memories?.total) || 0,
     embeddingProviderConfigured,
     voiceConfig,
     network,

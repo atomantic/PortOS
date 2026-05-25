@@ -198,4 +198,10 @@ describe('summarizeCapabilities', () => {
   it('reports unconfigured overall when only ok + unconfigured rows', () => {
     expect(summarizeCapabilities([{ status: OK }, { status: UNCONFIGURED }]).overall).toBe(UNCONFIGURED);
   });
+
+  it('reports unconfigured (not ok) for empty or garbage input', () => {
+    expect(summarizeCapabilities([]).overall).toBe(UNCONFIGURED);
+    expect(summarizeCapabilities(null).overall).toBe(UNCONFIGURED);
+    expect(summarizeCapabilities(null).total).toBe(0);
+  });
 });

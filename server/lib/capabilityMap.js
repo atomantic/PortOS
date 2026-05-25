@@ -256,13 +256,15 @@ export function buildCapabilityRows(data = {}) {
  * `overall` is worst-wins across error → warn → unconfigured → ok.
  */
 export function summarizeCapabilities(rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
   const counts = { ok: 0, warn: 0, error: 0, unconfigured: 0 };
-  for (const r of (Array.isArray(rows) ? rows : [])) {
+  for (const r of list) {
     if (counts[r?.status] !== undefined) counts[r.status] += 1;
   }
-  let overall = OK;
+  // Empty/garbage input is "nothing set up", not "all healthy" — don't default OK.
+  let overall = list.length > 0 ? OK : UNCONFIGURED;
   if (counts.error > 0) overall = ERROR;
   else if (counts.warn > 0) overall = WARN;
   else if (counts.unconfigured > 0) overall = UNCONFIGURED;
-  return { ...counts, total: rows.length, overall };
+  return { ...counts, total: list.length, overall };
 }
