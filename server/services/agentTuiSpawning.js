@@ -182,11 +182,19 @@ export async function spawnTuiAgent({
   // failure so it gets the full PTY stream regardless of run length.
   const rawFile = join(agentDir, 'raw.txt');
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : PATHS.root;
+  // The agent writes `.agent-done` in its workspace to signal completion (see
+  // the sentinel watcher below). Computed up front so both the watcher AND
+  // finish() can read it — finish() ingests it directly to survive the
+  // /quit-exit-vs-poll race (see ingestDoneSentinel).
+  const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
 
   let outputBuffer = '';
   let finalized = false;
+  // Guards ingestDoneSentinel so the sentinel is read at most once even when
+  // both the poll watcher and finish() try to ingest it.
+  let sentinelIngested = false;
   let hasStartedWorking = false;
   let promptSentAt = null;
   let firstOutputAt = null;
@@ -333,6 +341,27 @@ export async function spawnTuiAgent({
     scheduleFlush();
   };
 
+  // Read the `.agent-done` sentinel (if present) and append its markdown task
+  // summary line-by-line into the agent's output so downstream consumers
+  // (extractFinalSummary, persistSimplifySummaries, completion hooks, the agent
+  // card, output.txt) get the resolution. Idempotent: both the poll watcher and
+  // finish() call it, but it reads at most once. Capped at 4 KB so an agent that
+  // pasted the whole diff into the sentinel can't blow up the record.
+  const ingestDoneSentinel = async () => {
+    if (sentinelIngested) return;
+    if (!doneSentinelPath || !existsSync(doneSentinelPath)) return;
+    sentinelIngested = true;
+    const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
+      console.error(`❌ ingestDoneSentinel readFile failed: ${err.message}`);
+      return '';
+    });
+    const trimmed = contents.trim();
+    if (!trimmed) return;
+    appendLine(`✅ Agent signaled completion`);
+    const truncated = trimmed.length > 4096 ? `${trimmed.slice(0, 4096)}\n…[truncated]` : trimmed;
+    for (const line of truncated.split('\n')) appendLine(line);
+  };
+
   const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
     if (finalized) return;
     finalized = true;
@@ -347,6 +376,15 @@ export async function spawnTuiAgent({
     // finalize comes from elsewhere (shell-exit, command-not-found, user
     // termination) the timer never gets a chance to run.
     postPasteBuffer = null;
+
+    // Ingest the .agent-done sentinel BEFORE draining, so its markdown summary
+    // lands in outputBuffer/output.txt regardless of WHICH path finalized the
+    // agent. The completion workflow writes the sentinel and then runs /quit —
+    // the process exits within milliseconds, so handleExit almost always wins
+    // the race against the 2s doneSentinelTimer poll. Reading it here (not just
+    // in the poll) is what makes the resolution show up in the completed-agent
+    // details view. Idempotent via `sentinelIngested`.
+    await ingestDoneSentinel();
 
     // Drain pending parsed lines AND raw chunks before the final state
     // writes so completion events don't beat the last output batch to disk.
@@ -622,40 +660,23 @@ export async function spawnTuiAgent({
   }, 5000);
 
   // Sentinel-file watcher. The agent's prompt instructs it to write
-  // .agent-done in the workspace after running /simplify + /do:pr; the file
-  // contains a markdown task summary that we ingest line-by-line into the
-  // agent's outputBuffer so downstream code (extractFinalSummary,
-  // persistSimplifySummaries, completion hooks, the agent card) gets the
-  // same `outputBuffer.tail = summary` shape it used to get from headless
-  // CLI runs. Idle-complete is just the fallback for an agent that didn't
-  // comply.
-  const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
+  // .agent-done in the workspace after running /simplify + /do:pr. This poll
+  // exists only to finalize PROMPTLY when the agent signals done WITHOUT
+  // exiting its TUI (e.g. it forgot /quit, or stays alive) — otherwise we'd
+  // wait out the much longer idle timeout. The actual sentinel READ happens in
+  // finish() (via ingestDoneSentinel) so the resolution is captured no matter
+  // which path finalizes: the far more common case is the agent writing the
+  // sentinel and then running /quit, whose process exit fires finish() long
+  // before this 2s poll ticks. Idle-complete is the fallback for a
+  // non-complying agent.
   const doneSentinelTimer = doneSentinelPath ? setInterval(() => {
     try {
       if (finalized) return;
       if (!existsSync(doneSentinelPath)) return;
       clearInterval(doneSentinelTimer);
-      readFile(doneSentinelPath, 'utf8')
-        .then(contents => {
-          const trimmed = contents.trim();
-          if (!trimmed) return;
-          appendLine(`✅ Agent signaled completion`);
-          // Cap at 4 KB so a runaway agent that pasted the entire diff into
-          // the sentinel doesn't blow up the agent record / downstream
-          // memory-extraction prompts.
-          const truncated = trimmed.length > 4096 ? `${trimmed.slice(0, 4096)}\n…[truncated]` : trimmed;
-          for (const line of truncated.split('\n')) appendLine(line);
-        })
-        .catch(err => console.error(`❌ doneSentinelTimer readFile failed: ${err.message}`))
-        .finally(() => {
-          try {
-            finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
-              emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });
-            });
-          } catch (err) {
-            console.error(`❌ doneSentinelTimer finish call failed: ${err.message}`);
-          }
-        });
+      finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
+        emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });
+      });
     } catch (err) {
       console.error(`❌ doneSentinelTimer interval callback failed: ${err.message}`);
     }
