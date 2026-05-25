@@ -68,7 +68,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'text-stage entities-summary + speechPattern',
   customizedHint: (filename) =>
     `   To pick up {{worldEntitiesSummary}} + {{speechPattern}} / {{speechAccent}} manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and merge the new blocks in the same position as in the sample template.`,
@@ -76,7 +76,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
     `⚠️  ${count} prompt(s) could not be auto-updated because they were customized.\n` +
     `   The {{worldEntitiesSummary}} block + {{speechPattern}} / {{speechAccent}} renderers\n` +
     `   will not appear in those prompts until the files are merged manually. See\n` +
-    `   data.sample/prompts/stages/.`,
+    `   data.reference/prompts/stages/.`,
 });
 
 export { applyMigration };

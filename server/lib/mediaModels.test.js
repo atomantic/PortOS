@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
-const SAMPLE_REGISTRY_PATH = join(__dirname_self, '..', '..', 'data.sample', 'media-models.json');
+const SAMPLE_REGISTRY_PATH = join(__dirname_self, '..', '..', 'data.reference', 'media-models.json');
 
 let tmpDir;
 let registryFile;
@@ -22,12 +22,12 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// data.sample/media-models.json must mirror the in-code DEFAULT_REGISTRY so
-// `npm run setup:data` (which copies data.sample → data on fresh installs)
+// data.reference/media-models.json must mirror the in-code DEFAULT_REGISTRY so
+// `npm run setup:data` (which copies data.reference → data on fresh installs)
 // produces the same starting state as the runtime `seedIfMissing()` fallback.
 // Compares the seed file to a freshly-bootstrapped registry with
 // _shippedDefaults stripped (that's a runtime-only field).
-describe('data.sample seed file', () => {
+describe('data.reference seed file', () => {
   it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
     const sample = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
     const { loadMediaModels } = await import('./mediaModels.js');

@@ -4,6 +4,7 @@ import { ChevronRight, AlertTriangle, Target } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
+import { equalListByKeys } from '../lib/compareHelpers';
 import { CATEGORY_CONFIG, GOAL_TYPE_CONFIG } from './goals/GoalDetailPanel';
 
 const HORIZON_LABELS = {
@@ -40,24 +41,10 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
       // drive `daysSinceUpdate` / `isStalled` (a backfilled or corrected
       // progressHistory entry mutates the latest timestamp without changing
       // array length).
-      compare: (prev, next) => {
-        const a = Array.isArray(prev.goals) ? prev.goals : null;
-        const b = Array.isArray(next.goals) ? next.goals : null;
-        if (a === null || b === null) return a === b;
-        return a.length === b.length && a.every((g, i) => (
-          g.id === b[i]?.id
-            && g.title === b[i]?.title
-            && g.category === b[i]?.category
-            && g.horizon === b[i]?.horizon
-            && g.goalType === b[i]?.goalType
-            && g.progress === b[i]?.progress
-            && g.status === b[i]?.status
-            && g.parentId === b[i]?.parentId
-            && g.urgency === b[i]?.urgency
-            && g.createdAt === b[i]?.createdAt
-            && getLastProgressDate(g) === getLastProgressDate(b[i])
-        ));
-      },
+      compare: (prev, next) => equalListByKeys(prev.goals, next.goals, [
+        'id', 'title', 'category', 'horizon', 'goalType', 'progress',
+        'status', 'parentId', 'urgency', 'createdAt', getLastProgressDate,
+      ]),
     },
   );
 

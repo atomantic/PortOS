@@ -105,6 +105,9 @@ they care about this release.
   point of view.
 - **No "Touched:" / "New file:" / "Removed:" footers.** Those belong in commit
   messages, PRs, or `git log`.
+- **No `[plan-id]` slug prefixes.** Slugs like `[data-versioning-split-pipeline-issues]`
+  are for grep-ability across commits, branches, and PR titles — keep them out of
+  user-facing release notes.
 - **No internal data shapes.** "Each Work now carries `imageStyle = { presetId,
   prompt, negativePrompt }`" should be "Each Writers Room work can pin a world
   style preset that prefixes every scene's image prompt."

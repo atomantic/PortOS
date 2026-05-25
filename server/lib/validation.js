@@ -552,6 +552,48 @@ export const searchQuerySchema = z.object({
 // client/src/components/cos/constants.js → REVIEWER_OPTIONS.
 export const REVIEWER_VALUES = ['copilot', 'claude', 'gemini', 'codex'];
 export const DEFAULT_REVIEWER = 'copilot';
+export const DEFAULT_REVIEWERS = ['copilot'];
+// Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
+export const REVIEW_STOP_MODES = ['all', 'on-findings', 'on-clean'];
+export const DEFAULT_REVIEW_STOP_MODE = 'all';
+
+/**
+ * Resolve task metadata to an ordered, deduped reviewer list. Prefers the new
+ * `reviewers` array; falls back to the legacy single `reviewer` string; defaults
+ * to `['copilot']`. Filters to known reviewers and preserves first-occurrence order.
+ */
+export function normalizeReviewers(meta) {
+  const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  const source = Array.isArray(raw.reviewers)
+    ? raw.reviewers
+    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
+  const seen = new Set();
+  const out = [];
+  for (const r of source) {
+    if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); out.push(r); }
+  }
+  return out.length ? out : [...DEFAULT_REVIEWERS];
+}
+
+/**
+ * Build the slashdo review flag string for an ordered reviewer list.
+ * - `--review-with a,b,c` only when the list isn't the lone default copilot.
+ * - `--review-stop-on-*` only when 2+ reviewers (stop-mode is meaningless for one).
+ * - `--reviewer-applies` only when a non-copilot reviewer is present (no-op on copilot).
+ */
+export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false) {
+  const list = normalizeReviewers({ reviewers });
+  const isDefaultOnly = list.length === 1 && list[0] === DEFAULT_REVIEWER;
+  const hasNonCopilot = list.some(r => r !== DEFAULT_REVIEWER);
+  const parts = [];
+  if (!isDefaultOnly) parts.push(`--review-with ${list.join(',')}`);
+  if (list.length >= 2) {
+    if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
+    else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');
+  }
+  if (reviewerApplies && hasNonCopilot) parts.push('--reviewer-applies');
+  return parts.join(' ');
+}
 
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
@@ -590,6 +632,12 @@ export const createCosTaskSchema = z.object({
   reviewer: z.preprocess(
     v => v === '' ? undefined : v,
     z.enum(REVIEWER_VALUES).optional()
+  ),
+  reviewers: z.array(z.enum(REVIEWER_VALUES)).optional(),
+  reviewStopMode: z.enum(REVIEW_STOP_MODES).optional(),
+  reviewerApplies: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
   ),
 });
 
@@ -993,6 +1041,35 @@ export const stageConfigUpdateSchema = z.object({
 // sends an unmodelled field. If a future stage field is added, extend the
 // schema rather than reintroducing `.passthrough()`.
 
+// === Local LLM backends (Ollama / LM Studio) ===
+export const localLlmBackendSchema = z.enum(['ollama', 'lmstudio']);
+// modelId is passed positionally to the `lms` CLI (execFile, no shell) — reject
+// a leading dash (would be parsed as a flag) and control chars (NUL / newline).
+export const localLlmModelIdSchema = z.string().min(1).max(256)
+  .refine((v) => !v.startsWith('-'), { message: 'modelId may not start with "-"' })
+  .refine((v) => !/[\0\r\n]/.test(v), { message: 'modelId may not contain control characters (NUL, CR, LF)' });
+export const localLlmInstallSchema = z.object({
+  backend: localLlmBackendSchema,
+  modelId: localLlmModelIdSchema,
+});
+export const localLlmDeleteSchema = localLlmInstallSchema;
+export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
+// Migrate moves models from the OTHER backend onto `to` (bidirectional, never
+// flips the default marker). `mode` picks how the GGUF lands on disk: 'link'
+// hardlinks/shares it (default), 'copy' duplicates it.
+export const localLlmMigrateSchema = z.object({
+  to: localLlmBackendSchema,
+  mode: z.enum(['link', 'copy']).optional().default('link'),
+});
+export const localLlmInstallBackendSchema = z.object({ backend: localLlmBackendSchema });
+export const localLlmOllamaServiceSchema = z.object({ action: z.enum(['start', 'stop', 'enable', 'disable']) });
+export const localLlmHuggingFaceSearchSchema = z.object({
+  backend: localLlmBackendSchema,
+  q: z.string().max(160).optional().default(''),
+  category: z.string().max(40).optional().default('all'),
+  limit: z.coerce.number().int().min(1).max(30).optional().default(12),
+});
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.
@@ -1063,8 +1140,12 @@ export const MAX_TOTAL_SPAWNS = 5;
 const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 
 /**
- * Sanitize taskMetadata to only allowed agent-option keys with boolean values.
- * Prevents prototype pollution and reserved metadata field overrides.
+ * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
+ * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
+ * are kept only when actually boolean; the review-loop keys are constrained by
+ * value — `reviewer` to a known reviewer, `reviewers` to a filtered/deduped list
+ * of known reviewers, `reviewStopMode` to a known stop-mode — plus a validated
+ * `pipeline` object. Prevents prototype pollution and reserved-field overrides.
  * Returns a clean plain object or null if input is empty/invalid.
  */
 export function sanitizeTaskMetadata(raw) {
@@ -1077,9 +1158,26 @@ export function sanitizeTaskMetadata(raw) {
       hasKeys = true;
     }
   }
-  // `reviewer` is a constrained string (copilot/claude/gemini/codex), not a boolean.
+  // `reviewer` is a legacy single constrained string (copilot/claude/gemini/codex).
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && REVIEWER_VALUES.includes(raw.reviewer)) {
     clean.reviewer = raw.reviewer;
+    hasKeys = true;
+  }
+  // `reviewers` is the ordered multi-reviewer list — filter to known values, dedupe, preserve order.
+  if (Array.isArray(raw.reviewers)) {
+    const seen = new Set();
+    const list = [];
+    for (const r of raw.reviewers) {
+      if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); list.push(r); }
+    }
+    if (list.length) { clean.reviewers = list; hasKeys = true; }
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {
+    clean.reviewStopMode = raw.reviewStopMode;
+    hasKeys = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewerApplies') && typeof raw.reviewerApplies === 'boolean') {
+    clean.reviewerApplies = raw.reviewerApplies;
     hasKeys = true;
   }
   // Pass through pipeline config (validated shape: object with stages array)
@@ -1186,7 +1284,7 @@ export const subscriptionCreateSchema = z.object({
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -1194,11 +1292,25 @@ export const peerSubscribeSchema = z.object({
 // second-pass scrub against path separators inside the service layer; this
 // schema just constrains shape + caps so a malformed manifest doesn't bypass
 // validation entirely. SHA-256 is hex-64 when present.
-const peerAssetManifestEntrySchema = z.object({
-  filename: z.string().trim().min(1).max(255),
-  kind: z.enum(['image', 'image-ref', 'video']),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
-}).strict();
+//
+// Discriminated on `kind` because `sidecarSha256` (the gen-params sidecar hash)
+// is ONLY meaningful for images — image-ref/video entries carry no sidecar, so
+// `.strict()` on the non-image branch rejects a stray `sidecarSha256` instead
+// of silently accepting a malformed sender payload.
+const hex64 = z.string().regex(/^[a-f0-9]{64}$/i);
+const peerAssetManifestEntrySchema = z.discriminatedUnion('kind', [
+  z.object({
+    filename: z.string().trim().min(1).max(255),
+    kind: z.literal('image'),
+    sha256: hex64.optional(),
+    sidecarSha256: hex64.optional(),
+  }).strict(),
+  z.object({
+    filename: z.string().trim().min(1).max(255),
+    kind: z.enum(['image-ref', 'video']),
+    sha256: hex64.optional(),
+  }).strict(),
+]);
 
 // One sanitized record on the wire. Mirrors sanitizeRecordForWire's output:
 // id is required, soft-delete fields are tail-canonical, and the receiver's
@@ -1218,32 +1330,84 @@ const peerWireRecordSchema = z.object({
 // unbounded. `sourceInstanceId` is required + must be a real instance id
 // (the receiver rejects "unknown" at the service layer; here we just enforce
 // non-empty + length cap).
+// `portosMeta` envelope — every outbound payload built by `buildPushPayload`
+// stamps the sender's PortOS version + schemaVersions map so the receiver
+// can detect a version mismatch before applying the record. Optional on
+// the wire so legacy peers (no portosMeta) still validate; the receiver's
+// version-gate treats absent meta as "no contract" and falls through to
+// the existing merge path.
+//
+// CRITICAL: uses `.passthrough()` (not `.strict()`). The whole point of
+// the envelope is to enable graceful version negotiation. If a future
+// PortOS adds a new field to `portosMeta` (e.g. `clientName`,
+// `capabilities`, `regionCode`), `.strict()` would 400-reject every push
+// from that version at Zod validation BEFORE the receiver's schema-version
+// gate runs — surfacing as a generic 400 with no `blockedBySchema`
+// persistence, no cooldown, no SchemaGapBadge surfacing. `.passthrough()`
+// lets unknown fields flow through to the gate, which is the actual
+// compat decision point.
+const portosMetaSchema = z.object({
+  portosVersion: z.string().trim().min(1).max(40).optional(),
+  schemaVersions: z.record(z.string().min(1).max(60), z.number().int().min(0).max(1_000_000)).optional(),
+}).passthrough().optional();
 const peerSyncPushBase = {
   record: peerWireRecordSchema,
   assetManifest: z.array(peerAssetManifestEntrySchema).max(2000),
   sourceInstanceId: z.string().trim().min(1).max(120),
-  // Optional bundled media collection — Stage 5 media-collections sync
-  // attaches the universe / series's linked collection so collection-only
-  // edits propagate via the per-record push pipeline. Same shape as a
-  // record on the wire (id required, sanitizer handles the rest); without
-  // this field on both push branches the strict() rejection drops every
-  // production push from a universe / series with images. See
-  // peerSync.js buildPushPayload and applyIncomingPush.
-  linkedCollection: peerWireRecordSchema.optional(),
+  portosMeta: portosMetaSchema,
 };
+// Optional bundled media collection — Stage 5 media-collections sync attaches
+// the universe / series's linked collection so collection-only edits propagate
+// via the per-record push pipeline. Same shape as a record on the wire (id
+// required, sanitizer handles the rest). ONLY valid on universe/series pushes:
+// a mediaCollection push IS the collection, so accepting linkedCollection there
+// would let a sender smuggle an arbitrary EXTRA collection that the receiver's
+// applyIncomingPush merges — a side-channel to overwrite collections outside the
+// explicit per-record subscription. The mediaCollection branch's .strict()
+// therefore rejects it. See peerSync.js buildPushPayload (never sets it for the
+// mediaCollection kind) and applyIncomingPush.
+const linkedCollectionField = { linkedCollection: peerWireRecordSchema.optional() };
 const universePushSchema = z.object({
   kind: z.literal('universe'),
   ...peerSyncPushBase,
+  ...linkedCollectionField,
 }).strict();
 const seriesPushSchema = z.object({
   kind: z.literal('series'),
   ...peerSyncPushBase,
+  ...linkedCollectionField,
   issues: z.array(peerWireRecordSchema).max(1000).optional(),
+}).strict();
+const mediaCollectionPushSchema = z.object({
+  kind: z.literal('mediaCollection'),
+  ...peerSyncPushBase,
 }).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
+  mediaCollectionPushSchema,
 ]);
+
+// Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
+
+export const peerSyncRecordSchema = z.object({
+  peerId: z.string().trim().min(1).max(120),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection']),
+  recordId: z.string().trim().min(1).max(200),
+}).strict();
+
+export const peerSyncNowSchema = z.object({
+  peerId: z.string().trim().min(1).max(120),
+}).strict();
+
+export const peerPullMetadataSchema = z.object({
+  // Backfill tries every online peer; no per-peer scoping field today.
+  // .trim() so a stray-whitespace filename ('  a.png  ') normalizes to the real
+  // name instead of passing validation and then failing sanitization/disk
+  // lookup (a confusing 200 with attempted>0, recovered=0). Matches the
+  // manifest-entry filename handling.
+  filenames: z.array(z.string().trim().min(1).max(300)).max(5000),
+}).strict();
 
 // =============================================================================
 // CREATIVE DIRECTOR SCHEMAS

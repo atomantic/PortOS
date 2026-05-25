@@ -70,6 +70,33 @@ export const REVIEWER_OPTIONS = [
   { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff' }
 ];
 export const DEFAULT_REVIEWER = 'copilot';
+export const DEFAULT_REVIEWERS = ['copilot'];
+
+// Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
+// Keep in sync with REVIEW_STOP_MODES in `server/lib/validation.js`.
+export const REVIEW_STOP_MODES = [
+  { value: 'all', label: 'Run all', description: 'Run every reviewer in order before merging (default)' },
+  { value: 'on-findings', label: 'Stop on first fix', description: 'Stop after the first reviewer that landed a fix' },
+  { value: 'on-clean', label: 'Stop on first clean', description: 'Stop after the first reviewer that reports zero findings' }
+];
+export const DEFAULT_REVIEW_STOP_MODE = 'all';
+
+// Resolve metadata to an ordered, deduped reviewer list (client mirror of the
+// server's normalizeReviewers): prefers `reviewers`, falls back to legacy
+// single `reviewer`, defaults to `['copilot']`.
+const REVIEWER_VALUES = REVIEWER_OPTIONS.map(o => o.value);
+export function normalizeReviewers(meta) {
+  const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  const source = Array.isArray(raw.reviewers)
+    ? raw.reviewers
+    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
+  const seen = new Set();
+  const out = [];
+  for (const r of source) {
+    if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); out.push(r); }
+  }
+  return out.length ? out : [...DEFAULT_REVIEWERS];
+}
 
 // Returns the Tailwind className string for an agent option toggle button.
 // effective: whether the option is on (global + override resolved)

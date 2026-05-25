@@ -18,8 +18,8 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents, metaStringOr } from './agentState.js';
-import { DEFAULT_REVIEWER } from '../lib/validation.js';
+import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { normalizeReviewers, DEFAULT_REVIEW_STOP_MODE } from '../lib/validation.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
@@ -233,9 +233,19 @@ export function buildCliSpawnConfig(provider, model) {
   const providerId = provider?.id || 'claude-code';
   const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
 
-  // Codex CLI uses different invocation pattern
+  // Codex CLI uses different invocation pattern.
+  // `--dangerously-bypass-approvals-and-sandbox` is the Codex equivalent of
+  // Claude's `--dangerously-skip-permissions` / Gemini's `--yolo`: it skips all
+  // approval prompts AND disables the sandbox. Without it, `codex exec` runs
+  // under the default workspace-write sandbox (network blocked, so `gh pr create`
+  // can't resolve api.github.com) and, in non-interactive `exec` mode, any
+  // command that needs approval is silently cancelled — which is exactly how a
+  // codex agent could push a branch over SSH yet fail to open the PR over HTTPS.
+  // PortOS runs on a private, single-user, trusted machine (the "externally
+  // sandboxed" context this flag documents), matching how we already spawn the
+  // other CLIs unrestricted.
   if (providerId === 'codex') {
-    const args = ['exec'];
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
     if (effectiveModel) {
       args.push('--model', effectiveModel);
     }
@@ -582,7 +592,9 @@ export async function spawnDirectly({
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
         requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-        reviewer: metaStringOr(task.metadata?.reviewer, DEFAULT_REVIEWER),
+        reviewers: normalizeReviewers(task.metadata),
+        reviewStopMode: task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE,
+        reviewerApplies: isTruthyMetaFn(task.metadata?.reviewerApplies),
         skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
         description: task.description,
         agentOutput: outputBuffer,

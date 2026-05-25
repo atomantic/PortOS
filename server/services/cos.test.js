@@ -784,6 +784,36 @@ describe('cos.js source — priority + capacity invariants', () => {
       'Generation log must not claim "(on-demand)" — function is shared by queue + on-demand callers'
     ).not.toMatch(/Generating improvement task[^`'"\n]*\(on-demand\)/);
   });
+
+  it('applyPlanIdMetadata does NOT pre-stamp planId for self-claiming task types', () => {
+    // Regression guard: `plan-task` agents pick (and claim) their own slug at
+    // execution time, mirroring `/claim`. A dispatch-time pre-pick stamps a
+    // slug before the agent creates its `claim/<slug>` branch (the real lock),
+    // so two near-simultaneous dispatches both target the same first-available
+    // item — the exact race behind the 2026-05-21 duplicate-PR incident. The
+    // in-flight scan in applyPlanIdMetadata must stay (it gates dispatch), but
+    // the planId stamp must be fenced behind PLAN_SELF_CLAIM_TASK_TYPES.
+    expect(
+      COS_SRC,
+      'plan-task must be registered as a self-claiming task type'
+    ).toMatch(/PLAN_SELF_CLAIM_TASK_TYPES\s*=\s*new Set\(\[\s*'plan-task'\s*\]\)/);
+
+    const fnStart = COS_SRC.indexOf('async function applyPlanIdMetadata');
+    expect(fnStart, 'applyPlanIdMetadata must exist').toBeGreaterThan(-1);
+    const fnBody = extractFnBody(COS_SRC, fnStart);
+
+    // The planId stamp must be guarded so self-claiming types never pre-pick.
+    expect(
+      fnBody,
+      'metadata.planId stamp must be fenced behind a PLAN_SELF_CLAIM_TASK_TYPES check'
+    ).toMatch(/if\s*\(\s*!PLAN_SELF_CLAIM_TASK_TYPES\.has\(taskType\)\s*\)\s*\{\s*metadata\.planId\s*=/);
+
+    // The gate (skipReason) machinery must still run — we only dropped the stamp.
+    expect(
+      fnBody,
+      'applyPlanIdMetadata must still scan in-flight slugs to gate dispatch'
+    ).toMatch(/findInProgressIds\(/);
+  });
 });
 
 describe('addTask — first-line dedup', () => {

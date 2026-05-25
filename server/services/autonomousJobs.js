@@ -28,6 +28,8 @@ import { runGoalCheckIn } from './goalCheckIn.js'
 import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../lib/commandSecurity.js'
 import { getUserTimezone, getLocalParts, nextLocalTime } from '../lib/timezone.js'
 import { parseCronToNextRun } from './eventScheduler.js'
+import { cleanupOrphanedWorktrees } from './worktreeManager.js'
+import { getActiveAgentIds } from './agentState.js'
 
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
@@ -73,36 +75,53 @@ function runMoltworldExploration() {
  * instead of spawning AI agents. Key is the scriptHandler name, value is the function.
  */
 /**
- * Remove completed agent data directories older than 7 days.
+ * Remove completed agent data directories older than 7 days, and reap leaked
+ * CoS agent worktrees (dirs whose agent is no longer live).
+ *
+ * The worktree sweep lives here, on the daily scheduled cadence, rather than on
+ * the 15-min CoS health-check hot path — running it that often gave it a wide
+ * window to remove a human's in-flight `/claim` worktree mid-review.
+ * `cleanupOrphanedWorktrees` itself also skips `claim-*` worktrees outright, so
+ * the daily cadence is purely about reaping abandoned `agent-*` trees.
  */
 async function agentDataCleanup() {
-  const agentsDir = join(PATHS.cos, 'agents')
-  if (!existsSync(agentsDir)) return { cleaned: 0 }
-
-  const entries = await readdir(agentsDir)
-  const cutoff = Date.now() - 7 * DAY
-  let cleaned = 0
-
-  // Get active agent IDs so we never delete data for running agents
-  const { getActiveAgentIds } = await import('./subAgentSpawner.js')
+  // Active agent IDs so we never delete data / worktrees for running agents.
+  // `getActiveAgentIds` lives in the side-effect-free `agentState.js`, so this
+  // script job doesn't pull in `subAgentSpawner.js` (and its module-load
+  // `initSpawner()` + scheduled orphan cleanup) just to read the maps.
   const activeIds = new Set(getActiveAgentIds())
 
-  for (const entry of entries) {
-    if (activeIds.has(entry)) continue
-    const entryPath = join(agentsDir, entry)
-    const info = await stat(entryPath).catch(() => null)
-    if (!info?.isDirectory()) continue
-    if (info.mtimeMs < cutoff) {
-      const removed = await rm(entryPath, { recursive: true, force: true }).then(() => true, (err) => {
-        console.warn(`⚠️ Failed to clean agent dir ${entry}: ${err.message}`)
-        return false
-      })
-      if (removed) cleaned++
+  const agentsDir = join(PATHS.cos, 'agents')
+  let cleaned = 0
+  if (existsSync(agentsDir)) {
+    const entries = await readdir(agentsDir)
+    const cutoff = Date.now() - 7 * DAY
+
+    for (const entry of entries) {
+      if (activeIds.has(entry)) continue
+      const entryPath = join(agentsDir, entry)
+      const info = await stat(entryPath).catch(() => null)
+      if (!info?.isDirectory()) continue
+      if (info.mtimeMs < cutoff) {
+        const removed = await rm(entryPath, { recursive: true, force: true }).then(() => true, (err) => {
+          console.warn(`⚠️ Failed to clean agent dir ${entry}: ${err.message}`)
+          return false
+        })
+        if (removed) cleaned++
+      }
     }
   }
 
-  console.log(`🧹 Agent data cleanup: removed ${cleaned} directories older than 7 days`)
-  return { cleaned }
+  // Reap orphaned agent worktrees not tracked by any live agent (moved off the
+  // CoS hot path). The helper guards `claim-*` worktrees, so this can't touch a
+  // human's in-flight claim.
+  const worktreesReaped = await cleanupOrphanedWorktrees(PATHS.root, activeIds).catch((err) => {
+    console.warn(`⚠️ Orphaned worktree cleanup failed: ${err.message}`)
+    return 0
+  })
+
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, reaped ${worktreesReaped} orphaned worktree(s)`)
+  return { cleaned, worktreesReaped }
 }
 
 const SCRIPT_HANDLERS = {
@@ -364,7 +383,7 @@ Phase 4 — Report:
   {
     id: 'job-agent-data-cleanup',
     name: 'Agent Data Cleanup',
-    description: 'Remove completed agent data older than 7 days.',
+    description: 'Remove completed agent data older than 7 days and reap orphaned agent worktrees.',
     category: 'agent-data-cleanup',
     interval: 'daily',
     intervalMs: DAY,
@@ -471,7 +490,7 @@ async function initJobs() {
 
 async function syncSkillTemplatesFromSample() {
   if (!PATHS.root) return
-  const sampleDir = join(PATHS.root, 'data.sample', 'prompts', 'skills', 'jobs')
+  const sampleDir = join(PATHS.root, 'data.reference', 'prompts', 'skills', 'jobs')
   if (!existsSync(sampleDir)) return
   await ensureDir(JOBS_SKILLS_DIR)
   const shippedDir = join(JOBS_SKILLS_DIR, '.shipped')
@@ -510,7 +529,7 @@ async function syncSkillTemplatesFromSample() {
       // history. We choose preservation: the user's file (whether intentional
       // customization or a stale shipped copy) stays in place. Users who want the
       // new template can delete the file and restart so the seeder re-creates it
-      // from data.sample/.
+      // from data.reference/.
       console.log(`ℹ️ Preserving user-modified skill template: ${file}`)
     }
   }

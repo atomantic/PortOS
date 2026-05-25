@@ -68,6 +68,12 @@ vi.mock('./agentState.js', () => ({
   userTerminatedAgents: new Set()
 }));
 
+vi.mock('fs', () => ({
+  // Default: no .agent-done sentinel on disk. The completion-sentinel test
+  // overrides this to true. Re-set in beforeEach so it can't leak between tests.
+  existsSync: vi.fn().mockReturnValue(false),
+}));
+
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   appendFile: vi.fn().mockResolvedValue(undefined),
@@ -115,6 +121,8 @@ vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
   };
 });
 
+import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
 import * as agentLifecycle from './agentLifecycle.js';
@@ -294,6 +302,12 @@ describe('spawnTuiAgent runtime', () => {
 
     vi.mocked(shellService.getSessionProcess).mockReturnValue(null);
     vi.mocked(shellService.getSession).mockReturnValue({ id: SESSION_ID });
+
+    // Reset sentinel state: no .agent-done on disk, empty read. The
+    // completion-sentinel test overrides both. clearAllMocks keeps the factory
+    // implementation, so re-set explicitly to prevent cross-test leakage.
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFile).mockResolvedValue('');
   });
 
   afterEach(() => {
@@ -624,5 +638,50 @@ describe('spawnTuiAgent runtime', () => {
       ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
     );
     expect(openCalls).toHaveLength(0);
+  });
+
+  // ── 10. Completion-sentinel ingestion on the shell-exit (/quit) race ─────────
+  // The completion workflow has the agent write `.agent-done` and then run
+  // `/quit`, which exits the TUI process within milliseconds — long before the
+  // 2s doneSentinelTimer poll fires. The shell-exit path therefore wins the
+  // race and finalizes the agent. finish() MUST still ingest the sentinel so
+  // its markdown resolution lands in outputBuffer / output.txt and shows up in
+  // the completed-agent details view. Regression guard for the lost-resolution
+  // bug where the summary only got ingested by the (slower) poll path.
+  it('shell-exit after sentinel write: ingests .agent-done summary into the persisted output (process /quit beats the 2s poll)', async () => {
+    const { appendFile } = await import('fs/promises');
+    const sentinel = '## Summary\nImplemented the fix.\n\n## PR\nhttps://example.com/pr/42';
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFile).mockImplementation(async (p) =>
+      typeof p === 'string' && p.endsWith('.agent-done') ? sentinel : ''
+    );
+
+    const spawnPromise = runSpawn({ workspacePath: '/tmp/ws' });
+    await flushMicrotasks();
+
+    // Simulate the TUI process exiting cleanly from /quit — NOT the poll.
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await flushMicrotasks();
+
+    await spawnPromise;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+
+    // The completed-agent details view reads output.txt (getAgent) and the
+    // in-state output stream (live view / fallback). Both must carry the
+    // sentinel resolution — assert on the persistence paths, not outputBuffer,
+    // since the test mocks OUTPUT_BUFFER_CAP down to 1 byte.
+    const flushedLines = vi.mocked(cosAgents.appendAgentOutputLines).mock.calls
+      .flatMap(([, lines]) => lines);
+    expect(flushedLines).toContain('✅ Agent signaled completion');
+    expect(flushedLines.some(l => l.includes('Implemented the fix.'))).toBe(true);
+    expect(flushedLines.some(l => l.includes('https://example.com/pr/42'))).toBe(true);
+
+    const outputTxtWrites = vi.mocked(appendFile).mock.calls
+      .filter(([p]) => typeof p === 'string' && p.endsWith('output.txt'))
+      .map(([, data]) => String(data))
+      .join('');
+    expect(outputTxtWrites).toContain('Implemented the fix.');
+    expect(outputTxtWrites).toContain('https://example.com/pr/42');
   });
 });

@@ -18,21 +18,13 @@
 import { synthesize } from './tts.js';
 import { getVoiceConfig } from './config.js';
 import { rememberTtsForAllSockets } from './echo.js';
-import { getUserTimezone, getLocalParts } from '../../lib/timezone.js';
+import { getUserTimezone, getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
 
-// 24-hour HH:MM regex shared with the route-level Zod schema in
-// `routes/voice.js`. Both ends of the config write path validate the same
-// shape so a passing schema is guaranteed to parse here.
-export const HHMM_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
-
-// Parse "HH:MM" → minutes-from-midnight. Returns null for malformed input so
-// the caller can decide whether to fall through (quiet hours off) or error.
-export const parseHHMM = (s) => {
-  if (typeof s !== 'string') return null;
-  const m = s.match(HHMM_RE);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-};
+// HH:MM helpers live in server/lib/timezone.js (single source of truth shared
+// with the dashboard's time-window validator). Re-exported here so the
+// route-level Zod schema in `routes/voice.js` validates the same lenient
+// HH:MM shape and tests can exercise the parser directly.
+export { HHMM_RE, parseHHMM } from '../../lib/timezone.js';
 
 // Maximum spoken-text length for proactive lines. The /api/voice/speak Zod
 // schema already caps HTTP payloads at 4000 chars, but `speakProactive` is
@@ -43,18 +35,11 @@ export const parseHHMM = (s) => {
 // needs to.
 export const MAX_PROACTIVE_TEXT_LEN = 4000;
 
-// Quiet-hours window inclusion check. Handles the overnight case (start>end,
-// e.g. 22:00 → 07:00) by wrapping. Same-value start/end means "the window is
-// empty" — proactive speech is always allowed.
-export const isWithinQuietHours = ({ start, end, nowMinutes }) => {
-  const s = parseHHMM(start);
-  const e = parseHHMM(end);
-  if (s === null || e === null) return false;
-  if (s === e) return false;
-  if (s < e) return nowMinutes >= s && nowMinutes < e;
-  // Overnight wrap: in-window if at-or-after start OR before end.
-  return nowMinutes >= s || nowMinutes < e;
-};
+// Quiet-hours inclusion is exactly the generic time-window predicate — a
+// half-open [start, end) window with overnight wrap (same-value start/end =
+// empty window, so proactive speech is always allowed). Kept as a domain-named
+// alias so callers and tests read clearly.
+export const isWithinQuietHours = isWithinTimeWindow;
 
 // Pull the user's current local minutes-from-midnight via Intl. Server runs
 // TZ=UTC, so a naive `new Date().getHours()` would compare quiet hours

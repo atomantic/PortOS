@@ -29,7 +29,7 @@ const NEW_SHIPPED_MD5 = {
 export default {
   async up({ rootDir }) {
     const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
-    const sampleDir = join(rootDir, 'data.sample', 'prompts', 'stages');
+    const sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
 
     let updated = 0;
     let alreadyCurrent = 0;
@@ -60,7 +60,7 @@ export default {
         console.warn(
           `⚠️  places extraction prompt ${filename} has been customized — skipping auto-update.\n` +
           `   To pick up the new intExt / timeOfDay fields, diff:\n` +
-          `     data.sample/prompts/stages/${filename}\n` +
+          `     data.reference/prompts/stages/${filename}\n` +
           `   against your current:\n` +
           `     data/prompts/stages/${filename}\n` +
           `   and add the two new field bullets + two new JSON keys.`,

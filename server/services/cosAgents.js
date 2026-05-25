@@ -594,8 +594,9 @@ async function isPidAlive(pid) {
 
 // Cleanup zombie agents - agents marked as running but whose process is dead
 export async function cleanupZombieAgents() {
-  // Check local tracking maps
-  const { getActiveAgentIds } = await import('./subAgentSpawner.js');
+  // Check local tracking maps (read from the side-effect-free state module, not
+  // subAgentSpawner — avoids triggering its module-load init from a zombie sweep).
+  const { getActiveAgentIds } = await import('./agentState.js');
   const activeIds = getActiveAgentIds();
 
   // Also check with the CoS runner for agents it's actively tracking

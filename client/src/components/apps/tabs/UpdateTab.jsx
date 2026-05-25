@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Download, XCircle, Check, Loader, AlertTriangle, Trash2, ExternalLink, Tag } from 'lucide-react';
+import { RefreshCw, Download, XCircle, Check, Loader, AlertTriangle, Trash2, ExternalLink, Tag, GitFork, GitBranch } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -35,6 +35,8 @@ export default function UpdateTab() {
   const [steps, setSteps] = useState([]);
   const [updateError, setUpdateError] = useState(null);
   const [polling, setPolling] = useState(false);
+  const [syncingFork, setSyncingFork] = useState(false);
+  const [forkSyncError, setForkSyncError] = useState(null);
   const attemptsRef = useRef(0);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
@@ -43,6 +45,7 @@ export default function UpdateTab() {
     const data = await api.getUpdateStatus().catch(() => null);
     if (data) setStatus(data);
     setLoading(false);
+    return data;
   }, []);
 
   useEffect(() => {
@@ -133,25 +136,67 @@ export default function UpdateTab() {
     setChecking(false);
   };
 
-  const handleUpdate = async () => {
-    // Set target version BEFORE executing so it's available when the
-    // restarting step arrives via socket (which may beat the HTTP response)
-    if (status?.latestRelease?.version) {
-      targetVersionRef.current = status.latestRelease.version;
+  // `fromStatus` lets callers (e.g. handleSyncForkAndUpdate) pass the freshly
+  // fetched status object instead of relying on the closure capture — `setStatus`
+  // only schedules a render and the awaited fetchStatus() return value is the
+  // single source of truth for the just-loaded state.
+  const runUpdate = useCallback(async (opts = {}, fromStatus = null) => {
+    const s = fromStatus || status;
+    if (s?.latestRelease?.version) {
+      targetVersionRef.current = s.latestRelease.version;
     }
-    preUpdateVersionRef.current = status?.currentVersion || null;
+    preUpdateVersionRef.current = s?.currentVersion || null;
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
-    const result = await api.executePortosUpdate().catch(err => {
+    const result = await api.executePortosUpdate(opts).catch(err => {
       setUpdateError(err.message);
       setUpdating(false);
       return null;
     });
-    // Update from response if available (should match, but server is authoritative)
     if (result?.tag) {
       targetVersionRef.current = result.tag.replace(/^v/, '');
     }
+    return result;
+  }, [status]);
+
+  const handleUpdate = () => runUpdate();
+
+  const handleUpdateFromForkAsIs = () => runUpdate({ acknowledgeFork: true });
+
+  const handleSyncForkAndUpdate = async () => {
+    setSyncingFork(true);
+    setForkSyncError(null);
+    const synced = await api.syncPortosFork({}, { silent: true }).catch(err => {
+      setForkSyncError(err.message);
+      return null;
+    });
+    setSyncingFork(false);
+    if (!synced) return;
+    if (synced.alreadyUpToDate) {
+      toast.success(`Fork already up to date with ${status?.upstream?.fullName || 'upstream'}`);
+    } else {
+      toast.success(`Synced ${synced.fullName} from ${synced.source}`);
+    }
+    const fresh = await fetchStatus();
+    await runUpdate({}, fresh);
+  };
+
+  const handleSyncForkOnly = async () => {
+    setSyncingFork(true);
+    setForkSyncError(null);
+    const synced = await api.syncPortosFork({}, { silent: true }).catch(err => {
+      setForkSyncError(err.message);
+      return null;
+    });
+    setSyncingFork(false);
+    if (!synced) return;
+    toast.success(
+      synced.alreadyUpToDate
+        ? `Fork already up to date with ${status?.upstream?.fullName || 'upstream'}`
+        : `Synced ${synced.fullName} from ${synced.source}`
+    );
+    await fetchStatus();
   };
 
   const handleIgnore = async (version) => {
@@ -178,6 +223,13 @@ export default function UpdateTab() {
 
   const release = status?.latestRelease;
   const hasUpdate = status?.updateAvailable;
+  const remote = status?.remoteInfo;
+  const upstreamName = status?.upstream?.fullName || 'atomantic/PortOS';
+  const isFork = !!remote?.isFork;
+  const lastForkSync = status?.lastForkSync;
+  // Server is the source of truth for the freshness window — don't
+  // re-implement the time math here.
+  const forkSyncFresh = !!status?.forkSyncFresh;
 
   return (
     <div className="space-y-6">
@@ -199,6 +251,40 @@ export default function UpdateTab() {
           {checking ? 'Checking...' : 'Check for Updates'}
         </button>
       </div>
+
+      {/* Origin / Fork status */}
+      {remote?.hasOrigin && (
+        <div className={`p-3 rounded-lg border text-sm ${
+          isFork
+            ? 'border-port-warning/40 bg-port-warning/5'
+            : remote.isUpstream
+              ? 'border-port-border bg-port-card'
+              : 'border-port-border bg-port-card'
+        }`}>
+          <div className="flex items-start gap-2">
+            {isFork ? <GitFork size={16} className="text-port-warning shrink-0 mt-0.5" /> : <GitBranch size={16} className="text-gray-400 shrink-0 mt-0.5" />}
+            <div className="flex-1">
+              <div className="text-white">
+                {remote.isUpstream && <>Running from upstream <span className="font-mono">{remote.fullName}</span></>}
+                {isFork && <>Running from fork <span className="font-mono">{remote.fullName}</span></>}
+                {!remote.isUpstream && !isFork && <>Origin: <span className="font-mono">{remote.fullName || remote.originUrl}</span></>}
+              </div>
+              {isFork && (
+                <div className="text-xs text-gray-400 mt-1 space-y-1">
+                  <div>Updates pull from your fork's <span className="font-mono">main</span>. Sync it from <span className="font-mono">{upstreamName}</span> before updating, or apply upstream changes onto a working branch first to preserve customizations.</div>
+                  <div>Tip: PR shareable fixes upstream; keep private changes on a separate branch and rebase that branch onto <span className="font-mono">main</span> after each sync.</div>
+                  {forkSyncFresh && (
+                    <div className="text-port-success">✓ Fork synced {new Date(lastForkSync.syncedAt).toLocaleTimeString()} — ready to update.</div>
+                  )}
+                </div>
+              )}
+              {forkSyncError && (
+                <div className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Available Update */}
       {release && (
@@ -241,18 +327,50 @@ export default function UpdateTab() {
       {/* Update Actions */}
       {hasUpdate && (
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={handleUpdate}
-            disabled={updating || polling}
-            className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-          >
-            <Download size={14} className={updating ? 'animate-bounce' : ''} />
-            {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
-          </button>
+          {isFork ? (
+            <>
+              <button
+                onClick={handleSyncForkAndUpdate}
+                disabled={updating || polling || syncingFork}
+                className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+                title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update. Refuses to overwrite divergent fork commits.`}
+              >
+                <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+                {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
+              </button>
+              <button
+                onClick={handleSyncForkOnly}
+                disabled={updating || polling || syncingFork}
+                className="px-4 py-2 bg-port-border text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 disabled:opacity-50"
+                title={`Run gh repo sync ${remote?.fullName} only — useful if you want to merge upstream into a feature branch yourself before applying.`}
+              >
+                <GitFork size={14} />
+                Sync Fork Only
+              </button>
+              <button
+                onClick={handleUpdateFromForkAsIs}
+                disabled={updating || polling || syncingFork}
+                className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+                title="Skip the fork sync and pull from your fork's origin as-is. Use this if you already merged upstream into your fork via your own workflow."
+              >
+                <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                Update from Fork As-Is
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleUpdate}
+              disabled={updating || polling}
+              className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+            >
+              <Download size={14} className={updating ? 'animate-bounce' : ''} />
+              {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
+            </button>
+          )}
           {release && (
             <button
               onClick={() => handleIgnore(release.version)}
-              disabled={updating}
+              disabled={updating || syncingFork}
               className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
             >
               <XCircle size={14} />

@@ -5,6 +5,7 @@
 
 import { getAllProviders } from '../services/providers.js';
 import { startAIOp } from '../services/aiStatusEvents.js';
+import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../services/ollamaManager.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 
@@ -184,6 +185,16 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   const doneLabel = effectiveLabel.replace(/…$/, '');
   const startMs = Date.now();
   const elapsedSec = () => ((Date.now() - startMs) / 1000).toFixed(1);
+
+  if (isOllamaProvider(provider)) {
+    statusOp.update('provider:starting', 'Starting Ollama if needed…', { providerId: provider.id });
+    const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
+    if (!ready.success) {
+      const error = `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`;
+      statusOp.error(error);
+      return { error };
+    }
+  }
 
   const first = await postChatCompletion(provider, model, prompt, opts);
   if (!first.error) {

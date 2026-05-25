@@ -13,6 +13,7 @@
 // next series-side write will rewrite the JSON without the legacy fields.
 
 import { join } from 'path';
+import { readdir, readFile } from 'fs/promises';
 import { createHash } from 'node:crypto';
 import { updateSeries } from './series.js';
 import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
@@ -27,10 +28,39 @@ import { mergeExtractedBible, BIBLE_FIELD, BIBLE_SOURCE } from '../../lib/storyB
 export const deriveOrphanUniverseId = (seriesId) =>
   `uni-from-series-${createHash('sha1').update(String(seriesId)).digest('hex').slice(0, 32)}`;
 
-// Raw read of pipeline-series.json (bypasses sanitizeSeries, which post-B.4
-// strips the legacy canon fields the migration needs to see).
-const readRawSeriesState = () =>
-  readJSONFile(join(PATHS.data, 'pipeline-series.json'), { series: [] }, { logError: false });
+// Raw read of pipeline series records (bypasses sanitizeSeries, which post-B.4
+// strips the legacy canon fields the migration needs to see). Prefer the
+// split collection layout, but keep the legacy/backup files readable for
+// older installs and recovery runs.
+const readRawSplitSeriesState = async () => {
+  const dir = join(PATHS.data, 'pipeline-series');
+  const entries = await readdir(dir, { withFileTypes: true }).catch((err) => {
+    if (err?.code === 'ENOENT') return [];
+    throw err;
+  });
+  const series = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const raw = await readFile(join(dir, entry.name, 'index.json'), 'utf-8').catch(() => null);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') series.push(parsed);
+    } catch {
+      // A single corrupt record should not make the whole best-effort legacy
+      // canon migration unreadable.
+    }
+  }
+  return { series };
+};
+
+const readRawSeriesState = async () => {
+  const split = await readRawSplitSeriesState();
+  if (split.series.length > 0) return split;
+  const legacy = await readJSONFile(join(PATHS.data, 'pipeline-series.json'), null, { logError: false });
+  if (legacy && Array.isArray(legacy.series)) return legacy;
+  return readJSONFile(join(PATHS.data, 'pipeline-series.json.bak-036'), { series: [] }, { logError: false });
+};
 
 // Reverse of BIBLE_FIELD — maps the persisted field name (`characters`) back
 // to its BIBLE_KIND value (`character`) so the migration can call

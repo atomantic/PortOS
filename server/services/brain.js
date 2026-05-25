@@ -51,7 +51,7 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
   let model = modelOverride || provider.defaultModel;
 
   // gemini-cli default is a thinking model (3.1-pro); prefer the provider's configured
-  // light tier (populated from data.sample/providers.json on new installs) and only fall
+  // light tier (populated from data.reference/providers.json on new installs) and only fall
   // back to the hard-coded flash if nothing is configured at all.
   if (provider.id === 'gemini-cli' && !model) {
     model = provider.lightModel || 'gemini-2.5-flash';

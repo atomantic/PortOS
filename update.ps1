@@ -103,6 +103,16 @@ function Safe-Install {
 # the update completes (we don't auto-pop because the rest of the script
 # needs to keep running with main's contents).
 Step "git-pull" "running" "Pulling latest changes..."
+$originUrl = git remote get-url origin 2>$null
+if ($originUrl) {
+    # Redact any embedded credentials (https://user:token@host/...) before logging
+    # so PATs don't leak into data/update.log or the update UI step output.
+    $originUrlSafe = $originUrl -replace '(://)[^@/]+@', '$1***@'
+    Write-SafeHost "🌐 Pulling from origin: $originUrlSafe"
+    # Also append directly to $UpdateLog — updateExecutor only forwards STEP:
+    # lines, so Write-SafeHost above doesn't reach update.log on its own.
+    Add-Content -Path $UpdateLog -Value "🌐 Pulling from origin: $originUrlSafe"
+}
 $headRef = git symbolic-ref -q HEAD 2>$null
 $currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
 $stashedForBranch = ""

@@ -39,6 +39,8 @@ vi.mock('../pipeline/issues.js', async () => ({
 }));
 
 vi.mock('../mediaCollections.js', async () => ({
+  getCollection: vi.fn(),
+  listCollections: vi.fn(),
   findCollectionByUniverseId: vi.fn(),
   findCollectionBySeriesId: vi.fn(),
   mergeMediaCollectionsFromSync: vi.fn(),
@@ -61,10 +63,17 @@ import {
   applyIncomingPush,
   diffAssetManifestAgainstLocal,
   buildAssetManifest,
+  collectCollectionAssetReferences,
   autoSubscribeRecordToAllPeers,
   autoSubscribePeerToAllRecords,
   retryPendingPushesForPeer,
+  forcePushRecord,
+  getRecordPayloadForPeer,
+  pullRecordFromPeer,
+  syncNowForPeer,
+  collectSubscriptionsForUpdate,
   __resetForTests,
+  __drainForTests,
 } from './peerSync.js';
 
 import { getInstanceId, getPeers } from '../instances.js';
@@ -72,6 +81,8 @@ import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeB
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import {
+  getCollection,
+  listCollections,
   findCollectionByUniverseId,
   findCollectionBySeriesId,
   mergeMediaCollectionsFromSync,
@@ -142,6 +153,8 @@ beforeEach(async () => {
   vi.mocked(listIssues).mockReset().mockResolvedValue([]);
   // Default: no linked collection for any record. Tests that exercise the
   // bundle path override these per-call.
+  vi.mocked(getCollection).mockReset().mockRejectedValue(Object.assign(new Error('Collection not found'), { code: 'NOT_FOUND' }));
+  vi.mocked(listCollections).mockReset().mockResolvedValue([]);
   vi.mocked(findCollectionByUniverseId).mockReset().mockResolvedValue(null);
   vi.mocked(findCollectionBySeriesId).mockReset().mockResolvedValue(null);
   vi.mocked(mergeMediaCollectionsFromSync).mockReset().mockResolvedValue({ applied: false, count: 0 });
@@ -172,10 +185,12 @@ afterEach(async () => {
 
 describe('peerSync', () => {
   describe('PEER_SUBSCRIBABLE_KINDS', () => {
-    it('exposes the canonical kinds (universe + series only)', () => {
-      // Issues piggyback on series subscriptions — direct issue subs are
-      // intentionally rejected per the Stage 2 design.
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series']);
+    it('is exactly [universe, series, mediaCollection]', () => {
+      // Exact equality (not toContain) so an accidental add/remove/reorder is
+      // caught — this list is canonical and its order can affect iteration
+      // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
+      // subscriptions; direct issue subs are intentionally rejected (Stage 2).
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection']);
     });
   });
 
@@ -561,7 +576,10 @@ describe('peerSync', () => {
       // and pay N subscribePeer readState calls per online transition.
       vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
       await autoSubscribePeerToAllRecords('peer-a', 'universe');
-      await new Promise((r) => setTimeout(r, 10));
+      // Deterministically settle the fire-and-forget initial pushes (their
+      // peerFetch fires a tick after subscribe returns) so they don't leak past
+      // a fixed sleep into the assertion window below — the CI flake this fixes.
+      await __drainForTests();
       vi.mocked(peerFetch).mockClear();
       // Re-run on steady state — no push should fire because the set-diff
       // is empty and the for-loop body never runs.
@@ -647,6 +665,191 @@ describe('peerSync', () => {
     });
   });
 
+  describe('forcePushRecord', () => {
+    beforeEach(() => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Forced', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(findCollectionByUniverseId).mockResolvedValue(null);
+    });
+
+    it('pushes even when existing sub lastPushedHash matches (bypasses unchanged short-circuit)', async () => {
+      // First subscribe + initial push — record gets a lastPushedHash.
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // Poll for the fire-and-forget initial push to persist its hash. A fixed
+      // sleep OR a single writeTail drain (__drainForTests) is racy in slower CI
+      // because the push's peerFetch + persistPushSuccess chain may not have even
+      // started when we read — vi.waitFor retries the real condition deterministically.
+      let sub;
+      await vi.waitFor(async () => {
+        sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(sub?.lastPushedHash).toBeTruthy();
+      });
+      expect(sub.lastPushedHash).toBeTruthy(); // hash was recorded
+
+      // Clear the mock call count — we care only about calls from forcePushRecord.
+      vi.mocked(peerFetch).mockClear();
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      // forcePushRecord MUST hit the network despite the hash being unchanged.
+      const result = await forcePushRecord('peer-a', 'universe', 'u1');
+      expect(result.pushed).toBe(true);
+      expect(vi.mocked(peerFetch)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(peerFetch)).toHaveBeenCalledWith(
+        expect.stringContaining('/api/peer-sync/push'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('creates a subscription and pushes when no sub existed yet', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      const result = await forcePushRecord('peer-a', 'universe', 'u1');
+      expect(result.pushed).toBe(true);
+
+      // Subscription should now exist.
+      const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(sub).not.toBeNull();
+    });
+  });
+
+  describe('getRecordPayloadForPeer', () => {
+    it('returns a push-payload for an existing universe', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      const payload = await getRecordPayloadForPeer('universe', 'u1');
+      expect(payload).toMatchObject({ kind: 'universe', record: { id: 'u1' } });
+      expect(Array.isArray(payload.assetManifest)).toBe(true);
+    });
+
+    it('returns null when the record does not exist locally', async () => {
+      vi.mocked(getUniverse).mockResolvedValue(undefined);
+      expect(await getRecordPayloadForPeer('universe', 'ghost')).toBeNull();
+    });
+
+    it('returns null (no unknown-sourced payload) when self-identity is unknown', async () => {
+      // Without the guard this would emit a payload with sourceInstanceId='unknown'
+      // that the puller's applyIncomingPush rejects — or 500 on a read failure.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getInstanceId).mockResolvedValueOnce('unknown');
+      expect(await getRecordPayloadForPeer('universe', 'u1')).toBeNull();
+    });
+
+    it('returns null when self-identity read fails', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getInstanceId).mockRejectedValueOnce(new Error('instances.json unreadable'));
+      expect(await getRecordPayloadForPeer('universe', 'u1')).toBeNull();
+    });
+  });
+
+  describe('pullRecordFromPeer', () => {
+    it('peer-not-found when the peer is unknown', async () => {
+      vi.mocked(getPeers).mockResolvedValue([]);
+      expect(await pullRecordFromPeer('nope', 'universe', 'u1')).toEqual({ pulled: false, reason: 'peer-not-found' });
+    });
+
+    it('peer-unreachable when the fetch fails', async () => {
+      vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u1')).toEqual({ pulled: false, reason: 'peer-unreachable' });
+    });
+
+    it('not-on-peer on a 404 from the peer', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 404 });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u1')).toEqual({ pulled: false, reason: 'not-on-peer' });
+    });
+
+    it('invalid-payload when the peer returns a malformed body', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ junk: true }) });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u1')).toEqual({ pulled: false, reason: 'invalid-payload' });
+    });
+
+    it('applies a valid payload and reports missingAssets count', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
+      });
+      const result = await pullRecordFromPeer('peer-a', 'universe', 'u-pull');
+      expect(result.pulled).toBe(true);
+      expect(typeof result.missingAssets).toBe('number');
+    });
+
+    it('invalid-payload when sourceInstanceId does not match the contacted peer', async () => {
+      // We fetched from peer-a, but the payload claims to originate from someone
+      // else — applying it would bind our reverse-subscription/asset-pull to a
+      // peer we never contacted. Reject rather than trust the self-reported origin.
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-b' }),
+      });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'invalid-payload' });
+    });
+
+    it('payload-too-large when the peer declares a Content-Length over the cap', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: (h) => (h.toLowerCase() === 'content-length' ? String(64 * 1024 * 1024) : null) },
+        json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
+      });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
+    it('payload-too-large (not peer-unreachable) when the HTTPS shim trips the maxBytes cap', async () => {
+      // The shim rejects with an "exceed" Error — must map to payload-too-large,
+      // consistent with the Content-Length path, not be misread as offline.
+      vi.mocked(peerFetch).mockRejectedValue(new Error('Response body exceeded maxBytes 16777216 (got 99999999)'));
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
+    it('invalid-payload when the returned record is not the one we requested', async () => {
+      // Asked for universe/u-pull but the peer returned a different record id —
+      // applying it would merge unexpected data under the requested key.
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ kind: 'universe', record: { id: 'some-other-id' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
+      });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'invalid-payload' });
+    });
+  });
+
+  describe('syncNowForPeer', () => {
+    it('returns {ok:false} when the peer has no instanceId', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: null, name: 'No ID Peer', enabled: true, syncEnabled: true },
+      ]);
+      const result = await syncNowForPeer('no-such-peer');
+      expect(result).toEqual({ ok: false });
+    });
+
+    it('returns {ok:false} when the peer is not found', async () => {
+      const result = await syncNowForPeer('ghost-peer');
+      expect(result).toEqual({ ok: false });
+    });
+
+    it('calls backfill+retry for a peer with enabled categories and returns {ok:true}', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+          enabled: true, syncEnabled: true,
+          directions: ['outbound', 'inbound'],
+          syncCategories: { universe: true, pipeline: false, mediaCollections: false },
+        },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1', name: 'Universe 1' }]);
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe 1', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      const result = await syncNowForPeer('peer-a');
+      expect(result).toEqual({ ok: true });
+    });
+  });
+
   describe('buildAssetManifest', () => {
     it('hashes direct image filenames via the sidecar cache', async () => {
       await writeFile(join(PATHS.images, 'asset-1.png'), Buffer.from('image bytes'));
@@ -673,6 +876,23 @@ describe('peerSync', () => {
     it('returns an empty manifest for records with no asset refs', async () => {
       const manifest = await buildAssetManifest({ id: 'u1', name: 'Bare' });
       expect(manifest).toEqual([]);
+    });
+
+    it('includes sidecarSha256 in the manifest entry when sidecar is present', async () => {
+      await writeFile(join(PATHS.images, 'with-sidecar.png'), Buffer.from('image bytes'));
+      await writeFile(join(PATHS.images, 'with-sidecar.metadata.json'), Buffer.from(JSON.stringify({ prompt: 'a cat' })));
+      const record = { id: 'u1', characters: [{ imageRefs: ['with-sidecar.png'] }] };
+      const manifest = await buildAssetManifest(record);
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0].sidecarSha256).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('omits sidecarSha256 from the manifest entry when no sidecar exists', async () => {
+      await writeFile(join(PATHS.images, 'no-sidecar.png'), Buffer.from('image bytes'));
+      const record = { id: 'u1', characters: [{ imageRefs: ['no-sidecar.png'] }] };
+      const manifest = await buildAssetManifest(record);
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0]).not.toHaveProperty('sidecarSha256');
     });
   });
 
@@ -769,6 +989,104 @@ describe('peerSync', () => {
       ]);
       expect(missing).toHaveLength(2);
       expect(missing.map((m) => m.filename).sort()).toEqual(['clip.mp4', 'ref.png']);
+    });
+
+    it('returns image entry as missing when image hash matches but sidecar is absent', async () => {
+      // The image file is already present and hash-matches; BUT the sender
+      // carries a sidecarSha256 and we have no local sidecar. The diff must
+      // still include the entry so the worker pulls the sidecar.
+      const imageBytes = Buffer.from('hello world');
+      await writeFile(join(PATHS.images, 'nosidecar.png'), imageBytes);
+      // Actual sha256 of "hello world"
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'nosidecar.png', kind: 'image', sha256: imageHash, sidecarSha256: 'a'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].filename).toBe('nosidecar.png');
+      expect(missing[0].sidecarSha256).toBe('a'.repeat(64));
+    });
+
+    it('does NOT return an image as missing when image hash matches and sidecar gen-params match', async () => {
+      // Both image and sidecar are present; the gen-params are identical — no pull needed.
+      const imageBytes = Buffer.from('hello world');
+      await writeFile(join(PATHS.images, 'fullmatch.png'), imageBytes);
+      await writeFile(join(PATHS.images, 'fullmatch.metadata.json'), Buffer.from(JSON.stringify({ prompt: 'cat' })));
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      // The sender advertises the gen-params hash (NOT the raw-file hash).
+      const senderSidecarHash = sidecarGenParamsHash({ prompt: 'cat' });
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'fullmatch.png', kind: 'image', sha256: imageHash, sidecarSha256: senderSidecarHash },
+      ]);
+      expect(missing).toEqual([]);
+    });
+
+    it('CONVERGENCE: image NOT re-flagged when gen-params match but the sha256 cache block differs', async () => {
+      // CRITICAL regression for the churn bug. Two machines with byte-identical
+      // gen-params but different per-machine `sha256` cache blocks (mtimeMs/size
+      // differ) must NOT perpetually re-pull. The sidecar hash is computed over
+      // gen-params ONLY (sha256 cache stripped), so it converges regardless of
+      // the local cache block.
+      const imageBytes = Buffer.from('hello world');
+      await writeFile(join(PATHS.images, 'converge.png'), imageBytes);
+      // Local sidecar: SAME gen-params, but a DIFFERENT sha256 cache block than
+      // whatever the sender stamped (simulates the receiver re-stamping its own
+      // local image mtime+size after a prior pull).
+      await writeFile(join(PATHS.images, 'converge.metadata.json'), Buffer.from(JSON.stringify({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'c'.repeat(64), mtimeMs: 111111, size: 222 },
+      })));
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      // The SENDER computes the gen-params hash over its OWN sidecar, which has
+      // the SAME gen-params but a DIFFERENT sha256 cache block (different mtime/size).
+      const senderSidecarHash = sidecarGenParamsHash({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'd'.repeat(64), mtimeMs: 999999, size: 888 },
+      });
+      // The receiver computes its local gen-params hash the same way.
+      const localSidecarHash = sidecarGenParamsHash({
+        prompt: 'a wizard', model: 'flux', steps: 30,
+        sha256: { value: 'c'.repeat(64), mtimeMs: 111111, size: 222 },
+      });
+      // The two MUST be equal despite differing cache blocks — proves convergence.
+      expect(senderSidecarHash).toBe(localSidecarHash);
+      // And the diff must NOT flag the image as missing (no re-pull churn).
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'converge.png', kind: 'image', sha256: imageHash, sidecarSha256: senderSidecarHash },
+      ]);
+      expect(missing).toEqual([]);
+    });
+
+    it('CONVERGENCE: key-order differences across machines do not break the gen-params hash', async () => {
+      const { sidecarGenParamsHash } = await import('../../lib/assetHash.js');
+      const a = sidecarGenParamsHash({ prompt: 'x', model: 'flux', steps: 30 });
+      const b = sidecarGenParamsHash({ steps: 30, prompt: 'x', model: 'flux' });
+      expect(a).toBe(b);
+    });
+
+    it('returns image entry as missing when sidecar hash differs (peer has updated metadata)', async () => {
+      const imageBytes = Buffer.from('hello world');
+      const sidecarBytes = Buffer.from(JSON.stringify({ prompt: 'old prompt' }));
+      await writeFile(join(PATHS.images, 'staleside.png'), imageBytes);
+      await writeFile(join(PATHS.images, 'staleside.metadata.json'), sidecarBytes);
+      const imageHash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'staleside.png', kind: 'image', sha256: imageHash, sidecarSha256: 'b'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].filename).toBe('staleside.png');
+    });
+
+    it('preserves sidecarSha256 in the sanitized missing entry (no untrusted round-trip loss)', async () => {
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'absent.png', kind: 'image', sha256: 'a'.repeat(64), sidecarSha256: 'b'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].sidecarSha256).toBe('b'.repeat(64));
+      // Junk fields still stripped.
+      expect(missing[0]).not.toHaveProperty('gigantic');
     });
   });
 
@@ -1180,6 +1498,122 @@ describe('peerSync', () => {
       const manifestFilenames = (captured.assetManifest || []).map(a => a.filename);
       expect(manifestFilenames).toEqual([]);
     });
+
+    // --- Standalone mediaCollection push payload --------------------------
+    // A peer subscribed directly to a mediaCollection record (NOT via a
+    // universe/series's linkedCollection bundle). The peer must have the
+    // `mediaCollections` syncCategory enabled or the push gate short-circuits.
+    const enableCollectionPeer = () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+          enabled: true, syncEnabled: true,
+          directions: ['outbound', 'inbound'],
+          syncCategories: { universe: true, pipeline: true, mediaCollections: true },
+        },
+      ]);
+    };
+
+    it('emits BOTH image and video manifest entries for a live mediaCollection push', async () => {
+      // Regression (Bug 2): video collection items store the bare videoId; the
+      // on-disk file is `<id>.mp4`. The standalone push manifest builder must
+      // append `.mp4` (same as the linkedCollection bundle path) or every
+      // collection video is silently dropped and receivers never pull bytes.
+      enableCollectionPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.images, 'pic.png'), Buffer.from('image bytes'));
+      await writeFile(join(PATHS.videos, 'vid-xyz.mp4'), Buffer.from('mp4 bytes'));
+
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-9', name: 'Standalone', description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [
+          { kind: 'image', ref: 'pic.png', addedAt: '2026-05-22T01:00:00Z' },
+          { kind: 'video', ref: 'vid-xyz', addedAt: '2026-05-22T02:00:00Z' },
+        ],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
+        deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-col', peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'col-9',
+      });
+      expect(captured.kind).toBe('mediaCollection');
+      expect(captured.record.id).toBe('col-9');
+      const imageEntries = captured.assetManifest.filter(a => a.kind === 'image');
+      const videoEntries = captured.assetManifest.filter(a => a.kind === 'video');
+      expect(imageEntries.map(a => a.filename)).toEqual(['pic.png']);
+      // The .mp4 must have been appended to the bare videoId.
+      expect(videoEntries.map(a => a.filename)).toEqual(['vid-xyz.mp4']);
+    });
+
+    it('ships an empty asset manifest for a tombstone mediaCollection push', async () => {
+      enableCollectionPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      // Real files on disk would otherwise hash into the manifest — the
+      // deleted gate must skip the manifest builder entirely.
+      await writeFile(join(PATHS.images, 'doomed.png'), Buffer.from('bytes'));
+      await writeFile(join(PATHS.videos, 'vid-doom.mp4'), Buffer.from('bytes'));
+
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-tomb', name: 'Doomed', description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [
+          { kind: 'image', ref: 'doomed.png', addedAt: '2026-05-22T01:00:00Z' },
+          { kind: 'video', ref: 'vid-doom', addedAt: '2026-05-22T02:00:00Z' },
+        ],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T03:00:00Z',
+        deleted: true, deletedAt: '2026-05-22T03:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-tomb', peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'col-tomb',
+      });
+      expect(captured.record.id).toBe('col-tomb');
+      expect(captured.record.deleted).toBe(true);
+      expect(captured.assetManifest).toEqual([]);
+    });
+  });
+
+  describe('collectSubscriptionsForUpdate', () => {
+    // Regression: mediaCollections.js emits emitRecordUpdated('mediaCollection',…)
+    // on every edit/delete, but the push pipeline only acted on it if
+    // collectSubscriptionsForUpdate returns the direct subs. Omitting the
+    // mediaCollection branch made those emits inert (edits never auto-pushed).
+    it('returns direct mediaCollection subscriptions (so edits/deletes auto-push)', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+        enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+        syncCategories: { universe: true, pipeline: true, mediaCollections: true },
+      }]);
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-7', name: 'Standalone', description: '', coverKey: null,
+        universeId: null, seriesId: null, items: [],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
+        deleted: false, deletedAt: null,
+      });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'col-7' });
+      await __drainForTests();
+
+      const subs = await collectSubscriptionsForUpdate('mediaCollection', 'col-7');
+      expect(subs.map((s) => s.recordId)).toContain('col-7');
+      expect(subs.every((s) => s.recordKind === 'mediaCollection')).toBe(true);
+    });
+
+    it('returns [] for a kind with no direct/parent subscription path', async () => {
+      expect(await collectSubscriptionsForUpdate('image', 'whatever')).toEqual([]);
+    });
   });
 
   describe('applyIncomingPush', () => {
@@ -1423,6 +1857,404 @@ describe('peerSync', () => {
       });
       const all = await listPeerSubscriptions({ peerId: 'peer-a' });
       expect(all).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // SCHEMA-VERSION GATING — sender side (handle 409 / cooldown / clear)
+  // + receiver side (reject when sender ahead / pass through legacy + behind)
+  // -------------------------------------------------------------------------
+  describe('schema-version gating', () => {
+    beforeEach(() => {
+      // Earlier tests in this file accumulate calls on the merge mocks (the
+      // file's outer beforeEach does mockResolvedValue but not mockClear).
+      // Clear history so `expect(...).not.toHaveBeenCalled()` reflects only
+      // calls made in the current test.
+      vi.mocked(mergeUniversesFromSync).mockClear();
+      vi.mocked(mergeSeriesFromSync).mockClear();
+      vi.mocked(mergeIssuesFromSync).mockClear();
+    });
+
+    describe('receiver — applyIncomingPush', () => {
+      it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
+        // Local code is at universes:5 (see server/lib/schemaVersions.js).
+        // A push from a sender on universes:6 must NOT touch local state.
+        const rejection = await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 6, receiverV: 5 }]);
+        expect(rejection.details.senderPortosVersion).toBe('99.0.0');
+        // Receiver MUST stamp its OWN PortOS version so the sender can show
+        // the user "peer X is on PortOS vY" — without this, the sender would
+        // fall back to its own version (the one it sent) and mislabel the
+        // peer in the SchemaGapBadge.
+        expect(typeof rejection.details.receiverPortosVersion).toBe('string');
+        expect(rejection.details.receiverPortosVersion.length).toBeGreaterThan(0);
+        // mergeUniversesFromSync MUST NOT have been called — the gate runs
+        // before the merge dispatch.
+        expect(mergeUniversesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('passes through when sender schemaVersions are EQUAL to local', async () => {
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 5 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1' }),
+        ]);
+      });
+
+      it('passes through when sender is BEHIND local (sanitizer handles the backfill)', async () => {
+        // Older peer pushes a v4-shape universe. Receiver is on v5 but the
+        // record-shape sanitizer can backfill, so we apply rather than reject.
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 4 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1' }),
+        ]);
+      });
+
+      it('passes through legacy peers that send NO portosMeta at all', async () => {
+        // Backwards compat — pre-this-PR peers don't know to include the
+        // envelope. The comparator treats absent sender versions as 0, which
+        // either matches (receiver also 0 for the category) or surfaces as
+        // "behind" (which we DON'T gate on).
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalled();
+      });
+    });
+
+    describe('sender — pushRecordToPeer', () => {
+      it('stamps portosMeta on the outbound push payload', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+        await pushRecordToPeer({
+          id: 's-meta', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        });
+        const call = vi.mocked(peerFetch).mock.calls.at(-1);
+        expect(call).toBeDefined();
+        const body = JSON.parse(call[1].body);
+        expect(body.portosMeta).toBeDefined();
+        expect(body.portosMeta.schemaVersions.universes).toBe(5);
+        expect(typeof body.portosMeta.portosVersion).toBe('string');
+      });
+
+      it('records a blockedBySchema marker on the subscription when the peer responds 409', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        // Receiver claims it's on universes:4 + PortOS 2.5.0; sender is at 5.
+        // `receiverPortosVersion` is the rejecting peer's version — that's
+        // the label the sender persists as `peerPortosVersion`.
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: 'sender schema is ahead',
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: {
+              details: {
+                ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }],
+                behind: [],
+                senderPortosVersion: '3.0.0',
+                receiverPortosVersion: '2.5.0',
+                receiverSchemaVersions: { universes: 4 },
+              },
+            },
+          }),
+        });
+        // Subscribe first so we have a sub record to assert against.
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('peer-schema-behind');
+        expect(result.blockedBySchema).toBe(true);
+        // Block persisted on the subscription.
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeDefined();
+        expect(after.blockedBySchema.ahead).toEqual([{ category: 'universes', senderV: 5, receiverV: 4 }]);
+        expect(after.blockedBySchema.peerPortosVersion).toBe('2.5.0');
+        expect(typeof after.blockedBySchema.detectedAt).toBe('string');
+        // lastPushedHash must NOT have advanced — the record didn't land.
+        expect(after.lastPushedHash).toBeFalsy();
+      });
+
+      it('short-circuits subsequent pushes for blocked subs within the cooldown window', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        // First push gets the 409.
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: {
+              details: {
+                ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }],
+                senderPortosVersion: '2.5.0',
+              },
+            },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const fetchCallsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        // Re-load the sub with the persisted block, then push again with NO
+        // bypass — should not hit the network.
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        const result = await pushRecordToPeer(blocked);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('peer-schema-behind-cooldown');
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(fetchCallsAfterFirst);
+      });
+
+      it('bypassSchemaCooldown=true re-probes regardless of recent block', async () => {
+        // Simulates the peer:online path: retryPendingPushesForPeer passes
+        // bypassSchemaCooldown so the next probe actually hits the wire even
+        // if a recent 409 set the cooldown.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false, status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: { details: { ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }] } },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const callsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        await pushRecordToPeer(blocked, { bypassSchemaCooldown: true });
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(callsAfterFirst + 1);
+      });
+
+      it('clears blockedBySchema once a subsequent push succeeds (peer upgraded)', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        // First push: 409.
+        vi.mocked(peerFetch).mockResolvedValueOnce({
+          ok: false, status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: { details: { ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }], senderPortosVersion: '2.5.0' } },
+          }),
+        });
+        // Second push: peer upgraded, accepts.
+        vi.mocked(peerFetch).mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        expect((await findPeerSubscription('peer-a', 'universe', 'u1')).blockedBySchema).toBeDefined();
+        // Bypass cooldown to simulate a peer:online retry.
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        await pushRecordToPeer(blocked, { bypassSchemaCooldown: true });
+        const cleared = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(cleared.blockedBySchema).toBeUndefined();
+        expect(cleared.lastPushedHash).toBeTruthy(); // succeeded → hash recorded
+      });
+
+      it('falls back without portosMeta when the peer is on a pre-version-gate PortOS (strict schema 400)', async () => {
+        // Pre-version-gate receiver: its `peerSyncPushSchema` is `.strict()`
+        // and has no `portosMeta` field, so it rejects our envelope as a
+        // generic VALIDATION_ERROR before any schema-gate logic. The sender
+        // must detect that specific shape, strip portosMeta, and retry —
+        // otherwise universe/series pushes to not-yet-upgraded peers fail
+        // hard and silently during a federation rollout.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const firstCallBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: '', message: "Unrecognized key(s) in object: 'portosMeta'" }] },
+        }) };
+        firstCallBody.clone = () => firstCallBody;
+        const retryBody = { ok: true, status: 200, json: async () => ({}) };
+        vi.mocked(peerFetch)
+          .mockResolvedValueOnce(firstCallBody)
+          .mockResolvedValueOnce(retryBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(true);
+        // Two network calls: the failed validating one + the retry without portosMeta.
+        const calls = vi.mocked(peerFetch).mock.calls;
+        expect(calls.length).toBe(2);
+        const firstPayload = JSON.parse(calls[0][1].body);
+        const retryPayload = JSON.parse(calls[1][1].body);
+        expect(firstPayload.portosMeta).toBeDefined();
+        expect(retryPayload.portosMeta).toBeUndefined();
+        // Record content is preserved across the retry.
+        expect(retryPayload.record.id).toBe('u1');
+        expect(retryPayload.sourceInstanceId).toBe(firstPayload.sourceInstanceId);
+      });
+
+      it('does NOT retry on a 400 whose validation error is unrelated to portosMeta', async () => {
+        // The retry is keyed on the `portosMeta` mention in the validation
+        // details — any other 400 (oversized field, unknown record key, etc.)
+        // is a genuine bug we want to surface, not silently retry.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'record.name', message: 'String too long' }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValueOnce(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('http-400');
+        // Only ONE call — no retry.
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(1);
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // mediaCollection push + receiver
+  // -------------------------------------------------------------------------
+  describe('collectCollectionAssetReferences', () => {
+    it('maps items to image/video refs with an empty directImageRefFilenames', () => {
+      const refs = collectCollectionAssetReferences({ items: [
+        { kind: 'image', ref: 'a.png' },
+        { kind: 'video', ref: 'vid123' },
+        { kind: 'image', ref: 'b.png' },
+      ] });
+      expect(refs.directImageFilenames).toEqual(['a.png', 'b.png']);
+      expect(refs.directVideoFilenames).toEqual(['vid123']);
+      expect(refs.directImageRefFilenames).toEqual([]);
+    });
+
+    it('returns empty arrays for a collection with no items', () => {
+      const refs = collectCollectionAssetReferences({ items: [] });
+      expect(refs.directImageFilenames).toEqual([]);
+      expect(refs.directVideoFilenames).toEqual([]);
+      expect(refs.directImageRefFilenames).toEqual([]);
+    });
+
+    it('returns empty arrays for null/undefined input', () => {
+      expect(collectCollectionAssetReferences(null).directImageFilenames).toEqual([]);
+      expect(collectCollectionAssetReferences(undefined).directImageFilenames).toEqual([]);
+    });
+  });
+
+  describe('applyIncomingPush — mediaCollection', () => {
+    it('applies an incoming mediaCollection push into local collections', async () => {
+      // Use the real mergeMediaCollectionsFromSync via importActual so the
+      // write lands in the tmpdir and listCollections can confirm persistence.
+      const real = await vi.importActual('../mediaCollections.js');
+      vi.mocked(mergeMediaCollectionsFromSync).mockImplementationOnce(real.mergeMediaCollectionsFromSync);
+      vi.mocked(listCollections).mockImplementationOnce(real.listCollections);
+
+      await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-x', name: 'Synced', items: [], updatedAt: '2026-05-23T00:00:00.000Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-abc',
+      });
+
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'col-x', name: 'Synced' }),
+      ]);
+
+      // Confirm the record landed on disk via the real listCollections.
+      const all = await real.listCollections();
+      const found = all.find((c) => c.id === 'col-x');
+      expect(found).toBeDefined();
+      expect(found.name).toBe('Synced');
+    });
+
+    it('routes a mediaCollection push through mergeMediaCollectionsFromSync (mock assertion)', async () => {
+      await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-y', name: 'Test', items: [], updatedAt: '2026-05-23T00:00:00.000Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-abc',
+      });
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'col-y' }),
+      ]);
+    });
+
+    it('auto-creates a reverse subscription back to the sender for a syncable local collection', async () => {
+      // Regression (Bug 1): classifyLocalRecord had no mediaCollection branch,
+      // so it returned 'missing' and maybeCreateReverseSubscription's
+      // `localState !== 'syncable'` guard never bootstrapped bidirectional
+      // collection sync. The merge landed the record locally, so the
+      // classifyLocalRecord lookup must resolve it as 'syncable'.
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'col-rev', name: 'Synced', items: [], updatedAt: '2026-05-23T00:00:00.000Z',
+        deleted: false, deletedAt: null,
+      });
+      const result = await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-rev', name: 'Synced', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.reverseSubscriptionCreated).toBe(true);
+      const sub = await findPeerSubscription('peer-a', 'mediaCollection', 'col-rev');
+      expect(sub).not.toBeNull();
+      expect(sub.adoptedFromReverse).toBe(true);
+    });
+
+    it('does NOT create a reverse subscription when the local collection is missing (merge dropped it)', async () => {
+      // The default getCollection mock rejects (NOT_FOUND) → classifyLocalRecord
+      // returns 'missing' → no orphan reverse-sub.
+      const result = await applyIncomingPush({
+        kind: 'mediaCollection',
+        record: { id: 'col-gone', name: 'Gone', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.reverseSubscriptionCreated).toBe(false);
+      const sub = await findPeerSubscription('peer-a', 'mediaCollection', 'col-gone');
+      expect(sub).toBeNull();
+    });
+  });
+
+  describe('peerSyncPushSchema — mediaCollection validation', () => {
+    it('accepts a valid mediaCollection push payload', async () => {
+      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      expect(() => peerSyncPushSchema.parse({
+        kind: 'mediaCollection',
+        record: { id: 'col-x', name: 'My Collection', items: [] },
+        assetManifest: [],
+        sourceInstanceId: 'peer-abc',
+      })).not.toThrow();
+    });
+
+    it('rejects a mediaCollection push payload missing sourceInstanceId', async () => {
+      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      expect(() => peerSyncPushSchema.parse({
+        kind: 'mediaCollection',
+        record: { id: 'col-x' },
+        assetManifest: [],
+      })).toThrow();
     });
   });
 });

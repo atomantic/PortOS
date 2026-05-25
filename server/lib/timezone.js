@@ -125,3 +125,44 @@ export function todayInTimezone(timezone) {
   const parts = getLocalParts(new Date(), timezone)
   return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
 }
+
+// ---------------------------------------------------------------------------
+// HH:MM time-window primitives
+//
+// Two consumers validate "HH:MM" (24h) strings with deliberately different
+// strictness, so both regexes live here as the single source of truth:
+//   - HHMM_RE (lenient): tolerates a single-digit hour ("9:00") as well as
+//     the zero-padded form. Used by voice quiet-hours (routes/voice.js via
+//     proactiveSpeech.js), which has always accepted single-digit hours.
+//   - HHMM_STRICT_RE: requires a zero-padded hour ("09:00"). Used by the
+//     dashboard activateWindow validator (services/dashboardLayouts.js) and
+//     mirrored client-side in client/src/utils/timeWindow.js — keep all three
+//     in sync (each has a parity test against the literal pattern).
+// ---------------------------------------------------------------------------
+export const HHMM_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/
+export const HHMM_STRICT_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+// Parse "HH:MM" → minutes-from-midnight. Lenient (accepts single-digit hours)
+// so callers can validate strictness separately at their boundary. Returns
+// null for malformed input so the caller can fall through or error.
+export function parseHHMM(s) {
+  if (typeof s !== 'string') return null
+  const m = s.match(HHMM_RE)
+  if (!m) return null
+  return Number(m[1]) * 60 + Number(m[2])
+}
+
+// Half-open [start, end) window-inclusion check against minutes-from-midnight.
+// Handles the overnight case (start > end, e.g. 22:00 → 07:00) by wrapping.
+// start === end is an empty window → never matches. Malformed bounds → false
+// (caller treats as "window off"). Shared by voice quiet-hours and mirrored
+// client-side for dashboard time-windowed layout auto-activation.
+export function isWithinTimeWindow({ start, end, nowMinutes }) {
+  const s = parseHHMM(start)
+  const e = parseHHMM(end)
+  if (s === null || e === null) return false
+  if (s === e) return false
+  if (s < e) return nowMinutes >= s && nowMinutes < e
+  // Overnight wrap: in-window if at-or-after start OR before end.
+  return nowMinutes >= s || nowMinutes < e
+}

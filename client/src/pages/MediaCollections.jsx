@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -7,6 +7,8 @@ import {
   listVideoHistory, listImageGallery,
 } from '../services/api';
 import { buildUnsortedCollection } from '../lib/unsorted';
+import SyncBadge from '../components/sync/SyncBadge';
+import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 
 // Resolve a collection's cover-thumbnail URL. Default = newest item by
 // addedAt; user-pinned coverKey wins when set. We need full image/video
@@ -47,12 +49,17 @@ const resolveCover = (collection, imagesByName, videosById) => {
 };
 
 export default function MediaCollections() {
+  const navigate = useNavigate();
   const [collections, setCollections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [imagesByName, setImagesByName] = useState(new Map());
   const [videosById, setVideosById] = useState(new Map());
+
+  // Sync integrity — no peers prop (the page doesn't fetch peers itself),
+  // so the hook fetches instances internally.
+  const sync = useSyncIntegrity('mediaCollection');
 
   const refresh = async () => {
     setLoading(true);
@@ -167,16 +174,24 @@ export default function MediaCollections() {
                   {c.counts.image === 0 && c.counts.video === 0 && <span>Empty</span>}
                 </div>
                 <div className="flex-1" />
-                {!c.synthetic && (
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(c)}
-                    className="self-end px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
-                    title="Delete collection"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                )}
+                <div className="flex items-center justify-between gap-1">
+                  {!c.synthetic && (
+                    <SyncBadge
+                      status={syncBadgeStatus(sync, c.id)}
+                      onClick={() => navigate(`/media/collections/${encodeURIComponent(c.id)}/sync`)}
+                    />
+                  )}
+                  {!c.synthetic && (
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(c)}
+                      className="px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
+                      title="Delete collection"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}

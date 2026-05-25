@@ -15,6 +15,7 @@ import toast from './ui/Toast';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
+import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -212,14 +213,7 @@ function SnapshotList() {
       // the oldest — walk every rendered tuple (id + fileCount) so a stale
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
-      compare: (prev, next) => {
-        if (prev.length !== next.length) return false;
-        for (let i = 0; i < prev.length; i++) {
-          if (prev[i]?.id !== next[i]?.id) return false;
-          if (prev[i]?.fileCount !== next[i]?.fileCount) return false;
-        }
-        return true;
-      },
+      compare: (prev, next) => equalListByKeys(prev, next, ['id', 'fileCount']),
     },
   );
   const [selectedId, setSelectedId] = useState(null);
@@ -282,14 +276,9 @@ const BackupWidget = memo(function BackupWidget() {
       // monotonic timestamps + status + error + destPath captures every
       // visible change at the widget's resolution. Avoids per-poll re-renders
       // that would re-compute relative-time labels for no visual benefit.
-      compare: (prev, next) => (
-        prev.status === next.status
-          && prev.lastRun === next.lastRun
-          && prev.nextRun === next.nextRun
-          && prev.error === next.error
-          && prev.filesChanged === next.filesChanged
-          && prev.destPath === next.destPath
-      ),
+      compare: (prev, next) => equalByKeys(prev, next, [
+        'status', 'lastRun', 'nextRun', 'error', 'filesChanged', 'destPath',
+      ]),
     },
   );
   const [triggering, setTriggering] = useState(false);

@@ -126,12 +126,13 @@ export function sanitizeRecordForWire(kind, record) {
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'mediaCollection': {
-      // Collections have no `ephemeral` / `deleted` semantics today — the
-      // record shape is already wire-safe as produced by sanitizeCollection.
-      // The case exists so future per-record push fan-out for collections has
-      // a single sanitizer to extend (e.g. stripping a future local-only
-      // field like a UI sort preference) without forking the wire contract.
-      return record;
+      // Strip then re-add soft-delete fields at tail so the byte-stable
+      // checksum invariant holds regardless of the on-disk key position.
+      // Collections have no `ephemeral` field — unlike universe/series,
+      // they are always wire-syncable when non-ephemeral (there is no
+      // collection-level ephemeral flag), so no ephemeral minimization path.
+      const { deleted: _d, deletedAt: _da, ...rest } = record;
+      return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     default:
       return null;

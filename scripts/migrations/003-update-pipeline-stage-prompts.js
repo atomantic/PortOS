@@ -44,7 +44,7 @@ export const NEW_SHIPPED_MD5 = {
   'pipeline-idea-expansion.md':  '1f3c5d077a5ef9a4b610335d5e3edd9c', // post-025
   'pipeline-prose.md':           'd1f8e3f1d214725b5aa67f309a81cd7d', // post-027
   'pipeline-comic-script.md':    '133d200d069c2e8173b7c129eea58f53', // post-027
-  'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.sample)
+  'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.reference)
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005
 };
 
@@ -55,7 +55,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   retireOnSampleMissing: true,
   customizedHint: (filename) =>
     `   To apply the length-profile variables manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and merge the {{lengthTargets.*}} template variables.`,
@@ -63,7 +63,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
     `⚠️  ${count} prompt(s) could not be auto-updated because they were customized.\n` +
     `   The length profile picker UI will work, but those prompts won't use\n` +
     `   {{lengthTargets.*}} variables until you merge them manually.\n` +
-    `   See data.sample/prompts/stages/ for the updated templates.`,
+    `   See data.reference/prompts/stages/ for the updated templates.`,
 });
 
 export { applyMigration };

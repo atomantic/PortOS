@@ -1,27 +1,40 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { rmSync, mkdirSync } from 'fs';
+import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-// In-memory file store mirroring universeBuilder.test.js so canon mutations
-// roundtrip through the same readState/writeState path the real service uses.
-const fileStore = new Map();
+// Real tmpdir backing the per-record store. `mockPathsDataRoot` redirects
+// PATHS.data so collectionStore lands under tempRoot/universes/. Everything
+// else from fileUtils (atomicWrite, readJSONFile, ensureDir) is the real impl.
+const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({
+  prefix: 'portos-universe-canon-',
+  extraOverrides: (root) => ({ imageRefs: `${root}/image-refs` }),
+});
+afterAll(cleanup);
 
-vi.mock('../lib/fileUtils.js', () => ({
-  tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: '/mock/data', imageRefs: '/mock/data/image-refs' },
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
-  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
-  shortId: (id, n = 8) => (id == null ? '' : String(id).slice(0, n)),
-  // Stub: pretend every referenced sheet file exists, so the GET-time lazy
-  // `pruneStaleReferenceSheets` doesn't null out pointers between seed and
-  // assertion. The purge tests below don't depend on stale-collapse behavior.
-  resolveImageRef: vi.fn((filename) => (filename ? `/mock/data/image-refs/${filename}` : null)),
-}));
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return {
+    ...makeProxy(actual),
+    // Stub: pretend every referenced sheet file exists, so the GET-time lazy
+    // `pruneStaleReferenceSheets` doesn't null out pointers between seed and
+    // assertion. The purge tests below don't depend on stale-collapse behavior.
+    resolveImageRef: vi.fn((filename) => (filename ? `${tempRoot}/image-refs/${filename}` : null)),
+  };
+});
 
 let uuidCounter = 0;
+const mockUuid = (n) => `uuid-${String(n).padStart(8, '0')}`;
 vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
-  return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
+  return { ...actual, randomUUID: () => mockUuid(++uuidCounter) };
 });
+
+// Stub instances.js so createUniverse's fire-and-forget autoSubscribeRecordToAllPeers
+// doesn't fan the fixture out to real peers (getPeers reads the live registry via a
+// dataPath closure to the real PATHS once the post-return microtask runs outside this
+// file's fileUtils mock window). Mirrors importer.test.js / promoteToPipeline.test.js.
+vi.mock('./instances.js', () => mockNoPeers());
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 // The bible extractor + staged-LLM runner + prompt-refine helpers all reach
 // out to live AI providers. Stub them to return deterministic shapes so we
@@ -55,7 +68,8 @@ const seedUniverseWithCharacters = async (characters) => {
 };
 
 beforeEach(() => {
-  fileStore.clear();
+  rmSync(tempRoot, { recursive: true, force: true });
+  mkdirSync(tempRoot, { recursive: true });
   uuidCounter = 0;
   extractBibleMock.mockReset();
   runStagedLLMMock.mockReset();

@@ -187,7 +187,7 @@ export const getCosDecisionSummary = (options) => request('/cos/decisions/summar
 export const getCosDecisionPatterns = () => request('/cos/decisions/patterns');
 
 // Task Schedule (Configurable Intervals)
-export const getCosUpcomingTasks = (limit = 10) => request(`/cos/upcoming?limit=${limit}`);
+export const getCosUpcomingTasks = (limit = 10, options) => request(`/cos/upcoming?limit=${limit}`, options);
 export const getCosSchedule = () => request('/cos/schedule');
 export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval-types');
 export const getCosScheduleDueTasks = () => request('/cos/schedule/due');

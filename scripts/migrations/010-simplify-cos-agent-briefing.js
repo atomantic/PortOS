@@ -32,7 +32,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'cos-agent-briefing',
   customizedHint: (filename) =>
     `   To drop the obsolete header and role-play preamble manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}`,
 });

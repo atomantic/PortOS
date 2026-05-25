@@ -35,7 +35,7 @@
  * and tombstone GC (Stage 5; `sharing/tombstoneGc.js`).
  */
 
-import { join, basename } from 'path';
+import { join } from 'path';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
@@ -43,16 +43,28 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
-import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
+import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
+import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
+import { pullSidecarForImage } from './sidecarSync.js';
 import { recordEvents } from './recordEvents.js';
+import {
+  PORTOS_SCHEMA_VERSIONS,
+  buildPortosMeta,
+  compareSchemaVersions,
+  formatVersionGap,
+  getPortosVersion,
+} from '../../lib/schemaVersions.js';
 import { getInstanceId, getPeers, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { peerSyncPushSchema } from '../../lib/validation.js';
 import { instanceEvents } from '../instanceEvents.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import {
+  getCollection,
+  listCollections,
   findCollectionByUniverseId,
   findCollectionBySeriesId,
   mergeMediaCollectionsFromSync,
@@ -63,7 +75,7 @@ import {
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -77,7 +89,18 @@ peerSyncEvents.setMaxListeners(100);
 
 export const ERR_NOT_FOUND = 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND';
 export const ERR_VALIDATION = 'PEER_SYNC_SUBSCRIPTION_VALIDATION';
-const makeErr = (message, code) => Object.assign(new Error(message), { code });
+// Receiver-side rejection — the incoming payload's `portosMeta.schemaVersions`
+// is ahead of our local PORTOS_SCHEMA_VERSIONS for one or more categories,
+// so applying the record would corrupt local state. The HTTP route maps this
+// to 409 + a structured body { ahead, behind, senderPortosVersion } so the
+// sender can persist the gap on the subscription and surface it in the UI.
+export const ERR_SCHEMA_VERSION_AHEAD = 'PEER_SYNC_SCHEMA_VERSION_AHEAD';
+const makeErr = (message, code, details = null) => {
+  const err = new Error(message);
+  err.code = code;
+  if (details) err.details = details;
+  return err;
+};
 
 const STATE_PATH = () => join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 const DEBOUNCE_MS = 3000;
@@ -246,6 +269,7 @@ export async function unsubscribePeer(id) {
 const KIND_TO_CATEGORY = Object.freeze({
   universe: 'universe',
   series: 'pipeline',
+  mediaCollection: 'mediaCollections',
 });
 
 function peerAllowsOutbound(peer) {
@@ -324,6 +348,8 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   } else if (recordKind === 'series') {
     const { listSeries } = await import('../pipeline/series.js');
     records = await listSeries({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'mediaCollection') {
+    records = await listCollections({ includeDeleted: false }).catch(() => []);
   }
   // Drop ephemeral records before the set-difference / sub creation. The wire
   // sanitizer would short-circuit any push anyway, but creating a sub that
@@ -460,6 +486,67 @@ export async function buildAssetManifest(record) {
   return out;
 }
 
+/**
+ * Map a collection's items array to the `{ directImageFilenames,
+ * directImageRefFilenames, directVideoFilenames }` shape consumed by the
+ * per-item manifest hashers. Collections store items as
+ * `{ kind:'image'|'video', ref, addedAt }` and carry no image-ref kind.
+ */
+export function collectCollectionAssetReferences(collection) {
+  const items = Array.isArray(collection?.items) ? collection.items : [];
+  const directImageFilenames = [];
+  const directVideoFilenames = [];
+  for (const it of items) {
+    if (it?.kind === 'image' && typeof it.ref === 'string') directImageFilenames.push(it.ref);
+    else if (it?.kind === 'video' && typeof it.ref === 'string') directVideoFilenames.push(it.ref);
+  }
+  return { directImageFilenames, directImageRefFilenames: [], directVideoFilenames };
+}
+
+// Video collection items store the BARE video id (e.g. a UUID), while the
+// on-disk file is `<id>.mp4` (today every PortOS-managed video is mp4 —
+// confirmed by inspecting video-history.json). The image side stores refs
+// WITH the extension already. Append `.mp4` unless the ref already carries an
+// extension (defensive — older state may have stamped a filename instead of an
+// id, and a future video format would land as `.webm` etc.). Shared by BOTH
+// collection manifest builders (`buildCollectionAssetManifest` for standalone
+// mediaCollection pushes, `buildAssetManifestForCollection` for the
+// linkedCollection bundle) so the two can't diverge on the extension rule.
+function collectionVideoRefToFilename(ref) {
+  return /\.[a-z0-9]+$/i.test(ref) ? ref : `${ref}.mp4`;
+}
+
+async function buildCollectionAssetManifest(collection) {
+  const refs = collectCollectionAssetReferences(collection);
+  const out = [];
+  for (const filename of refs.directImageFilenames) {
+    const entry = await hashImageForManifest(filename);
+    if (entry) out.push(entry);
+  }
+  for (const ref of refs.directVideoFilenames) {
+    const entry = await hashSimpleAsset(collectionVideoRefToFilename(ref), 'video', PATHS.videos);
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * Returns sorted sha256 hashes for a record's own assets (used by the
+ * integrity manifest builder). For `series` this captures the series' OWN
+ * asset refs only — child-issue assets are not yet included (v1 limitation;
+ * full issue-level integrity is deferred to a future pass).
+ *
+ * @param {'universe'|'series'|'mediaCollection'} kind
+ * @param {object} record
+ * @returns {Promise<string[]>} sorted sha256 strings (falsy hashes omitted)
+ */
+export async function assetShaListForRecord(kind, record) {
+  const manifest = kind === 'mediaCollection'
+    ? await buildCollectionAssetManifest(record)
+    : await buildAssetManifest(record);
+  return manifest.map((e) => e.sha256).filter(Boolean).sort();
+}
+
 async function hashImageForManifest(filename) {
   // Sanitize before join — a record with `imageRefs` containing a path-
   // traversal filename (peer-pushed via linkedCollection, hand-edited,
@@ -471,7 +558,17 @@ async function hashImageForManifest(filename) {
   const fullPath = join(PATHS.images, safeName);
   const result = await getOrComputeImageSha256(fullPath);
   if (!result) return null;
-  return { filename: safeName, kind: 'image', sha256: result.hash };
+  // Advertise a sidecarSha256 only when the sidecar carries gen-params beyond
+  // the `sha256` cache block. CRITICAL: we hash the GEN-PARAMS ONLY (sorted-key
+  // canonical form, `sha256` cache key stripped) via `sidecarGenParamsHash` —
+  // NOT the raw sidecar file. The `sha256` block embeds the LOCAL image's
+  // mtime+size, so hashing the whole file would never converge across machines
+  // (the receiver re-stamps its own mtime after every pull and re-diverges,
+  // re-pulling the sidecar every sync cycle). `sidecarGenParamsHash` returns
+  // null when there are no gen-params, so we never advertise a hash for a
+  // pure cache-only sidecar.
+  const sidecarSha256 = sidecarGenParamsHash(result.sidecar);
+  return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}) };
 }
 
 async function hashSimpleAsset(filename, kind, sourceDir) {
@@ -508,8 +605,8 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // entry. Reject anything that isn't a bare basename before any FS op.
     const safeName = sanitizeAssetFilename(entry.filename);
     if (!safeName) continue;
-    // Build a sanitized projection: only the three fields the sender needs
-    // back to pull. Echoing the raw peer-supplied entry would amplify any
+    // Build a sanitized projection: only the known fields the receiver needs
+    // to pull. Echoing the raw peer-supplied entry would amplify any
     // junk fields it shipped (large strings, extra kinds, prototype-pollution
     // attempts) into the response — wire-symmetry should not let untrusted
     // input round-trip through our process untouched.
@@ -517,11 +614,21 @@ export async function diffAssetManifestAgainstLocal(manifest) {
       filename: safeName,
       kind: entry.kind,
       ...(isStr(entry.sha256) ? { sha256: entry.sha256 } : {}),
+      ...(isStr(entry.sidecarSha256) ? { sidecarSha256: entry.sidecarSha256 } : {}),
     };
     const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
       missing.push(sanitizedEntry);
       continue;
+    }
+    // For images, compute the hash result once up front: it carries both the
+    // sha256 AND the parsed sidecar JSON, so the sidecarSha256 comparison below
+    // reuses it instead of re-reading the same file (one sidecar read per image
+    // instead of two). Only touch the cache machinery when a comparison will
+    // actually use it (sha256 or sidecarSha256 advertised by the peer).
+    let imageHashResult = null;
+    if (entry.kind === 'image' && (isStr(entry.sha256) || isStr(entry.sidecarSha256))) {
+      imageHashResult = await getOrComputeImageSha256(fullPath);
     }
     // Compare SHA when the manifest carries one — for ALL kinds, not just
     // images. The image path uses the sidecar cache (fast for the common
@@ -531,9 +638,30 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // ONLY thing that would catch it 60s later — better to detect on push.
     if (isStr(entry.sha256)) {
       const localHash = entry.kind === 'image'
-        ? (await getOrComputeImageSha256(fullPath))?.hash ?? null
+        ? imageHashResult?.hash ?? null
         : await sha256File(fullPath).catch(() => null);
-      if (localHash !== entry.sha256) missing.push(sanitizedEntry);
+      if (localHash !== entry.sha256) {
+        missing.push(sanitizedEntry);
+        continue;
+      }
+    }
+    // Sidecar-only divergence: image bytes are already present and hash-match,
+    // but the peer has a gen-params sidecar we're missing or have stale.
+    // Pull the entry so the worker can fetch ONLY the sidecar (it checks the
+    // image hash before deciding whether to re-pull the image bytes).
+    //
+    // We MUST recompute the local sidecar hash the SAME way the sender did
+    // (`sidecarGenParamsHash` — gen-params only, sorted-key canonical, `sha256`
+    // cache block stripped). Hashing the raw sidecar file would never match the
+    // sender's gen-params-only hash and would re-flag the image every cycle.
+    if (entry.kind === 'image' && isStr(entry.sidecarSha256)) {
+      // Reuse the sidecar already loaded by getOrComputeImageSha256; only fall
+      // back to a direct read if that result was unavailable (e.g. the image
+      // became unreadable between the existsSync check and the stat).
+      const localSidecar = imageHashResult?.sidecar
+        ?? await readJSONFile(join(PATHS.images, imageSidecarName(safeName)), null, { logError: false });
+      const localSidecarHash = sidecarGenParamsHash(localSidecar);
+      if (localSidecarHash !== entry.sidecarSha256) missing.push(sanitizedEntry);
     }
   }
   return missing;
@@ -544,25 +672,6 @@ function directoryForAssetKind(kind) {
   if (kind === 'image-ref') return PATHS.imageRefs;
   if (kind === 'video') return PATHS.videos;
   return null;
-}
-
-/**
- * Returns the filename if it's safe to use as a path segment under the asset
- * directory, otherwise null. Rejects path separators, parent-directory
- * tokens, and any value that doesn't match its own basename — same posture
- * as `jobFromSidecar` in services/sharing/exporter.js for symmetry with
- * how the share-bucket importer validates inbound asset filenames.
- */
-function sanitizeAssetFilename(name) {
-  if (typeof name !== 'string' || !name) return null;
-  // Reject separators and exact parent-directory segments (`.` / `..`
-  // as the whole basename). A basename like `my..render.png` is
-  // legitimate (the gallery filename validator permits `..` inside a
-  // basename) — only the path-segment forms are traversal.
-  if (name.includes('/') || name.includes('\\')) return null;
-  if (name === '.' || name === '..') return null;
-  if (basename(name) !== name) return null;
-  return name;
 }
 
 // --- Push pipeline (sender side) ----------------------------------------
@@ -582,7 +691,14 @@ function sanitizeAssetFilename(name) {
  * atomically per merge cycle. Issue records are filtered through
  * `sanitizeRecordForWire('issue', ...)` too.
  */
-export async function pushRecordToPeer(sub) {
+// Cool-down between re-probes when a peer has rejected our push for schema-
+// version reasons. Without it, every local edit would HTTP-roundtrip a 409
+// while the peer is on the older PortOS, spamming the network. The retry
+// loop on `peer:online` bypasses this — that's the canonical "did the peer
+// upgrade?" probe point.
+const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
+
+export async function pushRecordToPeer(sub, options = {}) {
   if (
     !isPlainObject(sub)
     || !isNonEmptyStr(sub.peerId)
@@ -590,6 +706,18 @@ export async function pushRecordToPeer(sub) {
     || !isNonEmptyStr(sub.recordId)
   ) {
     return { pushed: false, reason: 'invalid-subscription' };
+  }
+  // SCHEMA-BLOCK COOLDOWN — if the peer rejected our last push for being
+  // schema-ahead, hold off re-probing on every local edit. Re-probes happen
+  // on the next `peer:online` (where `retryPendingPushesForPeer` passes
+  // `bypassSchemaCooldown: true`) or after the cooldown elapses.
+  if (sub.blockedBySchema && !options.bypassSchemaCooldown) {
+    const detectedAtMs = Date.parse(sub.blockedBySchema.detectedAt || '');
+    const stillCooling = Number.isFinite(detectedAtMs)
+      && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
+    if (stillCooling) {
+      return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
+    }
   }
   const peer = await findPeerById(sub.peerId);
   if (!peer) return { pushed: false, reason: 'peer-not-found' };
@@ -636,21 +764,84 @@ export async function pushRecordToPeer(sub) {
   // hook), so the timeout is enforced inline with an AbortController so a
   // hung peer can't keep the push promise pending forever and block subsequent
   // debounced pushes for the same sub.
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-  const res = await peerFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: controller.signal,
-  }).catch((err) => {
-    console.log(`⚠️ peerSync: push to ${peer.name || peer.instanceId} failed: ${err.message}`);
-    return null;
-  }).finally(() => clearTimeout(timeoutId));
+  const postPayload = async (body) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
+    return peerFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    }).catch((err) => {
+      console.log(`⚠️ peerSync: push to ${peer.name || peer.instanceId} failed: ${err.message}`);
+      return null;
+    }).finally(() => clearTimeout(timeoutId));
+  };
+  let res = await postPayload(payload);
+  // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
+  // without a `portosMeta` field, so it 400-rejects our envelope at Zod
+  // validation BEFORE its schema-version gate code (which doesn't exist on
+  // that version anyway) can run. Detect that specific rejection — Zod emits
+  // "Unrecognized key(s) in object: 'portosMeta'" — and retry once without
+  // the envelope so the push lands on the older peer. The older peer can't
+  // see schemaVersions, but until the user upgrades it that's the
+  // best-effort behavior we want (vs. permanently stranded pushes). Once
+  // they upgrade, the next push round naturally re-includes `portosMeta`.
+  if (res && res.status === 400 && payload.portosMeta) {
+    const errBody = await res.clone().json().catch(() => null);
+    const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
+    const mentionsMeta = details.some((d) => /portosMeta/.test(`${d?.path || ''} ${d?.message || ''}`));
+    if (errBody?.code === 'VALIDATION_ERROR' && mentionsMeta) {
+      console.log(
+        `ℹ️ peerSync: ${peer.name || peer.instanceId} is on a pre-version-gate PortOS — retrying push without portosMeta envelope`,
+      );
+      const { portosMeta: _strip, ...legacyPayload } = payload;
+      res = await postPayload(legacyPayload);
+    }
+  }
+  // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
+  // PortOS and can't parse our newer storage layout. Persist the gap on the
+  // subscription so the Instances UI can surface "Peer X needs to update
+  // PortOS to receive your updates" — and short-circuit retries to that
+  // peer for the affected record kind. We don't tear down the subscription;
+  // when the peer upgrades and reconnects, `peer:online` will re-fire
+  // pushRecordToPeer and the next response either clears the block (success)
+  // or refreshes the gap info (still behind).
+  if (res && res.status === 409) {
+    const body = await res.json().catch(() => null);
+    if (body?.code === ERR_SCHEMA_VERSION_AHEAD) {
+      // The global error handler nests our `err.details` under `context.details`
+      // (see server/routes/peerSync.js `mapAndRethrow`), so reach in two levels
+      // to get the original payload from the peerSync service.
+      const details = isPlainObject(body.context?.details) ? body.context.details : {};
+      // `peerPortosVersion` describes the REJECTING peer's PortOS version
+      // (what we want to show in the SchemaGapBadge), so read
+      // `receiverPortosVersion` from the receiver-supplied details — NOT
+      // `senderPortosVersion`, which is our own version round-tripped from
+      // the payload we sent.
+      await persistSchemaVersionBlock(sub.id, {
+        ahead: Array.isArray(details.ahead) ? details.ahead : [],
+        behind: Array.isArray(details.behind) ? details.behind : [],
+        peerPortosVersion: typeof details.receiverPortosVersion === 'string' ? details.receiverPortosVersion : null,
+        peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
+      });
+      console.warn(
+        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — peer is on an older PortOS schema. ` +
+        `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead: details.ahead || [], behind: details.behind || [] })}`,
+      );
+      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
+    }
+  }
   if (!res || !res.ok) {
     return { pushed: false, reason: res ? `http-${res.status}` : 'network' };
   }
   const body = await res.json().catch(() => null);
+
+  // Push succeeded — clear any prior schema-version block so the sub goes
+  // back to normal. Either the peer upgraded or the gap was transient.
+  if (sub.blockedBySchema) {
+    await clearSchemaVersionBlock(sub.id);
+  }
 
   // Persist push metadata to peer_subscriptions.json, then advance the
   // tombstone cursor in peer_tombstone_cursors.json if the receiver acked
@@ -694,11 +885,61 @@ async function persistPushSuccess(subId, hash) {
     sub.lastPushedAt = now;
     sub.lastPushedHash = hash;
     sub.updatedAt = now;
+    // A successful push (or even a no-asset-stranded push) clears any prior
+    // schema-version block — the peer can receive again.
+    if (sub.blockedBySchema) delete sub.blockedBySchema;
     await writeState(state);
   });
 }
 
+/**
+ * Persist a `blockedBySchema` field on the subscription so subsequent pushes
+ * short-circuit until the peer upgrades. Stored on the same record as
+ * `lastPushedAt` / `lastPushedHash` so the Instances UI can read everything
+ * from a single subscription fetch. We capture both directions of the gap
+ * (`ahead` = what the PEER needs to gain to receive our pushes; `behind` =
+ * what the peer has that we don't — informational) along with the peer's
+ * PortOS version string for the user-visible message.
+ */
+async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions }) {
+  // Capture peerId inside the lock so the emitted event carries it — lets each
+  // Instances PeerCard filter on its own peer instead of every card refetching.
+  let blockedPeerId = null;
+  await withStateLock(async () => {
+    const state = await readState();
+    const sub = state.subscriptions.find((s) => s.id === subId);
+    if (!sub) return;
+    blockedPeerId = sub.peerId || null;
+    const now = new Date().toISOString();
+    sub.blockedBySchema = {
+      detectedAt: now,
+      ahead: Array.isArray(ahead) ? ahead : [],
+      behind: Array.isArray(behind) ? behind : [],
+      peerPortosVersion: peerPortosVersion || null,
+      peerSchemaVersions: peerSchemaVersions || null,
+    };
+    sub.updatedAt = now;
+    await writeState(state);
+  });
+  peerSyncEvents.emit('subscription-blocked', { subId, peerId: blockedPeerId });
+}
+
+async function clearSchemaVersionBlock(subId) {
+  let clearedPeerId = null;
+  await withStateLock(async () => {
+    const state = await readState();
+    const sub = state.subscriptions.find((s) => s.id === subId);
+    if (!sub || !sub.blockedBySchema) return;
+    clearedPeerId = sub.peerId || null;
+    delete sub.blockedBySchema;
+    sub.updatedAt = new Date().toISOString();
+    await writeState(state);
+  });
+  peerSyncEvents.emit('subscription-unblocked', { subId, peerId: clearedPeerId });
+}
+
 async function buildPushPayload(sub, sourceInstanceId) {
+  const portosMeta = await buildPortosMeta();
   if (sub.recordKind === 'universe') {
     const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
     if (!record) return null;
@@ -730,6 +971,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       record: sanitized,
       assetManifest,
       sourceInstanceId,
+      portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
     };
   }
@@ -782,8 +1024,17 @@ async function buildPushPayload(sub, sourceInstanceId) {
       issues: sanitizedIssues,
       assetManifest,
       sourceInstanceId,
+      portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
     };
+  }
+  if (sub.recordKind === 'mediaCollection') {
+    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('mediaCollection', record);
+    if (!sanitized) return null;
+    const assetManifest = record.deleted === true ? [] : await buildCollectionAssetManifest(record);
+    return { kind: 'mediaCollection', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
   return null;
 }
@@ -851,15 +1102,10 @@ async function buildAssetManifestForCollection(collection) {
     const safeName = sanitizeAssetFilename(it.ref);
     if (!safeName) continue;
     if (it.kind === 'video') {
-      // Video collection items store the bare video id (e.g. a UUID), while
-      // the on-disk file is `<id>.mp4` (today every PortOS-managed video is
-      // mp4 — confirmed by inspecting video-history.json). The image side
-      // stores refs WITH the extension already, so it works as-is. Append
-      // `.mp4` here unless the ref already carries an extension (defensive
-      // — older state may have stamped a filename instead of an id, and a
-      // future video format would land as `.webm` etc.).
-      const filename = /\.[a-z0-9]+$/i.test(safeName) ? safeName : `${safeName}.mp4`;
-      const entry = await hashSimpleAsset(filename, 'video', PATHS.videos);
+      // Bare videoId → `<id>.mp4` via the shared helper (see
+      // collectionVideoRefToFilename). `sanitizeAssetFilename` already ran on
+      // `it.ref` above; the extension append is purely the on-disk naming rule.
+      const entry = await hashSimpleAsset(collectionVideoRefToFilename(safeName), 'video', PATHS.videos);
       if (entry) out.push(entry);
     } else {
       // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
@@ -909,18 +1155,66 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, assetManifest, sourceInstanceId } = payload;
+  const { kind, record, issues, linkedCollection, assetManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
-  // sourceInstanceId is the key we hang the per-peer tombstone cursor on;
-  // empty / "unknown" would poison the cursor table with a synthetic entry
-  // that never gets cleaned up.
+  // Identity + record-shape checks happen BEFORE the schema-version gate.
+  // The gate's 409 body includes `receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS`
+  // — a (mild) version-fingerprint disclosure — and we don't want to surface
+  // it to callers that haven't even identified themselves correctly. Move
+  // the cheap shape validation first so unidentified or malformed requests
+  // get a clean 400 with no version information.
   if (!isNonEmptyStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
     throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
   }
   if (!isPlainObject(record) || !isNonEmptyStr(record.id)) {
     throw makeErr('record must be an object with a string id', ERR_VALIDATION);
+  }
+
+  // SCHEMA-VERSION GATE — runs BEFORE any merge so a sender on a newer
+  // storage layout can't corrupt local state. Legacy senders without
+  // `portosMeta` pass through (comparator treats absent as zero/no-contract;
+  // their record went through the same v0 → vN sanitizer chain we already
+  // run). When the sender is AHEAD on any category, we reject with a
+  // structured error the route layer maps to HTTP 409 + body so the sender
+  // can persist the gap on the subscription and surface it in the UI.
+  //
+  // We do NOT reject on "sender behind" here — the sanitizer's existing
+  // backfill chain handles older inputs in-place. A future forward-only
+  // contract (e.g. a required field that the sanitizer can't synthesize)
+  // can opt into a behind-gate; the comparator already surfaces both
+  // directions for that purpose.
+  const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
+  const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
+  const versionDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  // Tombstone payloads carry only id+deleted+deletedAt+updatedAt — fields
+  // that exist at EVERY schema version and cannot corrupt local state. Gating
+  // them on the schema-version comparator would strand federated deletes
+  // whenever any peer upgrades faster than another (sender writes
+  // blockedBySchema → edit-triggered pushes go into cooldown → delete never
+  // reaches receivers until both peers reconnect AND the receiver upgrades).
+  // Exempt tombstones from the gate so soft-deletes always converge.
+  if (versionDiff.ahead.length > 0 && record.deleted !== true) {
+    console.warn(
+      `⚠️ peerSync: rejecting push from ${sourceInstanceId} — ${formatVersionGap(versionDiff)} (sender PortOS ${senderPortosVersion || 'unknown'})`,
+    );
+    // Surface the receiver's PortOS version so the sender can show the user
+    // *which* version their peer is on (the label the user thinks of as "the
+    // peer's PortOS version"). Without this field the sender's UI would fall
+    // back to its own version, which is misleading.
+    const receiverPortosVersion = await getPortosVersion().catch(() => null);
+    throw makeErr(
+      `sender's schema is ahead — receiver cannot apply (${formatVersionGap(versionDiff)})`,
+      ERR_SCHEMA_VERSION_AHEAD,
+      {
+        ahead: versionDiff.ahead,
+        behind: versionDiff.behind,
+        senderPortosVersion,
+        receiverPortosVersion,
+        receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS,
+      },
+    );
   }
 
   // Look up the LOCAL record state BEFORE merging so we can detect the
@@ -956,6 +1250,8 @@ export async function applyIncomingPush(payload) {
     if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
       await mergeIssuesFromSync(issues);
     }
+  } else if (kind === 'mediaCollection') {
+    await mergeMediaCollectionsFromSync([record]);
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -1129,6 +1425,16 @@ async function classifyLocalRecord(recordKind, recordId) {
     if (!s) return 'missing';
     return s.ephemeral === true ? 'ephemeral' : 'syncable';
   }
+  if (recordKind === 'mediaCollection') {
+    // Collections have no `ephemeral` concept, so a found record is always
+    // 'syncable'. Without this branch, maybeCreateReverseSubscription's
+    // `localState !== 'syncable'` guard would never bootstrap bidirectional
+    // collection sync from an inbound push. No ping-pong risk — the
+    // lastPushedHash short-circuit + LWW same-`updatedAt` no-op merge prevent
+    // it, same as universe/series.
+    const c = await getCollection(recordId, { includeDeleted: true }).catch(() => null);
+    return c ? 'syncable' : 'missing';
+  }
   return 'missing';
 }
 
@@ -1142,6 +1448,10 @@ const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
 
 const ASSET_PULL_TIMEOUT_MS = 60000;
 const ASSET_PULL_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap per asset
+// A record pull returns JSON (the record + its asset *manifest* of hashes, not
+// the bytes). Even a large series+issues record is metadata, so 16MB is a
+// generous ceiling that still caps a buggy/runaway peer's response.
+const RECORD_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
 
 // In-flight pull dedup. A peer can push multiple records that reference the
 // same asset in quick succession (universe edit → child collection re-link
@@ -1225,6 +1535,23 @@ async function pullOneAsset(peer, base, entry) {
 }
 
 async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) {
+  // Sidecar-only divergence: image bytes are already present and hash-match
+  // the sender's manifest (diffAssetManifestAgainstLocal still returned this
+  // entry because the local sidecar is absent or stale). Skip the image
+  // re-pull and go straight to the sidecar fetch — avoids re-downloading a
+  // potentially large PNG for a metadata-only update.
+  if (entry.kind === 'image' && isStr(entry.sha256)) {
+    const localFullPath = join(localDir, safeName);
+    if (existsSync(localFullPath)) {
+      const localHash = (await getOrComputeImageSha256(localFullPath))?.hash ?? null;
+      if (localHash === entry.sha256) {
+        // Image bytes already up-to-date — pull sidecar only.
+        await pullSidecarForImage(peer, base, safeName).catch(() => {});
+        return;
+      }
+    }
+  }
+
   const url = `${base}${urlPrefix}/${encodeURIComponent(safeName)}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
@@ -1292,6 +1619,12 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
     peerId: peer.instanceId,
   });
   console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+  // After a successful image pull, also fetch the gen-params sidecar if present
+  // on the sender. Best-effort: the image is already safely written above;
+  // a missing sidecar just means the image lands in Unsorted without a prompt.
+  if (entry.kind === 'image') {
+    await pullSidecarForImage(peer, base, safeName).catch(() => {});
+  }
 }
 
 // --- Listener install + debounced trigger -------------------------------
@@ -1346,8 +1679,14 @@ async function pushFromFreshSubscription(subId) {
  *   - For issue updates, the subscription on the parent series (resolved
  *     via `getIssueSeriesId` — see below).
  */
-async function collectSubscriptionsForUpdate(recordKind, recordId) {
-  if (recordKind === 'universe' || recordKind === 'series') {
+export async function collectSubscriptionsForUpdate(recordKind, recordId) {
+  // Direct-subscription kinds: a peer subscribes to the record itself, so an
+  // edit/delete fires a push to exactly those subs. mediaCollection belongs
+  // here (standalone collections sync per-record) — omitting it would make
+  // mediaCollections.js's emitRecordUpdated('mediaCollection', …) inert, so
+  // collection edits would only reach peers via initial subscribe / manual
+  // force-push, never on subsequent edits.
+  if (recordKind === 'universe' || recordKind === 'series' || recordKind === 'mediaCollection') {
     return listPeerSubscriptions({ recordKind, recordId });
   }
   if (recordKind === 'issue') {
@@ -1404,13 +1743,142 @@ export async function retryPendingPushesForPeer(peerId) {
   // "walked" the sub but never pushed it.
   let pushed = 0;
   for (const sub of subs) {
-    const result = await pushRecordToPeer(sub).catch((err) => {
+    // peer:online fired — re-probe schema-blocked subs immediately (peer
+    // may have upgraded since the last 409). Edit-triggered pushes still
+    // respect the cooldown.
+    const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
       console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
       return null;
     });
     if (result?.pushed) pushed += 1;
   }
   return { walked: subs.length, pushed };
+}
+
+/**
+ * Force a push for a specific (peer, kind, record) regardless of the
+ * unchanged-hash short-circuit. Resolves or creates the subscription first,
+ * then pushes with lastPushedHash nulled so pushRecordToPeer always fires a
+ * network call (idempotent LWW on the receiver).
+ *
+ * `subscribePeer` fires its own initial push on first insert; `forcePushRecord`
+ * then force-pushes again. The double-push is acceptable — the receiver's
+ * merge*FromSync paths are LWW and the second push is a no-op content-wise.
+ */
+export async function forcePushRecord(peerId, recordKind, recordId) {
+  const existing = await findPeerSubscription(peerId, recordKind, recordId);
+  const sub = existing || await subscribePeer({ peerId, recordKind, recordId });
+  // Null the lastPushedHash to bypass the unchanged short-circuit in pushRecordToPeer.
+  console.log(`🔄 peerSync: force-push ${recordKind}/${recordId} → ${peerId}`);
+  return pushRecordToPeer({ ...sub, lastPushedHash: null }, { bypassSchemaCooldown: true });
+}
+
+/**
+ * Build the push-payload for a single record WITHOUT a subscription — backs the
+ * peer-facing `GET /api/peer-sync/record` endpoint so a peer can PULL this
+ * record (and its assets) from us. Returns null when the record doesn't exist
+ * locally. Same shape `pushRecordToPeer` sends, so the puller reuses
+ * `applyIncomingPush` verbatim.
+ */
+export async function getRecordPayloadForPeer(recordKind, recordId) {
+  // Mirror pushRecordToPeer's identity guard: if our self-identity can't be read
+  // or isn't initialized yet, do NOT emit a payload — a missing/UNKNOWN
+  // sourceInstanceId would 500 here or poison the puller (applyIncomingPush
+  // rejects sourceInstanceId='unknown'). Return null → the route 404s.
+  const instanceId = await getInstanceId().catch(() => null);
+  if (!isNonEmptyStr(instanceId) || instanceId === UNKNOWN_INSTANCE_ID) return null;
+  return buildPushPayload({ recordKind, recordId }, instanceId);
+}
+
+/**
+ * Receiver-initiated PULL — the mirror of forcePushRecord. Fetch a record's
+ * push-payload from `peerId` and apply it locally (merging the record + its
+ * bundled collection and background-pulling missing asset bytes via
+ * applyIncomingPush). Lets a machine that is BEHIND on a record fix itself,
+ * instead of "Sync to peer" being the only (push-only) action — which can't
+ * help when the LOCAL side is the one missing data. Best-effort: returns
+ * `{ pulled, reason?, missingAssets? }`.
+ */
+export async function pullRecordFromPeer(peerId, recordKind, recordId) {
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find((p) => p.instanceId === peerId) || null;
+  if (!peer) return { pulled: false, reason: 'peer-not-found' };
+
+  const url = `${peerBaseUrl(peer)}/api/peer-sync/record?kind=${encodeURIComponent(recordKind)}&id=${encodeURIComponent(recordId)}`;
+  // Abort a hung peer after PUSH_TIMEOUT_MS — peerFetch has no built-in timeout,
+  // so without this a stalled peer would hang the pull (and the UI action)
+  // indefinitely. Mirrors the push path; an abort rejects → caught as null →
+  // 'peer-unreachable'.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
+  // maxBytes caps the HTTPS shim's in-memory buffering (see lib/httpClient.js);
+  // a buggy/misbehaving peer streaming an oversized body is aborted mid-stream
+  // rather than buffered whole. The shim rejects with an "exceed" Error.
+  let tooLarge = false;
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES })
+    .finally(() => clearTimeout(timeoutId))
+    .catch((err) => {
+      if (err?.message?.includes('exceed')) {
+        tooLarge = true; // HTTPS shim tripped the cap — same condition as the Content-Length check
+        console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} exceeded payload cap — ${err.message}`);
+      }
+      return null;
+    });
+  if (tooLarge) return { pulled: false, reason: 'payload-too-large' };
+  if (!res) return { pulled: false, reason: 'peer-unreachable' };
+  if (res.status === 404) return { pulled: false, reason: 'not-on-peer' };
+  if (!res.ok) return { pulled: false, reason: `http-${res.status}` };
+  // Plain-HTTP path: Node's fetch ignores maxBytes, but Express sets
+  // Content-Length on JSON — reject an oversized declared body before buffering.
+  const declaredLen = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLen) && declaredLen > RECORD_PAYLOAD_MAX_BYTES) {
+    console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} declared ${declaredLen} bytes > cap`);
+    return { pulled: false, reason: 'payload-too-large' };
+  }
+
+  const body = await res.json().catch(() => null);
+  // The peer response is untrusted — validate with the SAME schema the inbound
+  // /push route uses before handing it to applyIncomingPush.
+  const parsed = peerSyncPushSchema.safeParse(body);
+  if (!parsed.success) return { pulled: false, reason: 'invalid-payload' };
+  // The payload self-reports its origin via `sourceInstanceId`; applyIncomingPush
+  // uses it to wire the reverse subscription + pull asset bytes. We fetched from
+  // `peer`, so the origin MUST be that peer — a record claiming to originate
+  // elsewhere (misconfigured/buggy peer returning the wrong record) would bind
+  // our subscription/asset-pull to a peer we never contacted. Reject the mismatch.
+  if (parsed.data.sourceInstanceId !== peer.instanceId) {
+    return { pulled: false, reason: 'invalid-payload' };
+  }
+  // Likewise, the payload must be the record we asked for — a buggy peer that
+  // returns a different kind/id would otherwise merge unexpected data locally.
+  if (parsed.data.kind !== recordKind || parsed.data.record?.id !== recordId) {
+    return { pulled: false, reason: 'invalid-payload' };
+  }
+
+  console.log(`🔄 peerSync: pull-record ${recordKind}/${recordId} ← ${peer.name || peerId}`);
+  const result = await applyIncomingPush(parsed.data);
+  return { pulled: true, missingAssets: result?.missingAssets?.length ?? 0 };
+}
+
+/**
+ * Trigger an immediate full-sync for a single peer: backfill subscriptions for
+ * every enabled category and then retry all pending/stale pushes. Best-effort
+ * — per-kind failures are swallowed so one bad kind doesn't block the rest.
+ */
+export async function syncNowForPeer(peerId) {
+  const peer = await findPeerById(peerId);
+  if (!peer?.instanceId) return { ok: false };
+  for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+    if (peerHasCategory(peer, kind)) {
+      await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch((err) => {
+        console.log(`⚠️ peerSync: syncNow backfill ${kind} → ${peerId} failed: ${err.message}`);
+      });
+    }
+  }
+  await retryPendingPushesForPeer(peer.instanceId).catch((err) => {
+    console.log(`⚠️ peerSync: syncNow retry pushes → ${peerId} failed: ${err.message}`);
+  });
+  return { ok: true };
 }
 
 let onUpdated = null;
@@ -1506,5 +1974,18 @@ export function uninstallPeerSyncListener() {
  */
 export async function __resetForTests() {
   uninstallPeerSyncListener();
+  await writeTail.catch(() => {});
+}
+
+/**
+ * Test-only: await the in-flight write/push tail WITHOUT resetting state or
+ * detaching listeners, so a test can deterministically settle the fire-and-forget
+ * pushes a `subscribePeer` kicks off before asserting on the network mock. Awaits
+ * twice because a push's `persistPushSuccess` only enqueues on `writeTail` after
+ * its `peerFetch` resolves — i.e. a tick after the subscribe returned.
+ */
+export async function __drainForTests() {
+  await writeTail.catch(() => {});
+  await new Promise((r) => setTimeout(r, 0));
   await writeTail.catch(() => {});
 }

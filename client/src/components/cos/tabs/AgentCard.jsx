@@ -28,7 +28,7 @@ import MarkdownOutput from '../MarkdownOutput';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
-import { DEFAULT_REVIEWER } from '../constants';
+import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 // Extract task type from description (matches server-side extractTaskType)
@@ -606,13 +606,20 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 Simplify
               </span>
             )}
-            {agent.metadata.configReviewLoop && (
-              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-indigo-500/15 text-indigo-400"
-                    title={`Review loop enabled — agent will iterate on PR feedback (reviewer: ${agent.metadata.configReviewer || DEFAULT_REVIEWER})`}>
-                <RefreshCw size={10} aria-hidden="true" />
-                Review{agent.metadata.configReviewer && agent.metadata.configReviewer !== DEFAULT_REVIEWER ? `: ${agent.metadata.configReviewer}` : ''}
-              </span>
-            )}
+            {agent.metadata.configReviewLoop && (() => {
+              const reviewers = normalizeReviewers({
+                reviewers: agent.metadata.configReviewers,
+                reviewer: agent.metadata.configReviewer
+              });
+              const isDefault = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER;
+              return (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-indigo-500/15 text-indigo-400"
+                      title={`Review loop enabled — agent will iterate on PR feedback (reviewers: ${reviewers.join(' → ')})`}>
+                  <RefreshCw size={10} aria-hidden="true" />
+                  Review{isDefault ? '' : `: ${reviewers.join(', ')}`}
+                </span>
+              );
+            })()}
           </div>
         )}
 

@@ -8,12 +8,14 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
+import SyncBadge from '../components/sync/SyncBadge';
+import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import {
   listPipelineSeries,
   createPipelineSeries,
@@ -39,9 +41,12 @@ const emptyForm = () => ({
 });
 
 export default function Pipeline() {
+  const navigate = useNavigate();
   const [series, setSeries] = useState([]);
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const sync = useSyncIntegrity('series');
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -354,6 +359,10 @@ export default function Pipeline() {
                   </div>
                 ) : null}
               </Link>
+              <SyncBadge
+                status={syncBadgeStatus(sync, s.id)}
+                onClick={() => navigate(`/pipeline/series/${encodeURIComponent(s.id)}/sync`)}
+              />
               <ShareToButton kind="series" ids={[s.id]} compact />
               <SyncToPeerButton recordKind="series" recordId={s.id} compact />
               <button

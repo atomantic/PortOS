@@ -16,8 +16,8 @@ import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable } from './
 import { ensureDir, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
 
 // ─── Shared state (imported from agentState.js) ──────────────────────────────
-export { activeAgents, runnerAgents, userTerminatedAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta } from './agentState.js';
-import { activeAgents, runnerAgents, setUseRunner } from './agentState.js';
+export { activeAgents, runnerAgents, userTerminatedAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta, getActiveAgentIds } from './agentState.js';
+import { runnerAgents, setUseRunner } from './agentState.js';
 
 // ─── Sub-module re-exports ────────────────────────────────────────────────────
 export { selectModelForTask } from './agentModelSelection.js';
@@ -40,16 +40,6 @@ export async function loadSlashdoCommand(commandName) {
   const content = await loadSlashdoFile(commandName);
   if (content) console.log(`📋 Loaded slashdo command: do:${commandName}`);
   return content;
-}
-
-/**
- * Get list of active agent IDs (for zombie detection).
- * Includes both direct mode and runner mode agents.
- */
-export function getActiveAgentIds() {
-  const directIds = Array.from(activeAgents.keys());
-  const runnerIds = Array.from(runnerAgents.keys());
-  return [...directIds, ...runnerIds];
 }
 
 /**

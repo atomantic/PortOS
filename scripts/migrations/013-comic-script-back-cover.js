@@ -31,7 +31,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'comic-script back-cover',
   customizedHint: (filename) =>
     `   To add the Back cover concept section manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and merge the new \`## Back cover concept\` block.`,

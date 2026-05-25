@@ -1,0 +1,685 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes } from 'lucide-react';
+import toast from '../ui/Toast';
+import BrailleSpinner from '../BrailleSpinner';
+import { formatBytes, timeAgo } from '../../utils/formatters';
+import {
+  getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
+  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, controlOllamaService
+} from '../../services/api';
+import socket from '../../services/socket';
+
+const BACKENDS = [
+  { id: 'ollama', label: 'Ollama', icon: Cpu },
+  { id: 'lmstudio', label: 'LM Studio', icon: Box }
+];
+const labelFor = (id) => BACKENDS.find((b) => b.id === id)?.label || id;
+
+const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
+
+const CATEGORY_LABELS = {
+  chat: 'Chat',
+  reasoning: 'Reasoning',
+  coding: 'Coding',
+  vision: 'Image Analysis',
+  embedding: 'Text Embeddings',
+  lightweight: 'Small & Fast',
+  multilingual: 'Multilingual'
+};
+const CATEGORY_ORDER = ['reasoning', 'coding', 'vision', 'embedding', 'chat', 'lightweight', 'multilingual'];
+const categoryLabel = (id) => CATEGORY_LABELS[id] || id;
+
+// Render model capabilities as colored icons (LM Studio style) instead of text.
+// `cls` is the icon color; the bordered chip uses the same hue at low opacity.
+const CAPABILITY_META = {
+  chat: { Icon: MessageSquare, label: 'Chat', cls: 'text-gray-400 border-gray-500/50' },
+  code: { Icon: Code2, label: 'Code', cls: 'text-sky-400 border-sky-400/50' },
+  reasoning: { Icon: Brain, label: 'Reasoning', cls: 'text-emerald-400 border-emerald-400/50' },
+  vision: { Icon: Eye, label: 'Vision', cls: 'text-amber-400 border-amber-400/50' },
+  embeddings: { Icon: Boxes, label: 'Embeddings', cls: 'text-violet-400 border-violet-400/50' },
+  tools: { Icon: Wrench, label: 'Tool use', cls: 'text-blue-400 border-blue-400/50' },
+};
+
+// Parse a human size string ("4.7 GB", "512 MB") back to GB for the RAM hint.
+function parseSizeGb(sizeStr) {
+  const match = /([\d.]+)\s*(TB|GB|MB|KB)/i.exec(String(sizeStr || ''));
+  if (!match) return null;
+  const val = parseFloat(match[1]);
+  if (!Number.isFinite(val)) return null;
+  return val * ({ TB: 1024, GB: 1, MB: 1 / 1024, KB: 1 / (1024 * 1024) }[match[2].toUpperCase()]);
+}
+
+// Rough RAM/VRAM to run a model: weights + ~20% overhead (KV cache/runtime),
+// rounded up to whole GB with a 1 GB floor. Prefers exact bytes when known.
+function recommendedRamGb(m) {
+  const gb = Number.isFinite(m?.sizeBytes) ? m.sizeBytes / 1024 ** 3 : parseSizeGb(m?.size);
+  if (!gb || gb <= 0) return null;
+  return Math.max(1, Math.ceil(gb * 1.2));
+}
+
+// Summarize a migrate result for the success toast (per-model statuses → counts).
+function summarizeMigrate(r) {
+  const c = { linked: 0, copied: 0, installed: 0, started: 0, failed: 0, skipped: 0 };
+  for (const x of r?.results || []) {
+    if (x.status === 'imported') c[x.linked ? 'linked' : 'copied']++;
+    else if (c[x.status] != null) c[x.status]++;
+  }
+  const parts = [
+    c.linked && `${c.linked} linked`,
+    c.copied && `${c.copied} copied`,
+    c.installed && `${c.installed} downloaded`,
+    c.started && `${c.started} downloading`,
+    c.failed && `${c.failed} failed`,
+    c.skipped && `${c.skipped} skipped`
+  ].filter(Boolean);
+  return `${labelFor(r.from)} → ${labelFor(r.to)}: ${parts.join(', ') || 'nothing to move'}`;
+}
+
+function BackendCard({ backend, status, isDefault, busy, actionInProgress, runAction, setConfirmAction }) {
+  const data = status?.[backend.id];
+  const Icon = backend.icon;
+  const other = backend.id === 'ollama' ? 'lmstudio' : 'ollama';
+  const otherData = status?.[other];
+  const statusLabel = data?.available ? 'Running' : data?.installed ? 'Installed (stopped)' : 'Not installed';
+  const statusColor = data?.available ? 'bg-port-success' : data?.installed ? 'bg-port-warning' : 'bg-gray-600';
+  const startupService = backend.id === 'ollama' ? data?.service : null;
+  const runsAtStartup = Boolean(startupService?.runAtStartup);
+
+  return (
+    <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm text-gray-400">
+          <Icon size={14} />
+          {backend.label}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {isDefault && (
+            <span
+              className="text-xs px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded"
+              title="PortOS routes local-LLM runs here by default. This is independent of whether the server is running (see the status dot)."
+            >
+              Default
+            </span>
+          )}
+          <span className={`w-2 h-2 rounded-full ${statusColor}`} title={statusLabel} />
+        </div>
+      </div>
+
+      <div className="text-sm text-white">{statusLabel}</div>
+      <div className="text-xs text-gray-400">
+        {data?.modelCount ?? 0} model{(data?.modelCount ?? 0) === 1 ? '' : 's'} installed
+        {data?.version && <> · v{data.version}</>}
+        {startupService?.supported && <> · {runsAtStartup ? 'runs at login' : 'startup off'}</>}
+      </div>
+
+      {!data?.installed && (
+        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-port-border/50">
+          {data?.canAutoInstall ? (
+            <button
+              onClick={() => runAction(
+                `install-backend-${backend.id}`,
+                () => installLocalLlmBackend(backend.id),
+                (r) => r?.note ? `Installed ${backend.label} — ${r.note}` : `Installed ${backend.label}`
+              )}
+              disabled={busy}
+              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
+              title="Install via Homebrew (macOS) / official installer (Linux)"
+            >
+              {actionInProgress === `install-backend-${backend.id}` ? <BrailleSpinner /> : <Download size={12} />}
+              Install {backend.label}
+            </button>
+          ) : (
+            <a
+              href={data?.downloadUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white no-underline`}
+            >
+              <ExternalLink size={12} />
+              Get {backend.label}
+            </a>
+          )}
+        </div>
+      )}
+
+      {data?.installed && (
+        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-port-border/50">
+          {backend.id === 'ollama' && data?.canControl && (
+            <button
+              onClick={() => runAction(
+                `ollama-service-${data.available ? 'stop' : 'start'}`,
+                () => controlOllamaService(data.available ? 'stop' : 'start'),
+                data.available ? 'Ollama stopped' : 'Ollama is running'
+              )}
+              disabled={busy}
+              className={`${btnClass} ${data.available ? 'bg-port-warning/20 hover:bg-port-warning/30 text-port-warning' : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'}`}
+              title={data.available ? 'Stop the local Ollama server' : 'Start the local Ollama server'}
+            >
+              {actionInProgress === `ollama-service-${data.available ? 'stop' : 'start'}`
+                ? <BrailleSpinner />
+                : data.available ? <Square size={12} /> : <Play size={12} />}
+              {data.available ? 'Stop' : 'Start'} Ollama
+            </button>
+          )}
+          {backend.id === 'ollama' && startupService?.supported && (
+            <button
+              onClick={() => runAction(
+                `ollama-service-${runsAtStartup ? 'disable' : 'enable'}`,
+                () => controlOllamaService(runsAtStartup ? 'disable' : 'enable'),
+                runsAtStartup ? 'Ollama background service disabled' : 'Ollama will run at login'
+              )}
+              disabled={busy}
+              className={`${btnClass} ${runsAtStartup ? 'bg-port-warning/20 hover:bg-port-warning/30 text-port-warning' : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'}`}
+              title={runsAtStartup ? 'Stop the Homebrew service and remove the launch-at-login registration' : 'Start Ollama with Homebrew services so it runs in the background at login'}
+            >
+              {actionInProgress === `ollama-service-${runsAtStartup ? 'disable' : 'enable'}`
+                ? <BrailleSpinner />
+                : runsAtStartup ? <PowerOff size={12} /> : <Power size={12} />}
+              {runsAtStartup ? 'Disable Startup' : 'Run at Startup'}
+            </button>
+          )}
+          {!isDefault && (
+            <button
+              onClick={() => runAction(`switch-${backend.id}`, () => switchLocalLlmBackend(backend.id), `${backend.label} is now the default backend`)}
+              disabled={busy}
+              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
+              title="Route PortOS local-LLM runs here by default — doesn't move any models or stop the other backend"
+            >
+              {actionInProgress === `switch-${backend.id}` ? <BrailleSpinner /> : <Star size={12} />}
+              Set as Default
+            </button>
+          )}
+          {otherData?.available && (
+            <button
+              onClick={() => setConfirmAction({
+                type: 'migrate',
+                to: backend.id,
+                from: other,
+                label: `Bring ${labelFor(other)}'s models onto ${backend.label}?`,
+                detail: `Provisions the ${otherData.modelCount ?? 0} model${(otherData.modelCount ?? 0) === 1 ? '' : 's'} on ${labelFor(other)} onto ${backend.label} — your default backend is unchanged. Link shares each GGUF on disk (no extra space, falls back to a copy across filesystems); Copy makes an independent duplicate. Portable single-file GGUF models move with no re-download; MLX-format, sharded, or multimodal models that can't be shared/copied are re-pulled.`
+              })}
+              disabled={busy}
+              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
+              title={`Copy or link the models installed on ${labelFor(other)} onto ${backend.label}`}
+            >
+              <ArrowRightLeft size={12} />
+              Import from {labelFor(other)}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function LocalLlmTab() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState('ollama');
+  const [catalogSource, setCatalogSource] = useState('recommended');
+  const [catalog, setCatalog] = useState([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const [activeCategory, setActiveCategory] = useState('all');
+  const [query, setQuery] = useState('');
+  const [manualId, setManualId] = useState('');
+  const [actionInProgress, setActionInProgress] = useState(null);
+  const [progressMsg, setProgressMsg] = useState('');
+  const [confirmAction, setConfirmAction] = useState(null);
+  // id of the installed model awaiting a delete confirmation (two-step inline
+  // confirm — deleting weights is an irreversible multi-GB rm -rf / DELETE).
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const progressTimer = useRef(null);
+  const statusRequestId = useRef(0);
+  const catalogRequestId = useRef(0);
+  const selectedInitialized = useRef(false);
+
+  const loadStatus = useCallback(() => {
+    const requestId = ++statusRequestId.current;
+    setLoading(true);
+    return getLocalLlmStatus()
+      .then((s) => {
+        if (requestId !== statusRequestId.current) return;
+        setStatus(s);
+        // Default the model-management view to the active backend on first load.
+        if (!selectedInitialized.current && s?.backend) {
+          setSelected(s.backend);
+          selectedInitialized.current = true;
+        }
+      })
+      .catch(() => {
+        if (requestId === statusRequestId.current) toast.error('Failed to load local LLM status');
+      })
+      .finally(() => {
+        if (requestId === statusRequestId.current) setLoading(false);
+      });
+  }, []);
+
+  const loadCatalog = useCallback((backend, q, source = catalogSource, category = activeCategory) => {
+    const requestId = ++catalogRequestId.current;
+    setCatalogLoading(true);
+    setCatalogError('');
+    const request = source === 'huggingface'
+      ? getLocalLlmHuggingFaceSearch(backend, q, category, 18)
+      : getLocalLlmCatalog(backend, q);
+    return request
+      .then((r) => {
+        if (requestId !== catalogRequestId.current) return;
+        setCatalog(r.models || []);
+      })
+      .catch((err) => {
+        if (requestId !== catalogRequestId.current) return;
+        setCatalog([]);
+        setCatalogError(source === 'huggingface' ? (err?.message || 'Hugging Face search failed') : '');
+      })
+      .finally(() => {
+        if (requestId === catalogRequestId.current) setCatalogLoading(false);
+      });
+  }, [activeCategory, catalogSource]);
+
+  useEffect(() => { loadStatus(); }, [loadStatus]);
+  // Debounce so typing in the search box doesn't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => loadCatalog(selected, query, catalogSource, activeCategory), catalogSource === 'huggingface' ? 450 : 250);
+    return () => clearTimeout(t);
+  }, [selected, query, catalogSource, activeCategory, loadCatalog]);
+
+  useEffect(() => {
+    const handleProgress = (data) => {
+      clearTimeout(progressTimer.current);
+      setProgressMsg(data.message || '');
+      if (data.event === 'complete') {
+        progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
+        loadStatus();
+        loadCatalog(selected, query, catalogSource, activeCategory);
+      }
+      if (data.event === 'error') {
+        progressTimer.current = setTimeout(() => setProgressMsg(''), 5000);
+      }
+    };
+    socket.on('localLlm:progress', handleProgress);
+    return () => {
+      socket.off('localLlm:progress', handleProgress);
+      clearTimeout(progressTimer.current);
+    };
+  }, [loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
+
+  const runAction = useCallback((key, fn, successMsg) => {
+    setConfirmAction(null);
+    setActionInProgress(key);
+    return fn()
+      .then((result) => {
+        if (successMsg) toast.success(typeof successMsg === 'function' ? successMsg(result) : successMsg);
+        if (typeof result?.running === 'boolean') {
+          setStatus((prev) => prev ? ({
+            ...prev,
+            ollama: {
+              ...prev.ollama,
+              installed: true,
+              available: result.running
+            }
+          }) : prev);
+        }
+        loadStatus();
+        loadCatalog(selected, query, catalogSource, activeCategory);
+      })
+      .catch(() => { /* request() surfaces API errors as a toast */ })
+      .finally(() => setActionInProgress(null));
+  }, [loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
+
+  const busy = actionInProgress != null;
+  const selectedData = status?.[selected];
+  const selectedOllamaStartupAction = selectedData?.service?.supported ? 'enable' : 'start';
+  const selectedOllamaStartupLabel = selectedData?.service?.supported ? 'Run at Startup' : 'Start Ollama';
+  const installedModels = selectedData?.models || [];
+  const catalogCategories = useMemo(() => {
+    const counts = new Map();
+    for (const model of catalog) counts.set(model.category || 'chat', (counts.get(model.category || 'chat') || 0) + 1);
+    return CATEGORY_ORDER
+      .filter((id) => counts.has(id))
+      .map((id) => ({ id, label: categoryLabel(id), count: counts.get(id) }));
+  }, [catalog]);
+  const visibleCatalogGroups = useMemo(() => {
+    const filterCategory = catalogSource === 'huggingface' ? 'all' : activeCategory;
+    const categoryIds = filterCategory === 'all'
+      ? catalogCategories.map((c) => c.id)
+      : [filterCategory];
+    return categoryIds
+      .map((category) => ({
+        category,
+        label: categoryLabel(category),
+        models: catalog.filter((model) => (model.category || 'chat') === category)
+      }))
+      .filter((group) => group.models.length > 0);
+  }, [activeCategory, catalog, catalogCategories, catalogSource]);
+
+  // LM Studio's REST fallback returns { pending: true } — the download was only
+  // queued, not finished — so don't claim "installed" in that case.
+  const install = (modelId) => runAction(`install-${modelId}`, () => installLocalLlmModel(selected, modelId),
+    (r) => r?.pending ? `${modelId} download started` : `${modelId} installed`);
+  const remove = (modelId) => runAction(`delete-${modelId}`, () => deleteLocalLlmModel(selected, modelId), `${modelId} deleted`);
+
+  return (
+    <div className="space-y-4">
+      {/* Backends — status + switch/migrate */}
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-gray-300">Local LLM Backends</h2>
+          <button onClick={loadStatus} disabled={loading} className="p-1.5 text-gray-400 hover:text-white transition-colors" title="Refresh" aria-label="Refresh local LLM status">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Both backends can be installed and running at the same time — <span className="text-gray-400">Default</span> just sets which one PortOS routes local-LLM runs to. Use <span className="text-gray-400">Import from…</span> to copy or link models between them without re-downloading.
+        </p>
+
+        {loading && !status ? (
+          <BrailleSpinner text="Loading local LLM status" />
+        ) : status ? (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {BACKENDS.map((b) => (
+                <BackendCard
+                  key={b.id} backend={b} status={status} isDefault={status.backend === b.id}
+                  busy={busy} actionInProgress={actionInProgress}
+                  runAction={runAction} setConfirmAction={setConfirmAction}
+                />
+              ))}
+            </div>
+
+            {progressMsg && (
+              <div className="flex items-center gap-2 text-sm text-port-accent bg-port-accent/10 border border-port-accent/20 rounded-lg px-3 py-2">
+                <BrailleSpinner />
+                {progressMsg}
+              </div>
+            )}
+
+            {confirmAction && (
+              <div className="bg-port-bg border border-port-warning/30 rounded-lg p-4 space-y-3">
+                <p className="text-sm text-white">{confirmAction.label}</p>
+                {confirmAction.detail && <p className="text-xs text-gray-400">{confirmAction.detail}</p>}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => runAction(`migrate-${confirmAction.to}-link`, () => migrateLocalLlmBackend(confirmAction.to, 'link'), summarizeMigrate)}
+                    disabled={busy}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent"
+                    title="Hardlink each GGUF so both backends share one file on disk (no extra space; falls back to a copy across filesystems)"
+                  >
+                    {actionInProgress === `migrate-${confirmAction.to}-link` ? <BrailleSpinner /> : <Link2 size={14} />}
+                    Link (share disk)
+                  </button>
+                  <button
+                    onClick={() => runAction(`migrate-${confirmAction.to}-copy`, () => migrateLocalLlmBackend(confirmAction.to, 'copy'), summarizeMigrate)}
+                    disabled={busy}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-border hover:bg-port-border/70 text-white"
+                    title="Make an independent duplicate on the target (uses extra disk; survives deleting the source backend's copy)"
+                  >
+                    {actionInProgress === `migrate-${confirmAction.to}-copy` ? <BrailleSpinner /> : <Copy size={14} />}
+                    Copy (independent)
+                  </button>
+                  <button onClick={() => setConfirmAction(null)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-500">Unable to load local LLM status</p>
+        )}
+      </div>
+
+      {/* Models — backend picker + catalog/install + installed list */}
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-sm font-medium text-gray-300">Models</h2>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <div className="flex items-center gap-1.5">
+              {['recommended', 'huggingface'].map((source) => (
+                <button
+                  key={source}
+                  onClick={() => { setCatalogSource(source); setActiveCategory('all'); }}
+                  className={`px-2.5 py-1 text-xs rounded transition-colors ${catalogSource === source ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                >
+                  {source === 'recommended' ? 'Recommended' : 'Hugging Face'}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
+              {BACKENDS.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => { setSelected(b.id); setActiveCategory('all'); }}
+                  className={`px-2.5 py-1 text-xs rounded transition-colors ${selected === b.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {selectedData && !selectedData.available && (
+          <div className="flex items-center gap-2 flex-wrap text-xs text-port-warning">
+            <span>
+              {labelFor(selected)} isn't running — {selectedData.installed
+                ? (selected === 'ollama' ? 'use the controls to start it or keep it running at login.' : 'launch the app and enable the local server.')
+                : 'install it first (Settings → Local LLMs prompts at setup, or run `npm run setup:llm`).'}
+            </span>
+            {selected === 'ollama' && selectedData.installed && selectedData.canControl && (
+              <button
+                onClick={() => runAction(
+                  `ollama-service-${selectedOllamaStartupAction}-models`,
+                  () => controlOllamaService(selectedOllamaStartupAction),
+                  selectedOllamaStartupAction === 'enable' ? 'Ollama will run at login' : 'Ollama is running'
+                )}
+                disabled={busy}
+                className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
+              >
+                {actionInProgress === `ollama-service-${selectedOllamaStartupAction}-models` ? <BrailleSpinner /> : <Play size={12} />}
+                {selectedOllamaStartupLabel}
+              </button>
+            )}
+          </div>
+        )}
+        {selectedData?.available && selectedData?.modelsError && (
+          <p className="text-xs text-port-warning">
+            Couldn't list {labelFor(selected)} models (showing what's available): {selectedData.modelsError}
+          </p>
+        )}
+
+        {/* Free-text install + search */}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex-1 flex items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3">
+            <Search size={14} className="text-gray-500" />
+            <label htmlFor="llm-catalog-search" className="sr-only">{`Search the ${labelFor(selected)} model catalog`}</label>
+            <input
+              id="llm-catalog-search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={catalogSource === 'huggingface' ? 'Search Hugging Face GGUF models…' : `Search the ${labelFor(selected)} catalog…`}
+              className="flex-1 bg-transparent py-2 text-sm text-white placeholder-gray-600 focus:outline-none"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <label htmlFor="llm-manual-install" className="sr-only">{`Install a ${labelFor(selected)} model by id`}</label>
+            <input
+              id="llm-manual-install"
+              value={manualId}
+              onChange={(e) => setManualId(e.target.value)}
+              placeholder={selected === 'ollama' ? 'pull by name e.g. llama3.2' : 'publisher/Model-GGUF'}
+              className="flex-1 sm:w-56 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-port-accent"
+            />
+            <button
+              onClick={() => { const id = manualId.trim(); if (id) { install(id); setManualId(''); } }}
+              disabled={busy || !manualId.trim()}
+              className="flex items-center gap-1.5 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-sm font-medium rounded-lg disabled:opacity-50"
+            >
+              <Plus size={14} /> Install
+            </button>
+          </div>
+        </div>
+
+        {catalogCategories.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              onClick={() => setActiveCategory('all')}
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${activeCategory === 'all' ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+            >
+              All ({catalog.length})
+            </button>
+            {catalogCategories.map((category) => (
+              <button
+                key={category.id}
+                onClick={() => setActiveCategory(category.id)}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${activeCategory === category.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+              >
+                {category.label} ({category.count})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {catalogLoading && (
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <BrailleSpinner />
+            {catalogSource === 'huggingface' ? 'Searching Hugging Face' : 'Loading recommendations'}
+          </div>
+        )}
+        {catalogError && (
+          <p className="text-xs text-port-warning">{catalogError}</p>
+        )}
+
+        {/* Catalog cards */}
+        <div className="space-y-4">
+          {visibleCatalogGroups.map((group) => (
+            <div key={group.category} className="space-y-2">
+              {activeCategory === 'all' && (
+                <h3 className="text-xs font-medium text-gray-400">{group.label}</h3>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {group.models.map((m) => {
+                  const ram = recommendedRamGb(m);
+                  const isHf = m.source === 'huggingface';
+                  const createdMs = new Date(m.createdAt).getTime();
+                  const updatedMs = new Date(m.updatedAt).getTime();
+                  return (
+                  <div key={m.id} className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white truncate">{m.name} <span className="text-xs text-gray-500">· {m.params}</span></div>
+                      <div className="text-xs text-gray-500 truncate">{m.id}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{m.description}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-gray-600 mt-1">
+                        <span className="text-gray-500">{categoryLabel(m.category)}</span>
+                        <span>{m.size}</span>
+                        {ram && (
+                          <span title="Approx RAM/VRAM to run this model — weights + ~20% overhead">
+                            ~{ram} GB RAM
+                          </span>
+                        )}
+                        {isHf && <span>{m.downloads?.toLocaleString?.() || 0} downloads</span>}
+                        {isHf && Number.isFinite(createdMs) && (
+                          <span
+                            title={`Published ${new Date(createdMs).toLocaleDateString()}${Number.isFinite(updatedMs) ? ` · updated ${timeAgo(m.updatedAt)}` : ''}`}
+                          >
+                            published {timeAgo(m.createdAt)}
+                          </span>
+                        )}
+                        {isHf && m.license && <span>{m.license}</span>}
+                        {(m.capabilities || []).map((capability) => {
+                          const meta = CAPABILITY_META[capability];
+                          if (!meta) {
+                            return <span key={capability} className="px-1.5 py-0.5 bg-port-border/60 rounded">{capability}</span>;
+                          }
+                          const Icon = meta.Icon;
+                          return (
+                            <span
+                              key={capability}
+                              title={meta.label}
+                              aria-label={meta.label}
+                              className={`inline-flex items-center justify-center w-5 h-5 rounded border ${meta.cls}`}
+                            >
+                              <Icon size={12} />
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {m.installed ? (
+                      <span className="text-xs px-2 py-1 text-port-success shrink-0">Installed</span>
+                    ) : (
+                      <button
+                        onClick={() => install(m.id)}
+                        disabled={busy}
+                        className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 flex items-center gap-1 shrink-0"
+                      >
+                        {actionInProgress === `install-${m.id}` ? <BrailleSpinner /> : <Download size={12} />}
+                        Install
+                      </button>
+                    )}
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {catalog.length === 0 && (
+            <p className="text-xs text-gray-500">No catalog matches{query ? ` for "${query}"` : ''}.</p>
+          )}
+          {catalog.length > 0 && visibleCatalogGroups.length === 0 && (
+            <p className="text-xs text-gray-500">No {categoryLabel(activeCategory)} matches{query ? ` for "${query}"` : ''}.</p>
+          )}
+        </div>
+
+        {/* Installed models */}
+        <div className="space-y-2 pt-2 border-t border-port-border/50">
+          <h3 className="text-xs font-medium text-gray-400">Installed on {labelFor(selected)} ({installedModels.length})</h3>
+          {installedModels.length === 0 ? (
+            <p className="text-xs text-gray-500">No models installed yet.</p>
+          ) : installedModels.map((m) => (
+            <div key={m.id} className="flex items-center gap-3 bg-port-bg border border-port-border rounded-lg p-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-white truncate">{m.name}</div>
+                <div className="text-xs text-gray-500 truncate">
+                  {[m.params, m.quantization, m.family].filter(Boolean).join(' · ')}
+                </div>
+              </div>
+              {m.size != null && <span className="text-xs text-gray-400 shrink-0">{formatBytes(m.size)}</span>}
+              {confirmDeleteId === m.id ? (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs text-port-error">Delete?</span>
+                  <button
+                    onClick={() => { setConfirmDeleteId(null); remove(m.id); }}
+                    disabled={busy}
+                    className="px-2 py-1 text-xs bg-port-error/30 hover:bg-port-error/50 text-port-error rounded disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <Trash2 size={12} />
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(m.id)}
+                  disabled={busy}
+                  className="px-2.5 py-1 text-xs bg-port-error/20 hover:bg-port-error/40 text-port-error rounded disabled:opacity-50 flex items-center gap-1 shrink-0"
+                  aria-label={`Delete ${m.name}`}
+                >
+                  {actionInProgress === `delete-${m.id}` ? <BrailleSpinner /> : <Trash2 size={12} />}
+                  Delete
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default LocalLlmTab;

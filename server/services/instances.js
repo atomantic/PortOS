@@ -257,6 +257,19 @@ export async function updatePeer(id, updates) {
         console.log(`🌐 Peer host ${peer.host ? `set to ${peer.host}` : 'cleared'}: ${peer.name}`);
       }
     }
+    // Per-(peer, category) schema-version gaps, populated by syncOrchestrator
+    // when a remote snapshot is rejected because the sender's schemaVersions
+    // are ahead of local. Stored on the peer record so the Instances UI's
+    // SchemaGapBadge can read it via the standard peers payload. Accept
+    // either a plain object (set/replace the map) or null (clear all gaps).
+    // Any other value is silently ignored.
+    if (updates.schemaGaps !== undefined) {
+      if (updates.schemaGaps === null) {
+        delete peer.schemaGaps;
+      } else if (updates.schemaGaps && typeof updates.schemaGaps === 'object' && !Array.isArray(updates.schemaGaps)) {
+        peer.schemaGaps = updates.schemaGaps;
+      }
+    }
     instanceEvents.emit('peers:updated', data.peers);
     return peer;
   });

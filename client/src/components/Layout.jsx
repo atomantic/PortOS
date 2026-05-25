@@ -200,7 +200,7 @@ const navItems = [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
-      { to: '/universe-builder', label: 'Universe', icon: Globe },
+      { to: '/universes', label: 'Universes', icon: Globe },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
   },
@@ -284,6 +284,7 @@ const navItems = [
       { to: '/settings/backup', label: 'Backup', icon: Download },
       { to: '/settings/database', label: 'Database', icon: Database },
       { to: '/settings/general', label: 'General', icon: Settings },
+      { to: '/settings/local-llm', label: 'Local LLMs', icon: Cpu },
       { to: '/settings/mortalloom', label: 'MortalLoom', icon: Activity },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot },
@@ -297,6 +298,7 @@ const navItems = [
     icon: HardDrive,
     defaultTo: '/data',
     children: [
+      { to: '/capabilities', label: 'Capabilities', icon: Compass },
       { to: '/data', label: 'Data', icon: HardDrive },
       { to: '/instances', label: 'Instances', icon: Network },
       { to: '/loops', label: 'Loops', icon: RefreshCw },
@@ -970,6 +972,7 @@ export default function Layout() {
         {/* Main content */}
         {(() => {
           const isFullWidth = location.pathname === '/character' ||
+            location.pathname === '/ai' ||
             location.pathname === '/ask' ||
             location.pathname.startsWith('/ask/') ||
             location.pathname.startsWith('/calendar') ||
@@ -985,10 +988,15 @@ export default function Layout() {
             location.pathname.startsWith('/pipeline/issues/') ||
             location.pathname.startsWith('/pipeline/series/') ||
             location.pathname.startsWith('/post') ||
+            location.pathname === '/prompts' ||
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
             location.pathname.startsWith('/wiki') ||
-            location.pathname.startsWith('/universe-builder') ||
+            // Only the universe EDITOR (/universes/:id, /universes/new) is
+            // full-width — it manages its own scroll. The /universes index
+            // (list/table) takes the normal padded+scrolling main, mirroring
+            // the Series Pipeline index (/pipeline is not full-width either).
+            location.pathname.startsWith('/universes/') ||
             location.pathname.startsWith('/writers-room') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||

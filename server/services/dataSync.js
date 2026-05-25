@@ -7,13 +7,19 @@
  */
 
 import crypto from 'crypto';
-import { stat } from 'fs/promises';
+import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
+import {
+  PORTOS_SCHEMA_VERSIONS,
+  buildPortosMeta,
+  compareSchemaVersions,
+  formatVersionGap,
+} from '../lib/schemaVersions.js';
 import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
-import { mergeIssuesFromSync } from './pipeline/issues.js';
+import { mergeIssuesFromSync, listIssues } from './pipeline/issues.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
@@ -26,9 +32,14 @@ const CHRONOTYPE_FILE = join(PATHS.digitalTwin, 'chronotype.json');
 const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
 const FEEDBACK_FILE = join(PATHS.digitalTwin, 'feedback.json');
 const MEATSPACE_DIR = PATHS.meatspace;
-const PIPELINE_SERIES_FILE = join(PATHS.data, 'pipeline-series.json');
-const PIPELINE_ISSUES_FILE = join(PATHS.data, 'pipeline-issues.json');
-const UNIVERSE_BUILDER_FILE = join(PATHS.data, 'universe-builder.json');
+const PIPELINE_SERIES_DIR = join(PATHS.data, 'pipeline-series');
+const PIPELINE_ISSUES_DIR = join(PATHS.data, 'pipeline-issues');
+// Universes used to live in a single `universe-builder.json`; migration 034
+// splits them into `data/universes/<id>/index.json` with a type-level
+// `data/universes/index.json`. Sync uses the directory for both reading
+// (listUniverses, below) and for fingerprint-based checksum caching — the
+// fingerprint walker descends into the dir so per-record edits invalidate.
+const UNIVERSE_BUILDER_DIR = join(PATHS.data, 'universes');
 const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
 
 const MEATSPACE_FILES = {
@@ -349,11 +360,11 @@ async function applyMeatspaceRemote(remoteData) {
 // --- Category: Universe ---
 
 async function getUniverseSnapshot() {
-  const raw = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
-  // Wire-projection lives in `server/lib/syncWire.js` so the new per-record
-  // peer-sync push agrees on what to strip (currently: top-level `runs[]`,
-  // which is local LLM run history per peer).
-  const { data } = sanitizeStateForWire('universe', raw);
+  // listUniverses() loads via the collection store — every per-record JSON
+  // under `data/universes/<id>/index.json` plus the sanitizer pass. Same
+  // input shape sanitizeStateForWire expects (it reads `state.universes`).
+  const universes = await listUniverses({ includeDeleted: true });
+  const { data } = sanitizeStateForWire('universe', { universes });
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -375,26 +386,22 @@ async function applyUniverseRemote(remoteData) {
 // --- Category: Pipeline ---
 
 async function getPipelineSnapshot() {
-  const [seriesFile, issuesFile] = await Promise.all([
-    readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
-    readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
+  const [series, issues] = await Promise.all([
+    listSeries({ includeDeleted: true }),
+    listIssues({ includeDeleted: true }),
   ]);
   // Wire-projection lives in `server/lib/syncWire.js` — see getUniverseSnapshot.
   const { data } = sanitizeStateForWire('pipeline', {
-    series: seriesFile.series,
-    issues: issuesFile.issues,
+    series,
+    issues,
   });
   return { data, checksum: computeChecksum(data) };
 }
 
 async function applyPipelineRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
-  // Routes through the per-file merge entry points so each side's
-  // read-modify-write runs INSIDE its own file-level write queue
-  // (`queueSeriesWrite` / `queueIssueWrite`) — serialized against every other
-  // local writer (bible edits, season metadata PATCH, season-cover render
-  // PATCH, updateStage, etc.). Each incoming record passes through its
-  // service's sanitizer for shape enforcement on the way in.
+  // Routes through the service merge entry points so each incoming record
+  // passes through the same sanitizer and LWW contract as local writes.
   const [seriesResult, issuesResult] = await Promise.all([
     mergeSeriesFromSync(remoteData.series || []),
     mergeIssuesFromSync(remoteData.issues || []),
@@ -433,7 +440,12 @@ async function getMediaCollectionsSnapshot() {
   // listCollections re-reads + sanitizes from disk; we don't cache here since
   // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
   // circuits the I/O when the file hasn't moved.
-  const collections = await listCollections();
+  // includeDeleted:true so tombstones cross the wire — matches getUniverseSnapshot
+  // / getPipelineSnapshot. Without it, a peer that missed the live delete push
+  // (offline/unsubscribed at delete time) never learns the collection was deleted
+  // and keeps it live; the receiver (mergeMediaCollectionsFromSync) already LWWs
+  // the incoming tombstone so this converges deletes without resurrecting them.
+  const collections = await listCollections({ includeDeleted: true });
   // Filter out collections whose linked record (universe or series) is marked
   // ephemeral. Mirrors the per-record push pipeline's local-ephemeral guard
   // (see peerSync.js applyIncomingPush) — without this filter, the
@@ -529,14 +541,14 @@ const CHECKSUM_PATHS = {
   character: [CHARACTER_FILE],
   digitalTwin: Object.values(DIGITAL_TWIN_FILES).map((f) => f.path),
   meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
-  universe: [UNIVERSE_BUILDER_FILE],
-  pipeline: [PIPELINE_SERIES_FILE, PIPELINE_ISSUES_FILE],
+  universe: [UNIVERSE_BUILDER_DIR],
+  pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR],
   // mediaCollections invalidates on its own file AND on the parent record
   // files — `getMediaCollectionsSnapshot` filters collections whose linked
   // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
   // must re-checksum the collections snapshot even though
   // media-collections.json itself didn't move. Same goes for un-ephemeral.
-  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_FILE, PIPELINE_SERIES_FILE],
+  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR],
 };
 
 const CATEGORIES = {
@@ -555,11 +567,51 @@ const CATEGORIES = {
 // nothing has changed, instead of re-materializing the full payload.
 const checksumCache = new Map();
 
+// Combine mtime/size/inode of one regular file into a single fingerprint
+// string. Inode is included so an atomic-write replace (which mints a new
+// inode) is always detected even when mtime rounds equal.
+const fingerprintEntry = (s) => s ? `${s.mtimeMs}:${s.size}:${s.ino}` : null;
+
+// Walk a directory two levels deep — the layout produced by collectionStore
+// (`{dir}/index.json` + `{dir}/<id>/index.json`) — and concatenate per-file
+// fingerprints into one deterministic string. Sorted by name so the result
+// is stable across readdir orderings. Used by the universe + mediaCollections
+// checksum paths so per-record edits invalidate the cache without enumerating
+// every record at module-load.
+async function fingerprintDirTwoLevels(dirPath) {
+  const top = await readdir(dirPath).catch(() => null);
+  if (!top) return null;
+  const sortedTop = [...top].sort();
+  const segments = [];
+  for (const name of sortedTop) {
+    const childPath = join(dirPath, name);
+    const cs = await stat(childPath).catch(() => null);
+    if (!cs) continue;
+    if (cs.isFile()) {
+      segments.push(`${name}:${fingerprintEntry(cs)}`);
+      continue;
+    }
+    if (!cs.isDirectory()) continue;
+    const inner = await readdir(childPath).catch(() => []);
+    for (const innerName of [...inner].sort()) {
+      const innerPath = join(childPath, innerName);
+      const is = await stat(innerPath).catch(() => null);
+      if (is?.isFile()) segments.push(`${name}/${innerName}:${fingerprintEntry(is)}`);
+    }
+  }
+  return segments.join('|') || 'empty';
+}
+
 async function readFingerprintMap(paths) {
   const out = {};
   await Promise.all(paths.map(async (p) => {
     const s = await stat(p).catch(() => null);
-    out[p] = s ? `${s.mtimeMs}:${s.size}:${s.ino}` : null;
+    if (!s) { out[p] = null; return; }
+    if (s.isDirectory()) {
+      out[p] = await fingerprintDirTwoLevels(p);
+      return;
+    }
+    out[p] = fingerprintEntry(s);
   }));
   return out;
 }
@@ -595,11 +647,51 @@ export async function getChecksum(category) {
 export async function getSnapshot(category) {
   const cat = CATEGORIES[category];
   if (!cat) return null;
-  return cat.getSnapshot();
+  const snap = await cat.getSnapshot();
+  // Stamp the sender's PortOS version + schema versions on every outbound
+  // snapshot. Receivers compare against their own PORTOS_SCHEMA_VERSIONS in
+  // `applyRemote` and reject ahead-mismatches before any data is merged.
+  // Legacy receivers ignore the unknown envelope field — no compatibility
+  // risk for the upgrade path.
+  return { ...snap, portosMeta: await buildPortosMeta() };
 }
 
-export async function applyRemote(category, remoteData) {
+/**
+ * Apply a peer's snapshot to local state.
+ *
+ * `options.portosMeta` (when provided) is the sender's PortOS version +
+ * schemaVersions envelope. The receiver runs the comparator and rejects
+ * ahead-mismatches BEFORE calling the category's `applyRemote` so a sender
+ * on a newer storage layout can't corrupt local state. Legacy senders that
+ * don't include `portosMeta` pass through (comparator treats absent as
+ * zero/no-contract; the sanitizer chain handles older inputs in-place).
+ *
+ * On block, returns `{ applied: false, count: 0, blockedBySchema: { ahead,
+ * behind, senderPortosVersion } }` so the orchestrator can persist the gap
+ * on the peer record and the Instances UI can surface it.
+ */
+export async function applyRemote(category, remoteData, options = {}) {
   const cat = CATEGORIES[category];
   if (!cat) return { applied: false, count: 0 };
+  const portosMeta = isPlainObject(options.portosMeta) ? options.portosMeta : null;
+  const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
+  const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
+  const versionDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  if (versionDiff.ahead.length > 0) {
+    console.warn(
+      `⚠️ dataSync: rejecting "${category}" snapshot — ${formatVersionGap(versionDiff)} ` +
+      `(sender PortOS ${senderPortosVersion || 'unknown'})`,
+    );
+    return {
+      applied: false,
+      count: 0,
+      blockedBySchema: {
+        ahead: versionDiff.ahead,
+        behind: versionDiff.behind,
+        senderPortosVersion,
+        receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS,
+      },
+    };
+  }
   return cat.applyRemote(remoteData);
 }

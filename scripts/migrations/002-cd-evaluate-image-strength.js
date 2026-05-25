@@ -3,7 +3,7 @@
  * pre-existing installs.
  *
  * The Creative Director evaluator template gained a two-line block in
- * `data.sample/prompts/stages/cd-evaluate.md` that surfaces the per-scene
+ * `data.reference/prompts/stages/cd-evaluate.md` that surfaces the per-scene
  * `imageStrength` knob (and a sentence in the retry-branch instructions
  * documenting how to adjust it). `setup-data.js` only copies prompt files
  * that don't yet exist in `data/`, so installs created before that change
@@ -47,7 +47,7 @@ export default {
       throw err;
     });
     if (original == null) {
-      console.log(`📄 ${TEMPLATE_REL_PATH} not present — skipping (fresh install will copy from data.sample)`);
+      console.log(`📄 ${TEMPLATE_REL_PATH} not present — skipping (fresh install will copy from data.reference)`);
       return;
     }
 
@@ -62,7 +62,7 @@ export default {
         next = next.replace(anchorPair, ANCHOR_BEFORE_BLOCK + NEW_BLOCK_LINES + ANCHOR_AFTER_BLOCK);
         changed = true;
       } else {
-        console.log(`⚠️ ${TEMPLATE_REL_PATH}: scene-context anchors don't match the pre-update template — skipping the imageStrength block insertion. Hand-merge from data.sample/ if needed.`);
+        console.log(`⚠️ ${TEMPLATE_REL_PATH}: scene-context anchors don't match the pre-update template — skipping the imageStrength block insertion. Hand-merge from data.reference/ if needed.`);
       }
     }
 
@@ -73,7 +73,7 @@ export default {
         next = next.replace(RETRY_OLD, RETRY_NEW);
         changed = true;
       } else {
-        console.log(`⚠️ ${TEMPLATE_REL_PATH}: retry-branch sentence doesn't match the pre-update template — skipping the imageStrength guidance extension. Hand-merge from data.sample/ if needed.`);
+        console.log(`⚠️ ${TEMPLATE_REL_PATH}: retry-branch sentence doesn't match the pre-update template — skipping the imageStrength guidance extension. Hand-merge from data.reference/ if needed.`);
       }
     }
 

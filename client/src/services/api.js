@@ -23,6 +23,7 @@ export * from './apiCalendar.js';
 export * from './apiGoals.js';
 export * from './apiReview.js';
 export * from './apiDatabase.js';
+export * from './apiLocalLlm.js';
 export * from './apiGSD.js';
 export * from './apiGithub.js';
 export * from './apiLoops.js';

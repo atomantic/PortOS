@@ -18,7 +18,7 @@ import { useAutoRefetch } from '../hooks/useAutoRefetch';
  */
 const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   const { data: upcoming, loading } = useAutoRefetch(
-    () => api.getCosUpcomingTasks(6).catch(() => []),
+    () => api.getCosUpcomingTasks(6, { silent: true }),
     60000
   );
 

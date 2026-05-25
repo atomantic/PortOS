@@ -17,6 +17,7 @@ import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
 export { attachWatcher, detachWatcher, listAttachedWatchers };
+export { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
 
 let initialized = false;
 let io = null;
@@ -48,6 +49,23 @@ export async function initSharing({ io: socketIo } = {}) {
     });
     sharingEvents.on('incompatible-manifest', (payload) => {
       io.emit('sharing:incompatible-manifest', payload);
+    });
+    // PortOS storage-layout version is ahead of this instance — the user
+    // needs to update PortOS to import the manifest. Separate event from
+    // `incompatible-manifest` (which gates on the share-protocol schema, a
+    // different version axis) so the UI can render distinct messages for
+    // each case.
+    sharingEvents.on('portos-schema-ahead', (payload) => {
+      io.emit('sharing:portos-schema-ahead', payload);
+    });
+    // Peer-sync per-record subscription got blocked / unblocked by a schema-
+    // version mismatch. Lets the Instances UI swap in the SchemaGapBadge
+    // without polling.
+    peerSyncEvents.on('subscription-blocked', (payload) => {
+      io.emit('peerSync:subscription-blocked', payload);
+    });
+    peerSyncEvents.on('subscription-unblocked', (payload) => {
+      io.emit('peerSync:subscription-unblocked', payload);
     });
     sharingEvents.on('unshared', (payload) => {
       io.emit('sharing:unshared', payload);

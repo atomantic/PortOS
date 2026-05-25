@@ -68,8 +68,10 @@ export * from './tuiHandshake.js';
 export * from './tuiPromptRunner.js';
 
 // === File & I/O ===
+export * from './collectionStore.js';
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
+export * from './schemaVersions.js';
 export * from './imageClean.js';
 export * from './multipart.js';
 export * from './assetHash.js';
@@ -80,6 +82,7 @@ export * from './zipStream.js';
 export * from './commandSecurity.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
+export * from './gitRemote.js';
 export * from './pythonSetup.js';
 
 // === Networking ===
@@ -91,6 +94,7 @@ export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
 export * from './sharingOrigin.js';
+export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
 
@@ -107,7 +111,10 @@ export * from './taskParser.js';
 export * from './curatedGenomeMarkers.js';
 
 // === Domain utilities ===
+export * from './capabilityMap.js';
 export * from './civitai.js';
+export * from './localLlmCatalog.js';
+export * from './localLlmDisk.js';
 export * from './issueLength.js';
 export * from './mediaItemKey.js';
 export * from './navManifest.js';

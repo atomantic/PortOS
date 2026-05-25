@@ -80,13 +80,15 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
+| `collectionStore.js` | Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type, schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` / `loadAll` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` / `verifySchemaVersion`. Per-id write queue means writes to different records don't serialize; `saveOneNow` is for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store, ...])` logs schema-version mismatches. |
+| `schemaVersions.js` | Cross-instance sync version contract. `PORTOS_SCHEMA_VERSIONS` (frozen map of `{ category: layoutVersion }`), `buildPortosMeta()` (envelope for every outbound sync payload), `compareSchemaVersions(sender, receiver)` returning `{ ahead, behind, compatible }`, and `formatVersionGap()` for UI/log lines. Receivers gate `applyIncomingPush` / share-bucket import / snapshot apply on the comparator result so an upgraded sender can't corrupt a downstream peer. |
+| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
 | `imageClean.js` | `cleanImageBuffer` (sharp-based denoise + C2PA strip) + `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in `routes/imageClean.js` wraps `cleanImageBuffer`. |
 | `multipart.js` | Streaming multipart/form-data parser. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
 | `zipStream.js` | Streaming ZIP parser. |
-| `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. |
+| `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. `sidecarGenParamsHash` canonically hashes a sidecar's gen-params (excludes the machine-local `sha256` cache block) for cross-machine sidecar-convergence comparisons. |
 
 ## Process execution
 
@@ -95,6 +97,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `commandSecurity.js` | Allowlist of safe shell commands. |
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
 | `ffmpeg.js` | Shared ffmpeg helpers (videoGen + videoTimeline). |
+| `gitRemote.js` | `getOriginInfo`, `parseGitRemoteUrl`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — classifies the local `origin` remote vs the upstream atomantic/PortOS repo. Used by the update flow to detect forks. |
 | `pythonSetup.js` | Python venv / runner setup helpers. |
 
 ## Networking
@@ -107,6 +110,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
+| `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `INTEGRITY_STATUS` constants + `computeRecordIntegrity(localList, remoteList)` — classifies each record as `in-parity`, `local-only`, `peer-only`, `diverged`, or `assets-missing`. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
 | `tailscale.js` | Locate the Tailscale CLI binary and flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container). |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
@@ -137,7 +141,10 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `capabilityMap.js` | Pure row builders for the Capability Map (per-integration status tiers + rollup); fed by `routes/capabilities.js`. |
 | `civitai.js` | Civitai URL parsing + API client. |
+| `localLlmCatalog.js` | Curated cross-backend (Ollama↔LM Studio) local-LLM catalog + install-id mapping for the migrate flow. Pure. |
+| `localLlmDisk.js` | Pure on-disk reasoning for the migrate "copy GGUF locally instead of re-downloading" fast-path (Ollama manifest/blob parsing, LM Studio path layout, MLX/projector/shard detection). |
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
@@ -162,7 +169,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
-| `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers). |
+| `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing). |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
 | `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
 
@@ -170,5 +177,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `mockPathsDataRoot.js` | Shared `vi.mock` factory for `PATHS.data → temp dir`. |
+| `mockPathsDataRoot.js` | Shared Vitest helpers for `PATHS.data → temp dir` and no-peer record creation guards. |
 | `testHelper.js` | Test HTTP request helper. |

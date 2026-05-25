@@ -10,10 +10,10 @@
  *   pipeline-volume-verify       — per-volume placement + volume-internal adherence check
  *   pipeline-arc-resolve         — preserve picked shape during auto-resolve
  *
- * `pipeline-arc-resolve.md` was never previously in data.sample/ (it shipped
+ * `pipeline-arc-resolve.md` was never previously in data.reference/ (it shipped
  * in `27ef3c27` but only landed in `data/`). `createIfMissing: true` keeps
  * the migration self-contained for that case; for the other files the branch
- * never fires because they already shipped in data.sample/.
+ * never fires because they already shipped in data.reference/.
  *
  * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
@@ -56,7 +56,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   createIfMissing: true,
   customizedHint: (filename) =>
     `   To apply the Vonnegut shape variables manually, diff:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   against your current:\n` +
     `     data/prompts/stages/${filename}\n` +
     `   and merge the {{{shapeGuidance}}} block (and {{shapePosition}} / {{volumeShapePosition}} where applicable).`,

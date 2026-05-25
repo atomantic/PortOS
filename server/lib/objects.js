@@ -54,3 +54,50 @@ export const deepMerge = (base, patch) => {
   }
   return out;
 };
+
+/**
+ * Stable, canonical JSON serialization: recursively sorts object keys so two
+ * structurally-equal values produce byte-identical strings regardless of the
+ * key-insertion order they happened to be built with. Use this when a string
+ * (or hash of a string) must be COMPARABLE ACROSS MACHINES — e.g. content-
+ * hashing a sidecar's gen-params on a sender and re-deriving the same hash on
+ * a receiver where the object was rebuilt in a different key order.
+ *
+ * Arrays preserve order (order is semantic for arrays); object keys are sorted
+ * lexicographically. Only TRUE plain objects (prototype `Object.prototype` or
+ * `null`) get key-sorted; everything else — primitives, null, and exotic
+ * objects like Date / Map / class instances — serializes via native
+ * `JSON.stringify` rules (so e.g. a Date round-trips through `toJSON` to its
+ * ISO string instead of collapsing to `{}`). `undefined` and functions are
+ * dropped exactly as `JSON.stringify` drops them.
+ */
+// NB: isPlainObject() is intentionally loose (true for Date/Map/class
+// instances), so it's WRONG here — it would key-sort a Date's (empty) own keys
+// into `{}`. Require the prototype to be Object.prototype or null instead.
+const isCanonicalSortable = (v) => {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
+
+export const canonicalStringify = (value) => {
+  if (Array.isArray(value)) {
+    // Array.from (not .map) so SPARSE-array holes are visited and serialized as
+    // `null` — matching JSON.stringify ([1,,2] → "[1,null,2]"). `.map` preserves
+    // holes, and `.join` would then emit invalid JSON ("[1,,2]"), diverging the
+    // cross-machine hash for any value containing a sparse array.
+    return `[${Array.from(value, (v) => canonicalStringify(v) ?? 'null').join(',')}]`;
+  }
+  if (isCanonicalSortable(value)) {
+    const parts = [];
+    for (const key of Object.keys(value).sort()) {
+      const serialized = canonicalStringify(value[key]);
+      // Skip keys whose value serializes to undefined (functions / undefined)
+      // — matches JSON.stringify dropping them from objects.
+      if (serialized === undefined) continue;
+      parts.push(`${JSON.stringify(key)}:${serialized}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return JSON.stringify(value);
+};

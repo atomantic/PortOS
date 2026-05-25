@@ -48,7 +48,7 @@ export default {
 
     for (const { filename, oldShippedMd5, newShippedMd5 } of TARGETS) {
       const installedPath = join(rootDir, 'data', 'prompts', 'stages', filename);
-      const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', filename);
+      const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', filename);
 
       const installedExists = await access(installedPath, constants.F_OK).then(() => true, () => false);
       if (!installedExists) { missing++; continue; }
@@ -65,7 +65,7 @@ export default {
 
       const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
       if (!sampleExists) {
-        console.warn(`⚠️  importer-fence-source: data.sample for ${filename} missing — cannot update`);
+        console.warn(`⚠️  importer-fence-source: data.reference for ${filename} missing — cannot update`);
         continue;
       }
       const sample = await readFile(samplePath, 'utf8');

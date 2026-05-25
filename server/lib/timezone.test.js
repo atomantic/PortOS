@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
-import { getLocalParts, getUtcOffsetMs, nextLocalTime, todayInTimezone } from './timezone.js'
+import {
+  getLocalParts,
+  getUtcOffsetMs,
+  nextLocalTime,
+  todayInTimezone,
+  HHMM_RE,
+  HHMM_STRICT_RE,
+  parseHHMM,
+  isWithinTimeWindow,
+} from './timezone.js'
 
 describe('timezone', () => {
   describe('getLocalParts', () => {
@@ -95,6 +104,67 @@ describe('timezone', () => {
       const parts = getLocalParts(resultDate, 'America/Los_Angeles')
       expect(parts.hour).toBe(7)
       expect(parts.minute).toBe(0)
+    })
+  })
+
+  describe('HH:MM regexes', () => {
+    it('HHMM_RE (lenient) accepts both single- and zero-padded hours', () => {
+      expect(HHMM_RE.test('9:00')).toBe(true)
+      expect(HHMM_RE.test('09:00')).toBe(true)
+      expect(HHMM_RE.test('23:59')).toBe(true)
+      expect(HHMM_RE.test('24:00')).toBe(false)
+      expect(HHMM_RE.test('12:60')).toBe(false)
+    })
+
+    it('HHMM_STRICT_RE requires a zero-padded hour', () => {
+      expect(HHMM_STRICT_RE.test('09:00')).toBe(true)
+      expect(HHMM_STRICT_RE.test('23:59')).toBe(true)
+      expect(HHMM_STRICT_RE.test('9:00')).toBe(false)
+      expect(HHMM_STRICT_RE.test('24:00')).toBe(false)
+    })
+
+    // Parity guard: the client mirror in client/src/utils/timeWindow.js and the
+    // dashboard route mock both pin this exact source. Update all three together.
+    it('HHMM_STRICT_RE has the documented canonical source', () => {
+      expect(HHMM_STRICT_RE.source).toBe('^([01]\\d|2[0-3]):[0-5]\\d$')
+    })
+  })
+
+  describe('parseHHMM', () => {
+    it.each([
+      ['00:00', 0],
+      ['07:00', 420],
+      ['22:00', 1320],
+      ['23:59', 23 * 60 + 59],
+      ['9:30', 9 * 60 + 30],
+    ])('parses %s → %s', (s, expected) => {
+      expect(parseHHMM(s)).toBe(expected)
+    })
+
+    it.each(['', '24:00', '12:60', 'abc', null, undefined, '12'])('rejects %s', (s) => {
+      expect(parseHHMM(s)).toBeNull()
+    })
+  })
+
+  describe('isWithinTimeWindow', () => {
+    it('matches inside a same-day window (half-open)', () => {
+      const win = { start: '09:00', end: '17:00' }
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 10 * 60 })).toBe(true)
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 9 * 60 })).toBe(true)
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 17 * 60 })).toBe(false)
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 8 * 60 })).toBe(false)
+    })
+
+    it('wraps overnight (start > end)', () => {
+      const win = { start: '22:00', end: '07:00' }
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 23 * 60 })).toBe(true)
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 5 * 60 })).toBe(true)
+      expect(isWithinTimeWindow({ ...win, nowMinutes: 14 * 60 })).toBe(false)
+    })
+
+    it('returns false for empty (start === end) or malformed bounds', () => {
+      expect(isWithinTimeWindow({ start: '08:00', end: '08:00', nowMinutes: 8 * 60 })).toBe(false)
+      expect(isWithinTimeWindow({ start: 'abc', end: '07:00', nowMinutes: 5 * 60 })).toBe(false)
     })
   })
 

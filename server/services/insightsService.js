@@ -22,6 +22,7 @@ import { getActiveProvider, getProviderById } from './providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
 import { stripCodeFences, parseLLMJSON } from '../lib/aiProvider.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
 const DEFAULT_AI_TIMEOUT_MS = 300000;
 
@@ -169,6 +170,11 @@ async function callProviderAISimple(provider, model, prompt, { temperature = 0.3
   const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
 
   if (provider.type === 'api') {
+    const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
+    if (!ready.success) {
+      return { error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}` };
+    }
+
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
 

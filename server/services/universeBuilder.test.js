@@ -1,6 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync } from "fs";
+import { writeFile, mkdir } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import { mockNoPeerSync, mockNoPeers } from "../lib/mockPathsDataRoot.js";
 
-const fileStore = new Map();
+// Real per-suite tmpdir backing the universes/ layout. Each test wipes the
+// tree in beforeEach. The fileUtils mock below overrides PATHS.data so the
+// universeBuilder + collectionStore land here instead of the real ./data.
+const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), "universe-builder-test-"));
 
 // Per-test reference-sheet "what exists on disk" — keys are filenames the
 // referenceSheetImageRef preservation guard / pruner asks about. Default
@@ -8,31 +16,67 @@ const fileStore = new Map();
 // names like 'sheet-B.png' still pass; the stale-prune test overrides
 // resolveImageRef to return null for the stale filename.
 const refSheetFilesByName = new Map();
-vi.mock("../lib/fileUtils.js", () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: "/mock/data" },
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => {
-    fileStore.set(path, data);
-  }),
-  readJSONFile: vi.fn(async (path, fallback) =>
-    fileStore.has(path) ? fileStore.get(path) : fallback,
-  ),
-  // mustExist: true → return a non-null path when the filename either
-  // appears in refSheetFilesByName or has no explicit "missing" entry.
-  // Tests opt into "this file is gone" by calling
-  // refSheetFilesByName.set('foo.png', null).
-  resolveImageRef: vi.fn((ref) => {
-    if (typeof ref !== 'string' || !ref) return null;
-    if (refSheetFilesByName.has(ref)) return refSheetFilesByName.get(ref);
-    return `/mock/refs/${ref}`;
-  }),
-}));
+
+vi.mock("../lib/fileUtils.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    // Override PATHS.data to point at the test tmpdir; everything else
+    // (atomicWrite, readJSONFile, ensureDir, etc.) uses the real impl so
+    // collectionStore's readdir/stat/rm operate against a real fs tree.
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    // mustExist: true → return a non-null path when the filename either
+    // appears in refSheetFilesByName or has no explicit "missing" entry.
+    // Tests opt into "this file is gone" by calling
+    // refSheetFilesByName.set('foo.png', null).
+    resolveImageRef: vi.fn((ref) => {
+      if (typeof ref !== 'string' || !ref) return null;
+      if (refSheetFilesByName.has(ref)) return refSheetFilesByName.get(ref);
+      return `/mock/refs/${ref}`;
+    }),
+  };
+});
+
+// Stub instances.js so createUniverse's fire-and-forget autoSubscribeRecordToAllPeers
+// doesn't fan out to real peers. getPeers reads the live peer registry through a
+// dataPath closure that resolves to the REAL PATHS once the post-return microtask
+// runs outside this file's fileUtils mock window — so without this stub, creating a
+// non-ephemeral fixture (e.g. "Moebius SciFi") initial-pushes it across the
+// federation and the receiving instance persists it into the real data/universes/.
+// Mirrors the same guard in importer.test.js and writersRoom/promoteToPipeline.test.js.
+vi.mock("./instances.js", () => mockNoPeers());
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
+
+// Pre-seed state into the new per-record layout. Mirrors what migration 034
+// produces — each universe lands in `universes/<id>/index.json` and the
+// cross-record `runs[]` lives in `universes/index.json` under `config.runs`.
+async function seedState({ universes = [], runs = [] } = {}) {
+  const universesDir = join(TEST_DATA_ROOT, "universes");
+  await mkdir(universesDir, { recursive: true });
+  for (const u of universes) {
+    const recDir = join(universesDir, u.id);
+    await mkdir(recDir, { recursive: true });
+    await writeFile(join(recDir, "index.json"), JSON.stringify(u, null, 2));
+  }
+  await writeFile(join(universesDir, "index.json"), JSON.stringify({
+    schemaVersion: 5,
+    type: "universes",
+    updatedAt: new Date().toISOString(),
+    config: { runs },
+  }, null, 2));
+}
+
+afterAll(() => {
+  rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+});
 
 let uuidCounter = 0;
+// Pad to satisfy UNIVERSE_ID_RE / collectionStore's idPattern (8-80 chars).
+// Tests still get a predictable, monotonically increasing id sequence.
+const mockUuid = (n) => `uuid-${String(n).padStart(8, '0')}`;
 vi.mock("crypto", async () => {
   const actual = await vi.importActual("crypto");
-  return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
+  return { ...actual, randomUUID: () => mockUuid(++uuidCounter) };
 });
 
 const svc = await import("./universeBuilder.js");
@@ -73,8 +117,12 @@ const seedWorld = async (overrides = {}) =>
 
 describe("universeBuilder service", () => {
   beforeEach(() => {
-    fileStore.clear();
+    // Wipe the test tmpdir between tests so each starts with an empty
+    // universes/ tree.
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    mkdirSync(TEST_DATA_ROOT, { recursive: true });
     uuidCounter = 0;
+    refSheetFilesByName.clear();
   });
 
   it("listUniverses returns [] for fresh state", async () => {
@@ -83,7 +131,7 @@ describe("universeBuilder service", () => {
 
   it("createUniverse persists with sanitized categories + kind tags", async () => {
     const w = await seedWorld();
-    expect(w.id).toBe("uuid-1");
+    expect(w.id).toBe(mockUuid(1));
     expect(w.name).toBe("Moebius SciFi");
     // All default categories materialized even when only one was provided,
     // each tagged with its canon trunk via the WORLD_CATEGORY_DEFAULT_KINDS map.
@@ -1617,7 +1665,7 @@ describe("universeBuilder service", () => {
 
   describe("categories→canon backfill", () => {
     it("backfills canon arrays from categories on first read + stamps the current schema version", async () => {
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "w-v1", name: "Legacy",
@@ -1661,7 +1709,7 @@ describe("universeBuilder service", () => {
     });
 
     it("backfill is idempotent — re-reading an already-migrated universe does not duplicate canon", async () => {
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "w-v1", name: "Legacy",
@@ -1683,14 +1731,14 @@ describe("universeBuilder service", () => {
       // Third read post-rename: a user-renamed entry must not be clobbered by
       // re-running backfill (the schemaVersion guard prevents the re-insert).
       const renamed = { ...second, characters: second.characters.map((c) => ({ ...c, name: "Alex Smith" })) };
-      fileStore.set("/mock/data/universe-builder.json", { universes: [renamed], runs: [] });
+      await seedState({ universes: [renamed], runs: [] });
       const third = (await svc.listUniverses())[0];
       expect(third.characters.length).toBe(1);
       expect(third.characters[0].name).toBe("Alex Smith");
     });
 
     it("backfill does not overwrite a pre-existing canon entry sharing a variation label", async () => {
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "w-mixed", name: "Mixed",
@@ -1824,7 +1872,7 @@ describe("universeBuilder service", () => {
     });
 
     it("sanitizeTemplate round-trips existing variation + sheet ids verbatim", async () => {
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "w1",
@@ -1853,7 +1901,7 @@ describe("universeBuilder service", () => {
       // is not persisted there (race-safety against concurrent writers — see
       // readState() docstring). After a no-op updateUniverse() forces a write,
       // ids land on disk and every subsequent read returns the same ones.
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "legacy-universe",
@@ -1889,7 +1937,7 @@ describe("universeBuilder service", () => {
       // universe is already migrated — so already-upgraded records don't
       // bump updatedAt (which would interfere with LWW sync + spuriously
       // emit recordUpdated on every render).
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "fresh",
@@ -2094,7 +2142,7 @@ describe("universeBuilder service", () => {
     });
 
     it("imageRefs basename guard rejects path-separator filenames", async () => {
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "w1",
@@ -2120,7 +2168,7 @@ describe("universeBuilder service", () => {
   describe("sanitizers", () => {
     it("drops malformed variations on read", async () => {
       // Manually plant invalid state — sanitizeTemplate strips it on read.
-      fileStore.set("/mock/data/universe-builder.json", {
+      await seedState({
         universes: [
           {
             id: "w1",

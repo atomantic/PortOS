@@ -13,8 +13,7 @@
  *   already present and skip.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { readLayoutsDoc, writeLayoutsDoc } from './_lib.js';
 
 const WIDGET_ID = 'quick-image';
 const WIDGET_W = 3;
@@ -83,23 +82,9 @@ function applyToLayout(layout) {
 
 export default {
   async up({ rootDir }) {
-    const path = join(rootDir, 'data', 'dashboard-layouts.json');
-    const raw = await readFile(path, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📦 migration 033: no dashboard-layouts.json yet — fresh install will seed from defaults.`);
-      return { updated: 0, reason: 'no-state' };
-    }
-    let doc;
-    try { doc = JSON.parse(raw); } catch {
-      console.log(`📦 migration 033: dashboard-layouts.json unreadable — skipping.`);
-      return { updated: 0, reason: 'unreadable' };
-    }
-    if (!doc || !Array.isArray(doc.layouts)) {
-      return { updated: 0, reason: 'no-layouts-array' };
-    }
+    const result = await readLayoutsDoc({ rootDir, label: 'migration 033' });
+    if (!result.ok) return { updated: 0, reason: result.reason };
+    const { doc, path } = result;
 
     let touched = 0;
     for (const layout of doc.layouts) {
@@ -112,7 +97,7 @@ export default {
       return { updated: 0, reason: 'already-applied' };
     }
 
-    await writeFile(path, JSON.stringify(doc, null, 2));
+    await writeLayoutsDoc(path, doc);
     console.log(`📦 migration 033: seeded quick-image widget into ${touched} built-in layout(s).`);
     return { updated: touched };
   },

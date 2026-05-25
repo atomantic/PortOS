@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 
@@ -9,6 +10,11 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => fileStore.has(path) ? fileStore.get(path) : fallback),
 }));
+
+// Suppress the fire-and-forget dynamic import so tests don't load the real
+// peerSync module graph (which reads the live peer registry and imports
+// universe/series services).
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -92,10 +98,81 @@ describe('mediaCollections service', () => {
       .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
   });
 
-  it('deleteCollection removes the entry', async () => {
+  it('deleteCollection soft-deletes: absent from live list, present with deleted===true in includeDeleted list', async () => {
     const c = await svc.createCollection({ name: 'A' });
     await svc.deleteCollection(c.id);
     expect(await svc.listCollections()).toEqual([]);
+    const all = await svc.listCollections({ includeDeleted: true });
+    expect(all).toHaveLength(1);
+    expect(all[0].deleted).toBe(true);
+    expect(all[0].id).toBe(c.id);
+  });
+
+  it('deleteCollection clears coverKey on the persisted tombstone (no dangling cover in the wire record)', async () => {
+    const c = await svc.createCollection({ name: 'WithCover' });
+    await svc.addItem(c.id, { kind: 'image', ref: 'cover.png' });
+    await svc.updateCollection(c.id, { coverKey: 'image:cover.png' });
+    await svc.deleteCollection(c.id);
+    // Assert on the PERSISTED record — listCollections' sanitizer would null a
+    // dangling coverKey on read regardless, so inspect storage directly.
+    const stored = fileStore.get('/mock/data/media-collections.json').collections.find((x) => x.id === c.id);
+    expect(stored.deleted).toBe(true);
+    expect(stored.items).toEqual([]);
+    expect(stored.coverKey).toBeNull();
+  });
+
+  it('deleteCollection emits recordDeleted for mediaCollection and receivable via recordEvents', async () => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const deletedEvts = [];
+    const handler = (evt) => deletedEvts.push(evt);
+    recordEvents.on('deleted', handler);
+    try {
+      const c = await svc.createCollection({ name: 'B' });
+      await svc.deleteCollection(c.id);
+      expect(deletedEvts).toContainEqual(expect.objectContaining({ recordKind: 'mediaCollection', recordId: c.id }));
+    } finally {
+      recordEvents.off('deleted', handler);
+    }
+  });
+
+  it('updateCollection throws ERR_NOT_FOUND on a soft-deleted collection', async () => {
+    const c = await svc.createCollection({ name: 'Live' });
+    await svc.deleteCollection(c.id);
+    await expect(svc.updateCollection(c.id, { name: 'Revived' }))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+  });
+
+  it('item mutators (addItem/removeItem/bulkUpdateCollectionItems) throw ERR_NOT_FOUND on a tombstone', async () => {
+    const c = await svc.createCollection({ name: 'Live' });
+    await svc.addItem(c.id, { kind: 'image', ref: 'keep.png' });
+    await svc.deleteCollection(c.id);
+    // All three behave as not-found after soft-delete (no tombstone resurrection).
+    await expect(svc.addItem(c.id, { kind: 'image', ref: 'new.png' }))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    await expect(svc.removeItem(c.id, 'image:keep.png'))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    await expect(svc.bulkUpdateCollectionItems(c.id, { add: [{ kind: 'image', ref: 'b.png' }] }))
+      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+  });
+
+  it('deleteCollection is idempotent on an already-tombstoned record (no re-stamp, no re-emit)', async () => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const c = await svc.createCollection({ name: 'DoubleDelete' });
+    await svc.deleteCollection(c.id);
+    const firstDeletedAt = (await svc.listCollections({ includeDeleted: true })).find((x) => x.id === c.id).deletedAt;
+    await new Promise((r) => setTimeout(r, 5)); // ensure a later timestamp WOULD differ if re-stamped
+    const deletedEvts = [];
+    const handler = (evt) => deletedEvts.push(evt);
+    recordEvents.on('deleted', handler);
+    try {
+      const res = await svc.deleteCollection(c.id);
+      expect(res).toEqual({ id: c.id });
+      const afterSecond = (await svc.listCollections({ includeDeleted: true })).find((x) => x.id === c.id);
+      expect(afterSecond.deletedAt).toBe(firstDeletedAt); // not re-stamped
+      expect(deletedEvts).toEqual([]);                    // not re-emitted
+    } finally {
+      recordEvents.off('deleted', handler);
+    }
   });
 
   it('deleteCollection emits recordUpdated on the universe when the deleted collection was linked', async () => {
@@ -340,6 +417,72 @@ describe('mediaCollections service', () => {
     });
 
     describe('findOrCreateUniverseCollection', () => {
+      it('mints a DETERMINISTIC id (uc-<universeId>) so federated peers converge, not a random UUID', async () => {
+        const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
+        expect(c.id).toBe('uc-u-1');
+        expect(svc.linkedCollectionId({ universeId: 'u-1' })).toBe('uc-u-1');
+        // Series mirror.
+        const s = await svc.findOrCreateSeriesCollection({ seriesId: 's-9', seriesName: 'Bar' });
+        expect(s.id).toBe('sc-s-9');
+      });
+
+      it('findOrCreateCollectionByName canonicalizes the id when backfilling a universe link onto an orphan', async () => {
+        const orphan = await svc.findOrCreateCollectionByName({ name: 'Universe: Legacy' });
+        expect(orphan.id).not.toMatch(/^uc-/); // standalone → random id
+        // Referencing it WITH a universeId must adopt the deterministic id, not
+        // keep the random one (which couldn't converge across peers).
+        const linked = await svc.findOrCreateCollectionByName({ name: 'Universe: Legacy', universeId: 'u-legacy' });
+        expect(linked.id).toBe('uc-u-legacy');
+        expect(linked.universeId).toBe('u-legacy');
+        const all = await svc.listCollections();
+        expect(all.filter((c) => c.name === 'Universe: Legacy')).toHaveLength(1);
+        expect(all.some((c) => c.id === orphan.id)).toBe(false); // old random id gone
+      });
+
+      it('backfill prefers an existing live canonical collection over promoting a same-named orphan', async () => {
+        // Universe already has its canonical collection (with items)…
+        const canonical = await svc.findOrCreateUniverseCollection({ universeId: 'u-x', universeName: 'X' });
+        await svc.addItem(canonical.id, { kind: 'image', ref: 'keep.png' });
+        // …plus a same-named orphan. A name-first backfill must NOT clobber the
+        // canonical record's items — it returns the canonical one.
+        const result = await svc.findOrCreateCollectionByName({ name: 'Universe: X', universeId: 'u-x' });
+        expect(result.id).toBe('uc-u-x');
+        expect(result.items.map((i) => i.ref)).toContain('keep.png');
+      });
+
+      it('findOrCreateCollectionByName slices an overlong universeId for both the id and the stored field', async () => {
+        // An overlong owner id must yield the same canonical id the universeId-first
+        // path computes (it slices to UNIVERSE_ID_MAX=80) — otherwise the backfill/
+        // create here and findOrCreateUniverseCollection would diverge and duplicate.
+        const overlong = 'u-' + 'x'.repeat(200);
+        const sliced = overlong.slice(0, 80);
+        const c = await svc.findOrCreateCollectionByName({ name: 'Universe: Big', universeId: overlong });
+        expect(c.id).toBe(`uc-${sliced}`);
+        expect(c.universeId).toBe(sliced);
+        expect(svc.linkedCollectionId({ universeId: overlong })).toBe(`uc-${sliced}`);
+      });
+
+      it('findOrCreateCollectionByName trims a padded universeId so it converges (no uc- u1 -style ids)', async () => {
+        // A padded id must normalize to the same canonical id an unpadded caller
+        // gets — the presence guard and the slice operate on the trimmed value.
+        const c = await svc.findOrCreateCollectionByName({ name: 'Universe: Padded', universeId: '  u-pad  ' });
+        expect(c.id).toBe('uc-u-pad');
+        expect(c.universeId).toBe('u-pad');
+      });
+
+      it('revives the deterministic id after delete instead of duplicating it (tombstone reclaim)', async () => {
+        const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
+        await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });
+        await svc.deleteCollection(c.id); // tombstone at uc-u-1
+        const revived = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
+        expect(revived.id).toBe('uc-u-1');
+        expect(revived.deleted).toBeFalsy();
+        // Exactly one live collection at the deterministic id — the tombstone was
+        // reclaimed, not left to shadow the fresh record in listCollections' dedup.
+        const live = await svc.listCollections();
+        expect(live.filter((x) => x.id === 'uc-u-1')).toHaveLength(1);
+      });
+
       it('returns the existing universeId-linked collection on second call', async () => {
         const first = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'Foo',
@@ -946,6 +1089,104 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(merged.description).toBe('local');
   });
 
+  it('preserves deleted + deletedAt through sync merge', async () => {
+    await svc.mergeMediaCollectionsFromSync([{
+      id: 'c1', name: 'C1', items: [],
+      deleted: true, deletedAt: '2026-05-23T00:00:00.000Z',
+      updatedAt: '2026-05-23T00:00:00.000Z',
+    }]);
+    const live = await svc.listCollections();
+    expect(live.find((c) => c.id === 'c1')).toBeUndefined();
+    const all = await svc.listCollections({ includeDeleted: true });
+    const c = all.find((x) => x.id === 'c1');
+    expect(c?.deleted).toBe(true);
+    expect(c?.deletedAt).toBe('2026-05-23T00:00:00.000Z');
+  });
+
+  it('a newer remote tombstone deletes a local live collection', async () => {
+    const c = await svc.createCollection({ name: 'WillDie' });
+    const tombstone = {
+      id: c.id,
+      name: 'WillDie',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: c.createdAt,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2099-01-01T00:00:00.000Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([tombstone]);
+    expect(await svc.listCollections()).toEqual([]);
+    const all = await svc.listCollections({ includeDeleted: true });
+    const found = all.find((x) => x.id === c.id);
+    expect(found?.deleted).toBe(true);
+  });
+
+  it('an older remote tombstone does NOT delete a newer local collection', async () => {
+    const c = await svc.createCollection({ name: 'Survivor' });
+    const tombstone = {
+      id: c.id,
+      name: 'Survivor',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: c.createdAt,
+      updatedAt: '2000-01-01T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2000-01-01T00:00:00.000Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([tombstone]);
+    const live = await svc.listCollections();
+    expect(live.find((x) => x.id === c.id)).toBeTruthy();
+    expect(live.find((x) => x.id === c.id)?.deleted).toBeFalsy();
+  });
+
+  it('a remote tombstone for an unknown id is recorded as a tombstone (no resurrection)', async () => {
+    const tombstone = {
+      id: 'ghost-id',
+      name: 'Ghost',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: '2026-05-23T00:00:00.000Z',
+      updatedAt: '2026-05-23T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2026-05-23T00:00:00.000Z',
+    };
+    await svc.mergeMediaCollectionsFromSync([tombstone]);
+    expect(await svc.listCollections()).toEqual([]);
+    const all = await svc.listCollections({ includeDeleted: true });
+    const found = all.find((x) => x.id === 'ghost-id');
+    expect(found?.deleted).toBe(true);
+  });
+
+  it('a tombstone missing deletedAt falls back to updatedAt (not the older createdAt)', async () => {
+    // A hand-edited / legacy tombstone may carry deleted:true with no explicit
+    // deletedAt. The effective deletion time should align with the most-recent
+    // timestamp (updatedAt), not createdAt — otherwise LWW + GC see it as far
+    // older than it really is.
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'c1', name: 'Gone', description: '', coverKey: null,
+        universeId: null, seriesId: null, items: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-05-22T03:00:00.000Z',
+        deleted: true,
+        // deletedAt intentionally omitted
+      }],
+    });
+    const [c] = await svc.listCollections({ includeDeleted: true });
+    expect(c.deleted).toBe(true);
+    expect(c.deletedAt).toBe('2026-05-22T03:00:00.000Z');
+  });
+
   it('compares addedAt as parsed milliseconds (not lexicographic) when picking the earlier item', async () => {
     // sanitizeItem accepts any Date.parse-able string, not strictly ISO-8601.
     // Lexicographic compare would order "05/22/2026 ..." AFTER "2026-..." (the
@@ -970,5 +1211,174 @@ describe('mergeMediaCollectionsFromSync', () => {
     // The 08:00 slash-format timestamp is earlier than 10:00 ISO; numeric
     // compare picks it. Lexicographic compare would have picked the ISO one.
     expect(Date.parse(merged.items[0].addedAt)).toBe(Date.parse('05/22/2026 08:00:00 UTC'));
+  });
+});
+
+describe('createCollection — event emission', () => {
+  it('emits a mediaCollection updated event with the created record id', async () => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const updatedEvts = [];
+    const handler = (evt) => updatedEvts.push(evt);
+    recordEvents.on('updated', handler);
+    try {
+      const c = await svc.createCollection({ name: 'New' });
+      expect(updatedEvts).toContainEqual(
+        expect.objectContaining({ recordKind: 'mediaCollection', recordId: c.id }),
+      );
+    } finally {
+      recordEvents.off('updated', handler);
+    }
+  });
+});
+
+describe('findOrCreate* — announces new collections to the sync pipeline', () => {
+  // A newly-created universe/series-linked (or named) collection must emit a
+  // mediaCollection 'updated' event so a peer with mediaCollections syncing
+  // enabled (but universe/series sync off) still receives it via per-record sync.
+  // It must NOT re-announce on a find-existing hit (would churn every render).
+  const collectMediaUpdateIds = async (fn) => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const ids = [];
+    const handler = (evt) => { if (evt.recordKind === 'mediaCollection') ids.push(evt.recordId); };
+    recordEvents.on('updated', handler);
+    try { await fn(); } finally { recordEvents.off('updated', handler); }
+    return ids;
+  };
+
+  it('findOrCreateUniverseCollection announces on create, stays quiet on find-existing', async () => {
+    const created = await collectMediaUpdateIds(() =>
+      svc.findOrCreateUniverseCollection({ universeId: 'u1', universeName: 'Iron Veil' }));
+    const c = await svc.findCollectionByUniverseId('u1');
+    expect(created).toEqual([c.id]);
+    const again = await collectMediaUpdateIds(() =>
+      svc.findOrCreateUniverseCollection({ universeId: 'u1', universeName: 'Iron Veil' }));
+    expect(again).toEqual([]);
+  });
+
+  it('findOrCreateSeriesCollection announces on create, stays quiet on find-existing', async () => {
+    const created = await collectMediaUpdateIds(() =>
+      svc.findOrCreateSeriesCollection({ seriesId: 's1', seriesName: 'Salt Run' }));
+    expect(created).toHaveLength(1);
+    const again = await collectMediaUpdateIds(() =>
+      svc.findOrCreateSeriesCollection({ seriesId: 's1', seriesName: 'Salt Run' }));
+    expect(again).toEqual([]);
+  });
+
+  it('findOrCreateCollectionByName announces on create, stays quiet on find-existing', async () => {
+    const created = await collectMediaUpdateIds(() =>
+      svc.findOrCreateCollectionByName({ name: 'Loose Bucket' }));
+    expect(created).toHaveLength(1);
+    const again = await collectMediaUpdateIds(() =>
+      svc.findOrCreateCollectionByName({ name: 'Loose Bucket' }));
+    expect(again).toEqual([]);
+  });
+});
+
+describe('mutators — mediaCollection updated emission (standalone per-record sync)', () => {
+  // A standalone collection (no universe/series link) reaches a directly-
+  // subscribed peer ONLY through the per-record mediaCollection push pipeline,
+  // so every content mutator must emit a mediaCollection 'updated' event or the
+  // edit silently never propagates.
+  const collectMediaUpdates = async (fn) => {
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const ids = [];
+    const handler = (evt) => { if (evt.recordKind === 'mediaCollection') ids.push(evt.recordId); };
+    recordEvents.on('updated', handler);
+    try {
+      await fn();
+    } finally {
+      recordEvents.off('updated', handler);
+    }
+    return ids;
+  };
+
+  it('updateCollection emits a mediaCollection updated event', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    const ids = await collectMediaUpdates(() => svc.updateCollection(c.id, { description: 'changed' }));
+    expect(ids).toContain(c.id);
+  });
+
+  it('addItem emits a mediaCollection updated event', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    const ids = await collectMediaUpdates(() => svc.addItem(c.id, { kind: 'image', ref: 'x.png' }));
+    expect(ids).toContain(c.id);
+  });
+
+  it('removeItem emits a mediaCollection updated event', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    await svc.addItem(c.id, { kind: 'image', ref: 'x.png' });
+    const ids = await collectMediaUpdates(() => svc.removeItem(c.id, 'image:x.png'));
+    expect(ids).toContain(c.id);
+  });
+
+  it('bulkUpdateCollectionItems emits a mediaCollection updated event when items change', async () => {
+    const c = await svc.createCollection({ name: 'Standalone' });
+    const ids = await collectMediaUpdates(() =>
+      svc.bulkUpdateCollectionItems(c.id, { add: [{ kind: 'image', ref: 'y.png' }] }),
+    );
+    expect(ids).toContain(c.id);
+  });
+});
+
+describe('pruneTombstonedCollections', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+  });
+
+  it('prunes tombstoned collections older than the cutoff and returns the count', async () => {
+    // Create a live collection and soft-delete it with an old timestamp by
+    // injecting the tombstone directly into the file store.
+    const c = await svc.createCollection({ name: 'ToDelete' });
+    const oldTs = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // Overwrite the file store with a tombstone carrying an old deletedAt.
+    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
+    const path = '/mock/data/media-collections.json';
+    const current = await readJSONFile(path, { collections: [] });
+    const withTombstone = current.collections.map((col) =>
+      col.id === c.id
+        ? { ...col, deleted: true, deletedAt: oldTs, updatedAt: oldTs, items: [] }
+        : col,
+    );
+    await atomicWrite(path, { collections: withTombstone });
+
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 1 });
+    expect(await svc.listCollections({ includeDeleted: true })).toHaveLength(0);
+  });
+
+  it('does NOT prune a live collection', async () => {
+    await svc.createCollection({ name: 'Live' });
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 0 });
+    expect(await svc.listCollections()).toHaveLength(1);
+  });
+
+  it('does NOT prune a tombstone newer than the cutoff', async () => {
+    const c = await svc.createCollection({ name: 'RecentDelete' });
+    // Soft-delete with a future timestamp (simulating a delete that just happened).
+    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
+    const path = '/mock/data/media-collections.json';
+    const current = await readJSONFile(path, { collections: [] });
+    const futureTs = new Date(Date.now() + 60 * 1000).toISOString();
+    const withTombstone = current.collections.map((col) =>
+      col.id === c.id
+        ? { ...col, deleted: true, deletedAt: futureTs, updatedAt: futureTs, items: [] }
+        : col,
+    );
+    await atomicWrite(path, { collections: withTombstone });
+
+    // Cut-off is now; the tombstone's deletedAt is in the future → not pruned.
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 0 });
+    const all = await svc.listCollections({ includeDeleted: true });
+    expect(all).toHaveLength(1);
+    expect(all[0].deleted).toBe(true);
+  });
+
+  it('returns { pruned: 0 } without touching the file when cutoff is not a finite number', async () => {
+    await svc.createCollection({ name: 'A' });
+    expect(await svc.pruneTombstonedCollections(NaN)).toEqual({ pruned: 0 });
+    expect(await svc.pruneTombstonedCollections(Infinity)).toEqual({ pruned: 0 });
   });
 });

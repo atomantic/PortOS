@@ -7,6 +7,7 @@ export const getAlertsSummary = (options) => request('/alerts/summary', options)
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
+export const getCapabilities = (options) => request('/capabilities', options);
 export const updateHealthThresholds = (thresholds) => request('/system/health/thresholds', {
   method: 'PUT',
   body: JSON.stringify(thresholds)
@@ -20,7 +21,15 @@ export const ignoreUpdateVersion = (version) => request('/update/ignore', {
   body: JSON.stringify({ version })
 });
 export const clearIgnoredVersions = () => request('/update/ignore', { method: 'DELETE' });
-export const executePortosUpdate = () => request('/update/execute', { method: 'POST' });
+export const executePortosUpdate = (opts) => {
+  const body = opts && Object.keys(opts).length ? JSON.stringify(opts) : undefined;
+  return request('/update/execute', body ? { method: 'POST', body } : { method: 'POST' });
+};
+export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/sync-fork', {
+  method: 'POST',
+  body: JSON.stringify(opts),
+  ...requestOpts
+});
 
 // Settings
 export const getSettings = (options) => request('/settings', options);

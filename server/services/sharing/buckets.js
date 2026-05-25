@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { access, constants, stat } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
@@ -105,6 +105,26 @@ export function bucketBlobSidecarPath(bucketPath, hash) {
 // skip `sha256File` + `copyFile` on re-export of unchanged assets.
 export function bucketBlobIndexPath(bucketPath) { return join(bucketBlobsDir(bucketPath), '.index.json'); }
 export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
+
+/**
+ * Returns the filename if it's safe to use as a path segment under an asset
+ * directory, otherwise null. Rejects path separators, parent-directory
+ * tokens, and any value that doesn't match its own basename — the canonical
+ * traversal guard for inbound/peer-supplied asset filenames before they hit a
+ * `join(dir, name)` FS op. Shared by the peer-sync diff/pull paths
+ * (`peerSync.js`, `sidecarSync.js`) so every callsite scrubs identically.
+ */
+export function sanitizeAssetFilename(name) {
+  if (typeof name !== 'string' || !name) return null;
+  // Reject separators and exact parent-directory segments (`.` / `..`
+  // as the whole basename). A basename like `my..render.png` is
+  // legitimate (the gallery filename validator permits `..` inside a
+  // basename) — only the path-segment forms are traversal.
+  if (name.includes('/') || name.includes('\\')) return null;
+  if (name === '.' || name === '..') return null;
+  if (basename(name) !== name) return null;
+  return name;
+}
 
 /** Lay out the canonical bucket structure (idempotent). */
 export async function ensureBucketLayout(bucket) {

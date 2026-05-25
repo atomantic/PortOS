@@ -605,7 +605,7 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
     .replace(/\{appName\}/g, () => app.name)
     .replace(/\{repoPath\}/g, () => app.repoPath)
     .replace(/\{appId\}/g, () => app.id)
-    .replace(/\{reviewer\}/g, () => DEFAULT_REVIEWER)
+    .replace(/\{reviewers\}/g, () => DEFAULT_REVIEWER)
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{planConstraint\}/g, () => '');
 

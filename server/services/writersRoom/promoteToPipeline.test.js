@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
 
@@ -15,10 +15,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
 // createSeries/createIssue calls don't fan out to real peers via
 // peerSync's autoSubscribeRecordToAllPeers (which reads the live peer
 // registry through dataPath closure to the real PATHS).
-vi.mock('../instances.js', async () => {
-  const actual = await vi.importActual('../instances.js');
-  return { ...actual, getPeers: () => Promise.resolve([]) };
-});
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const wrLocal = await import('./local.js');
 const { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } = await import('./promoteToPipeline.js');

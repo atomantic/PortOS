@@ -23,7 +23,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   label: 'extract-scenes shots',
   customizedHint: (filename) =>
     `   Manually merge the shots[] additions from:\n` +
-    `     data.sample/prompts/stages/${filename}\n` +
+    `     data.reference/prompts/stages/${filename}\n` +
     `   into your current:\n` +
     `     data/prompts/stages/${filename}`,
   skipFooter: (count) =>

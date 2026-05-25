@@ -30,6 +30,7 @@ import { getEvents as getCalendarEvents } from './calendarSync.js';
 import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
 import { resolveCliModel } from '../lib/providerModels.js';
+import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
 // Re-export so the route can keep importing modes via askService — but
 // askConversations is the source of truth (it owns the persistence schema).
@@ -426,6 +427,10 @@ async function* streamCompletion(provider, model, prompt, signal) {
     };
     let response;
     try {
+      const ready = await ensureOllamaProviderReady(provider);
+      if (!ready.success) {
+        throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
+      }
       response = await fetch(`${provider.endpoint}/chat/completions`, {
         method: 'POST',
         headers,

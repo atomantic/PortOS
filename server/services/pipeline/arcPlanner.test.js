@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 let stageRunnerSpy;
@@ -16,6 +17,9 @@ vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
+
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 // Stub the staged-LLM runner so the test owns the LLM response shape.
 // Each test sets `stageRunnerSpy = vi.fn(...)` to control what comes back.

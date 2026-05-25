@@ -22,7 +22,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = join(__dirname, '..', '..');
 
 export const sampleBody = (filename, subdir = 'stages') =>
-  readFileSync(join(repoRoot, 'data.sample', 'prompts', subdir, filename), 'utf-8');
+  readFileSync(join(repoRoot, 'data.reference', 'prompts', subdir, filename), 'utf-8');
 
 /** Synthetic body that won't match any shipped hash. */
 export const customizedBody = (filename) =>
@@ -53,7 +53,7 @@ export function runPromptMigrationTests({
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), prefix));
     stagesDir = join(rootDir, 'data', 'prompts', subdir);
-    const sampleDir = join(rootDir, 'data.sample', 'prompts', subdir);
+    const sampleDir = join(rootDir, 'data.reference', 'prompts', subdir);
     mkdirSync(stagesDir, { recursive: true });
     mkdirSync(sampleDir, { recursive: true });
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
@@ -95,7 +95,7 @@ export function runPromptMigrationTests({
     });
   });
 
-  it('NEW_SHIPPED_MD5 matches the live data.sample body (drift catch)', () => {
+  it('NEW_SHIPPED_MD5 matches the live data.reference body (drift catch)', () => {
     // Without this assertion, a future template edit that forgets to bump
     // NEW_SHIPPED_MD5 would make the migration classify the sample-shaped
     // file as "customized" and silently skip the upgrade.

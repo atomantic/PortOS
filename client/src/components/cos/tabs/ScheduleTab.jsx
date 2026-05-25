@@ -5,7 +5,8 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
 import CronInput from '../../CronInput';
-import { AGENT_OPTIONS, REVIEWER_OPTIONS, DEFAULT_REVIEWER, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
+import ReviewerPicker from '../ReviewerPicker';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import ToggleSwitch from '../../ToggleSwitch';
 import { filterSelectableModels } from '../../../utils/providers';
@@ -498,23 +499,20 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
           })}
         </div>
         {(config.taskMetadata?.reviewLoop || config.taskMetadata?.openPR) && (
-          <div className="mt-3 flex items-center gap-2 pl-2">
-            <label htmlFor={`reviewer-${taskType}`} className="text-xs text-gray-500">Reviewer:</label>
-            <select
-              id={`reviewer-${taskType}`}
-              value={config.taskMetadata?.reviewer || DEFAULT_REVIEWER}
-              onChange={e => onUpdate(taskType, {
-                taskMetadata: { ...(config.taskMetadata || {}), reviewer: e.target.value }
-              })}
+          <div className="mt-3 pl-2">
+            <ReviewerPicker
+              reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : DEFAULT_REVIEWERS)}
+              stopMode={config.taskMetadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE}
+              reviewerApplies={config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true'}
               disabled={updating}
-              className="px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px]"
-              title="Reviewer for the post-PR review loop (--review-with). Copilot = GitHub's auto-review; the others run a local CLI critique via /do:rpr."
-              aria-label="Reviewer for review loop"
-            >
-              {REVIEWER_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value} title={opt.description}>{opt.label}</option>
-              ))}
-            </select>
+              onChange={({ reviewers, stopMode, reviewerApplies }) => {
+                // Drop the legacy single `reviewer` key so storage converges on `reviewers`.
+                const { reviewer, ...rest } = config.taskMetadata || {};
+                onUpdate(taskType, {
+                  taskMetadata: { ...rest, reviewers, reviewStopMode: stopMode, reviewerApplies }
+                });
+              }}
+            />
           </div>
         )}
       </div>

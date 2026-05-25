@@ -507,18 +507,22 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.autoApproved).toBe(true);
   });
 
-  it('should NOT spawn a review-loop follow-up when Copilot review request fails', async () => {
+  it('STILL spawns the review-loop follow-up when the Copilot pre-request fails (follow-up re-requests at its turn)', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/43' });
     git.requestCopilotReview.mockResolvedValue({ success: false, error: 'gh exited 1' });
+    addTask.mockResolvedValue({ id: 'sys-rl-q' });
 
     await cleanupAgentWorktree('agent-1', true, {
       openPR: true, requestCopilotReview: true, description: 'X',
       originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
     });
 
-    // No follow-up because the initial review never landed — nothing to wait on
-    expect(addTask).not.toHaveBeenCalled();
+    // A failed pre-request is recoverable — the follow-up requests Copilot itself at
+    // its turn. Not spawning would leave the PR open with no review loop (the bug).
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot']);
     expect(removeWorktree).toHaveBeenCalled();
   });
 
@@ -551,13 +555,13 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
   // --- non-Copilot reviewer (--review-with claude/gemini/codex) ---
 
-  it('should NOT call the native GH Copilot reviewer API when reviewer is not "copilot"', async () => {
+  it('should NOT call the native GH Copilot reviewer API when the list has no copilot', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/55' });
     addTask.mockResolvedValue({ id: 'sys-rl-y' });
 
     await cleanupAgentWorktree('agent-1', true, {
-      openPR: true, requestCopilotReview: true, reviewer: 'claude', description: 'X',
+      openPR: true, requestCopilotReview: true, reviewers: ['claude'], description: 'X',
       originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
     });
 
@@ -570,14 +574,51 @@ describe('cleanupAgentWorktree - openPR path', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-z' });
 
     await cleanupAgentWorktree('agent-1', true, {
-      openPR: true, requestCopilotReview: true, reviewer: 'codex', description: 'Build with codex review',
+      openPR: true, requestCopilotReview: true, reviewers: ['codex'], description: 'Build with codex review',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
     expect(addTask).toHaveBeenCalledTimes(1);
     const [followUp] = addTask.mock.calls[0];
-    expect(followUp.metadata.reviewLoopReviewer).toBe('codex');
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['codex']);
     expect(followUp.metadata.reviewLoopFollowUp).toBe(true);
+  });
+
+  it('pre-requests Copilot only when it LEADS the list, and threads stop-mode/applies through', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/57' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-w' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'codex', 'gemini'],
+      reviewStopMode: 'on-findings', reviewerApplies: true, description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    expect(git.requestCopilotReview).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'gemini']);
+    expect(followUp.metadata.reviewLoopStopMode).toBe('on-findings');
+    expect(followUp.metadata.reviewLoopReviewerApplies).toBe(true);
+  });
+
+  it('does NOT pre-request Copilot when it trails a CLI reviewer, but keeps it in the follow-up list', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/58' });
+    addTask.mockResolvedValue({ id: 'sys-rl-v' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['codex', 'gemini', 'copilot'], description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    // Copilot is not first → no stale pre-request; the follow-up requests it at its turn.
+    expect(git.requestCopilotReview).not.toHaveBeenCalled();
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['codex', 'gemini', 'copilot']);
   });
 
   // --- skipMerge tests for review-loop follow-up cleanup ---

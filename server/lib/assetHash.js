@@ -1,6 +1,8 @@
 import { stat } from 'fs/promises';
 import { basename, join } from 'path';
+import { createHash } from 'crypto';
 import { atomicWrite, readJSONFile, sha256File, PATHS } from './fileUtils.js';
+import { isPlainObject, canonicalStringify, POLLUTING_KEYS } from './objects.js';
 
 // Each image at `data/images/{uuid}.png` has a sibling `.metadata.json`
 // sidecar carrying its generation provenance (model, prompt, dimensions, etc).
@@ -84,4 +86,41 @@ export async function getOrComputeImageSha256(imagePath) {
     console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
   });
   return { hash, sidecar: next };
+}
+
+/**
+ * Content hash of a sidecar's GEN-PARAMS, computed identically on every
+ * machine so a sender and receiver can compare "do we carry the same
+ * prompt/model metadata?" without the comparison drifting on machine-local
+ * cache state.
+ *
+ * CRITICAL: the `sha256` key is the per-image hash cache
+ * (`{ value, mtimeMs, size }`) that `getOrComputeImageSha256` re-stamps with
+ * the LOCAL image file's mtime+size on every read. Including it in the hash
+ * would make two byte-identical-gen-params sidecars on different machines
+ * produce DIFFERENT hashes that never converge — the receiver re-stamps its
+ * local mtime after every pull and re-diverges, re-flagging the image
+ * "missing" every sync cycle. So we strip `sha256` and hash a CANONICAL
+ * (sorted-key) serialization of the remaining gen-params.
+ *
+ * Returns a hex sha256 string, or null when the sidecar carries no gen-params
+ * beyond the cache key (nothing worth syncing — callers must NOT advertise a
+ * sidecarSha256 in that case).
+ */
+export function sidecarGenParamsHash(sidecar) {
+  if (!isPlainObject(sidecar)) return null;
+  // Object.create(null) so a peer-supplied `__proto__` key can't mutate the
+  // temp object's prototype via `genParams[key] = …` (prototype-pollution
+  // footgun). POLLUTING_KEYS (__proto__/constructor/prototype) are skipped
+  // outright — legitimate gen-params never use them, so the hash is identical
+  // for real sidecars while a hostile one stays inert and deterministic.
+  const genParams = Object.create(null);
+  let count = 0;
+  for (const key of Object.keys(sidecar)) {
+    if (key === 'sha256' || POLLUTING_KEYS.has(key)) continue;
+    genParams[key] = sidecar[key];
+    count += 1;
+  }
+  if (count === 0) return null;
+  return createHash('sha256').update(canonicalStringify(genParams)).digest('hex');
 }

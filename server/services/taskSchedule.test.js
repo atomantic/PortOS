@@ -776,6 +776,20 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('Sentinel body for substitution test.')
       expect(loadSlashdoFile).toHaveBeenCalledWith('replan', { stripFrontmatter: true })
     })
+
+    it('plan-task default self-picks like /claim — no scheduler pre-pick / Item Constraint', async () => {
+      // The agent picks its own slug at execution time (Phase 1) rather than
+      // accepting a slug the scheduler pre-reserved. Pin the absence of the
+      // pre-pick scaffolding so a future edit can't quietly reintroduce the
+      // dispatch-time reservation race (see cos.js PLAN_SELF_CLAIM_TASK_TYPES).
+      const prompt = await getTaskPrompt('plan-task')
+      expect(prompt).not.toContain('{planConstraint}')
+      expect(prompt).not.toContain('Item Constraint')
+      expect(prompt).not.toContain('scheduler pre-reserved')
+      // It still drives the /claim flow: in-flight scan + claim/<slug> branch.
+      expect(prompt).toContain('claim/<slug>')
+      expect(prompt).toContain('in-flight set')
+    })
   })
 
   describe('resetExecutionHistory', () => {

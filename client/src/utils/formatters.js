@@ -80,7 +80,9 @@ export function formatRuntime(ms) {
  */
 export function timeAgo(dateStr, fallback = 'never') {
   if (!dateStr) return fallback;
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  const time = new Date(dateStr).getTime();
+  if (!Number.isFinite(time)) return fallback; // Invalid Date → fallback, not "NaNy ago"
+  const seconds = Math.floor((Date.now() - time) / 1000);
   if (seconds < 0) return 'just now';
   if (seconds < 60) return seconds < 10 ? 'just now' : `${seconds}s ago`;
   const mins = Math.floor(seconds / 60);
@@ -239,17 +241,46 @@ export function formatDurationMs(ms) {
 
 /**
  * Format a duration in minutes as a human-readable string
- * @param {number} minutes - Duration in minutes
- * @returns {string} Formatted duration (e.g., "30m", "1h 30m", "2h")
+ * @param {number|null|undefined} minutes - Duration in minutes; nullish → ''
+ * @param {object} [options]
+ * @param {boolean} [options.approximate=false] - Prefix the result with `~`
+ *   to signal an estimate (e.g., "~1h 30m") for predicted/averaged durations.
+ * @returns {string} Formatted duration (e.g., "30m", "1h 30m", "2h", "~2h")
  */
-export function formatDurationMin(minutes) {
+export function formatDurationMin(minutes, options = {}) {
   if (minutes == null) return '';
+  const { approximate = false } = options ?? {};
+  const prefix = approximate ? '~' : '';
   if (minutes >= 60) {
     const h = Math.floor(minutes / 60);
     const m = minutes % 60;
-    return m ? `${h}h ${m}m` : `${h}h`;
+    return m ? `${prefix}${h}h ${m}m` : `${prefix}${h}h`;
   }
-  return `${minutes}m`;
+  return `${prefix}${minutes}m`;
+}
+
+/**
+ * Format a calendar event's date+time, with a distinct all-day rendering.
+ * Tuned for the event-detail panel: timed events show a short weekday plus
+ * time (e.g. "Sat, Apr 1, 1:30 PM"); all-day events show a full weekday and
+ * year (e.g. "Saturday, April 1, 2026"). Kept separate from `formatDateTime`
+ * because the weekday-led shape is event-specific.
+ * Behavior-identical to the local formatter it replaced: any input is passed
+ * straight to `new Date(...)`, so malformed/empty values render the same
+ * `Invalid Date` / epoch string the original did. The two call sites always
+ * pass a real event time, so this degenerate path is never exercised — kept
+ * faithful so the migration introduces zero visual change.
+ * @param {string|Date|null} dateStr - ISO timestamp or Date object
+ * @param {object} [options]
+ * @param {boolean} [options.allDay=false] - Render date-only (all-day event).
+ * @returns {string} Formatted event date/time
+ */
+export function formatEventDateTime(dateStr, options = {}) {
+  const { allDay = false } = options ?? {};
+  const date = new Date(dateStr);
+  // All-day events render exactly like `formatDateFull` (full weekday + year).
+  if (allDay) return formatDateFull(date);
+  return date.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 /**

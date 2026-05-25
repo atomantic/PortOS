@@ -11,7 +11,10 @@ vi.mock('./config.js', () => ({
 vi.mock('./tts.js', () => ({
   synthesize: vi.fn(async () => ({ wav: Buffer.alloc(64), latencyMs: 12 })),
 }));
-vi.mock('../../lib/timezone.js', () => ({
+// Keep the real HH:MM helpers (HHMM_RE/parseHHMM/isWithinTimeWindow now live
+// here) and override only the timezone-lookup pair the integration path needs.
+vi.mock('../../lib/timezone.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   getUserTimezone: vi.fn(async () => 'UTC'),
   getLocalParts: vi.fn(() => ({ hour: 14, minute: 0 })),
 }));

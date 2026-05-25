@@ -370,7 +370,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
             {universes.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
           <Link
-            to="/universe-builder"
+            to={series.universeId ? `/universes/${encodeURIComponent(series.universeId)}` : '/universes'}
             className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
           >
             <Globe size={12} /> Open
@@ -412,7 +412,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           // UniverseCanonSection) so users land on the folded-in canon UI
           // instead of the bible at the top of the builder.
           <Link
-            to={`/universe-builder/${encodeURIComponent(series.universeId)}#canon`}
+            to={`/universes/${encodeURIComponent(series.universeId)}#canon`}
             className="block text-xs text-port-accent hover:underline"
           >
             Manage characters, places, and objects on the linked Universe →

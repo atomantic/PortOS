@@ -11,6 +11,7 @@ import { join, extname } from 'path';
 import { getProviderById } from './providers.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
 const SCREENSHOTS_DIR = PATHS.screenshots;
 const DEFAULT_VISION_TIMEOUT_MS = 60000;
@@ -62,6 +63,10 @@ async function loadImageAsBase64(imagePath) {
  * @returns {Promise<Object>} - API response
  */
 async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, timeout = DEFAULT_VISION_TIMEOUT_MS }) {
+  await ensureOllamaProviderReady({ endpoint }).then((ready) => {
+    if (!ready.success) throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
+  });
+
   const response = await fetchWithTimeout(`${endpoint}/chat/completions`, {
     method: 'POST',
     headers: {

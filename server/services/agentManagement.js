@@ -15,7 +15,6 @@ import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { activeAgents, runnerAgents, userTerminatedAgents, useRunner } from './agentState.js';
 import { cleanupAgentWorktree, syncRunnerAgents } from './agentLifecycle.js';
-import { cleanupOrphanedWorktrees } from './worktreeManager.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 import { PATHS } from '../lib/fileUtils.js';
 
@@ -371,16 +370,15 @@ export async function cleanupOrphanedAgents() {
     }
   }
 
-  // Clean up worktrees for orphaned agents
+  // Clean up worktrees for the specific agents detected as orphaned this cycle.
+  // The blanket "reap every worktree dir with no live agent" sweep lives in the
+  // scheduled `agent-data-cleanup` job (autonomousJobs.js), NOT here — running it
+  // on the 15-min health-check hot path gave it a wide window to remove a human's
+  // in-flight `/claim` worktree mid-review. Targeted cleanup of a known-dead
+  // agent's own worktree is safe and stays.
   for (const { agentId } of orphanedTaskIds) {
     await cleanupAgentWorktree(agentId, false);
   }
-
-  // Also clean up any orphaned worktrees not tracked by any agent
-  const activeIds = new Set([...activeAgents.keys(), ...runnerAgents.keys()]);
-  await cleanupOrphanedWorktrees(ROOT_DIR, activeIds).catch(err => {
-    console.log(`⚠️ Orphaned worktree cleanup failed: ${err.message}`);
-  });
 
   // Handle orphaned tasks - reset for retry or create investigation task
   for (const { taskId, agentId } of orphanedTaskIds) {

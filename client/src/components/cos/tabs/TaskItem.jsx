@@ -20,6 +20,7 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
+import { formatDurationMin } from '../../../utils/formatters';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -73,16 +74,6 @@ function extractTaskType(description) {
   if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
   if (d.includes('investigate') || d.includes('debug')) return 'investigation';
   return 'feature';
-}
-
-// Format duration in minutes
-function formatDurationMin(mins) {
-  if (mins >= 60) {
-    const hours = Math.floor(mins / 60);
-    const remainingMins = mins % 60;
-    return remainingMins > 0 ? `~${hours}h ${remainingMins}m` : `~${hours}h`;
-  }
-  return `~${mins}m`;
 }
 
 // Format file size for display
@@ -261,7 +252,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
               >
                 <Timer size={10} aria-hidden="true" />
-                {formatDurationMin(durationEstimate.estimatedMin)}
+                {formatDurationMin(durationEstimate.estimatedMin, { approximate: true })}
               </span>
             )}
             {/* Success rate indicator for pending tasks */}

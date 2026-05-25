@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { isInTimeWindow, isValidTimeString, MORNING_DEFAULT_WINDOW, pickActiveLayoutId, recordManualLayoutPick } from './timeWindow.js';
+import { isInTimeWindow, isValidTimeString, MORNING_DEFAULT_WINDOW, pickActiveLayoutId, recordManualLayoutPick, TIME_STRING_RE } from './timeWindow.js';
+
+describe('TIME_STRING_RE parity', () => {
+  // Must stay byte-for-byte equal to HHMM_STRICT_RE in server/lib/timezone.js
+  // (and the dashboard route mock). If this fails, sync all three.
+  it('mirrors the server HHMM_STRICT_RE source', () => {
+    expect(TIME_STRING_RE.source).toBe('^([01]\\d|2[0-3]):[0-5]\\d$');
+  });
+});
 
 describe('isValidTimeString', () => {
   it('accepts HH:MM in 24h format', () => {

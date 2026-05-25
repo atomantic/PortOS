@@ -20,8 +20,16 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn()
 }));
 
+vi.mock('../lib/gitRemote.js', () => ({
+  getOriginInfo: vi.fn(),
+  UPSTREAM_OWNER: 'atomantic',
+  UPSTREAM_REPO: 'PortOS',
+  UPSTREAM_FULL_NAME: 'atomantic/PortOS'
+}));
+
 import { readJSONFile, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { execGh } from './github.js';
+import { getOriginInfo } from '../lib/gitRemote.js';
 import {
   compareSemver,
   getCurrentVersion,
@@ -30,6 +38,8 @@ import {
   clearIgnored,
   checkForUpdate,
   clearStaleUpdateInProgress,
+  getRemoteInfo,
+  syncFork,
   updateEvents
 } from './updateChecker.js';
 
@@ -81,6 +91,17 @@ describe('getCurrentVersion', () => {
 describe('getUpdateStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      originUrl: 'git@github.com:atomantic/PortOS.git',
+      host: 'github.com',
+      owner: 'atomantic',
+      repo: 'PortOS',
+      fullName: 'atomantic/PortOS',
+      isUpstream: true,
+      isGithub: true,
+      isFork: false
+    });
   });
 
   it('should report no update when latestRelease is null', async () => {
@@ -399,5 +420,332 @@ describe('clearStaleUpdateInProgress', () => {
     const cleared = await clearStaleUpdateInProgress();
     expect(cleared).toBe(false);
     expect(atomicWrite).not.toHaveBeenCalled();
+  });
+});
+
+describe('getRemoteInfo', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('proxies to getOriginInfo from lib/gitRemote', async () => {
+    const mock = {
+      hasOrigin: true,
+      originUrl: 'git@github.com:alice/PortOS.git',
+      host: 'github.com',
+      owner: 'alice',
+      repo: 'PortOS',
+      fullName: 'alice/PortOS',
+      isUpstream: false,
+      isGithub: true,
+      isFork: true
+    };
+    getOriginInfo.mockResolvedValue(mock);
+    await expect(getRemoteInfo()).resolves.toEqual(mock);
+  });
+});
+
+describe('getUpdateStatus remoteInfo', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('includes remoteInfo and upstream metadata', async () => {
+    const remote = {
+      hasOrigin: true,
+      originUrl: 'git@github.com:alice/PortOS.git',
+      host: 'github.com',
+      owner: 'alice',
+      repo: 'PortOS',
+      fullName: 'alice/PortOS',
+      isUpstream: false,
+      isGithub: true,
+      isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null,
+        latestRelease: { version: '1.27.0' },
+        ignoredVersions: [],
+        updateInProgress: false,
+        lastUpdateResult: null
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.remoteInfo).toEqual(remote);
+    expect(status.upstream).toEqual({ owner: 'atomantic', repo: 'PortOS', fullName: 'atomantic/PortOS' });
+    expect(status.updateAvailable).toBe(true);
+  });
+
+  it('returns remoteInfo=null when origin lookup throws', async () => {
+    getOriginInfo.mockRejectedValue(new Error('not a git repo'));
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null,
+        latestRelease: null,
+        ignoredVersions: [],
+        updateInProgress: false,
+        lastUpdateResult: null
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.remoteInfo).toBeNull();
+    expect(status.upstream.fullName).toBe('atomantic/PortOS');
+  });
+
+  it('forkSyncFresh is true within the freshness window for the same fork', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:alice/PortOS.git', host: 'github.com',
+      owner: 'alice', repo: 'PortOS', fullName: 'alice/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const recent = new Date(Date.now() - 2 * 60 * 1000).toISOString(); // 2 min ago
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        lastForkSync: { fullName: 'alice/PortOS', syncedAt: recent }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(true);
+    expect(status.forkSyncWindowMs).toBe(10 * 60 * 1000);
+  });
+
+  it('forkSyncFresh is false when lastForkSync is older than the window', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:alice/PortOS.git', host: 'github.com',
+      owner: 'alice', repo: 'PortOS', fullName: 'alice/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const stale = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30 min ago
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        lastForkSync: { fullName: 'alice/PortOS', syncedAt: stale }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(false);
+  });
+
+  it('forkSyncFresh is case-insensitive on fullName (matches GitHub semantics)', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:ALICE/PortOS.git', host: 'github.com',
+      owner: 'ALICE', repo: 'PortOS', fullName: 'ALICE/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const recent = new Date(Date.now() - 1 * 60 * 1000).toISOString();
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        // Stored with lowercase variant — should still match the uppercase origin
+        lastForkSync: { fullName: 'alice/portos', syncedAt: recent }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(true);
+  });
+
+  it('forkSyncFresh is false when lastForkSync.fullName mismatches the current origin', async () => {
+    const remote = {
+      hasOrigin: true, originUrl: 'git@github.com:bob/PortOS.git', host: 'github.com',
+      owner: 'bob', repo: 'PortOS', fullName: 'bob/PortOS',
+      isUpstream: false, isGithub: true, isFork: true
+    };
+    getOriginInfo.mockResolvedValue(remote);
+    const recent = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null, latestRelease: null, ignoredVersions: [],
+        updateInProgress: false, lastUpdateResult: null,
+        lastForkSync: { fullName: 'alice/PortOS', syncedAt: recent }
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+
+    const status = await getUpdateStatus();
+    expect(status.forkSyncFresh).toBe(false);
+  });
+});
+
+describe('syncFork', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    atomicWrite.mockResolvedValue(undefined);
+    ensureDir.mockResolvedValue(undefined);
+    readJSONFile.mockResolvedValue({
+      lastCheck: null,
+      latestRelease: null,
+      ignoredVersions: [],
+      updateInProgress: false,
+      lastUpdateResult: null,
+      lastForkSync: null
+    });
+  });
+
+  it('runs gh repo sync against the user fork and the upstream source', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      originUrl: 'git@github.com:alice/PortOS.git',
+      host: 'github.com',
+      owner: 'alice',
+      repo: 'PortOS',
+      fullName: 'alice/PortOS',
+      isUpstream: false,
+      isGithub: true,
+      isFork: true
+    });
+    execGh.mockResolvedValue('✓ Synced the "main" branch from atomantic/PortOS to alice/PortOS');
+
+    const result = await syncFork();
+    expect(execGh).toHaveBeenCalledWith([
+      'repo', 'sync', 'alice/PortOS', '--source', 'atomantic/PortOS', '--branch', 'main'
+    ]);
+    expect(result.synced).toBe(true);
+    expect(result.fullName).toBe('alice/PortOS');
+    expect(result.source).toBe('atomantic/PortOS');
+    expect(result.mergedBranch).toBe('main');
+    expect(result.alreadyUpToDate).toBe(false);
+  });
+
+  it('detects already-up-to-date response', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: false,
+      isFork: true,
+      fullName: 'alice/PortOS',
+      owner: 'alice',
+      repo: 'PortOS'
+    });
+    execGh.mockResolvedValue('✓ Repository is up to date with atomantic/PortOS');
+
+    const result = await syncFork();
+    expect(result.alreadyUpToDate).toBe(true);
+  });
+
+  it('respects an explicit branch argument', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: false,
+      isFork: true,
+      fullName: 'alice/PortOS',
+      owner: 'alice',
+      repo: 'PortOS'
+    });
+    execGh.mockResolvedValue('✓ Synced');
+
+    await syncFork({ branch: 'release' });
+    expect(execGh).toHaveBeenCalledWith([
+      'repo', 'sync', 'alice/PortOS', '--source', 'atomantic/PortOS', '--branch', 'release'
+    ]);
+  });
+
+  it('refuses when there is no origin remote', async () => {
+    getOriginInfo.mockResolvedValue({ hasOrigin: false, isGithub: false, isFork: false, isUpstream: false });
+    await expect(syncFork()).rejects.toThrow(/no git origin/i);
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('refuses when origin is not on GitHub', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: false,
+      isFork: false,
+      isUpstream: false,
+      host: 'gitlab.com',
+      fullName: 'team/PortOS'
+    });
+    await expect(syncFork()).rejects.toThrow(/github-only/i);
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('refuses when origin is already the upstream', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: true,
+      isFork: false,
+      fullName: 'atomantic/PortOS'
+    });
+    await expect(syncFork()).rejects.toThrow(/already the upstream/i);
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('uses pre-fetched remoteInfo without re-spawning git', async () => {
+    const remote = {
+      hasOrigin: true, isGithub: true, isUpstream: false, isFork: true,
+      fullName: 'alice/PortOS', owner: 'alice', repo: 'PortOS'
+    };
+    execGh.mockResolvedValue('✓ Synced');
+    await syncFork({ remoteInfo: remote });
+    expect(getOriginInfo).not.toHaveBeenCalled();
+    expect(execGh).toHaveBeenCalledWith([
+      'repo', 'sync', 'alice/PortOS', '--source', 'atomantic/PortOS', '--branch', 'main'
+    ]);
+  });
+
+  it('refuses when origin is a GitHub repo but not a fork (renamed/unrelated)', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: false,
+      isFork: false,
+      fullName: 'alice/MyCustomOS',
+      owner: 'alice',
+      repo: 'MyCustomOS'
+    });
+    await expect(syncFork()).rejects.toThrow(/not a fork of atomantic\/PortOS/i);
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('propagates gh CLI errors (diverged fork)', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: false,
+      isFork: true,
+      fullName: 'alice/PortOS',
+      owner: 'alice',
+      repo: 'PortOS'
+    });
+    execGh.mockRejectedValue(new Error('failed to sync: the destination repository would not be a fast forward'));
+    await expect(syncFork()).rejects.toThrow(/fast forward/i);
+  });
+
+  it('persists lastForkSync metadata to state on success', async () => {
+    getOriginInfo.mockResolvedValue({
+      hasOrigin: true,
+      isGithub: true,
+      isUpstream: false,
+      isFork: true,
+      fullName: 'alice/PortOS',
+      owner: 'alice',
+      repo: 'PortOS'
+    });
+    execGh.mockResolvedValue('✓ Synced');
+
+    await syncFork();
+    expect(atomicWrite).toHaveBeenCalled();
+    const saved = JSON.parse(atomicWrite.mock.calls[0][1]);
+    expect(saved.lastForkSync).toEqual(expect.objectContaining({
+      fullName: 'alice/PortOS',
+      source: 'atomantic/PortOS',
+      branch: 'main',
+      alreadyUpToDate: false
+    }));
+    expect(saved.lastForkSync.syncedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

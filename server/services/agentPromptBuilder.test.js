@@ -182,6 +182,19 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/MERGED/);
     });
 
+    it('TUI simplify step is provider-aware — non-Claude TUI (codex-tui) gets the inline equivalent, not /simplify', () => {
+      // /simplify is a Claude Code TUI built-in; codex-tui / gemini-tui can't run it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'codex-tui' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
+    });
+
     it('renders the Completion Workflow with /do:push when openPR is false', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: false } }),
@@ -202,6 +215,22 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/quit`/);
+      expect(prompt).toMatch(/PortOS will push and open the PR/);
+    });
+
+    it('inlines a simplify-equivalent self-review (no /simplify command) for non-Claude CLI agents', () => {
+      // /simplify is a Claude Code built-in; codex/gemini can't run it. With
+      // simplify enabled they must still get the reuse/quality/efficiency pass,
+      // phrased inline so any CLI can perform it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false }); // no providerId → not Claude → no slashdo
+      expect(prompt).toMatch(/^## Completion$/m);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
       expect(prompt).toMatch(/PortOS will push and open the PR/);
     });
 
@@ -284,9 +313,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
       expect(prompt).toMatch(/MERGED/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
-      // Default reviewer (copilot) — `--review-with copilot` should still be
-      // surfaced so the agent knows the explicit choice.
-      expect(prompt).toMatch(/--review-with copilot/);
+      // Default reviewer (copilot, lone) — names copilot but emits no `--review-with`
+      // (the lone default needs no flag).
+      expect(prompt).toMatch(/Reviewers \(in order\)\*\*: `copilot`/);
+      expect(prompt).not.toMatch(/--review-with/);
     });
 
     it('threads a non-default reviewer (claude) into the follow-up block via --review-with', () => {
@@ -298,7 +328,7 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRNumber: 9,
           reviewLoopPROwner: 'o',
           reviewLoopPRRepo: 'r',
-          reviewLoopReviewer: 'claude',
+          reviewLoopReviewers: ['claude'],
           sourceTaskId: 'task-src-2',
         }}),
         '/r',
@@ -306,17 +336,78 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/--review-with claude/);
       // The Copilot-specific pre-request wording must be replaced for CLI reviewers.
-      expect(prompt).toMatch(/CLI-based reviewer/);
+      expect(prompt).toMatch(/CLI-based/);
+    });
+
+    it('threads an ordered multi-reviewer list + flags into the follow-up block', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex', 'gemini', 'copilot'],
+          reviewLoopStopMode: 'on-clean',
+          reviewLoopReviewerApplies: true,
+          sourceTaskId: 'task-src-3',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with codex,gemini,copilot/);
+      expect(prompt).toMatch(/--review-stop-on-clean/);
+      expect(prompt).toMatch(/--reviewer-applies/);
+      // Ordered run instruction.
+      expect(prompt).toMatch(/For EACH reviewer in order/);
     });
 
     it('threads reviewer into the TUI Completion Workflow as `/do:pr --review-with <reviewer>`', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewer: 'gemini' } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewers: ['gemini'] } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true });
       expect(prompt).toMatch(/`\/do:pr --review-with gemini`/);
+    });
+
+    it('allows merging on `partial` in the completion merge step when a stop-mode is set', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'gemini'], reviewStopMode: 'on-clean' } }),
+        '/r',
+        { branchName: 'feat', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).toMatch(/--review-stop-on-clean/);
+      // `partial` is a successful stop-mode short-circuit → mergeable.
+      expect(prompt).toMatch(/`partial`/);
+    });
+
+    it('does NOT merge on `partial` under the default stop-mode (all)', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'gemini'] } }),
+        '/r',
+        { branchName: 'feat', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).not.toMatch(/`partial`/);
+    });
+
+    it('tells the follow-up to request Copilot at its turn when copilot does NOT lead the list', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopReviewers: ['codex', 'copilot'],
+          sourceTaskId: 'task-src-4',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      // Must instruct requesting Copilot at its turn — not claim a pre-request happened.
+      expect(prompt).toMatch(/request a Copilot review when you reach its turn/);
+      expect(prompt).not.toMatch(/already requested the initial Copilot/);
     });
 
     it('worktreeCommitGuidance: existing-branch wins over slashdo/PR — emits the review-fix push wording', () => {

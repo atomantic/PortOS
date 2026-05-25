@@ -13,6 +13,7 @@
 
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { HHMM_STRICT_RE } from '../lib/timezone.js';
 
 const STATE_PATH = join(PATHS.data, 'dashboard-layouts.json');
 
@@ -195,8 +196,9 @@ export const GRID_ITEM_H_MAX = 50;
 // activateWindow and the local clock falls inside it, the dashboard
 // auto-selects that layout on a fresh visit (unless the user picked a
 // different one today). Stored as a literal "HH:MM" pair so a hand-edited
-// JSON is human-readable.
-export const TIME_STRING_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+// JSON is human-readable. Sourced from the strict (zero-padded) shared regex
+// in server/lib/timezone.js; mirrored client-side in client/src/utils/timeWindow.js.
+export const TIME_STRING_RE = HHMM_STRICT_RE;
 
 // Sanitize a layout's activateWindow. Returns null for any malformed shape
 // (missing fields, non-string types, off-format strings). A null result

@@ -26,7 +26,7 @@
  *
  *   2. `ensureSampleContent` copies missing prompt files — so
  *      `data/prompts/stages/writers-room-places.md` will be auto-seeded
- *      from data.sample (full post-rename + post-migration-007 content)
+ *      from data.reference (full post-rename + post-migration-007 content)
  *      while the user's old `writers-room-settings.md` is left orphaned.
  *      Switching the stage key to `…-places` makes the runtime use the
  *      freshly seeded sample template, ignoring any customizations the
@@ -63,17 +63,17 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 
 const STAGE_CONFIG_REL_PATH = 'data/prompts/stage-config.json';
-const SAMPLE_CONFIG_REL_PATH = 'data.sample/prompts/stage-config.json';
+const SAMPLE_CONFIG_REL_PATH = 'data.reference/prompts/stage-config.json';
 const LEGACY_KEY = 'writers-room-settings';
 const NEW_KEY = 'writers-room-places';
 
 const PROMPTS_STAGES_DIR_REL = 'data/prompts/stages';
-const SAMPLE_STAGES_DIR_REL = 'data.sample/prompts/stages';
+const SAMPLE_STAGES_DIR_REL = 'data.reference/prompts/stages';
 const LEGACY_PROMPT_FILE = 'writers-room-settings.md';
 const NEW_PROMPT_FILE = 'writers-room-places.md';
 
 // MD5 of the pre-rename `writers-room-settings.md` shipped baseline (the
-// content that existed in data.sample right before commit be903564 renamed
+// content that existed in data.reference right before commit be903564 renamed
 // the file to `writers-room-places.md`). An installed legacy file at this
 // hash is an *unmodified* default — the user did not customize it. This
 // also happens to equal migration 007's `OLD_SHIPPED_MD5` for the renamed
@@ -140,7 +140,7 @@ const migratePromptFile = async (rootDir) => {
   }
 
   if (newContent != null && sampleContent != null && newContent === sampleContent) {
-    // `…-places.md` was just auto-seeded from data.sample. Decide whether
+    // `…-places.md` was just auto-seeded from data.reference. Decide whether
     // the legacy file is an unmodified default (keep the modern auto-seed)
     // or carries real user customizations (preserve those over the seed).
     //
@@ -214,7 +214,7 @@ export default {
       throw err;
     });
     if (raw == null) {
-      console.log(`📄 ${STAGE_CONFIG_REL_PATH} not present — skipping (fresh install will copy from data.sample)`);
+      console.log(`📄 ${STAGE_CONFIG_REL_PATH} not present — skipping (fresh install will copy from data.reference)`);
       return;
     }
 

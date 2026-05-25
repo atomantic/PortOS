@@ -2,7 +2,7 @@
  * Update Claude CLI/TUI provider defaults to the current model lineup.
  *
  * Two prior seeded shapes existed for `claude-code` / `claude-code-tui`:
- *   1. The data.sample 4-item dated list — `claude-haiku-4-5-20251001`,
+ *   1. The data.reference 4-item dated list — `claude-haiku-4-5-20251001`,
  *      `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`,
  *      `claude-opus-4-6` (defaultModel: `claude-opus-4-6`).
  *   2. The scaffold-route 3-item dated list — `claude-haiku-4-5-20251001`,
@@ -22,7 +22,7 @@
  *
  * Tier-pointer policy when a rewrite does happen:
  *   - `defaultModel`: if it's one of the previously *seeded* defaults
- *     (`claude-opus-4-6` from data.sample, `claude-sonnet-4-5-20250929`
+ *     (`claude-opus-4-6` from data.reference, `claude-sonnet-4-5-20250929`
  *     from the scaffold route), upgrade to the policy default
  *     `claude-opus-4-7`. If it's some *other* retired id (a user pinned
  *     haiku-/opus-4-5-dated as default), fall back to the per-model
@@ -89,7 +89,7 @@ const RETIRED_TO_SUCCESSOR = {
 };
 
 // `defaultModel` follows a different policy than the tier pointers: when the
-// existing default is one of the previously *seeded* defaults (data.sample's
+// existing default is one of the previously *seeded* defaults (data.reference's
 // `claude-opus-4-6` or scaffold's `claude-sonnet-4-5-20250929`), upgrade to
 // the policy default `claude-opus-4-7` — this is the migration's stated
 // goal. For any *other* retired-id default (a user who actively pinned
@@ -166,7 +166,7 @@ export default {
       throw err;
     });
     if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds from data.sample with the new defaults)`);
+      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds from data.reference with the new defaults)`);
       return;
     }
 

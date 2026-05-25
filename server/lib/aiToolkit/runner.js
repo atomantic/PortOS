@@ -5,6 +5,7 @@ import { join, extname } from 'path';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
+import { ensureProviderReady as ensureOllamaProviderReady } from '../../services/ollamaManager.js';
 
 export function createRunnerService(config = {}) {
   const {
@@ -309,16 +310,19 @@ export function createRunnerService(config = {}) {
         messageContent = prompt;
       }
 
-      const response = await fetch(`${provider.endpoint}/chat/completions`, {
-        method: 'POST',
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: model || provider.defaultModel,
-          messages: [{ role: 'user', content: messageContent }],
-          stream: true
-        })
-      }).catch(err => ({ ok: false, error: err.message, status: 0 }));
+      const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
+      const response = ready.success
+        ? await fetch(`${provider.endpoint}/chat/completions`, {
+            method: 'POST',
+            headers,
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: model || provider.defaultModel,
+              messages: [{ role: 'user', content: messageContent }],
+              stream: true
+            })
+          }).catch(err => ({ ok: false, error: err.message, status: 0 }))
+        : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
 
       if (!response.ok) {
         activeRuns.delete(runId);

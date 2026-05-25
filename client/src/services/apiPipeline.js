@@ -59,7 +59,9 @@ export const PIPELINE_STAGE_STATUS_COLOR = Object.freeze({
 });
 
 // ---- Series ----
-export const listPipelineSeries = () => request('/pipeline/series');
+// `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
+// (e.g. an optional join that should fail quietly) — see CLAUDE.md.
+export const listPipelineSeries = (options = {}) => request('/pipeline/series', options);
 export const getPipelineSeries = (id) => request(`/pipeline/series/${encodeURIComponent(id)}`);
 export const createPipelineSeries = (data) => request('/pipeline/series', {
   method: 'POST',

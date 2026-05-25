@@ -20,29 +20,14 @@
  *   re-seed it. This matches the behavior of the fresh-install path.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
 import { INTENT_LAYOUTS } from '../../server/services/dashboardLayouts.js';
+import { readLayoutsDoc, writeLayoutsDoc } from './_lib.js';
 
 export default {
   async up({ rootDir }) {
-    const path = join(rootDir, 'data', 'dashboard-layouts.json');
-    const raw = await readFile(path, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📦 migration 030: no dashboard-layouts.json yet — fresh install will seed from defaults.`);
-      return { updated: 0, reason: 'no-state' };
-    }
-    let doc;
-    try { doc = JSON.parse(raw); } catch {
-      console.log(`📦 migration 030: dashboard-layouts.json unreadable — skipping.`);
-      return { updated: 0, reason: 'unreadable' };
-    }
-    if (!doc || !Array.isArray(doc.layouts)) {
-      return { updated: 0, reason: 'no-layouts-array' };
-    }
+    const result = await readLayoutsDoc({ rootDir, label: 'migration 030' });
+    if (!result.ok) return { updated: 0, reason: result.reason };
+    const { doc, path } = result;
 
     const existingIds = new Set(doc.layouts.map((l) => l?.id).filter(Boolean));
     const toAdd = INTENT_LAYOUTS.filter((l) => !existingIds.has(l.id));
@@ -52,7 +37,7 @@ export default {
     }
 
     doc.layouts.push(...toAdd.map((l) => ({ ...l, builtIn: true })));
-    await writeFile(path, JSON.stringify(doc, null, 2));
+    await writeLayoutsDoc(path, doc);
     console.log(`📦 migration 030: seeded ${toAdd.length} intent layout(s) (${toAdd.map((l) => l.id).join(', ')}).`);
     return { updated: toAdd.length };
   },

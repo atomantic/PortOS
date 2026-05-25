@@ -96,7 +96,7 @@ PortOS/
 ├── data/                      # Runtime data (gitignored)
 │   ├── apps.json              # Registered apps (read by autofixer)
 │   ├── providers.json         # AI provider configs
-│   ├── history.json           # Action history
+│   ├── history.jsonl          # Action history (JSON Lines)
 │   ├── browser-config.json    # Browser CDP/health configuration
 │   ├── TASKS.md               # User task file
 │   ├── COS-TASKS.md           # System task file

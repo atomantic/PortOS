@@ -15,6 +15,7 @@ import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
 import avatarRoutes from './routes/avatar.js';
 import systemHealthRoutes from './routes/systemHealth.js';
+import capabilitiesRoutes from './routes/capabilities.js';
 import appsRoutes from './routes/apps.js';
 import referenceReposRoutes from './routes/referenceRepos.js';
 import portsRoutes from './routes/ports.js';
@@ -67,6 +68,9 @@ import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
 import databaseRoutes from './routes/database.js';
+import localLlmRoutes from './routes/localLlm.js';
+import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './services/localLlm.js';
+import { ensureRunning as ensureOllamaRunning } from './services/ollamaManager.js';
 import searchRoutes from './routes/search.js';
 import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
@@ -139,6 +143,10 @@ import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridg
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { runMigrations } from '../scripts/run-migrations.js';
+import { verifyCollectionVersions } from './lib/collectionStore.js';
+import { universeStore } from './services/universeBuilder.js';
+import { seriesStore } from './services/pipeline/series.js';
+import { issueStore } from './services/pipeline/issues.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -174,7 +182,7 @@ initSocket(io);
 
 // Build absolute paths - use centralized PATHS for data, __dirname for non-data paths
 const DATA_DIR = PATHS.data;
-const DATA_SAMPLE_DIR = join(__dirname, '..', 'data.sample');
+const DATA_REFERENCE_DIR = join(__dirname, '..', 'data.reference');
 
 // Apply pending data migrations BEFORE the AI toolkit reads stage-config.json
 // and providers.json. Without this, a plain pull-and-restart (no update.sh)
@@ -186,6 +194,16 @@ await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
   // Log the full stack (or stringified err for non-Error throws) so failures
   // during boot are diagnosable without rerunning under a debugger.
   console.error(`❌ Migration run failed at startup: ${err?.stack ?? err}`);
+});
+
+// Verify every registered collection's on-disk type-level schemaVersion
+// matches what the code expects. Mismatches mean a migration didn't run (or
+// the user rolled the code back below a forward-only migration) — log loudly
+// but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
+// Model"); a hard exit on startup is worse than a noisy log the user can act
+// on. Returns per-store statuses for downstream telemetry; we discard them.
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore()]).catch(err => {
+  console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
 // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
@@ -219,6 +237,7 @@ const aiToolkitHooks = {
         workspacePath: metadata.workspacePath,
         workspaceName: metadata.workspaceName,
         errorDetails: errorMessage,
+        errorAnalysis: metadata.errorAnalysis,
         // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
       }
     });
@@ -232,7 +251,7 @@ const aiToolkit = createAIToolkit({
   runsDir: 'runs',
   promptsDir: 'prompts',
   screenshotsDir: join(DATA_DIR, 'screenshots'),
-  sampleProvidersFile: join(DATA_SAMPLE_DIR, 'providers.json'),
+  sampleProvidersFile: join(DATA_REFERENCE_DIR, 'providers.json'),
   io,
   asyncHandler,
   hooks: aiToolkitHooks
@@ -251,6 +270,17 @@ try {
   await aiToolkit.services.providers.getAllProviders();
 } catch (err) {
   console.error(`❌ Failed to load providers at startup: ${err.message}`);
+}
+
+// Ensure the provider paired with the active local-LLM backend (LLM_BACKEND in
+// .env, chosen at setup time) is enabled, so a fresh install can use Ollama /
+// LM Studio for runs without hand-toggling it in the Providers UI.
+const activeLocalLlmBackend = getLocalLlmBackend();
+ensureBackendProvider(activeLocalLlmBackend).catch((err) =>
+  console.error(`⚠️ Failed to enable local LLM backend provider: ${err.message}`));
+if (activeLocalLlmBackend === 'ollama') {
+  ensureOllamaRunning({ preferPersistent: true }).catch((err) =>
+    console.error(`⚠️ Failed to start Ollama for active local LLM backend: ${err.message}`));
 }
 
 // Swap the toolkit's generic executeCliRun for PortOS's variant that adds
@@ -329,6 +359,7 @@ app.set('io', io);
 app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemHealthRoutes);
+app.use('/api/capabilities', capabilitiesRoutes);
 app.use('/api/apps', appsRoutes);
 app.use('/api/apps/:appId/reference-repos', referenceReposRoutes);
 app.use('/api/ports', portsRoutes);
@@ -387,6 +418,7 @@ app.use('/api/digital-twin/identity', identityRoutes);
 app.use('/api/digital-twin/autobiography', autobiographyRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
+app.use('/api/local-llm', localLlmRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/data', dataManagerRoutes);

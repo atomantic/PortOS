@@ -12,7 +12,7 @@ import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import {
   Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
-  ArrowUpCircle, Search, ChevronDown, Check,
+  ArrowUpCircle, ArrowLeft, Search, ChevronDown, Check,
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -467,12 +467,15 @@ export function UniverseSelector({ universes, selectedId, value, onChange, onPic
 
 export default function UniverseBuilder() {
   // The selected world id lives in the URL so deep-linking + back/forward
-  // work. The page is mounted at /universe-builder, /universe-builder/:universeId,
-  // and /media/universe-builder(/:universeId) — strip any trailing /<id> off the
-  // current pathname to derive the base for navigation back to the list.
+  // work. The editor is mounted at /universes/:universeId and /universes/new —
+  // strip any trailing /<id> off the current pathname to derive the base for
+  // navigation back to the list.
   const params = useParams();
   const location = useLocation();
-  const selectedId = params.universeId || null;
+  // `/universes/new` is the create-mode entry point from the Universes index —
+  // treat the `new` sentinel as "no id" (blank draft). Real universe ids are
+  // UUIDs, so this can never shadow an actual record.
+  const selectedId = params.universeId && params.universeId !== 'new' ? params.universeId : null;
   // `goToWorld` preserves `location.search` (e.g. `?tab=&bucket=&series=`) so
   // the auto-save → create path doesn't snap the user back to the Bible tab
   // after they triggered Generate From Idea from inside Cast/Places/Objects.
@@ -874,7 +877,7 @@ export default function UniverseBuilder() {
 
   // Hash-scroll for deep-links — the legacy `/canon` redirect and
   // PipelineSeries' "Manage characters, places, and objects" link both
-  // navigate to `/universe-builder/<id>#canon`. React Router doesn't
+  // navigate to `/universes/<id>#canon`. React Router doesn't
   // auto-scroll to hashes, so wait until the section is rendered (gated by
   // `draft.id === selectedId`) then scroll. The element id (`canon`) is set
   // on UniverseCanonSection's root <section>.
@@ -1005,7 +1008,7 @@ export default function UniverseBuilder() {
     // delete. Otherwise the user would see both a red "Delete failed" toast
     // AND a green "World deleted" toast, with the world apparently gone from
     // the sidebar even though it's still on disk.
-    const ok = await deleteUniverse(id)
+    const ok = await deleteUniverse(id, { silent: true })
       .then(() => true)
       .catch((e) => { toast.error(`Delete failed: ${e.message}`); return false; });
     if (!ok) return;
@@ -1749,6 +1752,13 @@ export default function UniverseBuilder() {
   return (
     <div className="flex flex-col h-full">
       <section className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
+        {/* Back to the universe index (list/table at /universes). */}
+        <Link
+          to="/universes"
+          className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-port-accent self-start"
+        >
+          <ArrowLeft size={14} /> All Universes
+        </Link>
         {/* Thin action header — autocomplete universe selector doubles as the
             name field; Save + Share + Delete sit beside it so they're reachable
             from any tab. The Bible-tab actions (Generate / Refine, starter

@@ -5,8 +5,15 @@
  * Provides model discovery, loading, unloading, and downloading.
  */
 
+import { homedir } from 'os'
+import { join, basename, resolve, relative, isAbsolute, sep } from 'path'
+import { existsSync } from 'fs'
+import { readdir, stat, mkdir, copyFile, link, rm, rmdir } from 'fs/promises'
 import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import {
+  dirIsMlx, selectPrimaryGguf, selectProjectorGguf, isShardedGguf, lmStudioPublisherRepo
+} from '../lib/localLlmDisk.js'
 
 const AVAILABILITY_CACHE_TTL_MS = 30_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
@@ -24,8 +31,18 @@ const DEFAULT_CONFIG = {
 // Cached state
 let config = { ...DEFAULT_CONFIG }
 let isAvailable = null
-let loadedModels = []
-let availableModels = []
+// null = not yet fetched; any array (even empty) = a cached result — mirrors
+// availableModels below so an idle LM Studio (server up, 0 models loaded)
+// doesn't re-hit /api/v0/models on every status poll.
+let loadedModels = null
+// null = not yet fetched; any array (even empty) = a cached result. Lets the
+// catalog-overlay path (queried per keystroke) reuse the list instead of
+// re-hitting /api/v0/models each time. Busted to null by resetCache().
+let availableModels = null
+// Last error from the model-LIST call (/api/v0/models), distinct from the
+// availability probe (/v1/models): LM Studio can answer the probe yet fail the
+// list, so this lets callers tell "0 models" from "couldn't list models".
+let lastListError = null
 let lastCheckAt = null
 
 // Status tracking
@@ -95,12 +112,13 @@ async function checkLMStudioAvailable() {
  * @returns {Promise<Array>} - Loaded models
  */
 async function getLoadedModels(forceRefresh = false) {
-  if (!forceRefresh && loadedModels.length > 0) {
+  if (!forceRefresh && loadedModels !== null) {
     return loadedModels
   }
 
   const available = await checkLMStudioAvailable()
   if (!available) {
+    // Don't cache — unavailable is transient, so the next call re-probes.
     return []
   }
 
@@ -131,22 +149,32 @@ async function getLoadedModels(forceRefresh = false) {
       created: model.created,
       ownedBy: model.owned_by
     }))
+    return loadedModels
   }
-  return loadedModels
+
+  // Both list endpoints failed — return empty WITHOUT caching (loadedModels
+  // stays null) so the next call retries instead of pinning a bogus empty.
+  return []
 }
 
 /**
- * Get all downloaded models (loaded and not-loaded)
+ * Get all downloaded models (loaded and not-loaded).
+ * @param {boolean} [forceRefresh] - bypass the cache (callers that read live
+ *   per-model `state`, e.g. embedding-model discovery, should force).
  * @returns {Promise<Array>} - All downloaded models with state info
  */
-async function getAvailableModels() {
+async function getAvailableModels(forceRefresh = false) {
+  if (!forceRefresh && availableModels !== null) return availableModels
   const available = await checkLMStudioAvailable()
   if (!available) {
+    // Unreachable is surfaced by the availability probe (`available`), not here.
+    lastListError = null
     return []
   }
 
-  const response = await lmStudioRequest('/api/v0/models').catch(() => null)
+  const response = await lmStudioRequest('/api/v0/models').catch((err) => ({ _err: err.message }))
   if (response?.data) {
+    lastListError = null
     availableModels = response.data.map(model => ({
       id: model.id,
       type: model.type,
@@ -159,8 +187,16 @@ async function getAvailableModels() {
     return availableModels
   }
 
-  // Fallback to loaded models only
+  // Reachable (the /v1/models probe passed) but the native model-list call
+  // failed or returned no data — record it so callers can distinguish this from
+  // a genuinely empty list. Fall back to loaded models for a best-effort list.
+  lastListError = response?._err || 'LM Studio model list (/api/v0/models) returned no data'
   return getLoadedModels(true)
+}
+
+/** Last `/api/v0/models` list error (null if the most recent list succeeded). */
+function getLastListError() {
+  return lastListError
 }
 
 /**
@@ -347,7 +383,7 @@ async function getEmbeddings(text, options = {}) {
   // Auto-discover an embedding model if none specified
   let model = options.model
   if (!model) {
-    const models = await getAvailableModels()
+    const models = await getAvailableModels(true) // need live per-model state
     const embeddingModel = models.find(m => m.type === 'embeddings' && m.state === 'loaded')
       || models.find(m => m.type === 'embeddings')
     if (embeddingModel) {
@@ -430,9 +466,210 @@ function updateConfig(newConfig) {
  */
 function resetCache() {
   isAvailable = null
-  loadedModels = []
-  availableModels = []
+  loadedModels = null
+  availableModels = null
+  lastListError = null
   lastCheckAt = null
+}
+
+// LM Studio can be installed as a macOS app without the `lms` CLI on PATH and
+// without the local server running — mirror scripts/setup-llm.js so status
+// doesn't report "Not installed" (and offer a redundant install) in that case.
+function isAppInstalled() {
+  return process.platform === 'darwin' && existsSync('/Applications/LM Studio.app')
+}
+
+// ---- local-disk introspection / import (migrate fast-path) ------------------
+
+const dirExists = (p) => stat(p).then((s) => s.isDirectory()).catch(() => false)
+
+/** LM Studio's models root — first of the two known locations that exists. */
+async function getModelsDir() {
+  const candidates = [
+    process.env.LM_STUDIO_MODELS_DIR,
+    join(homedir(), '.lmstudio', 'models'),
+    join(homedir(), '.cache', 'lm-studio', 'models')
+  ].filter(Boolean)
+  for (const dir of candidates) {
+    if (await dirExists(dir)) return dir
+  }
+  return candidates[1] // sensible default even if it doesn't exist yet
+}
+
+const normalizeRepoKey = (s) => String(s || '')
+  .split('/').pop()
+  .trim()
+  .toLowerCase()
+  .replace(/[-.]gguf$/i, '')
+  .replace(/[-.]mlx[-.].*$/i, '')
+
+async function findModelDir(modelsDir, modelId) {
+  // Reject `.`/`..` traversal segments before joining — mirrors the stricter
+  // findDeletableModelDirs guard so the read path can't resolve outside the
+  // models tree either (trusted ids today, but defense-in-depth parity).
+  const segments = String(modelId || '').split('/').map((s) => s.trim()).filter(Boolean)
+  if (segments.some((s) => s === '.' || s === '..')) return null
+  const direct = join(modelsDir, ...segments)
+  if (await dirExists(direct)) return direct
+
+  const wanted = normalizeRepoKey(modelId)
+  if (!wanted) return null
+  const publishers = await readdir(modelsDir).catch(() => [])
+  for (const publisher of publishers) {
+    const publisherDir = join(modelsDir, publisher)
+    if (!(await dirExists(publisherDir))) continue
+    const repos = await readdir(publisherDir).catch(() => [])
+    const repo = repos.find((name) => normalizeRepoKey(name) === wanted)
+    if (repo) return join(publisherDir, repo)
+  }
+  return null
+}
+
+/**
+ * Locate an installed LM Studio model's files on disk (no network). The model
+ * id usually maps directly onto the `<publisher>/<repo>` folder, but LM Studio
+ * can report an API id that differs from the downloaded repo. Fall back to a
+ * normalized repo-name scan so `openai/gpt-oss-20b` can still resolve the local
+ * `lmstudio-community/gpt-oss-20b-GGUF` folder. MLX models (safetensors, no
+ * GGUF) return `{ isMlx: true, ggufPath: null }` so the caller routes them to
+ * re-pull instead of a (impossible) file copy.
+ * @returns {Promise<{ ggufPath: string|null, projectorPath: string|null, isMlx: boolean, isSharded: boolean }|null>}
+ */
+async function resolveLocalModel(modelId) {
+  const modelsDir = await getModelsDir()
+  const dir = await findModelDir(modelsDir, modelId)
+  if (!dir) return null
+  const files = await readdir(dir).catch(() => [])
+  if (dirIsMlx(files)) return { ggufPath: null, projectorPath: null, isMlx: true, isSharded: false }
+  const primary = selectPrimaryGguf(files)
+  if (!primary) return null
+  const projector = selectProjectorGguf(files)
+  return {
+    ggufPath: join(dir, primary),
+    projectorPath: projector ? join(dir, projector) : null,
+    isMlx: false,
+    isSharded: isShardedGguf(primary)
+  }
+}
+
+/**
+ * Resolve which on-disk folder(s) a delete request maps to. Unlike
+ * resolveLocalModel (a best-effort fuzzy first-match for READS), deletion is
+ * destructive (`rm -rf`), so this is deliberately stricter: it only ever returns
+ * concrete `<publisher>/<repo>` folders (LM Studio's invariant layout), rejects
+ * `.`/`..` traversal segments, and returns ALL normalized-scan matches so an
+ * ambiguous id (e.g. a `-GGUF` and a `-MLX-*` variant that normalize to the same
+ * key) can refuse instead of guessing the wrong one.
+ * @returns {Promise<string[]|null>} matched dirs, or null for an invalid id
+ */
+async function findDeletableModelDirs(modelsDir, modelId) {
+  const segments = String(modelId || '').split('/').map((s) => s.trim()).filter(Boolean)
+  if (segments.some((s) => s === '.' || s === '..')) return null
+  // Exact `<publisher>/<repo>` match takes precedence over the fuzzy scan.
+  if (segments.length === 2) {
+    const direct = join(modelsDir, segments[0], segments[1])
+    if (await dirExists(direct)) return [direct]
+  }
+  const wanted = normalizeRepoKey(modelId)
+  if (!wanted) return []
+  const matches = []
+  const publishers = await readdir(modelsDir).catch(() => [])
+  for (const publisher of publishers) {
+    const publisherDir = join(modelsDir, publisher)
+    if (!(await dirExists(publisherDir))) continue
+    const repos = await readdir(publisherDir).catch(() => [])
+    for (const name of repos) {
+      const repoDir = join(publisherDir, name)
+      if (normalizeRepoKey(name) === wanted && await dirExists(repoDir)) matches.push(repoDir)
+    }
+  }
+  return matches
+}
+
+/** True only when `dir` is a `<publisher>/<repo>` folder strictly under modelsDir. */
+function isModelLeafDir(modelsDir, dir) {
+  const rel = relative(resolve(modelsDir), resolve(dir))
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false
+  return rel.split(sep).length === 2
+}
+
+/**
+ * Delete an installed LM Studio model. The `lms` CLI has no remove command, and
+ * LM Studio's REST API exposes no delete — so we remove the model's on-disk
+ * `<publisher>/<repo>/` folder directly and prune the publisher dir if empty.
+ * Best-effort unloads the model first so the running app isn't left serving
+ * files that no longer exist.
+ * @returns {Promise<{ success: boolean, modelId: string, error?: string }>}
+ */
+async function deleteModel(modelId) {
+  const modelsDir = await getModelsDir()
+  const matches = await findDeletableModelDirs(modelsDir, modelId)
+  if (matches === null) return { success: false, error: `Invalid model id "${modelId}".`, modelId }
+  if (matches.length === 0) {
+    return { success: false, error: `Model files not found on disk for "${modelId}".`, modelId }
+  }
+  if (matches.length > 1) {
+    return { success: false, error: `Ambiguous model id "${modelId}" matches ${matches.length} folders — delete by exact "publisher/repo".`, modelId }
+  }
+  const dir = matches[0]
+  // Defense-in-depth: never rm the models root, a publisher dir, or anything
+  // outside modelsDir — only a concrete `<publisher>/<repo>` leaf.
+  if (!isModelLeafDir(modelsDir, dir)) {
+    return { success: false, error: `Refusing to delete "${dir}" — not a model folder under ${modelsDir}.`, modelId }
+  }
+  // Unload first if the app is up and holding it (no-op/harmless otherwise).
+  if (await checkLMStudioAvailable()) await unloadModel(modelId).catch(() => {})
+  const removed = await rm(dir, { recursive: true, force: true })
+    .then(() => ({ ok: true })).catch((err) => ({ _err: err.message }))
+  resetCache() // disk may have changed even on a partial failure — re-list fresh
+  if (removed._err) return { success: false, error: removed._err, modelId }
+  // Prune the now-empty publisher dir (rmdir fails harmlessly if not empty).
+  await rmdir(join(dir, '..')).catch(() => {})
+  console.log(`🗑️ LM Studio deleted: ${modelId} (${dir})`)
+  cosEvents.emit('lmstudio:modelDeleted', { modelId })
+  return { success: true, modelId }
+}
+
+/**
+ * Place a local GGUF into LM Studio's model tree (no download). LM Studio indexes
+ * loose GGUF files dropped under `<publisher>/<repo>/` on its next scan. In `link`
+ * mode the file is hardlinked (shared on disk with the source backend's copy);
+ * `copy` mode duplicates it. Link falls back to copy on any error (notably EXDEV
+ * across filesystems).
+ * @param {{ lmstudioId: string, ggufPath: string, projectorPath?: string|null, mode?: 'link'|'copy' }} args
+ * @returns {Promise<{ success: boolean, modelId?: string, linked?: boolean, error?: string }>}
+ */
+async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath, mode = 'copy' }) {
+  const modelsDir = await getModelsDir()
+  const { publisher, repo } = lmStudioPublisherRepo(lmstudioId)
+  const destDir = join(modelsDir, publisher, repo)
+  // Report the actual on-disk id (sanitized) rather than the raw input, so
+  // migrate results / follow-up ops match where the file really landed.
+  const resolvedId = `${publisher}/${repo}`
+  // Hardlink when asked; fall back to copy on any link error. Returns whether
+  // the file ended up hardlinked (so the caller can report disk-sharing).
+  const place = async (src, dest) => {
+    if (mode === 'link' && await link(src, dest).then(() => true).catch(() => false)) return true
+    await copyFile(src, dest)
+    return false
+  }
+  let linked = false
+  const r = await mkdir(destDir, { recursive: true })
+    .then(async () => {
+      const base = basename(ggufPath)
+      const destName = /\.gguf$/i.test(base) ? base : `${repo}.gguf`
+      linked = await place(ggufPath, join(destDir, destName))
+      if (projectorPath) {
+        const projBase = basename(projectorPath)
+        await place(projectorPath, join(destDir, /\.gguf$/i.test(projBase) ? projBase : `${repo}-mmproj.gguf`))
+      }
+    })
+    .then(() => ({ ok: true }))
+    .catch((err) => ({ _err: err.message }))
+  if (r._err) return { success: false, error: r._err, modelId: resolvedId }
+  resetCache()
+  console.log(`📦 LM Studio import (${linked ? 'hardlink' : 'copy'}): ${resolvedId} ← ${ggufPath}`)
+  return { success: true, modelId: resolvedId, linked }
 }
 
 export {
@@ -448,5 +685,10 @@ export {
   getStatus,
   updateConfig,
   resetCache,
+  isAppInstalled,
+  getLastListError,
+  resolveLocalModel,
+  importModelFromGguf,
+  deleteModel,
   DEFAULT_CONFIG
 }

@@ -1,12 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
+// One-shot write delay hook for the concurrency regression test: when set, the
+// first atomicWrite whose (path, data) matches is held for `ms` before landing,
+// letting a test force a specific read→write interleaving deterministically.
+let pendingWriteDelay = null;
 
 vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
+  atomicWrite: vi.fn(async (path, data) => {
+    if (pendingWriteDelay && pendingWriteDelay.match(path, data)) {
+      const { ms } = pendingWriteDelay;
+      pendingWriteDelay = null; // one-shot
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    fileStore.set(path, data);
+  }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));
 
@@ -16,6 +28,9 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
+
 const svc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
@@ -24,6 +39,7 @@ describe('pipeline issues service', () => {
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;
+    pendingWriteDelay = null;
   });
 
   it('createIssue assigns iss- id and auto-numbers within a series', async () => {
@@ -1112,6 +1128,44 @@ describe('pipeline issues service', () => {
       // Both mutations must survive — if either is missing, the write tail is broken.
       expect(final.stages.idea.output).toBe('beat sheet content');
       expect(final.status).toBe('needs-review');
+    });
+
+    it('a series-wide renumber cannot clobber a concurrent stage save on an affected issue', async () => {
+      // Regression for the per-record-split race (migrations 035/036): renumbers
+      // serialize on the per-series tail while stage/single-issue saves used the
+      // per-id tail — two independent mutexes over the same issue. A renumber that
+      // rewrites an issue's number from a stale in-memory snapshot could clobber a
+      // concurrent stage edit on it. Both now share the series tail.
+      const series = await seriesSvc.createSeries({ name: 'Renumber race' });
+      const v1 = await seasonsSvc.createSeason(series.id, { title: 'Volume 1', number: 1 });
+      const v2 = await seasonsSvc.createSeason(series.id, { title: 'Volume 2', number: 2 });
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 1, title: 'V1 E1' });
+      const target = await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 1, title: 'V2 E1' });
+      expect(target.number).toBe(2); // numbered after the single V1 issue
+
+      // Force the clobbering interleave deterministically: hold the STAGE write
+      // of `target` (the one carrying the edit) until after the renumber's write
+      // of `target` lands. Without a shared mutex the stage save read the issue
+      // at #2, so its delayed write lands a stale {#2, output} over the renumber's
+      // {#3, no output} — losing the renumber. Sharing the series tail forces the
+      // stage save to run AFTER the renumber and re-read the freshest (#3) record,
+      // so both the number and the edit survive.
+      pendingWriteDelay = {
+        ms: 50,
+        match: (path, data) => path.includes(target.id) && data?.stages?.idea?.output === 'STAGE-EDIT',
+      };
+
+      // (a) stage edit on the V2 issue, (b) a new V1 issue that renumbers the V2
+      // issue from #2 to #3 (rewriting target's record).
+      await Promise.all([
+        svc.updateStage(target.id, 'idea', { status: 'ready', output: 'STAGE-EDIT' }),
+        svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 2, title: 'V1 E2' }),
+      ]);
+
+      const after = await svc.getIssue(target.id);
+      expect(after.stages.idea.output).toBe('STAGE-EDIT'); // stage edit survived the renumber
+      expect(after.stages.idea.status).toBe('ready');
+      expect(after.number).toBe(3);                        // renumber also applied
     });
   });
 });

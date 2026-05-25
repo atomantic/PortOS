@@ -290,6 +290,27 @@ describe('syncOrchestrator', () => {
       expect(urls.some((u) => u.includes('/api/sync/pipeline/'))).toBe(false);
       expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
     });
+
+    it('skips mediaCollections snapshot category when peer has a mediaCollection per-record subscription', async () => {
+      // Task 1.9: a mediaCollection subscription must prevent the 60s snapshot
+      // loop from also hitting /api/sync/mediaCollections/ — the per-record
+      // push pipeline owns that category.
+      const dataSync = await import('./dataSync.js');
+      const peerSync = await import('./sharing/peerSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['mediaCollections', 'character']);
+      peerSync.listPeerSubscriptions.mockResolvedValueOnce([
+        { peerId: 'peer-inst-1', recordKind: 'mediaCollection', recordId: 'col-1' },
+      ]);
+      const peerWithCats = {
+        ...mockPeer,
+        syncCategories: { mediaCollections: true, character: true },
+      };
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'x', data: null }) });
+      await syncWithPeer(peerWithCats);
+      const urls = mockFetch.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes('/api/sync/mediaCollections/'))).toBe(false);
+      expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
+    });
   });
 
   describe('syncAllPeers', () => {

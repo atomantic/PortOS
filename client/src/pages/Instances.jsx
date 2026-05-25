@@ -14,12 +14,21 @@ import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
   removePeer, connectPeer, probePeer, getTailnetInfo, provisionTailnetCert,
-  listPeerSubscriptions, unsubscribeFromPeer,
+  listPeerSubscriptions,
+  getTombstoneSweepStatus, sweepTombstonesNow,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
+import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import { timeAgo } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
+import { useAsyncAction } from '../hooks/useAsyncAction';
+
+// Plural labels for tombstone record kinds — shared between the in-page
+// TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
+// echoes the same wording). The dedupe in the rendering call sites handles
+// the series/issue cohort coupling.
+const TOMBSTONE_KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues', mediaCollection: 'media collections' };
 
 const STATUS_COLORS = {
   online: 'text-port-success',
@@ -506,7 +515,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
-function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered }) {
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered, subsLoaded = true }) {
   // `livePushCovered` is true when this peer has at least one per-record
   // peer-sync subscription for a record kind that maps to this category
   // (universe-subs → 'universe', series-subs → 'pipeline'). The orchestrator
@@ -516,7 +525,10 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   // would always read "behind" even when the records are actually converged.
   // Render a distinct "live-push" state instead so the badge stops lying.
   const synced = cursorChecksum && remoteChecksum && cursorChecksum === remoteChecksum;
-  const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
+  // Suppress "behind" until peer subs have loaded — `livePushCovered` is derived
+  // from them, so before they resolve a live-push category would briefly mislabel
+  // itself "behind". Until then it falls through to the neutral "pending" state.
+  const behind = subsLoaded && cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
 
   return (
     <div className="flex items-center gap-1.5 text-xs">
@@ -549,82 +561,7 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   );
 }
 
-/**
- * Per-record peer-sync subscriptions to / from this peer.
- *
- * Shows what universes and series are being live-pushed to the peer (outgoing
- * subscriptions we created via SyncToPeerButton) plus what they auto-subscribed
- * back from us (`adoptedFromReverse`). Each row carries an unsubscribe control
- * so the user can tear down a sync mistake without leaving the page.
- *
- * Inbound-only peers (configured with directions=['inbound'] in the peer
- * record) never get reverse subscriptions auto-created — see
- * services/sharing/peerSync.js `maybeCreateReverseSubscription`.
- */
-function PeerSyncSubscriptionsSection({ peer, peerSubs, peerSubsLoaded, setPeerSubs }) {
-  const [busyId, setBusyId] = useState(null);
-
-  if (!peer.instanceId) return null;
-  if (!peerSubsLoaded) return null;
-  if (peerSubs.length === 0) return null;
-
-  const handleUnsubscribe = async (sub) => {
-    setBusyId(sub.id);
-    // silent:true — own toast in the catch, so suppress the apiCore default.
-    const ok = await unsubscribeFromPeer(sub.id, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Unsubscribe failed');
-      return null;
-    });
-    if (ok) {
-      setPeerSubs((prev) => prev.filter((s) => s.id !== sub.id));
-      toast.success(`Stopped syncing ${sub.recordKind} ${sub.recordId.slice(0, 8)} with ${peer.name}`);
-    }
-    setBusyId(null);
-  };
-
-  const universeSubs = peerSubs.filter((s) => s.recordKind === 'universe');
-  const seriesSubs = peerSubs.filter((s) => s.recordKind === 'series');
-
-  return (
-    <div className="mt-2 pt-2 border-t border-port-border/50">
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <ArrowLeftRight size={12} className="text-gray-500" />
-        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">
-          Live-pushed records ({peerSubs.length})
-        </span>
-      </div>
-      <div className="space-y-1">
-        {[...universeSubs, ...seriesSubs].map((sub) => (
-          <div
-            key={sub.id}
-            className="flex items-center gap-2 text-[11px] text-gray-300 group"
-          >
-            <span className="text-gray-500 font-mono">{sub.recordKind}</span>
-            <span className="text-gray-400 font-mono truncate flex-1" title={sub.recordId}>
-              {sub.recordId.slice(0, 12)}…
-            </span>
-            {sub.adoptedFromReverse ? (
-              <span className="text-[9px] text-port-accent/70" title="Auto-created when this peer pushed us first">
-                ↩ reverse
-              </span>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => handleUnsubscribe(sub)}
-              disabled={busyId === sub.id}
-              className="text-gray-600 hover:text-port-error disabled:opacity-40"
-              title="Stop syncing"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SyncStatusSection({ peer, syncStatus, peerSubs = [] }) {
+function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = true }) {
   if (!syncStatus || !peer.instanceId) return null;
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
@@ -700,6 +637,7 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [] }) {
               cursorChecksum={cursorChecksums[cat]}
               remoteChecksum={remoteChecksums[cat]}
               livePushCovered={livePushCovered.has(cat)}
+              subsLoaded={peerSubsLoaded}
             />
           );
         })}
@@ -818,24 +756,30 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
   const [probing, setProbing] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // Peer subs are loaded once at this level and shared with both
-  // PeerSyncSubscriptionsSection (renders the per-record list) and
-  // SyncStatusSection (uses the sub set to decide which snapshot badges
-  // should render as "live-push" instead of misleading "behind"). Without
-  // sharing, every card would issue two identical /sharing/peer-subs
-  // fetches.
+  // Peer subs are loaded once at this level and shared with SchemaGapBadge and
+  // SyncStatusSection (which uses the sub set to decide which snapshot badges
+  // render as "live-push" instead of a misleading "behind"). Without sharing,
+  // every card would issue duplicate /sharing/peer-subs fetches. (The verbose
+  // per-record "Live-pushed records" list that used to render these was removed
+  // — it grew unbounded and the Sync Details drawer covers per-record status.)
   const [peerSubs, setPeerSubs] = useState([]);
+  // Track whether the first subs fetch has settled — until it has, `peerSubs`
+  // is [] and SyncStatusSection can't tell a live-push category from a behind
+  // one, so it would flash "behind". Gates the snapshot badges' "behind" state.
   const [peerSubsLoaded, setPeerSubsLoaded] = useState(false);
 
   useEffect(() => {
     if (!peer.instanceId) {
       setPeerSubs([]);
-      setPeerSubsLoaded(true);
+      setPeerSubsLoaded(true); // no instanceId → nothing to load; don't suppress forever
       return;
     }
-    let cancelled = false;
+    // instanceId just became available or changed — re-suppress "behind" until
+    // this peer's first fetch settles, otherwise the stale [] would mislabel a
+    // live-push category. Cleared in the .finally() below.
     setPeerSubsLoaded(false);
-    listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
+    let cancelled = false;
+    const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {
         if (!cancelled) setPeerSubs(r?.subscriptions || []);
       })
@@ -845,7 +789,27 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
       .finally(() => {
         if (!cancelled) setPeerSubsLoaded(true);
       });
-    return () => { cancelled = true; };
+    refetch();
+    // When a per-record schema block is persisted server-side, the
+    // subscription's `blockedBySchema` field changes inside
+    // peer_subscriptions.json. The parent Instances component already
+    // refetches `peers` on this event, but its refresh doesn't re-run this
+    // card's `peerSubs` effect (deps are `peer.instanceId` only). Without
+    // a local subscription here, SchemaGapBadge keeps rendering the stale
+    // `blockedBySchema` value until a full page reload.
+    // The event carries `peerId` so only the affected card refetches —
+    // every card listens, but skips events for other peers.
+    const handleSchemaSubChange = (payload) => {
+      if (payload?.peerId && payload.peerId !== peer.instanceId) return;
+      refetch();
+    };
+    socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
+    socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
+    return () => {
+      cancelled = true;
+      socket.off('peerSync:subscription-blocked', handleSchemaSubChange);
+      socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
+    };
   }, [peer.instanceId]);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
@@ -981,16 +945,116 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
         </div>
       )}
 
+      <SchemaGapBadge peer={peer} peerSubs={peerSubs} />
+
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
-      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} />
-
-      <PeerSyncSubscriptionsSection peer={peer} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} setPeerSubs={setPeerSubs} />
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} />
 
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (
         <PeerAgentsSection peerId={peer.id} peerName={peer.name} />
       )}
+    </div>
+  );
+}
+
+// Manual "GC tombstones now" trigger. The 60s orchestrator sweep keeps its
+// 24h grace — this button passes graceMs:0 so a user who just mass-deleted
+// doesn't wait a day for the bytes to leave disk. The button disables only
+// when every cohort is refused (snapshot-mode peer with no per-record sub
+// in both `universe` and `pipeline`): partial progress is still useful.
+function TombstoneGcSection() {
+  const [refused, setRefused] = useState(null); // null = still loading
+
+  // Subscribe to peer-state changes so toggling a snapshot-mode peer's
+  // sync category (or disabling it) re-evaluates the refusal status
+  // without a page reload — otherwise the button stays stuck disabled
+  // even after the user has resolved the underlying refusal condition.
+  //
+  // `instances:peers:updated` fires from `updatePeer` BEFORE the async
+  // `autoSubscribePeerToAllRecords` backfill creates per-record subs, so an
+  // immediate fetch sees the pre-backfill state. Schedule a follow-up fetch
+  // after a short delay to capture the post-backfill subs; debounce so a
+  // rapid burst of peer updates collapses to one delayed fetch.
+  useEffect(() => {
+    let cancelled = false;
+    let backfillTimer = null;
+    const fetchStatus = () => {
+      getTombstoneSweepStatus({ silent: true })
+        .then((r) => { if (!cancelled && Array.isArray(r?.refused)) setRefused(r.refused); })
+        .catch(() => { if (!cancelled) setRefused((prev) => prev ?? []); });
+    };
+    const refreshAfterPeerChange = () => {
+      fetchStatus();
+      if (backfillTimer) clearTimeout(backfillTimer);
+      backfillTimer = setTimeout(() => {
+        backfillTimer = null;
+        if (!cancelled) fetchStatus();
+      }, 1500);
+    };
+    fetchStatus();
+    socket.on('instances:peers:updated', refreshAfterPeerChange);
+    return () => {
+      cancelled = true;
+      if (backfillTimer) clearTimeout(backfillTimer);
+      socket.off('instances:peers:updated', refreshAfterPeerChange);
+    };
+  }, []);
+
+  const [runSweep, sweeping] = useAsyncAction(async () => {
+    const result = await sweepTombstonesNow({ graceMs: 0 }, { silent: true });
+    if (!result) return null;
+    const { universes = 0, series = 0, issues = 0, collections = 0, refused: refusedKinds = [] } = result;
+    const totalPruned = universes + series + issues + collections;
+    if (totalPruned > 0) {
+      const parts = [];
+      if (universes) parts.push(`${universes} universe${universes === 1 ? '' : 's'}`);
+      if (series) parts.push(`${series} series`);
+      if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
+      if (collections) parts.push(`${collections} collection${collections === 1 ? '' : 's'}`);
+      toast.success(`Pruned ${parts.join(' / ')}`);
+    } else if (refusedKinds.length === 0) {
+      toast('No tombstones eligible for pruning');
+    }
+    if (refusedKinds.length > 0) {
+      const refusedLabel = [...new Set(refusedKinds.map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
+      toast.warning(`Refused: ${refusedLabel} — a snapshot-mode peer has no per-record subscription for this kind. Resolve to enable pruning.`);
+    }
+    setRefused(refusedKinds);
+    return result;
+  }, { errorMessage: 'Tombstone sweep failed' });
+
+  // Every cohort refused iff `universe` (its own cohort), `series` (the
+  // pipeline cohort representative — issues always travel with series), AND
+  // `mediaCollection` (its own cohort) are all in the refused set.
+  const allRefused = refused != null
+    && refused.includes('universe')
+    && refused.includes('series')
+    && refused.includes('mediaCollection');
+  const disabled = sweeping || refused == null || allRefused;
+  const title = allRefused
+    ? 'Every kind has an enabled snapshot-mode peer with no per-record subscription — pruning would risk resurrection. Subscribe the peer or disable it to enable GC.'
+    : 'Prune tombstones acked by every subscribed peer (skips the 24h grace).';
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-xl p-4 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-sm text-gray-300">
+        <Trash2 size={14} className="text-gray-500" />
+        <span className="text-gray-400 uppercase tracking-wider text-xs font-medium">Tombstone GC</span>
+        <span className="text-gray-500 text-xs">
+          Run on demand instead of waiting for the 24h orchestrator sweep.
+        </span>
+      </div>
+      <button
+        onClick={runSweep}
+        disabled={disabled}
+        title={title}
+        className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5"
+      >
+        <Trash2 size={12} />
+        {sweeping ? 'Pruning…' : 'GC tombstones now'}
+      </button>
     </div>
   );
 }
@@ -1026,6 +1090,11 @@ export default function Instances() {
       setPeers(updatedPeers);
     };
     socket.on('instances:peers:updated', handlePeersUpdated);
+    // NOTE: `peerSync:subscription-blocked/unblocked` is intentionally NOT
+    // handled here. Those events only mutate per-record subscription state
+    // (`blockedBySchema`), which each PeerCard refetches for its own peer via
+    // its peerSubs effect. A page-level fetchData() on every such event would
+    // refetch all peers + syncStatus for a change that touches only one card.
 
     return () => {
       socket.emit('instances:unsubscribe');
@@ -1055,6 +1124,8 @@ export default function Instances() {
         <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo} />
         <AddPeerForm onAdd={fetchData} />
       </div>
+
+      <TombstoneGcSection />
 
       {peers.length > 0 && (
         <div>
