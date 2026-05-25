@@ -181,8 +181,7 @@ const normalizeLmStudioId = (id) => String(id || '')
   .split('/').pop()
   .trim()
   .toLowerCase()
-  .replace(/[-.]gguf$/i, '')
-  .replace(/-gguf$/i, '');
+  .replace(/[-.]gguf$/i, '');
 
 const normalizeFor = (backend, id) =>
   backend === 'ollama' ? normalizeOllamaId(id) : normalizeLmStudioId(id);

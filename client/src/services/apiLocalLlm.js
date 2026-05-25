@@ -1,10 +1,8 @@
 import { request } from './apiCore.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.
+// Installed models per backend come back inside getLocalLlmStatus().
 export const getLocalLlmStatus = () => request('/local-llm/status');
-
-export const getLocalLlmModels = (backend) =>
-  request(`/local-llm/models?backend=${encodeURIComponent(backend)}`);
 
 export const getLocalLlmCatalog = (backend, q = '') =>
   request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);

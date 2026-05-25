@@ -523,7 +523,6 @@ export {
   getStatus,
   updateConfig,
   resetCache,
-  getModelsDir,
   resolveLocalModel,
   importModelFromGguf,
   DEFAULT_CONFIG

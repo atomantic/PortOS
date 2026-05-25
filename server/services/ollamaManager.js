@@ -16,8 +16,9 @@
 
 import { homedir } from 'os'
 import { join } from 'path'
-import { readFile, readdir, stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { readJSONFile } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
 } from '../lib/localLlmDisk.js'
@@ -233,13 +234,13 @@ function getModelsDir() {
 }
 
 const fileExists = (p) => stat(p).then((s) => s.isFile()).catch(() => false)
-const readJson = (p) => readFile(p, 'utf8').then((t) => JSON.parse(t)).catch(() => null)
+const readManifest = (p) => readJSONFile(p, null, { logError: false })
 
 // The canonical manifest path covers registry-pulled models; fall back to a
 // shallow scan of manifests/<registry>/<namespace>/<name>/<tag> for custom
 // registries/namespaces we didn't guess.
 async function findManifest(modelsDir, ref) {
-  const direct = await readJson(join(modelsDir, ...ollamaManifestRelPath(ref).split('/')))
+  const direct = await readManifest(join(modelsDir, ...ollamaManifestRelPath(ref).split('/')))
   if (direct) return direct
   const manifestsDir = join(modelsDir, 'manifests')
   const registries = await readdir(manifestsDir).catch(() => [])
@@ -247,7 +248,7 @@ async function findManifest(modelsDir, ref) {
     const namespaces = await readdir(join(manifestsDir, registry)).catch(() => [])
     for (const ns of namespaces) {
       const candidate = join(manifestsDir, registry, ns, ref.name, ref.tag)
-      const m = await readJson(candidate)
+      const m = await readManifest(candidate)
       if (m) return m
     }
   }
@@ -324,7 +325,6 @@ export {
   pullModel,
   deleteModel,
   getStatus,
-  getModelsDir,
   resolveLocalModel,
   importModelFromGguf
 }
