@@ -699,10 +699,33 @@ describe('dataSync — videoHistory category', () => {
     expect(snap.checksum).toBeTruthy();
   });
 
-  it('snapshot excludes hidden rows (local-only visibility must not propagate to peers)', async () => {
+  it('snapshot includes hidden rows but strips the hidden flag (hide stays local, checksums converge)', async () => {
+    // `hidden` is local-only visibility. The row CONTENT must still ride the wire
+    // (so the checksum is hide-state-independent and peers converge), but the
+    // `hidden` flag itself must be stripped so it doesn't propagate.
     writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v-hidden', { hidden: true }), row('v2')]);
     const snap = await dataSync.getSnapshot('videoHistory');
-    expect(snap.data.videos.map((v) => v.id).sort()).toEqual(['v1', 'v2']);
+    expect(snap.data.videos.map((v) => v.id).sort()).toEqual(['v1', 'v-hidden', 'v2'].sort());
+    expect(snap.data.videos.every((v) => !('hidden' in v))).toBe(true);
+  });
+
+  it('snapshot checksum is identical whether or not a row is hidden (convergence across divergent hide-state)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v2')]);
+    const visible = await dataSync.getSnapshot('videoHistory');
+    await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v2', { hidden: true })]);
+    const oneHidden = await dataSync.getSnapshot('videoHistory');
+    // Two peers that disagree only on v2's hidden flag compute the SAME checksum.
+    expect(oneHidden.checksum).toBe(visible.checksum);
+  });
+
+  it('applying a remote (hidden-stripped) row does not unhide a locally-hidden row', async () => {
+    // The immutable-createdAt LWW merge keeps the existing local row on a tie, so
+    // a peer's visible copy of a row the user hid locally must not undo the hide.
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1', { hidden: true })]);
+    await dataSync.applyRemote('videoHistory', { videos: [row('v1')] }); // remote has no hidden flag
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.find((v) => v.id === 'v1')?.hidden).toBe(true);
   });
 
   it('snapshot excludes id-less rows so checksums converge (apply side drops them too)', async () => {

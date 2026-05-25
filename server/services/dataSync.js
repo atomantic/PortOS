@@ -602,23 +602,28 @@ const hasVideoRowId = (r) => typeof r?.id === 'string' && r.id;
 
 async function getVideoHistorySnapshot() {
   const raw = await readJSONFile(VIDEO_HISTORY_FILE, []);
-  // Exclude rows the user hid from their own gallery (`hidden: true`) — hiding
-  // is a local-only visibility decision (e.g. inner chunks of a stitched clip,
-  // or a clip the user tucked away) and must NOT propagate to peers. The whole
-  // point of this category is to render a SHARED collection's video items, and
-  // a hidden row is by definition not part of that shared surface.
-  //
-  // Also exclude rows without a string `id`: applyVideoHistoryRemote can only
-  // merge id-keyed rows, so an id-less row in the wire snapshot/checksum would
-  // be un-appliable on the receiver — its recomputed checksum would never match
-  // the sender's and the two peers would re-download this category forever.
-  // Treat id-less rows as strictly local-only on BOTH sides.
-  const rows = (Array.isArray(raw) ? raw : []).filter((r) => r && !r.hidden && hasVideoRowId(r));
+  // Exclude rows without a string `id`: applyVideoHistoryRemote can only merge
+  // id-keyed rows, so an id-less row in the wire snapshot/checksum would be
+  // un-appliable on the receiver — its recomputed checksum would never match the
+  // sender's and the two peers would re-download this category forever. Treat
+  // id-less rows as strictly local-only on BOTH sides.
+  const rows = (Array.isArray(raw) ? raw : []).filter((r) => r && hasVideoRowId(r));
+  // `hidden` is a LOCAL-ONLY visibility flag (e.g. inner chunks of a stitched
+  // clip, or a clip the user tucked away). It must NOT influence the wire
+  // payload: if the snapshot's content depended on it, two peers that disagree
+  // on a row's hidden state would compute different checksums and re-download
+  // forever (and a union-merge would never let them converge). So we include
+  // the row CONTENT — a shared collection's video still renders on every peer —
+  // but strip `hidden` itself so the checksum is hide-state-independent and the
+  // flag doesn't propagate (the receiver keeps its own local `hidden` because
+  // the immutable-`createdAt` LWW merge keeps the existing row on a tie).
   // Canonicalize ordering for the wire so two peers holding identical sets
   // produce identical checksums regardless of insertion (newest-first) order.
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale.
   const data = {
-    videos: [...rows].sort((a, b) => a.id.localeCompare(b.id)),
+    videos: rows
+      .map(({ hidden, ...rest }) => rest) // eslint-disable-line no-unused-vars
+      .sort((a, b) => a.id.localeCompare(b.id)),
   };
   return { data, checksum: computeChecksum(data) };
 }
