@@ -506,6 +506,9 @@ async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath }) {
   const modelsDir = await getModelsDir()
   const { publisher, repo } = lmStudioPublisherRepo(lmstudioId)
   const destDir = join(modelsDir, publisher, repo)
+  // Report the actual on-disk id (sanitized) rather than the raw input, so
+  // migrate results / follow-up ops match where the file really landed.
+  const resolvedId = `${publisher}/${repo}`
   const r = await mkdir(destDir, { recursive: true })
     .then(async () => {
       const base = basename(ggufPath)
@@ -518,10 +521,10 @@ async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath }) {
     })
     .then(() => ({ ok: true }))
     .catch((err) => ({ _err: err.message }))
-  if (r._err) return { success: false, error: r._err, modelId: lmstudioId }
+  if (r._err) return { success: false, error: r._err, modelId: resolvedId }
   resetCache()
-  console.log(`📦 LM Studio import (local): ${lmstudioId} ← ${ggufPath}`)
-  return { success: true, modelId: lmstudioId }
+  console.log(`📦 LM Studio import (local): ${resolvedId} ← ${ggufPath}`)
+  return { success: true, modelId: resolvedId }
 }
 
 export {
