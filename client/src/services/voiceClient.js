@@ -462,6 +462,106 @@ export const onVoiceEvent = (event, handler) => {
   return () => socket.off(event, handler);
 };
 
+// Persistent, user-authorized screen-capture stream for the voice agent's
+// ui_describe_visually tool. getDisplayMedia is the only browser-native way to
+// grab WebGL/canvas content (CyberCity, charts) without a heavy DOM-to-canvas
+// dependency — but browsers REQUIRE a transient user gesture to call it, and the
+// screenshot request is server-initiated (mid voice turn), not a click. So the
+// user authorizes a capture stream ONCE via a click (enableVisionCapture, which
+// the VoiceWidget wires to a button), we keep that stream alive, and
+// captureScreenForVision grabs a frame from it on demand without re-prompting.
+let visionStream = null;
+// Optional callback invoked whenever the authorized stream ends — either via
+// disableVisionCapture() or because the user clicked "Stop sharing" in the
+// browser's own chrome (track 'ended'). Lets the UI sync its toggle state
+// instead of going stale until the next screenshot request.
+let onVisionEndedCb = null;
+
+const clearVisionStream = ({ notify = true } = {}) => {
+  const stream = visionStream;
+  // Null the global BEFORE stopping tracks: t.stop() synchronously fires the
+  // track 'ended' handler, and that handler no-ops unless `visionStream === its
+  // own stream` — so clearing first keeps a caller-initiated stop (notify:false)
+  // from re-entering via the 'ended' path and firing onVisionCaptureEnded.
+  visionStream = null;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  if (notify && typeof onVisionEndedCb === 'function') onVisionEndedCb();
+};
+
+// True when a live, user-authorized capture stream is available to grab frames.
+export const isVisionCaptureEnabled = () => !!(visionStream && visionStream.active);
+
+// Register a callback fired when the capture stream ends (user stops sharing via
+// the browser, or disableVisionCapture runs). Pass null to clear. Returns an
+// unsubscribe fn for symmetry with the other subscribe helpers.
+export const onVisionCaptureEnded = (cb) => {
+  onVisionEndedCb = typeof cb === 'function' ? cb : null;
+  return () => { onVisionEndedCb = null; };
+};
+
+// Authorize a screen-capture stream. MUST be called from within a user gesture
+// (a click handler) — getDisplayMedia rejects outside transient activation,
+// which is exactly why the server-initiated screenshot path can't call it.
+// Returns true once a live stream is authorized. The stream self-clears when the
+// user stops sharing via the browser's own chrome (track 'ended') so the next
+// enable re-prompts instead of grabbing a dead track.
+export const enableVisionCapture = async () => {
+  if (!navigator.mediaDevices?.getDisplayMedia) return false;
+  if (isVisionCaptureEnabled()) return true;
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: { displaySurface: 'browser' },
+    audio: false,
+  }).catch(() => null);
+  if (!stream) return false;
+  visionStream = stream;
+  // User-stopped (browser chrome) → clear + notify the UI so the toggle flips.
+  // Guard on `visionStream === stream` so a late 'ended' from a SUPERSEDED
+  // stream (quick disable→re-enable) can't tear down the newer capture session.
+  stream.getVideoTracks().forEach((t) => t.addEventListener('ended', () => {
+    if (visionStream === stream) clearVisionStream();
+  }, { once: true }));
+  return true;
+};
+
+// Stop and release the authorized capture stream (widget teardown / user
+// toggle-off). Caller-initiated, so it does NOT fire onVisionCaptureEnded — the
+// caller already owns the state change (and on unmount the cb is gone).
+export const disableVisionCapture = () => clearVisionStream({ notify: false });
+
+// Grab one frame from the authorized vision stream as a JPEG data URL. Returns
+// null when no stream is authorized yet (the caller prompts the user to enable
+// it) or on any frame-grab failure, so ui_describe_visually degrades to a clear
+// "I can't see your screen" rather than crashing.
+export const captureScreenForVision = async () => {
+  if (typeof document === 'undefined' || !isVisionCaptureEnabled()) return null;
+  const video = document.createElement('video');
+  video.srcObject = visionStream;
+  video.muted = true;
+  const playing = await video.play().then(() => true).catch(() => false);
+  if (!playing) return null;
+  // One frame is enough; give the decoder a tick to paint dimensions.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const w = video.videoWidth || 1280;
+  const h = video.videoHeight || 720;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const cctx = canvas.getContext('2d');
+  video.pause();
+  if (!cctx) return null;
+  cctx.drawImage(video, 0, 0, w, h);
+  // JPEG @ 0.8 keeps the payload well under the server's 16 MB cap even at 4K.
+  return canvas.toDataURL('image/jpeg', 0.8);
+};
+
+// Reply to a server voice:screenshot:request. Always emits a result (data URL
+// or null) so the server-side waiter resolves instead of timing out. Echo the
+// requestId so the server resolves the matching waiter and a late reply can't
+// satisfy a newer capture.
+export const sendScreenshotResult = (requestId, dataUrl) => {
+  socket.emit('voice:screenshot:result', { requestId, dataUrl: dataUrl || null });
+};
+
 export const playWav = (arrayBuffer) => enqueuePlay(arrayBuffer);
 
 // Resolves once every currently-queued TTS chunk has finished playing locally.

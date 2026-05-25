@@ -14,6 +14,10 @@ import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, U
 import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
+// getRelevantMemories is imported lazily inside buildMemoryContext — it only
+// runs for retrieval-shaped turns, so keep its memory-backend + embeddings
+// dependency graph out of voice startup / non-retrieval turns (same rationale
+// as the lazy visionTest import in describeScreenshot).
 
 // Compact per-page UI summary the LLM uses to drive ui_* tools. Keep it
 // short — every turn pays the token cost. Groups elements by kind and shows
@@ -94,7 +98,105 @@ const waitForUiRefresh = (state, timeoutMs, signal) => new Promise((resolve) => 
   state.uiWaiters.push(finish);
 });
 
-export { summarizeUi, shouldIncludeUi };
+// Ask the client to screenshot the active tab and await the data URL. Mirrors
+// requestUiText's requestId-keyed waiter pattern: emit voice:screenshot:request
+// with a requestId, park a resolver keyed by that id, and resolve only when the
+// client echoes the same id back on voice:screenshot:result (handled in
+// sockets/voice.js). Keying by id means a late result from an earlier capture
+// can't satisfy a newer waiter and describe the wrong screen.
+// Resolves with the data URL or null on timeout/abort/denied-capture.
+let screenshotRequestSeq = 0;
+const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resolve) => {
+  if (!state) { resolve(null); return; }
+  if (!(state.screenshotWaiters instanceof Map)) state.screenshotWaiters = new Map();
+  const requestId = `shot_${++screenshotRequestSeq}`;
+  let done = false;
+  const finish = (value) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    signal?.removeEventListener?.('abort', onAbort);
+    // Drop our own waiter so a late response (after timeout/abort) is a no-op
+    // rather than resolving a stale promise.
+    state.screenshotWaiters.delete(requestId);
+    resolve(value);
+  };
+  const onAbort = () => finish(null);
+  const timer = setTimeout(() => finish(null), timeoutMs);
+  signal?.addEventListener?.('abort', onAbort, { once: true });
+  state.screenshotWaiters.set(requestId, finish);
+  emit('voice:screenshot:request', { requestId });
+});
+
+// Send a captured image (base64 data URL) to the voice LLM provider's vision
+// endpoint and return the description text. Reuses visionTest's provider-aware
+// OpenAI-compatible /chat/completions call so we don't reimplement the request
+// shape. Lazy import keeps tools.js / the pipeline free of a hard vision dep.
+//
+// Vision model selection is DECOUPLED from the voice text model: reusing
+// `cfg.llm.model` here meant that pinning a text-only voice model silently broke
+// ui_describe_visually even when the provider had a working vision-capable
+// default. Prefer an explicit `cfg.llm.visionModel` when set; otherwise pass
+// undefined so describeImageDataUrl falls back to the provider's defaultModel
+// (which is vision-capable for vision-capable providers).
+const describeScreenshot = async (dataUrl, prompt, cfg) => {
+  const { describeImageDataUrl } = await import('../visionTest.js');
+  const providerId = cfg?.llm?.provider || 'lmstudio';
+  const visionModel = cfg?.llm?.visionModel;
+  const model = typeof visionModel === 'string' && visionModel && visionModel !== 'auto'
+    ? visionModel
+    : undefined;
+  return describeImageDataUrl({ dataUrl, prompt, providerId, model });
+};
+
+// Lazily fetch the page's visible text from the client. The client ships the
+// UI index WITHOUT the heavy visible-text blob by default (textOnDemand:true);
+// when ui_read actually needs it we emit voice:ui:read-request and await a
+// voice:ui:read-response (the socket handler resolves the matching waiter).
+// Resolves with the text string, or null on timeout / abort / no-waiter-infra
+// (e.g. tests). Falls back gracefully: if the client never replies (legacy
+// client that doesn't understand read-request) the timeout fires and the
+// caller treats it as "no text available".
+const UI_TEXT_READ_TIMEOUT_MS = 1500;
+let uiTextRequestSeq = 0;
+const requestUiText = (state, emit, signal, timeoutMs = UI_TEXT_READ_TIMEOUT_MS) => new Promise((resolve) => {
+  if (!state || typeof emit !== 'function') { resolve(null); return; }
+  if (!(state.uiTextWaiters instanceof Map)) state.uiTextWaiters = new Map();
+  const requestId = `uitext_${++uiTextRequestSeq}`;
+  // Capture the snapshot this read is FOR. state.ui is replaced wholesale on
+  // every voice:ui:index, so a reference change means the user navigated (or a
+  // new index arrived) between request and response — in that case we must NOT
+  // cache the now-stale text onto the current snapshot (a later same-turn
+  // ui_read would otherwise read the wrong page's text).
+  const snapshotAtRequest = state.ui;
+  let done = false;
+  const finish = (value) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    signal?.removeEventListener?.('abort', onAbort);
+    // Drop our own waiter so a late response (after timeout/abort) is a no-op
+    // rather than resolving a stale promise.
+    state.uiTextWaiters.delete(requestId);
+    // If the snapshot changed (navigation / new index) between request and
+    // response, the fetched text is for a page that's no longer current —
+    // resolve null (stale) rather than handing ui_read the wrong page's text.
+    // Reference equality treats "no snapshot at request AND none now" as
+    // unchanged (e.g. tests with a bare state). When still current, cache the
+    // text for a same-turn re-read (only when there's a snapshot object to hold it).
+    const stillCurrent = state.ui === snapshotAtRequest;
+    if (!stillCurrent) { resolve(null); return; }
+    if (value !== null && state.ui) state.ui.text = value;
+    resolve(value);
+  };
+  const onAbort = () => finish(null);
+  const timer = setTimeout(() => finish(null), timeoutMs);
+  signal?.addEventListener?.('abort', onAbort, { once: true });
+  state.uiTextWaiters.set(requestId, finish);
+  emit('voice:ui:read-request', { requestId });
+});
+
+export { summarizeUi, shouldIncludeUi, requestUiText };
 
 const buildSystemPrompt = (cfg) => {
   if (!cfg.llm.usePersonality) return cfg.llm.systemPrompt;
@@ -145,6 +247,72 @@ const buildSystemPrompt = (cfg) => {
   }
   if (p.customPrompt) lines.push(p.customPrompt);
   return lines.join(' ');
+};
+
+// Detect "retrieval-shaped" voice turns — the user is asking about their OWN
+// past: prior statements, preferences, facts, decisions, or recall-style
+// questions ("what did I say about…", "do I prefer…", "when did I…",
+// "remind me…", "have I mentioned…"). For these turns we proactively pull the
+// top relevant long-term memories into the system prompt so the model answers
+// from stored context instead of guessing. Deliberately a cheap regex set —
+// no extra LLM classification call. Narrow enough that action/navigation turns
+// ("open my daily log", "go to tasks") and present-tense questions ("what time
+// is it") don't false-positive into a memory search.
+//
+// Exported for unit testing.
+const RETRIEVAL_PATTERNS = [
+  // First-person recall about what *I* (the user) said/did/decided in the past.
+  /\b(?:what|when|where|why|how|who)\b[^?]*\bI\b[^?]*\b(?:said|told|mentioned|wrote|noted|decided|chose|picked|wanted|planned|asked|did|set)\b/i,
+  // "did I …" / "have I …" / "had I …" recall questions.
+  /\b(?:did|have|had|was|were)\s+I\b/i,
+  // Preference questions ("do I prefer", "what's my preferred", "which do I like").
+  /\bdo\s+I\s+(?:prefer|like|usually|normally|typically|tend\s+to|want|use)\b/i,
+  /\bmy\s+(?:preference|preferences|preferred|favorite|favourite|usual|go[- ]?to)\b/i,
+  // Explicit recall verbs aimed at the assistant's memory.
+  /\bremind\s+me\b/i,
+  /\b(?:do\s+you\s+)?remember\b/i,
+  /\b(?:what\s+do\s+you|what\s+can\s+you)\s+(?:remember|recall|know)\s+(?:about|regarding)\b/i,
+  /\brecall\b/i,
+  // "what did we decide/say/agree" — shared-history recall.
+  /\bwhat\s+did\s+we\s+(?:decide|say|agree|discuss|talk\s+about)\b/i,
+];
+
+export const isRetrievalShaped = (userText) => {
+  if (!userText || typeof userText !== 'string') return false;
+  const t = userText.trim();
+  if (!t) return false;
+  return RETRIEVAL_PATTERNS.some((re) => re.test(t));
+};
+
+// How many top-ranked memories to inject. Kept small (3–5) so the system
+// prompt stays cheap and the spoken reply stays grounded in the most relevant
+// few rather than a wall of marginally-related context.
+const MEMORY_INJECT_LIMIT = 5;
+
+// Run long-term memory retrieval for a retrieval-shaped utterance and render
+// the top-N hits into a clearly-delimited block for the system prompt. Returns
+// null when there are no relevant memories (inject nothing) — the caller must
+// guard on null. Memory retrieval can fail (embeddings backend down, no index
+// yet); that surfaces as zero memories rather than killing the turn.
+//
+// Exported for unit testing.
+export const buildMemoryContext = async (userText, { limit = MEMORY_INJECT_LIMIT } = {}) => {
+  // Lazy import (see the note at the top): only retrieval-shaped turns reach
+  // here, so the memory-retriever dependency graph stays out of the hot path.
+  const { getRelevantMemories } = await import('../memoryRetriever.js');
+  // getRelevantMemories → generateQueryEmbedding does a bare `await fetch` that
+  // REJECTS (not returns null) when the embeddings backend is unreachable, so
+  // catch here to honor the "zero memories rather than killing the turn"
+  // contract above — otherwise a down embed server errors every recall turn.
+  const memories = await getRelevantMemories({ description: userText }, { limit }).catch(() => null);
+  if (!Array.isArray(memories) || !memories.length) return null;
+  const top = memories.slice(0, limit).filter((m) => m && typeof m.content === 'string' && m.content.trim());
+  if (!top.length) return null;
+  const lines = top.map((m) => `- ${m.content.trim()}`);
+  return [
+    'Relevant memories (the user\'s own stored notes, preferences, facts, and past decisions — use these to answer; do not invent details not present here):',
+    ...lines,
+  ].join('\n');
 };
 
 const SENTENCE_RE = /[.!?\n](?:\s+|$)/;
@@ -405,6 +573,21 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       });
     }
   }
+  // Explicit long-term memory routing: only for retrieval-shaped turns (the
+  // user asking about their own past / preferences / prior decisions). For
+  // everything else we skip the search entirely so normal turns stay cheap.
+  // Injects nothing when there are no relevant memories.
+  if (isRetrievalShaped(userText)) {
+    const tMem = Date.now();
+    const memoryBlock = await buildMemoryContext(userText);
+    if (memoryBlock) {
+      const count = (memoryBlock.match(/^- /gm) || []).length;
+      tlog(`memory.inject ${count} memories +${Date.now() - tMem}ms`);
+      messages.push({ role: 'system', content: memoryBlock });
+    } else {
+      tlog(`memory.none +${Date.now() - tMem}ms`);
+    }
+  }
   messages.push(...history, { role: 'user', content: userText });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);
 
@@ -514,7 +697,20 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       const t0 = Date.now();
       let result;
       let args = {};
-      const ctx = { sideEffects: [], state, signal };
+      // ctx.requestUiText lets ui_read pull the visible-text blob on demand
+      // (the client omits it from the index now). Bind state/emit/signal here
+      // so the tool just calls ctx.requestUiText() with no plumbing.
+      const ctx = {
+        sideEffects: [],
+        state,
+        signal,
+        // ui_describe_visually: capture the active tab (client round-trip) and
+        // describe it via the voice provider's vision endpoint. Provided here
+        // so tools.js stays free of socket/vision coupling.
+        captureScreenshot: () => requestScreenshot(emit, state, 15000, signal),
+        describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg),
+        requestUiText: () => requestUiText(state, emit, signal),
+      };
       try {
         args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
         const argSummary = Object.keys(args).length ? Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`).join(' ') : '—';

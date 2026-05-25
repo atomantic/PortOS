@@ -6,11 +6,14 @@ import { captureThought, getInboxLog } from '../brain.js';
 import { NAVIGABLE_STAGE_IDS as PIPELINE_STAGE_IDS } from '../pipeline/issues.js';
 import { logDrink, getAlcoholSummary } from '../meatspaceAlcohol.js';
 import { logNicotine, getNicotineSummary } from '../meatspaceNicotine.js';
-import { addBodyEntry } from '../meatspaceHealth.js';
+import { addBodyEntry, addWorkout } from '../meatspaceHealth.js';
 import { getGoals, updateGoalProgress, addProgressEntry } from '../identity.js';
 import { listProcesses, restartApp } from '../pm2.js';
 import { getItems, getFeeds, markItemRead, markAllRead } from '../feeds.js';
-import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timezone.js';
+import { getEvents as getCalendarEvents } from '../calendarSync.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { getUserTimezone, todayInTimezone, getLocalParts, getUtcOffsetMs } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
@@ -20,6 +23,16 @@ import { getSettings } from '../settings.js';
 import { isDestructiveLabel, buildPending } from './confirmGate.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
+
+// Clamp an LLM-supplied `limit` to [1, hi]. Tool-call args can arrive as
+// strings ("10") or non-numeric junk; `Math.min(hi, "abc")` is NaN, which would
+// silently slice an empty result. Coerce with Number() and fall back to
+// `fallback` when the value isn't a finite positive number (preserving the old
+// `limit || fallback` behavior for 0 / blank).
+const clampLimit = (raw, fallback, hi) => {
+  const n = Number(raw);
+  return Math.max(1, Math.min(hi, Number.isFinite(n) && n > 0 ? n : fallback));
+};
 
 // ----- Pipeline stage navigation helpers (used by pipeline_next_stage etc) -----
 const PIPELINE_STAGE_LABELS = {
@@ -160,6 +173,12 @@ const TOOL_GROUPS = {
   meatspace_log_nicotine: 'meatspace',
   meatspace_summary_today: 'meatspace',
   meatspace_log_weight: 'meatspace',
+  meatspace_log_workout: 'meatspace',
+  calendar_today: 'calendar',
+  calendar_next: 'calendar',
+  weather_now: 'weather',
+  timer_set: 'timer',
+  ui_describe_visually: 'vision',
   goal_list: 'goals',
   goal_update_progress: 'goals',
   goal_log_note: 'goals',
@@ -205,7 +224,32 @@ const GROUP_INTENT = {
   // "jot", "file" — without which moving brain_capture out of the always-on
   // set would break "remember to buy milk" style turns.
   brain: /\b(search|find|look ?up|recall|what did I (?:say|write|note)|brain|inbox|capture|remember|remind me|jot|note (?:that|to|down)|save (?:this|that)|file (?:this|that|it)|add (?:this|that|it) to (?:my )?(?:brain|inbox|notes?))\b/i,
-  meatspace: /\b(drink|drank|beer|wine|whiskey|shot|cocktail|cigarette|vape|pouch|nicotine|weigh|pound|kilo|kg|smoke|smoking|how am I|summary today|log (?:a|my) (?:drink|weight|nicotine))\b/i,
+  // Bare `run`/`ran` were dropped — they collide with common command phrasing
+  // ("run the pipeline", "I ran the report") and would expose the workout tool
+  // on non-fitness turns. Genuine run-logging is recovered via the "went
+  // for/on a … run" phrasing and the "ran …" branch below, which requires a
+  // fitness OBJECT — a distance/race ("ran a 5k", "ran 3 miles", "ran a
+  // marathon"), a route ("ran my usual route", "ran my loop"), or a duration
+  // WITH a time unit ("ran for 30 minutes", "ran for an hour"). The duration
+  // branch insists on a minute/hour/second unit so "ran for a report", "ran for
+  // office", and "ran for president" no longer match, just as "I ran a report",
+  // "ran an errand", and "ran my mouth" don't. Other activity nouns
+  // (jog/yoga/cardio/gym/…) rarely collide in voice commands.
+  meatspace: /\b(drink|drank|beer|wine|whiskey|shot|cocktail|cigarette|vape|pouch|nicotine|weigh|pound|kilo|kg|smoke|smoking|workout|exercise|exercised|jog|yoga|lift(?:ed|ing)?|cardio|gym|cycling|cycled|swim|swam|how am I|summary today|log (?:a|my) (?:drink|weight|nicotine|workout|run|exercise))\b|\bwent (?:for|on) (?:a |an )?(?:\w+ ){0,2}(?:run|jog|swim|ride|walk|hike|workout)\b|\bran (?:a |an |my )?(?:\w+ ){0,2}(?:\d+\s?k\b|\d+\s?km\b|miles?\b|marathons?\b|half[- ]?marathons?\b|5k\b|10k\b|loops?\b|routes?\b|trails?\b|laps?\b)|\bran for (?:\w+ ){0,3}(?:hours?|hrs?|mins?|minutes?|seconds?|secs?)\b/i,
+  // Calendar reads — "what's on my calendar", "what do I have today",
+  // "next meeting", "what's next", "upcoming", "any appointments". Tight-ish
+  // so plain "open calendar" still routes to ui_navigate, not calendar_today.
+  calendar: /\b(calendar|agenda|meeting|appointment|event)s?\b|\bwhat(?:'s| is| do i have)?\b[^.!?\n]{0,30}\b(today|next|coming up|upcoming|scheduled|on my (?:plate|schedule|calendar))\b|\bwhat'?s next\b/i,
+  // Weather — "what's the weather", "is it raining", "how hot/cold",
+  // "temperature outside", "forecast".
+  weather: /\b(weather|forecast|temperature|raining|snowing|sunny|cloudy|how (?:hot|cold|warm)|degrees? (?:out|outside))\b/i,
+  // Timers / reminders — "set a timer", "remind me in N minutes", "ping me in".
+  timer: /\b(set a timer|start a timer|timer for|remind me (?:in|to)|ping me in|alarm|countdown|wake me)\b/i,
+  // Visual description — needs a vision model on a screenshot. "what's on this
+  // chart/graph", "describe this", "what am I looking at", "what does this
+  // look like". Kept distinct from `ui` (text read) so the LLM can choose
+  // ui_read vs ui_describe_visually.
+  vision: /\b(chart|graph|diagram|cyber ?city|3d|render(?:ing)?|visualization|picture|image|screenshot)\b|\b(?:what(?:'s| does| am i)?|describe)\b[^.!?\n]{0,30}\b(?:look(?:ing|s)? like|on (?:this|the) (?:chart|graph|screen|map)|visual(?:ly)?)\b/i,
   goals: /\b(goals?|progress|objective)\b/i,
   system: /\b(restart|crash(?:ed)?|pm2|process|service|is.*(?:running|down|up)|status)\b/i,
   // "mark.*read" / "mark.*unread" pairs feeds_mark_read with feeds_digest:
@@ -331,6 +375,62 @@ const findGoalByQuery = (goals, query) => {
   return { match: scored[0].goal, candidates: scored.slice(0, 4).map((s) => s.goal) };
 };
 
+// ----- Calendar helpers (calendar_today / calendar_next) -----
+// The calendar cache stores ISO `startTime`/`endTime` (UTC or with offset) plus
+// `title`, `location`, and `isAllDay` (the cache field name — see
+// calendarGoogleSync.js / calendarApiSync.js; the tool's own output uses
+// `allDay`). We format times in the user's TZ so a spoken "10 AM" matches the
+// wall clock, not the server's UTC.
+const formatEventTime = (iso, tz) => {
+  if (typeof iso !== 'string' || !iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(d);
+};
+const summarizeEvent = (e, tz) => {
+  const start = formatEventTime(e?.startTime, tz);
+  const when = e?.isAllDay ? 'all day' : (start || 'time TBD');
+  const loc = e?.location ? ` at ${e.location}` : '';
+  return `${e?.title || 'Untitled event'} (${when})${loc}`;
+};
+// UTC timestamp (ms) of local midnight for the `YYYY-MM-DD` day string in `tz`.
+// The server runs TZ=UTC, so we subtract the TZ offset from the naive UTC parse
+// of the day string. Evaluate the offset AT the target day's midnight (not at
+// `now`) so a DST transition elsewhere in the day can't shift the result by an
+// hour. The naive parse lands within ~14h of local midnight — close enough that
+// re-evaluating the offset at that candidate instant converges to the correct
+// offset across a DST boundary.
+export const anchorLocalMidnightUtc = (dayStr, tz) => {
+  const naiveUtc = Date.parse(`${dayStr}T00:00:00Z`);
+  const firstOffset = getUtcOffsetMs(new Date(naiveUtc), tz);
+  const candidate = naiveUtc - firstOffset;
+  const refinedOffset = getUtcOffsetMs(new Date(candidate), tz);
+  return naiveUtc - refinedOffset;
+};
+
+// ----- Weather helpers (weather_now) -----
+// WMO weather interpretation codes → short spoken text. Open-Meteo returns the
+// integer `weather_code`; this small table avoids pulling in a weather lib.
+const WEATHER_CODES = {
+  0: 'clear sky',
+  1: 'mainly clear', 2: 'partly cloudy', 3: 'overcast',
+  45: 'fog', 48: 'depositing rime fog',
+  51: 'light drizzle', 53: 'moderate drizzle', 55: 'dense drizzle',
+  56: 'light freezing drizzle', 57: 'dense freezing drizzle',
+  61: 'slight rain', 63: 'moderate rain', 65: 'heavy rain',
+  66: 'light freezing rain', 67: 'heavy freezing rain',
+  71: 'slight snow', 73: 'moderate snow', 75: 'heavy snow', 77: 'snow grains',
+  80: 'slight rain showers', 81: 'moderate rain showers', 82: 'violent rain showers',
+  85: 'slight snow showers', 86: 'heavy snow showers',
+  95: 'thunderstorm', 96: 'thunderstorm with slight hail', 99: 'thunderstorm with heavy hail',
+};
+const describeWeatherCode = (code) => WEATHER_CODES[code] ?? 'unknown conditions';
+// Fallback location when the user hasn't set one and didn't pass lat/lon.
+// San Francisco — a sensible documented default; the tool description tells
+// the LLM to pass lat/lon when the user names a place.
+const DEFAULT_LAT = 37.7749;
+const DEFAULT_LON = -122.4194;
+
 const TOOLS = [
   {
     name: 'brain_capture',
@@ -385,7 +485,7 @@ const TOOLS = [
       // `String.includes('')` matches everything, so an all-whitespace query
       // would return unrelated entries — reject instead of surprising the user.
       if (!q) throw new Error('query must not be empty');
-      const max = Math.max(1, Math.min(10, limit || 5));
+      const max = clampLimit(limit, 5, 10);
       // Load a reasonable window — the brain inbox is small enough that an
       // in-memory filter is fine and avoids a second storage pass for ranking.
       const records = await getInboxLog({ limit: 200 });
@@ -525,7 +625,7 @@ const TOOLS = [
       },
     },
     execute: async ({ limit = 5 } = {}) => {
-      const max = Math.max(1, Math.min(10, limit || 5));
+      const max = clampLimit(limit, 5, 10);
       const records = await getInboxLog({ limit: max });
       const items = records.map((r) => ({
         date: (r.capturedAt || '').slice(0, 10),
@@ -588,7 +688,7 @@ const TOOLS = [
       },
     },
     execute: async ({ limit = 10 } = {}) => {
-      const max = Math.max(1, Math.min(20, limit || 10));
+      const max = clampLimit(limit, 10, 20);
       const data = await getGoals();
       const active = (data.goals || []).filter((g) => g.status === 'active' || !g.status);
       active.sort((a, b) => (b.urgency ?? 0) - (a.urgency ?? 0));
@@ -752,7 +852,7 @@ const TOOLS = [
       },
     },
     execute: async ({ limit = 5 } = {}) => {
-      const max = Math.max(1, Math.min(10, limit || 5));
+      const max = clampLimit(limit, 5, 10);
       const [items, feeds] = await Promise.all([getItems({ unreadOnly: true }), getFeeds()]);
       const feedName = (id) => feeds.find((f) => f.id === id)?.title || 'feed';
       const picks = items.slice(0, max).map((i) => ({
@@ -1056,7 +1156,19 @@ const TOOLS = [
     },
     execute: async ({ summarize = false } = {}, ctx = {}) => {
       const ui = ctx?.state?.ui;
-      if (!ui || typeof ui.text !== 'string' || !ui.text.trim()) {
+      // The client no longer ships the visible-text blob with every index —
+      // it sets `textOnDemand` and we fetch it lazily here, only when ui_read
+      // actually runs. Resolution order:
+      //   1. Eager/legacy text already on the snapshot (older client, or a
+      //      prior ui_read in this turn cached it) → use it directly.
+      //   2. textOnDemand client → request it now via ctx.requestUiText().
+      //   3. Neither (very old / no widget) → "no text available".
+      let text = typeof ui?.text === 'string' && ui.text.trim() ? ui.text : null;
+      if (!text && ui?.textOnDemand && typeof ctx?.requestUiText === 'function') {
+        const fetched = await ctx.requestUiText();
+        if (typeof fetched === 'string' && fetched.trim()) text = fetched;
+      }
+      if (!text) {
         return {
           ok: false,
           error: 'No page text available',
@@ -1065,14 +1177,14 @@ const TOOLS = [
       }
       return {
         ok: true,
-        path: ui.path,
-        title: ui.title,
-        content: ui.text,
-        chars: ui.text.length,
+        path: ui?.path,
+        title: ui?.title,
+        content: text,
+        chars: text.length,
         summarize: !!summarize,
         // Keep `summary` short so the LLM message history isn't doubled — the
         // full body lives in `content`.
-        summary: `Read page "${ui.title || ui.path || 'current page'}" (${ui.text.length} chars).`,
+        summary: `Read page "${ui?.title || ui?.path || 'current page'}" (${text.length} chars).`,
       };
     },
   },
@@ -1388,6 +1500,298 @@ const TOOLS = [
         dayOfWeek: fmt({ weekday: 'long' }),
         time: fmt({ hour: 'numeric', minute: '2-digit' }),
         summary: `${fmt({ weekday: 'long' })}, ${fmt({ month: 'long', day: 'numeric', year: 'numeric' })} at ${fmt({ hour: 'numeric', minute: '2-digit' })}.`,
+      };
+    },
+  },
+
+  {
+    name: 'calendar_today',
+    description:
+      "Report today's calendar events. Use when the user asks \"what's on my calendar today?\", \"what do I have today?\", \"any meetings today?\". Reads from the user's synced calendar accounts (Google etc.). Returns up to 10 events with title, time, and location.",
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Max events to return (default 10, max 20).' },
+      },
+    },
+    execute: async ({ limit = 10 } = {}) => {
+      const max = clampLimit(limit, 10, 20);
+      const tz = await getUserTimezone();
+      const today = todayInTimezone(tz); // YYYY-MM-DD in the user's TZ
+      // The server runs TZ=UTC and event startTimes carry an offset/Z, so the
+      // [startDate, endDate] bounds must be the user's LOCAL day expressed in
+      // UTC — otherwise a late-evening PT event lands on the next UTC day and
+      // gets dropped. Anchor midnight-local by subtracting the TZ offset, but
+      // evaluate that offset at the TARGET day's midnight (not at `now`): on a
+      // DST-transition day the offset at `now` can differ from the offset at
+      // midnight by an hour, shifting the window and dropping/duplicating
+      // boundary events. Two passes converge (the first guess lands within
+      // ~14h of local midnight; the second re-evaluates at that instant).
+      const localMidnightUtc = anchorLocalMidnightUtc(today, tz);
+      const startDate = new Date(localMidnightUtc).toISOString();
+      const endDate = new Date(localMidnightUtc + 86399999).toISOString();
+      const { events = [] } = await getCalendarEvents({ startDate, endDate, limit: max });
+      const items = events.map((e) => ({
+        title: e.title,
+        startTime: e.startTime,
+        time: e.isAllDay ? 'all day' : formatEventTime(e.startTime, tz),
+        location: e.location || null,
+        allDay: !!e.isAllDay,
+      }));
+      return {
+        ok: true,
+        date: today,
+        count: items.length,
+        events: items,
+        summary: items.length
+          ? `${items.length} event${items.length === 1 ? '' : 's'} today: ${events.slice(0, max).map((e) => summarizeEvent(e, tz)).join('; ')}.`
+          : 'Nothing on your calendar today.',
+      };
+    },
+  },
+
+  {
+    name: 'calendar_next',
+    description:
+      'Report the next upcoming calendar event. Use when the user asks "what\'s next?", "what\'s my next meeting?", "when\'s my next appointment?". Reads from the user\'s synced calendar accounts and returns the soonest event starting from now.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const tz = await getUserTimezone();
+      const nowIso = new Date().toISOString();
+      // Look ahead 30 days; getEvents returns events sorted ascending by
+      // startTime, so the first one at/after now is "next". Pull a small
+      // window and filter in-memory rather than relying on exact boundary.
+      const horizon = new Date(Date.now() + 30 * 86400000).toISOString();
+      const { events = [] } = await getCalendarEvents({
+        startDate: nowIso,
+        endDate: horizon,
+        limit: 50,
+      });
+      // Match calendarSync.getEvents' range semantics (it keeps events whose
+      // endTime >= startDate), so an in-progress meeting and an all-day event
+      // that began at local midnight today both still count as "next" — a
+      // strict startTime >= now would drop them. Use endTime when present,
+      // falling back to startTime for events that carry only a start.
+      const nowMs = Date.now();
+      const next = events.find((e) => {
+        const ref = new Date(e?.endTime || e?.startTime);
+        return !Number.isNaN(ref.getTime()) && ref.getTime() >= nowMs;
+      });
+      if (!next) {
+        return { ok: true, found: false, summary: 'Nothing coming up on your calendar in the next 30 days.' };
+      }
+      const startDate = new Date(next.startTime);
+      const dayLabel = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }).format(startDate);
+      const timeLabel = next.isAllDay ? 'all day' : (formatEventTime(next.startTime, tz) || 'time TBD');
+      const loc = next.location ? ` at ${next.location}` : '';
+      return {
+        ok: true,
+        found: true,
+        title: next.title,
+        startTime: next.startTime,
+        location: next.location || null,
+        allDay: !!next.isAllDay,
+        summary: `Next up: ${next.title || 'Untitled event'} — ${dayLabel}, ${timeLabel}${loc}.`,
+      };
+    },
+  },
+
+  {
+    name: 'meatspace_log_workout',
+    description:
+      'Log a workout / exercise session to Meatspace tracking. Use when the user says "log a workout", "I went for a 30 minute run", "did an hour of yoga", "lifted weights for 45 minutes". The `type` is free-form (run, yoga, lifting, cycling, swim, etc.). Duration and intensity are optional.',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Workout type (e.g. "run", "yoga", "weightlifting", "cycling").' },
+        durationMinutes: { type: 'number', description: 'How long, in minutes. Omit if unknown.' },
+        intensity: { type: 'string', enum: ['light', 'moderate', 'vigorous'], description: 'Optional perceived intensity.' },
+        notes: { type: 'string', description: 'Optional free-form notes about the session.' },
+        date: { type: 'string', description: 'ISO date (YYYY-MM-DD). Omit for today.' },
+      },
+      required: ['type'],
+    },
+    execute: async ({ type, durationMinutes, intensity, notes, date } = {}) => {
+      if (typeof type !== 'string' || !type.trim()) throw new Error('type is required');
+      let resolvedDuration;
+      if (durationMinutes !== undefined && durationMinutes !== null && durationMinutes !== '') {
+        const parsed = Number(durationMinutes);
+        if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1440) {
+          throw new Error('durationMinutes must be a positive number (≤1440)');
+        }
+        resolvedDuration = parsed;
+      }
+      if (intensity !== undefined && intensity !== null && !['light', 'moderate', 'vigorous'].includes(intensity)) {
+        throw new Error('intensity must be light, moderate, or vigorous');
+      }
+      const entry = await addWorkout({
+        date,
+        type: type.trim(),
+        durationMinutes: resolvedDuration,
+        intensity,
+        notes,
+      });
+      const durPart = entry.durationMinutes ? ` (${entry.durationMinutes} min)` : '';
+      return {
+        ok: true,
+        date: entry.date,
+        type: entry.type,
+        summary: `Logged ${entry.type}${durPart} on ${entry.date}.`,
+      };
+    },
+  },
+
+  {
+    name: 'weather_now',
+    description:
+      'Report the current weather (temperature + conditions) for a location. Use when the user asks "what\'s the weather?", "is it raining?", "how hot is it outside?". Pass `lat`/`lon` for a specific place; with no coordinates it uses a saved location if one is configured, otherwise a default location. Uses the free Open-Meteo service (no API key).',
+    parameters: {
+      type: 'object',
+      properties: {
+        lat: { type: 'number', description: 'Latitude (-90 to 90). Omit to use the configured/default location.' },
+        lon: { type: 'number', description: 'Longitude (-180 to 180). Omit to use the configured/default location.' },
+      },
+    },
+    execute: async ({ lat, lon } = {}) => {
+      // Resolve location: explicit params > settings.location > default.
+      const settings = await getSettings().catch(() => ({}));
+      const cfgLat = Number(settings?.location?.lat);
+      const cfgLon = Number(settings?.location?.lon);
+      const numOrNull = (v) => {
+        if (v === undefined || v === null || v === '') return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      const resolvedLat = numOrNull(lat) ?? (Number.isFinite(cfgLat) ? cfgLat : null) ?? DEFAULT_LAT;
+      const resolvedLon = numOrNull(lon) ?? (Number.isFinite(cfgLon) ? cfgLon : null) ?? DEFAULT_LON;
+      if (resolvedLat < -90 || resolvedLat > 90 || resolvedLon < -180 || resolvedLon > 180) {
+        return { ok: false, summary: 'Latitude must be -90..90 and longitude -180..180.' };
+      }
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${resolvedLat}&longitude=${resolvedLon}`
+        + '&current=temperature_2m,weather_code&temperature_unit=fahrenheit';
+      const res = await fetchWithTimeout(url, {}, 10000).catch((err) => ({ ok: false, error: err?.message }));
+      if (!res || !res.ok) {
+        return { ok: false, summary: `Couldn't reach the weather service${res?.error ? ` (${res.error})` : ''}.` };
+      }
+      const data = await res.json().catch(() => null);
+      const current = data?.current;
+      if (!current || typeof current.temperature_2m !== 'number') {
+        return { ok: false, summary: 'The weather service returned no current conditions.' };
+      }
+      const temp = Math.round(current.temperature_2m);
+      const conditions = describeWeatherCode(current.weather_code);
+      return {
+        ok: true,
+        lat: resolvedLat,
+        lon: resolvedLon,
+        temperatureF: temp,
+        weatherCode: current.weather_code,
+        conditions,
+        summary: `It's ${temp}°F and ${conditions} right now.`,
+      };
+    },
+  },
+
+  {
+    name: 'timer_set',
+    description:
+      'Set a one-shot timer or reminder. Use when the user says "set a timer for 10 minutes", "remind me in 30 minutes to call mom", "ping me in an hour". When the timer fires, PortOS raises a notification with the label. Specify the duration in minutes (or seconds for short timers).',
+    parameters: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Timer duration in minutes. Use this for most timers.' },
+        seconds: { type: 'number', description: 'Timer duration in seconds. Use for short timers; added to minutes if both given.' },
+        label: { type: 'string', description: 'What to remind the user about (e.g. "tea is ready", "call mom").' },
+      },
+    },
+    execute: async ({ minutes, seconds, label } = {}) => {
+      const mins = Number.isFinite(Number(minutes)) ? Number(minutes) : 0;
+      const secs = Number.isFinite(Number(seconds)) ? Number(seconds) : 0;
+      const totalMs = Math.round((mins * 60 + secs) * 1000);
+      // Bound: at least 1s, at most 24h. An LLM-supplied NaN/negative or an
+      // absurd duration shouldn't schedule a runaway timer.
+      if (!Number.isFinite(totalMs) || totalMs < 1000) {
+        return { ok: false, summary: 'Tell me how long — e.g. "set a timer for 10 minutes".' };
+      }
+      if (totalMs > 24 * 60 * 60 * 1000) {
+        return { ok: false, summary: 'Timers are capped at 24 hours. For longer reminders, add a calendar event.' };
+      }
+      const trimmedLabel = typeof label === 'string' && label.trim() ? label.trim().slice(0, 200) : 'Timer';
+      // setTimeout runs OUTSIDE the request lifecycle — guard the async body so
+      // a thrown notification write can't crash the process (per CLAUDE.md).
+      setTimeout(() => {
+        addNotification({
+          type: NOTIFICATION_TYPES.AGENT_WARNING,
+          title: `⏰ ${trimmedLabel}`,
+          description: `Timer you set is up.`,
+          priority: PRIORITY_LEVELS.HIGH,
+        }).catch((err) => {
+          console.error(`❌ timer_set notification failed: ${err.message}`);
+        });
+      }, totalMs);
+      const totalSecs = Math.round(totalMs / 1000);
+      const human = totalSecs >= 60
+        ? `${Math.round(totalSecs / 60)} minute${Math.round(totalSecs / 60) === 1 ? '' : 's'}`
+        : `${totalSecs} second${totalSecs === 1 ? '' : 's'}`;
+      console.log(`⏰ Timer set for ${human}: "${trimmedLabel}"`);
+      return {
+        ok: true,
+        durationMs: totalMs,
+        label: trimmedLabel,
+        summary: `Timer set for ${human}${trimmedLabel !== 'Timer' ? ` — I'll remind you to ${trimmedLabel}` : ''}.`,
+      };
+    },
+  },
+
+  {
+    name: 'ui_describe_visually',
+    description:
+      "Take a screenshot of what the user is currently looking at and describe it using a vision model. Use when the user asks about VISUAL content the text-based ui_read can't capture — \"what's on this chart?\", \"describe this graph\", \"what does the CyberCity look like right now?\", \"what am I looking at?\". For plain text content prefer ui_read; only reach for this when the answer requires SEEING pixels (charts, 3D/WebGL views, images, diagrams). The screenshot is captured client-side (the browser may prompt for screen-capture permission the first time).",
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'What the user wants to know about the screen (e.g. "what does this chart show?"). Defaults to a general description.',
+        },
+      },
+    },
+    execute: async ({ question } = {}, ctx = {}) => {
+      if (typeof ctx.captureScreenshot !== 'function') {
+        return {
+          ok: false,
+          error: 'No screenshot channel',
+          summary: "I can't capture the screen right now — this only works through the live voice widget.",
+        };
+      }
+      const prompt = (typeof question === 'string' && question.trim())
+        ? `${question.trim()}\n\nAnswer concisely based only on what is visible in this screenshot.`
+        : 'Describe what is visible in this screenshot of an app screen, concisely.';
+      // Ask the client to capture the active tab. Returns a data URL (base64
+      // PNG/JPEG) or null if the user denied / capture failed.
+      const dataUrl = await ctx.captureScreenshot().catch(() => null);
+      if (!dataUrl || typeof dataUrl !== 'string') {
+        return {
+          ok: false,
+          error: 'Screenshot capture failed',
+          summary: "I couldn't capture the screen — the browser may have blocked screen capture. Try again and allow it.",
+        };
+      }
+      const description = await ctx.describeImage(dataUrl, prompt).catch((err) => ({ __error: err?.message || String(err) }));
+      if (description?.__error) {
+        return { ok: false, error: description.__error, summary: `I captured the screen but the vision model failed: ${description.__error}` };
+      }
+      const text = typeof description === 'string' ? description.trim() : '';
+      if (!text) {
+        return { ok: false, summary: 'I captured the screen but the vision model returned nothing.' };
+      }
+      return {
+        ok: true,
+        content: text,
+        path: ctx.state?.ui?.path || null,
+        // Keep summary short — the full description is in `content` for the LLM
+        // to speak verbatim (mirrors ui_read / ui_ask).
+        summary: `Described the current screen (${text.length} chars).`,
       };
     },
   },

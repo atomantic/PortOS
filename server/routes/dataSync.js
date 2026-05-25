@@ -13,7 +13,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections']);
+const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory']);
 
 // Tombstone GC manual trigger. Declared BEFORE `/:category/*` so the literal
 // "tombstones" segment wins Express's first-match lookup (categoryParam's
@@ -41,10 +41,26 @@ router.post('/tombstones/sweep', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Optional `?forPeer=<instanceId>` — the REQUESTING peer's instanceId. When
+// present, the snapshot/checksum is scoped to EXCLUDE records that peer
+// already receives from us per-record via the push pipeline (its inbound
+// coverage), so the snapshot carries only un-subscribed records + tombstones
+// for torn-down subs. Absent (older peers, non-peer callers) → full snapshot,
+// applied idempotently by the receiver. Express returns an array for repeated
+// query keys; the `typeof === 'string'` guard drops those so only a single
+// scalar instanceId scopes the request. Trim + length-cap the value (matching
+// the defensive id handling in the peerSync routes) so stray whitespace or a
+// malformed/oversized client value can't become a junk cache key.
+const forPeerOf = (req) => {
+  if (typeof req.query.forPeer !== 'string') return undefined;
+  const trimmed = req.query.forPeer.trim().slice(0, 128);
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
-  const result = await dataSync.getChecksum(category);
+  const result = await dataSync.getChecksum(category, { forPeerId: forPeerOf(req) });
   if (!result) throw new ServerError('Category not found', { status: 404 });
   res.json(result);
 }));
@@ -52,7 +68,7 @@ router.get('/:category/checksum', asyncHandler(async (req, res) => {
 // GET /api/sync/:category/snapshot — return category data + checksum
 router.get('/:category/snapshot', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
-  const snapshot = await dataSync.getSnapshot(category);
+  const snapshot = await dataSync.getSnapshot(category, { forPeerId: forPeerOf(req) });
   if (!snapshot) throw new ServerError('Category not found', { status: 404 });
   res.json(snapshot);
 }));

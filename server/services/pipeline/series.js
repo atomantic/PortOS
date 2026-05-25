@@ -232,7 +232,7 @@ export async function insertSeriesWithId(input = {}) {
   }
   const name = trimTo(input.name, NAME_MAX);
   if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
-  return store().queueRecordWrite(input.id, async () => {
+  const { next, wasResurrection } = await store().queueRecordWrite(input.id, async () => {
     // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId —
     // re-import undeletes; peer-sync resurrection is prevented at the merge
     // path via LWW, not here.
@@ -240,14 +240,26 @@ export async function insertSeriesWithId(input = {}) {
     if (existing && !existing.deleted) {
       throw makeErr(`Series id already exists: ${input.id}`, ERR_DUPLICATE);
     }
+    const wasResurrection = !!existing;
     const next = sanitizeSeries({ ...input, name });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
-    if (existing) {
+    if (wasResurrection) {
       console.warn(`♻️  insertSeriesWithId: overwriting tombstone for ${input.id}`);
     }
     await store().saveOneNow(next.id, next);
-    return next;
+    return { next, wasResurrection };
   });
+  // Mirror createSeries's federation side-effects on tombstone-overwrite:
+  // peers that still have the deleted record need the resurrection propagated.
+  if (wasResurrection && !next.ephemeral) {
+    emitRecordUpdated('series', next.id);
+    import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+      autoSubscribeRecordToAllPeers('series', next.id)
+    ).catch((err) => {
+      console.log(`⚠️ series: auto-subscribe after resurrection failed: ${err.message}`);
+    });
+  }
+  return next;
 }
 
 export async function updateSeries(id, patch = {}) {

@@ -20,7 +20,7 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
-import { formatDurationMin } from '../../../utils/formatters';
+import { formatDurationMin, formatBytes } from '../../../utils/formatters';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -74,14 +74,6 @@ function extractTaskType(description) {
   if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
   if (d.includes('investigate') || d.includes('debug')) return 'investigation';
   return 'feature';
-}
-
-// Format file size for display
-function formatAttachmentSize(bytes) {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // Get success rate styling based on percentage
@@ -368,7 +360,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center gap-1 px-2 py-0.5 text-xs bg-port-accent/10 text-port-accent hover:bg-port-accent/20 rounded transition-colors"
-                      title={`${att.originalName || att.filename} (${formatAttachmentSize(att.size)})`}
+                      title={`${att.originalName || att.filename}${att.size ? ` (${formatBytes(att.size)})` : ''}`}
                     >
                       <FileText size={10} aria-hidden="true" />
                       <span className="truncate max-w-[100px]">{att.originalName || att.filename}</span>

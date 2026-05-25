@@ -22,8 +22,10 @@ const router = Router();
 // Palette-safe subset of voice tools. Excluded: DOM-driving ui_* tools
 // (ui_click/ui_fill/ui_navigate need a live voice DOM context), dictation
 // toggles (voice-widget state), daily_log_open (pushes a sideEffect HTTP
-// callers can't consume). ui_ask is the explicit exception — it has no DOM
-// dependency and runs the same askService pipeline a non-voice caller wants.
+// callers can't consume), and ui_describe_visually (needs the live voice
+// widget's screenshot round-trip — the palette has no screen-capture path).
+// ui_ask is the explicit exception — it has no DOM dependency and runs the
+// same askService pipeline a non-voice caller wants.
 // pm2_restart is flagged destructive so the client can confirm.
 const PALETTE_ACTIONS = [
   { id: 'brain_capture',           label: 'Capture to Brain',        section: 'Brain' },
@@ -35,7 +37,12 @@ const PALETTE_ACTIONS = [
   { id: 'meatspace_log_drink',     label: 'Log a drink',             section: 'Health' },
   { id: 'meatspace_log_nicotine',  label: 'Log nicotine',            section: 'Health' },
   { id: 'meatspace_log_weight',    label: 'Log weight',              section: 'Health' },
+  { id: 'meatspace_log_workout',   label: 'Log a workout',           section: 'Health' },
   { id: 'meatspace_summary_today', label: "Today's health summary",  section: 'Health' },
+  { id: 'calendar_today',          label: "Today's calendar",        section: 'Calendar' },
+  { id: 'calendar_next',           label: 'Next calendar event',     section: 'Calendar' },
+  { id: 'weather_now',             label: 'Current weather',         section: 'System' },
+  { id: 'timer_set',               label: 'Set a timer',             section: 'System' },
   { id: 'feeds_digest',            label: 'Feed digest',             section: 'Feeds' },
   { id: 'pm2_status',              label: 'PM2 status',              section: 'System' },
   { id: 'pm2_restart',             label: 'Restart a PM2 process',   section: 'System', destructive: true },

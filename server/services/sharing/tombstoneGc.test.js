@@ -45,10 +45,22 @@ const NOW = 1_700_000_000_000; // arbitrary epoch ms anchor
 // per-kind filter, so tests should hand the full sub list with each row
 // carrying its own `recordKind` tag. The previous per-kind mock shape
 // (`mockImplementation(({ recordKind }) => ...)`) is replaced by this.
+//
+// `lastConfirmedPushedAt` defaults to NOW so the per-record clamp
+// (minConfirmedPushedAtForKind) is a no-op for the per-peer-ack policy tests —
+// they model "pushes are landing, only the tombstone ACK cursor lags." Tests
+// that exercise the per-record clamp (a record whose push never confirmed)
+// override it per row with a lower value (or `null`).
 const mockSubs = (subsByKind) => {
   const rows = [];
   for (const [recordKind, peers] of Object.entries(subsByKind)) {
-    for (const p of peers) rows.push({ ...p, recordKind });
+    for (const p of peers) {
+      rows.push({
+        lastConfirmedPushedAt: NOW,
+        ...p,
+        recordKind,
+      });
+    }
   }
   listPeerSubscriptions.mockResolvedValue(rows);
 };
@@ -282,6 +294,101 @@ describe('sweepTombstones — graceMs override (manual trigger / CLI path)', () 
     const result = await sweepTombstones({ now: NOW, graceMs: 0 });
     expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
     expect(result.refused).toContain('universe');
+  });
+});
+
+describe('sweepTombstones — per-record confirmed-push clamp (peer-sync-per-record-tombstone-ack-cursor)', () => {
+  // Regression for the per-peer cursor gap: the per-peer tombstone ack cursor
+  // (getMinAckAcrossPeers) advances to the MAX deletedAt acked across ALL of a
+  // peer's pushes. If push for record-A FAILS and a later push for record-B
+  // SUCCEEDS, the receiver returns ackedDeletesUpTo = B.deletedAt > A.deletedAt
+  // and the per-peer cursor jumps past A — even though A's delete-push was
+  // never confirmed. Without the per-record clamp, GC prunes A's tombstone and
+  // A's stale live copy on the receiver resurrects on the next snapshot sync.
+  //
+  // The fix clamps the cutoff to MIN(lastConfirmedPushedAt) across the kind's
+  // rows. Record-A's row is stuck at a pre-delete confirm time below A's
+  // deletedAt, so the cutoff stays below A and A's tombstone survives.
+  const A_DELETED_AT = NOW - 10 * 60 * 1000; // A deleted 10m ago
+  const A_LAST_CONFIRMED = NOW - 20 * 60 * 1000; // A's last *confirmed* push (pre-delete), 20m ago
+  const B_DELETED_AT = NOW - 5 * 60 * 1000; // B deleted 5m ago (more recent than A)
+
+  it('does NOT prune record-A tombstone when A push failed but a later record-B push advanced the per-peer cursor', async () => {
+    // Per-peer cursor reflects B's ack (the bug: it jumped past A).
+    getMinAckAcrossPeers.mockResolvedValue(B_DELETED_AT);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    // Two universe subs to the same peer. A's push never confirmed since
+    // before its delete (stuck low); B's push confirmed recently (at NOW).
+    mockSubs({
+      universe: [
+        { peerId: 'peer-a', recordId: 'u-A', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: A_LAST_CONFIRMED },
+        { peerId: 'peer-a', recordId: 'u-B', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: NOW },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedUniverses.mock.calls[0][0];
+    // Cutoff must be clamped to A's stuck confirm point (+1), NOT the per-peer
+    // ack of B. So A's tombstone (deletedAt = A_DELETED_AT) does NOT satisfy
+    // `A_DELETED_AT < cutoff` and survives; B's (deletedAt = B_DELETED_AT)
+    // also survives, which is fine — correctness over GC aggressiveness.
+    expect(cutoff).toBe(A_LAST_CONFIRMED + 1);
+    expect(A_DELETED_AT).toBeGreaterThanOrEqual(cutoff); // A NOT pruned
+  });
+
+  it('prunes record-A tombstone once A push is confirmed past its deletedAt', async () => {
+    // After A's delete-push finally lands, A's row confirm advances above its
+    // deletedAt and the clamp no longer holds the line — A is prunable.
+    getMinAckAcrossPeers.mockResolvedValue(B_DELETED_AT);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      universe: [
+        { peerId: 'peer-a', recordId: 'u-A', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: NOW },
+        { peerId: 'peer-a', recordId: 'u-B', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: NOW },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedUniverses.mock.calls[0][0];
+    // Both rows confirmed at NOW; the per-peer ack (B) is the binding clamp now.
+    expect(cutoff).toBe(B_DELETED_AT + 1);
+    expect(A_DELETED_AT).toBeLessThan(cutoff); // A NOW pruned
+  });
+
+  it('floors a never-confirmed row to its createdAt (protects post-subscribe tombstones, GC of pre-subscribe ones unaffected)', async () => {
+    // A brand-new sub (lastConfirmedPushedAt absent) shouldn't permanently
+    // freeze GC at 0 — it floors to createdAt, protecting only tombstones it
+    // still owes the peer (those created after it subscribed).
+    const createdAt = NOW - 30 * 60 * 1000;
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      universe: [
+        // lastConfirmedPushedAt: null overrides the mockSubs NOW default to
+        // model a row whose push has never been confirmed.
+        { peerId: 'peer-a', recordId: 'u-new', createdAt: new Date(createdAt).toISOString(), lastConfirmedPushedAt: null },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedUniverses.mock.calls[0][0];
+    expect(cutoff).toBe(createdAt + 1);
+  });
+
+  it('issues inherit the series rows confirmed-push clamp (issue tombstones ride series pushes)', async () => {
+    // An issue tombstone is bundled into its parent series push, so its
+    // protection comes from the series row's confirmed-push mark — not a
+    // (nonexistent) issue subscription.
+    const seriesStuckConfirm = NOW - 25 * 60 * 1000;
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      series: [
+        { peerId: 'peer-a', recordId: 's-A', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: seriesStuckConfirm },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const seriesCutoff = pruneTombstonedSeries.mock.calls[0][0];
+    const issueCutoff = pruneTombstonedIssues.mock.calls[0][0];
+    expect(seriesCutoff).toBe(seriesStuckConfirm + 1);
+    expect(issueCutoff).toBe(seriesCutoff); // issues clamp identically to series
   });
 });
 

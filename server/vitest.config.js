@@ -40,6 +40,9 @@ export default defineConfig({
         statements: 30
       }
     },
-    globals: true
+    globals: true,
+    // Global setup: mocks getPeers → [] so test-created records never fan out
+    // to live sync peers.  Per-suite vi.mock('./instances.js', …) overrides win.
+    setupFiles: ['./vitest.setup.js'],
   }
 });

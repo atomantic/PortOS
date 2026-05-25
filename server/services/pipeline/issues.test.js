@@ -34,6 +34,7 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 const svc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
+const { recordEvents } = await import('../sharing/recordEvents.js');
 
 describe('pipeline issues service', () => {
   beforeEach(() => {
@@ -731,6 +732,31 @@ describe('pipeline issues service', () => {
       await svc.deleteIssue(id);
       const restored = await svc.insertIssueWithId({ id, seriesId: 'ser-1', title: 'Restored' });
       expect(restored).toMatchObject({ id, title: 'Restored', deleted: false });
+    });
+
+    it('insertIssueWithId resurrection fires emitRecordUpdated on the parent series', async () => {
+      const id = 'iss-550e8400-e29b-41d4-a716-44665544abcd';
+      await svc.insertIssueWithId({ id, seriesId: 'ser-resurrect', title: 'ToResurrect' });
+      await svc.deleteIssue(id);
+
+      const emitSpy = vi.spyOn(recordEvents, 'emit');
+
+      await svc.insertIssueWithId({ id, seriesId: 'ser-resurrect', title: 'Resurrected' });
+
+      expect(emitSpy).toHaveBeenCalledWith('updated', { recordKind: 'series', recordId: 'ser-resurrect' });
+      emitSpy.mockRestore();
+    });
+
+    it('insertIssueWithId fresh insert does NOT fire emitRecordUpdated', async () => {
+      const id = 'iss-550e8400-e29b-41d4-a716-44665544abe0';
+      const emitSpy = vi.spyOn(recordEvents, 'emit');
+
+      await svc.insertIssueWithId({ id, seriesId: 'ser-fresh', title: 'Brand New' });
+
+      // insertIssueWithId (unlike createIssue) does not fire emitRecordUpdated
+      // on a fresh insert — only on tombstone resurrection.
+      expect(emitSpy).not.toHaveBeenCalledWith('updated', { recordKind: 'series', recordId: 'ser-fresh' });
+      emitSpy.mockRestore();
     });
 
     it('insertIssueWithId still rejects DUPLICATE on a LIVE record', async () => {

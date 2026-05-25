@@ -1,10 +1,13 @@
 // Per-socket voice handlers.
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
-//           | voice:dictation:set | voice:ui:index
+//           | voice:dictation:set | voice:ui:index | voice:screenshot:result
+//           | voice:ui:read-response
 // Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
 //           | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
+//           | voice:ui:read-request
 //           | voice:dailyLog:appended | voice:error | voice:idle
+//           | voice:screenshot:request
 
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
@@ -57,12 +60,23 @@ export const registerVoiceHandlers = (socket) => {
     history: [],
     ctrl: null,
     dictation: { enabled: false, date: null },
-    ui: null, // { path, title, elements:[{ ref, kind, label, ... }], updatedAt }
+    ui: null, // { path, title, elements:[{ ref, kind, label, ... }], text?, textOnDemand, updatedAt }
     // Promises awaiting the NEXT voice:ui:index arrival — used by the
     // pipeline to chain ui_* actions within one LLM turn: after firing a
     // ui:click, wait for the client's fresh index before the next tool
     // runs so the LLM can see the modal/new content it just opened.
     uiWaiters: [],
+    // Resolvers keyed by requestId, awaiting a voice:screenshot:result for an
+    // in-flight ui_describe_visually capture. The server emits
+    // voice:screenshot:request with a requestId, the client captures the active
+    // tab and replies with the same requestId + a data URL. Keying by id stops
+    // a late result from an earlier capture satisfying a newer waiter.
+    screenshotWaiters: new Map(),
+    // Resolvers keyed by requestId, awaiting a voice:ui:read-response. The
+    // ui_read tool emits voice:ui:read-request and parks a resolver here so
+    // the heavy visible-text blob is only computed by the client (and shipped
+    // over the wire) when actually needed — not eagerly on every index push.
+    uiTextWaiters: new Map(),
     // Ring of recently-spoken TTS sentences (with cached trigrams). The
     // pipeline uses this to detect the bot's own voice being echoed back
     // through the user's mic when laptop speakers are in play. The buffer is
@@ -228,7 +242,7 @@ export const registerVoiceHandlers = (socket) => {
   // (ui_click, ui_fill, ui_select, ui_check).
   socket.on('voice:ui:index', (payload) => {
     if (!payload || typeof payload !== 'object') return;
-    const { path, title, elements, text } = payload;
+    const { path, title, elements, text, textOnDemand } = payload;
     if (!Array.isArray(elements)) return;
     // Cap elements at 200 to bound prompt size from a malicious or runaway
     // client. (The visible-text `text` field has its own ~8 KB cap, enforced
@@ -242,7 +256,12 @@ export const registerVoiceHandlers = (socket) => {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
       elements: filtered,
+      // Eager-text legacy path: an index that ships `text` is used as-is by
+      // ui_read. Lazy path: `textOnDemand` tells the server it can fetch the
+      // visible text on demand via voice:ui:read-request. Exactly one of these
+      // is set by the client per the buildIndex() contract.
       text: typeof text === 'string' ? truncateOnWordBoundary(text, MAX_UI_TEXT_CHARS) : null,
+      textOnDemand: textOnDemand === true,
       updatedAt: Date.now(),
     };
     if (state.uiWaiters.length) {
@@ -252,12 +271,60 @@ export const registerVoiceHandlers = (socket) => {
     }
   });
 
+  // Client replies to a voice:screenshot:request with a base64 data URL of the
+  // captured tab (or null if capture failed / the user denied permission). The
+  // requestId echoes the request so a late result can't resolve a newer waiter.
+  // Cap the payload to bound memory from a runaway/malicious client — a
+  // full-screen PNG data URL is typically a few MB, so 16 MB is generous.
+  const MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024;
+  socket.on('voice:screenshot:result', (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    const { requestId, dataUrl: raw } = payload;
+    const dataUrl = (typeof raw === 'string' && raw.startsWith('data:image/') && raw.length <= MAX_SCREENSHOT_BYTES)
+      ? raw
+      : null;
+    const resolve = state.screenshotWaiters.get(requestId);
+    if (resolve) {
+      state.screenshotWaiters.delete(requestId);
+      resolve(dataUrl);
+    }
+  });
+
+  // Lazy visible-text reply. The ui_read tool emitted voice:ui:read-request;
+  // the client recomputed extractVisibleText on the live DOM and sent it back
+  // here. Re-apply the same ~8 KB word-boundary cap server-side so a runaway
+  // client can't blow past it, then resolve the matching waiter. Echo of the
+  // requestId correlates the response with the awaiting ui_read call.
+  socket.on('voice:ui:read-response', (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    const { requestId, text } = payload;
+    const capped = typeof text === 'string' ? truncateOnWordBoundary(text, MAX_UI_TEXT_CHARS) : null;
+    const resolve = state.uiTextWaiters.get(requestId);
+    if (resolve) {
+      state.uiTextWaiters.delete(requestId);
+      // Resolve only — caching onto state.ui.text happens inside requestUiText
+      // (pipeline.js), which captured the snapshot this read was issued for and
+      // caches only if it's still current. Caching here couldn't tell whether
+      // the snapshot changed (navigation) between request and response.
+      resolve(capped);
+    }
+  });
+
   socket.on('disconnect', () => {
     state.ctrl?.abort();
     // Abort any pending UI refresh waiters so their turns don't hang.
     const waiters = state.uiWaiters;
     state.uiWaiters = [];
     waiters.forEach((resolve) => resolve(null));
+    // Same for any pending screenshot capture.
+    const shotWaiters = Array.from(state.screenshotWaiters.values());
+    state.screenshotWaiters.clear();
+    shotWaiters.forEach((resolve) => resolve(null));
+    // Same for any pending lazy-text read waiters — resolve null so a
+    // ui_read awaiting a response that will never arrive doesn't hang.
+    const textWaiters = Array.from(state.uiTextWaiters.values());
+    state.uiTextWaiters.clear();
+    textWaiters.forEach((resolve) => resolve(null));
     unregisterEchoBuffer(state.recentTts);
   });
 };

@@ -94,9 +94,15 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   // merge applies as soon as the owner record lands.
   let collection;
   if (payload.universeId) {
-    const localUniverse = await getUniverse(payload.universeId).catch(() => null);
+    const localUniverse = await getUniverse(payload.universeId, { includeDeleted: true }).catch(() => null);
     if (!localUniverse) {
       return { itemsAdded: 0, itemsDeferred: payload.items.length, missingUniverse: true };
+    }
+    if (localUniverse.deleted) {
+      // Universe exists on disk but is tombstoned — not a transient missing-record
+      // situation. Return a distinct sentinel (the universe id) so the caller does
+      // NOT loop pending forever (the bug: tombstone looks like missing → never resolves).
+      return { itemsAdded: 0, itemsDeferred: payload.items.length, tombstonedUniverse: localUniverse.id };
     }
     // Use the LOCAL owner's name (authoritative for the linked collection's
     // locked name) over the manifest's `payload.name`. A peer exporting a
@@ -129,12 +135,18 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
     // Minting a fresh seriesId-stamped collection here would leave a
     // rename-locked stale per-series bucket attached to a linked series.
     if (localSeries.universeId) {
-      const localUniverse = await getUniverse(localSeries.universeId).catch(() => null);
+      const localUniverse = await getUniverse(localSeries.universeId, { includeDeleted: true }).catch(() => null);
       if (!localUniverse) {
         // Dangling universe link — defer so a later sync of the universe
         // record unblocks the merge under the universe contract. Treat as
         // missingSeries (same defer semantics) so the manifest stays pending.
         return { itemsAdded: 0, itemsDeferred: payload.items.length, missingSeries: true };
+      }
+      if (localUniverse.deleted) {
+        // Universe is tombstoned — same as the direct-universeId tombstone case.
+        // Return the universe id so the caller can surface it without needing to
+        // re-resolve the series→universe link.
+        return { itemsAdded: 0, itemsDeferred: payload.items.length, tombstonedUniverse: localUniverse.id };
       }
       collection = await findOrCreateUniverseCollection({
         universeId: localUniverse.id,
@@ -390,6 +402,11 @@ async function readReferencedRecords(bucketPath, manifest) {
 async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = null } = {}) {
   let applied = 0;
   const overridden = [];
+  // Records whose insert threw an UNEXPECTED (non-duplicate) error — they did
+  // NOT land. Surfaced as a pending condition (like legacyCanonPendingFailures)
+  // so processManifest leaves the cursor un-advanced and the watcher retries,
+  // instead of marking the manifest processed and silently dropping the record.
+  const failedInserts = [];
   const inboundSub = manifest.subscription?.recordKind && manifest.subscription?.recordId
     ? { bucketId: bucket.id, recordKind: manifest.subscription.recordKind, recordId: manifest.subscription.recordId }
     : null;
@@ -400,19 +417,33 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   };
 
   const mergeOne = async ({ kind, record, getFn, insertFn, updateFn, label }) => {
+    const suppressKind = kind === 'issue' ? 'series' : kind;
+    const suppressId = kind === 'issue' ? record.seriesId : record.id;
     const existing = await getFn(record.id).catch(() => null);
     if (!existing) {
-      await insertFn(record).catch((err) => {
-        // Duplicate id is benign — a parallel manifest already inserted it.
-        if (err?.code?.endsWith('_DUPLICATE')) return null;
-        console.log(`⚠️ sharing.importer: insertWithId(${kind}=${record.id}) failed: ${err.message}`);
-      });
-      applied++;
+      // Suppress re-export around the insert exactly like the UPDATE branch:
+      // insertXxxWithId now fires emitRecordUpdated on the tombstone-resurrection
+      // path, which would otherwise echo the just-imported record straight back
+      // into the bucket we're importing from. The peer-sync propagation that
+      // resurrection ALSO triggers (autoSubscribeRecordToAllPeers) is a separate
+      // mechanism and stays intact — only the bucket re-export is suppressed.
+      const insertOk = await withReexportSuppressed(suppressKind, suppressId, () => insertFn(record))
+        .then(() => true)
+        .catch((err) => {
+          // Duplicate id is benign — a parallel manifest already inserted it, so
+          // the record IS present; count it as applied.
+          if (err?.code?.endsWith('_DUPLICATE')) return true;
+          // Unexpected failure: the record did NOT land. Record it so the
+          // manifest stays pending and retries — incrementing `applied` and
+          // advancing the cursor here would silently drop the record.
+          console.log(`⚠️ sharing.importer: insertWithId(${kind}=${record.id}) failed: ${err.message}`);
+          failedInserts.push(`${kind}:${record.id}`);
+          return false;
+        });
+      if (insertOk) applied++;
       return;
     }
     if (remoteWins(existing.updatedAt, record.updatedAt)) {
-      const suppressKind = kind === 'issue' ? 'series' : kind;
-      const suppressId = kind === 'issue' ? record.seriesId : record.id;
       await withReexportSuppressed(suppressKind, suppressId, () => updateFn(existing.id, record));
       overridden.push({ kind, id: record.id, label });
       applied++;
@@ -521,6 +552,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   let itemsDeferred = 0;
   let collectionPendingUniverse = null;
   let collectionPendingSeries = null;
+  let collectionTombstonedUniverse = null;
   if (manifest.collection) {
     // Suppress re-export of the owner record while the collection items
     // land — the items themselves drive recordEvents, which would loop
@@ -540,6 +572,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     // later (independent) sync.
     if (r.missingUniverse) collectionPendingUniverse = manifest.collection.universeId;
     if (r.missingSeries) collectionPendingSeries = manifest.collection.seriesId;
+    if (r.tombstonedUniverse) collectionTombstonedUniverse = r.tombstonedUniverse;
   }
 
   let adoptedSubscription = null;
@@ -560,8 +593,10 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     collectionItemsDeferred: itemsDeferred,
     collectionPendingUniverse,
     collectionPendingSeries,
+    collectionTombstonedUniverse,
     legacyCanonPendingUniverses: legacyCanonPendingUniverses.length > 0 ? legacyCanonPendingUniverses : null,
     legacyCanonPendingFailures: legacyCanonPendingFailures.length > 0 ? legacyCanonPendingFailures : null,
+    recordImportFailures: failedInserts.length > 0 ? failedInserts : null,
     adoptedSubscription: adoptedSubscription
       ? { id: adoptedSubscription.id, bucketId: adoptedSubscription.bucketId, recordKind: adoptedSubscription.recordKind, recordId: adoptedSubscription.recordId }
       : null,
@@ -814,17 +849,30 @@ export async function processManifest(bucketId, manifestFilename) {
   // `recordIds`.
   const collectionPendingUniverse = outcome?.collectionPendingUniverse || null;
   const collectionPendingSeries = outcome?.collectionPendingSeries || null;
+  const collectionTombstonedUniverse = outcome?.collectionTombstonedUniverse || null;
   const legacyCanonPendingUniverses = outcome?.legacyCanonPendingUniverses || null;
   const legacyCanonPendingFailures = outcome?.legacyCanonPendingFailures || null;
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures) {
+  const recordImportFailures = outcome?.recordImportFailures || null;
+  // Tombstoned universe: the collection owner IS on disk but locally deleted.
+  // Unlike the truly-missing case this will never self-resolve via sync, so we
+  // advance the cursor (no infinite pending loop) and emit a clear signal. The
+  // user must restore the deleted universe to import the N deferred items.
+  if (collectionTombstonedUniverse) {
+    await markProcessed(bucketId, manifestFilename, manifest.id);
+    sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
+    console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
+    return { processed: true, manifest, outcome };
+  }
+  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures) {
     if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
     if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
     if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
     if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
     if (legacyCanonPendingUniverses) outcome.pendingLegacyCanonUniverses = legacyCanonPendingUniverses;
     if (legacyCanonPendingFailures) outcome.pendingLegacyCanonFailures = legacyCanonPendingFailures;
+    if (recordImportFailures) outcome.pendingRecordImportFailures = recordImportFailures;
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
@@ -941,6 +989,12 @@ export async function promoteInboxItem(bucketId, manifestId) {
   // present locally yet, throw a pending error instead of silently
   // dropping the inbox item. Otherwise the user's "promote" click
   // would consume the inbox row while the collection items never landed.
+  if (outcome.collectionTombstonedUniverse) {
+    throw Object.assign(new Error(`Universe ${outcome.collectionTombstonedUniverse} was deleted locally; restore it to import ${outcome.collectionItemsDeferred ?? 0} collection item(s)`), {
+      code: 'SHARING_UNIVERSE_TOMBSTONED',
+      collectionTombstonedUniverse: outcome.collectionTombstonedUniverse,
+    });
+  }
   if (outcome.collectionPendingUniverse) {
     throw Object.assign(new Error(`Collection payload waiting on universe ${outcome.collectionPendingUniverse} to be imported first`), {
       code: 'SHARING_UNIVERSE_PENDING',

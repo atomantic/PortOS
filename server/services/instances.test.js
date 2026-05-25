@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// This suite tests the real instances.js implementation — cancel the global
+// vitest.setup.js mock so the real getPeers (and all other exports) are used.
+// The global mock stubs getPeers → [] to prevent live peer fan-out in tests
+// that create records; here we instead mock instances.js's own dependencies
+// (fileUtils, asyncMutex, etc.) to make the real code deterministic.
+vi.unmock('./instances.js');
+
 // Mock dependencies before importing the module
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),

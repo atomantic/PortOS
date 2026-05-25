@@ -59,6 +59,45 @@ function peerIdsSubscribedToKind(subs, peers, recordKind) {
   )];
 }
 
+// Lowest per-(peer,record) confirmed-delivery water-mark across this kind's
+// eligible subscription rows (ms epoch). This closes the per-peer-cursor gap:
+// the per-peer tombstone ack cursor advances to the MAX deletedAt acked across
+// ALL of a peer's pushes, so a later record-B success can drag it past a
+// record-A whose push never landed — and GC would then prune A's tombstone
+// even though A was never confirmed delivered. Clamping the prune cutoff to
+// the MIN `lastConfirmedPushedAt` across the kind's rows holds the line: any
+// record whose push is unconfirmed (field still `null`, or stuck at a
+// pre-delete success time) pins the cutoff below its own `deletedAt`, so its
+// tombstone survives until that record's (delete-)push is actually confirmed.
+//
+// A row with no `lastConfirmedPushedAt` yet (never had a confirmed push) floors
+// to its `createdAt` rather than 0: a brand-new subscription should protect
+// tombstones created AFTER it subscribed (those it still owes the peer) without
+// freezing GC of tombstones that predate the subscription entirely — those
+// older tombstones are already gated by the cursor's `subscribedSince` horizon
+// (peerTombstoneCursors.js) and were never going to ride this row's pushes.
+// An unparseable `createdAt` (hand-edited / legacy row) floors to 0 — fully
+// conservative, never a false prune.
+//
+// Returns Infinity when there are no eligible rows for the kind (no per-record
+// constraint → the snapshot-coverage + per-peer-ack checks alone govern).
+function minConfirmedPushedAtForKind(subs, peers, recordKind) {
+  const eligible = eligiblePeerIdSet(peers);
+  let min = Infinity;
+  for (const s of subs) {
+    if (s.recordKind !== recordKind) continue;
+    if (!s.peerId || !eligible.has(s.peerId)) continue;
+    let confirmed = s.lastConfirmedPushedAt;
+    if (!Number.isFinite(confirmed)) {
+      // Never confirmed → floor to createdAt (0 if unparseable). See header.
+      const createdMs = Date.parse(s.createdAt || '');
+      confirmed = Number.isFinite(createdMs) ? createdMs : 0;
+    }
+    if (confirmed < min) min = confirmed;
+  }
+  return min;
+}
+
 function snapshotCategoryForKind(recordKind) {
   if (recordKind === 'universe') return 'universe';
   if (recordKind === 'series' || recordKind === 'issue') return 'pipeline';
@@ -88,19 +127,27 @@ function snapshotPeerIdsForKind(peers, recordKind) {
 // Returns null when ANY snapshot-mode peer for this kind isn't covered by
 // a per-record subscription — without an ack horizon, an offline peer could
 // resurrect a pruned tombstone via its next snapshot push. Otherwise the
-// cutoff is `min(now, minAck) - graceMs + 1`. The `+1` compensates for the
-// strict-less-than comparison the prune helpers use (`deletedAt < beforeMs`);
-// without it, a tombstone deleted at the same millisecond as `minAck`
-// survives forever under `graceMs:0` (the manual-trigger path). At
-// graceMs=24h the 1ms shift is invisible, so the orchestrator path is
-// unchanged in practice.
+// cutoff is `min(now, minAck, minConfirmedPush) - graceMs + 1`. The `+1`
+// compensates for the strict-less-than comparison the prune helpers use
+// (`deletedAt < beforeMs`); without it, a tombstone deleted at the same
+// millisecond as the clamp survives forever under `graceMs:0` (the manual-
+// trigger path). At graceMs=24h the 1ms shift is invisible, so the
+// orchestrator path is unchanged in practice.
+//
+// `minConfirmedPush` is the per-(peer,record) clamp (see
+// minConfirmedPushedAtForKind): the per-peer `minAck` cursor alone can drift
+// past a record whose push never landed, so we additionally hold the cutoff
+// at/below the lowest confirmed per-record delivery point. Issue tombstones
+// ride their parent series's push, so the caller reuses the `series` cutoff
+// for issues — the series rows' confirmed-push marks cover issues too.
 async function cutoffForKind(recordKind, { peers, subs, now, graceMs }) {
   const peerIds = peerIdsSubscribedToKind(subs, peers, recordKind);
   const snapshotPeerIds = snapshotPeerIdsForKind(peers, recordKind);
   const subbed = new Set(peerIds);
   if (snapshotPeerIds.some((id) => !subbed.has(id))) return null;
   const minAck = await getMinAckAcrossPeers(peerIds);
-  return Math.min(minAck, now) - graceMs + 1;
+  const minConfirmedPush = minConfirmedPushedAtForKind(subs, peers, recordKind);
+  return Math.min(minAck, minConfirmedPush, now) - graceMs + 1;
 }
 
 // Single point of disk I/O for peer registry + subscription rows. Both

@@ -669,9 +669,10 @@ export function insertIssueWithId(input = {}) {
     if (existingIdx >= 0 && !state.issues[existingIdx].deleted) {
       throw makeErr(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
     }
+    const wasResurrection = existingIdx >= 0;
     const next = sanitizeIssue({ ...input, seriesId, title });
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-    if (existingIdx >= 0) {
+    if (wasResurrection) {
       console.warn(`♻️  insertIssueWithId: overwriting tombstone for ${input.id}`);
       state.issues[existingIdx] = next;
     } else {
@@ -681,6 +682,9 @@ export function insertIssueWithId(input = {}) {
     // comes from (volume order, arcPosition) of the local state.
     await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
     await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+    // Mirror createIssue's federation side-effect on tombstone-overwrite:
+    // issues ride series-level events, so notify peers via the parent series.
+    if (wasResurrection) emitRecordUpdated('series', next.seriesId);
     return next;
   });
 }

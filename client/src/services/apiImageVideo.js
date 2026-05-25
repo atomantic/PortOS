@@ -104,7 +104,7 @@ export const cancelTimelineRender = (jobId) => request(`/video-timeline/${encode
 // Media collections — user-named buckets that can hold any mix of images
 // and videos. An item key is "<kind>:<ref>" (e.g. "image:foo.png" or
 // "video:<uuid>"); cover keys use the same format.
-export const listMediaCollections = () => request('/media/collections');
+export const listMediaCollections = ({ silent = false } = {}) => request('/media/collections', { silent });
 export const getMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`);
 export const createMediaCollection = ({ name, description = '' }) => request('/media/collections', {
   method: 'POST',

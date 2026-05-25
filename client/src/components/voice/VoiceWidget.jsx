@@ -1,11 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff } from 'lucide-react';
+import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
-  onProactiveSpeech,
+  onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
+  enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
 } from '../../services/voiceClient';
 import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
@@ -85,6 +86,10 @@ export default function VoiceWidget() {
   });
   const [hidden, setHidden] = useState(readVoiceHidden);
   const [level, setLevel] = useState(0);
+  // Whether the user has authorized a screen-capture stream for
+  // ui_describe_visually ("what's on this chart?"). Must be enabled from a click
+  // (user gesture) — getDisplayMedia can't run from the server-initiated turn.
+  const [visionEnabled, setVisionEnabled] = useState(false);
   const scrollRef = useRef(null);
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
@@ -220,9 +225,41 @@ export default function VoiceWidget() {
         if (!res.ok) toast.error(`Voice: couldn't toggle "${d?.target?.label}"`);
         else pushUiIndexAfterAction();
       }),
+      // ui_describe_visually: server asks the client to grab a frame of the
+      // authorized screen-capture stream. The stream must have been authorized
+      // earlier via the monitor button (a user gesture) — getDisplayMedia can't
+      // run from this server-initiated event. captureScreenForVision returns a
+      // data URL, or null when no stream is authorized / a frame grab failed;
+      // always reply so the server-side waiter resolves rather than timing out.
+      onVoiceEvent('voice:screenshot:request', async (payload) => {
+        const requestId = payload && typeof payload === 'object' ? payload.requestId : undefined;
+        if (!isVisionCaptureEnabled()) {
+          toast('Voice: click the screen button in the voice controls so I can see your screen.', { icon: '🖥️' });
+          setVisionEnabled(false);
+          sendScreenshotResult(requestId, null);
+          return;
+        }
+        const dataUrl = await captureScreenForVision();
+        if (!dataUrl) {
+          toast('Voice: screen capture was unavailable.', { icon: '📷' });
+          setVisionEnabled(isVisionCaptureEnabled());
+        }
+        sendScreenshotResult(requestId, dataUrl);
+      }),
     ];
     return () => offs.forEach((off) => off());
   }, [enabled, navigate]);
+
+  // Keep the vision toggle in sync with the actual capture stream, and release
+  // it on unmount. When the user clicks "Stop sharing" in the browser's own
+  // chrome the track ends asynchronously — onVisionCaptureEnded flips the toggle
+  // back to OFF so the button doesn't lie. Unmount unsubscribes first (so the
+  // caller-initiated disable below doesn't try to setState after teardown) then
+  // releases the stream so a forgotten "vision ON" doesn't keep sharing lit.
+  useEffect(() => {
+    const off = onVisionCaptureEnded(() => setVisionEnabled(false));
+    return () => { off(); disableVisionCapture(); };
+  }, []);
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -613,6 +650,26 @@ export default function VoiceWidget() {
               {handsFree ? 'hands-free' : 'push-to-talk'}
             </button>
           )}
+          <button
+            onClick={async () => {
+              if (visionEnabled) { disableVisionCapture(); setVisionEnabled(false); return; }
+              // getDisplayMedia must run inside this click (user gesture).
+              const ok = await enableVisionCapture();
+              setVisionEnabled(ok);
+              if (!ok) toast('Voice: screen sharing was declined or is unavailable.', { icon: '🖥️' });
+            }}
+            aria-label={visionEnabled ? 'Disable screen vision for voice' : 'Enable screen vision for voice'}
+            aria-pressed={visionEnabled}
+            title={visionEnabled
+              ? 'Screen vision ON — the assistant can describe what\'s on your screen ("what\'s on this chart?"). Click to stop sharing.'
+              : 'Screen vision OFF — click to let the assistant see your screen for "what\'s on this chart?" (you pick the tab/window).'}
+            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${visionEnabled
+              ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
+              : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
+          >
+            {visionEnabled ? <Monitor size={12} /> : <MonitorOff size={12} />}
+            {visionEnabled ? 'vision' : 'no vision'}
+          </button>
           {history.length > 0 && (
             <button
               onClick={() => setCollapsed((c) => !c)}

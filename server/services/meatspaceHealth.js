@@ -24,6 +24,7 @@ const BLOOD_TESTS_FILE = join(MEATSPACE_DIR, 'blood-tests.json');
 const EPIGENETIC_TESTS_FILE = join(MEATSPACE_DIR, 'epigenetic-tests.json');
 const EYES_FILE = join(MEATSPACE_DIR, 'eyes.json');
 const HEALTH_METRICS_FILE = join(MEATSPACE_DIR, 'health-metrics.json');
+const WORKOUTS_FILE = join(MEATSPACE_DIR, 'workouts.json');
 
 const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
@@ -178,6 +179,36 @@ export async function removeEyeExam(index) {
   await writeLocal(EYES_FILE, data);
   console.log(`👁️ Eye exam removed: ${removed.date}`);
   return removed;
+}
+
+// === Workouts ===
+// Local PortOS store (not mirrored to MortalLoom — the iCloud store has no
+// `workouts` array key, and adding one would need a coordinated MortalLoom
+// schema change). Voice/CoS log workouts here via addWorkout().
+
+export async function getWorkouts() {
+  const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] });
+  return (data.workouts || []).slice().sort(byDate);
+}
+
+export async function addWorkout({ date, type, durationMinutes, intensity, notes } = {}) {
+  const targetDate = date || new Date().toISOString().split('T')[0];
+  const trimmedType = typeof type === 'string' ? type.trim() : '';
+  if (!trimmedType) throw new Error('workout type is required');
+  const entry = {
+    date: targetDate,
+    type: trimmedType,
+    durationMinutes: Number.isFinite(durationMinutes) ? durationMinutes : null,
+    intensity: typeof intensity === 'string' && intensity.trim() ? intensity.trim() : null,
+    notes: typeof notes === 'string' && notes.trim() ? notes.trim() : null,
+  };
+  const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] });
+  if (!Array.isArray(data.workouts)) data.workouts = [];
+  data.workouts.push(entry);
+  data.workouts.sort(byDate);
+  await writeLocal(WORKOUTS_FILE, data);
+  console.log(`🏋️ Workout logged: ${trimmedType}${entry.durationMinutes ? ` (${entry.durationMinutes}min)` : ''} for ${targetDate}`);
+  return entry;
 }
 
 // === Blood Pressure ===

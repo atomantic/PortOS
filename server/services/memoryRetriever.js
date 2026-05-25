@@ -19,6 +19,12 @@ const SEARCH_MODE = 'hybrid';
 export async function getRelevantMemories(task, options = {}) {
   const maxTokens = options.maxTokens || DEFAULT_MEMORY_CONFIG.maxContextTokens;
   const minRelevance = options.minRelevance || DEFAULT_MEMORY_CONFIG.minRelevanceThreshold;
+  // Cap the semantic-search fan-out. Callers that only inject a handful of
+  // memories (e.g. voice's buildMemoryContext) pass a small `limit` so retrieval
+  // doesn't fetch 20 rows just to slice down to 5. Search results are
+  // relevance-sorted, so the top-`limit` are the most relevant. Defaults to 20
+  // (prior behavior) when unset; the token budget still applies on top.
+  const searchLimit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 20;
 
   const memories = [];
   let tokenCount = 0;
@@ -31,7 +37,7 @@ export async function getRelevantMemories(task, options = {}) {
     if (SEARCH_MODE === 'hybrid' && queryEmbedding) {
       // Use hybrid FTS + vector search with reciprocal rank fusion
       searchResults = await hybridSearchMemories(task.description, queryEmbedding, {
-        limit: 20,
+        limit: searchLimit,
         minRelevance,
         ftsWeight: 0.4,
         vectorWeight: 0.6
@@ -40,7 +46,7 @@ export async function getRelevantMemories(task, options = {}) {
       // Fallback to vector-only search
       searchResults = await searchMemories(queryEmbedding, {
         minRelevance,
-        limit: 20
+        limit: searchLimit
       });
     }
 

@@ -424,7 +424,8 @@ const SYNC_CATEGORY_META = [
   { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' },
   { key: 'universe', label: 'Universe', icon: Sparkles, description: 'Universe Builder canon: characters, places, objects' },
   { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' },
-  { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' }
+  { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' },
+  { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' }
 ];
 
 // Snapshot categories (excludes delta-based brain/memory)
@@ -805,10 +806,18 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
     };
     socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
     socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
+    // An incoming push from this peer auto-created a reverse subscription
+    // back to it (`maybeCreateReverseSubscription`). The new row lives in
+    // peer_subscriptions.json but this card cached `peerSubs` on mount, so
+    // refetch this peer's subs to surface the adopted-from-reverse sub
+    // without a manual page reload. Carries `peerId`, so the same filter
+    // keeps every other card from refetching needlessly.
+    socket.on('peerSync:subscription:created', handleSchemaSubChange);
     return () => {
       cancelled = true;
       socket.off('peerSync:subscription-blocked', handleSchemaSubChange);
       socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
+      socket.off('peerSync:subscription:created', handleSchemaSubChange);
     };
   }, [peer.instanceId]);
 

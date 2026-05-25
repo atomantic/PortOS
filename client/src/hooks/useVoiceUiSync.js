@@ -7,6 +7,17 @@
 //   VoiceWidget to emit right after a click/fill so the pipeline's in-turn
 //   "wait for refresh" can chain the next action.
 //
+// LAZY visible-text payload. The index ships the lightweight structure
+// (path/title/elements) but NOT the heavy visible-text blob — that runs
+// extractVisibleText over the whole page and is only needed by the `ui_read`
+// tool. Instead the index sets `textOnDemand: true`; when the server actually
+// needs the text it emits `voice:ui:read-request`, and we compute
+// extractVisibleText on the live DOM right then and reply with
+// `voice:ui:read-response`. A legacy server that never sends the read-request
+// still works because `ui_read` falls back to the eager-text path (an index
+// that already carries `text`); the read-request handler here is purely
+// additive.
+//
 // State lives on refs owned by the mounted hook, so StrictMode double-
 // invocation and HMR remounts don't leave stale timers or signature caches.
 // An escape-hatch module-level ref gives the post-action helper a handle
@@ -15,7 +26,7 @@
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import socket from '../services/socket.js';
-import { buildIndex, clearRefs } from '../services/domIndex.js';
+import { buildIndex, clearRefs, extractVisibleText } from '../services/domIndex.js';
 
 const DEBOUNCE_MS = 500;
 const INITIAL_DELAY_MS = 250;
@@ -75,6 +86,20 @@ export const useVoiceUiSync = (enabled) => {
 
     activePush = schedule;
 
+    // Server-driven lazy text read. The server emits voice:ui:read-request
+    // when the ui_read tool needs the visible-text blob it deliberately
+    // didn't ship in the index. Compute it on the live DOM right now and
+    // reply. Echo back the request id (when present) so the server can
+    // correlate the response with the awaiting tool call. Guard against a
+    // hidden tab returning a stale snapshot — still reply (with whatever the
+    // DOM holds) so the server's waiter doesn't hang on a missing response.
+    const onReadRequest = (payload) => {
+      const requestId = payload && typeof payload === 'object' ? payload.requestId : undefined;
+      const text = extractVisibleText();
+      socket.emit('voice:ui:read-response', { requestId, text });
+    };
+    socket.on('voice:ui:read-request', onReadRequest);
+
     // Reset sigs on route change so the first index for a new page always
     // emits, even if it happens to hash identically to the previous.
     quickSigRef.current = null;
@@ -97,6 +122,7 @@ export const useVoiceUiSync = (enabled) => {
 
     return () => {
       observer.disconnect();
+      socket.off('voice:ui:read-request', onReadRequest);
       if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
       if (activePush === schedule) activePush = null;
     };

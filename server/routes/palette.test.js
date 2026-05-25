@@ -90,6 +90,22 @@ describe('GET /api/palette/manifest', () => {
     expect(ids).toContain('ui_ask');
   });
 
+  it('exposes the new user-invocable actions (calendar/weather/timer/workout)', async () => {
+    const res = await request(makeApp()).get('/api/palette/manifest');
+    const ids = res.body.actions.map((a) => a.id);
+    expect(ids).toContain('calendar_today');
+    expect(ids).toContain('calendar_next');
+    expect(ids).toContain('weather_now');
+    expect(ids).toContain('timer_set');
+    expect(ids).toContain('meatspace_log_workout');
+  });
+
+  it('keeps ui_describe_visually OFF the palette (no screenshot context)', async () => {
+    const res = await request(makeApp()).get('/api/palette/manifest');
+    const ids = res.body.actions.map((a) => a.id);
+    expect(ids).not.toContain('ui_describe_visually');
+  });
+
   it('exposes ui_ask in the manifest with description hydrated from voice tools', async () => {
     const res = await request(makeApp()).get('/api/palette/manifest');
     const askAction = res.body.actions.find((a) => a.id === 'ui_ask');

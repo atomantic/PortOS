@@ -67,6 +67,12 @@ export async function initSharing({ io: socketIo } = {}) {
     peerSyncEvents.on('subscription-unblocked', (payload) => {
       io.emit('peerSync:subscription-unblocked', payload);
     });
+    // An incoming push auto-created a reverse subscription back to the
+    // sender. Let the Instances UI re-fetch that peer's subs so the new
+    // adopted-from-reverse row appears without a manual page reload.
+    peerSyncEvents.on('subscription-created', (payload) => {
+      io.emit('peerSync:subscription:created', payload);
+    });
     sharingEvents.on('unshared', (payload) => {
       io.emit('sharing:unshared', payload);
     });

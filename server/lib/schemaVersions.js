@@ -36,6 +36,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   pipelineIssues: 1,
   pipelineSeries: 1,
   mediaCollections: 1,
+  // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
+  // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
+  // comparator walks the union of keys), so declaring a brand-new key would
+  // make every not-yet-upgraded peer reject ALL categories (universe,
+  // pipeline, …) — severing sync across a federation that upgrades on
+  // independent schedules. videoHistory is a flat append-only array merged by
+  // id with LWW-on-createdAt; the merge already tolerates unknown/extra rows,
+  // so it does not need whole-payload gating. An older peer that lacks the
+  // `videoHistory` route simply rejects that one category request and keeps
+  // syncing everything else. (Generalizing the gate to be per-category —
+  // which would also fix the same latent issue for mediaCollections — is a
+  // separate follow-up tracked in PLAN.md.)
 });
 
 /**

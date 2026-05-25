@@ -1,5 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { truncateOnWordBoundary } from './voice.js';
+import { truncateOnWordBoundary, registerVoiceHandlers } from './voice.js';
+
+// Minimal fake socket: records on() handlers so tests can fire inbound events,
+// and captures emit() calls. No real Socket.IO needed — the voice:ui:index /
+// voice:ui:read-response handlers are pure state mutations.
+const makeFakeSocket = () => {
+  const handlers = new Map();
+  const emitted = [];
+  return {
+    on: (event, fn) => { handlers.set(event, fn); },
+    emit: (event, payload) => { emitted.push({ event, payload }); },
+    fire: (event, payload) => handlers.get(event)?.(payload),
+    has: (event) => handlers.has(event),
+    emitted,
+  };
+};
 
 describe('truncateOnWordBoundary', () => {
   it('returns input untouched when shorter than the cap', () => {
@@ -57,5 +72,54 @@ describe('truncateOnWordBoundary', () => {
     expect(out.endsWith('…')).toBe(true);
     // Tail isn't a partial token — character before the ellipsis is in the word charset.
     expect(out[out.length - 2]).toMatch(/[a]/);
+  });
+});
+
+describe('voice:ui lazy-text socket handlers', () => {
+  it('registers the lazy read-response handler', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(socket.has('voice:ui:index')).toBe(true);
+    expect(socket.has('voice:ui:read-response')).toBe(true);
+  });
+
+  it('accepts a lazy index (no text, textOnDemand:true) without throwing', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(() => socket.fire('voice:ui:index', {
+      path: '/tasks',
+      title: 'Tasks',
+      elements: [{ ref: 0, kind: 'button', label: 'Add' }],
+      textOnDemand: true,
+    })).not.toThrow();
+  });
+
+  it('tolerates malformed / unmatched read-response payloads', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    // Establish a ui snapshot first.
+    socket.fire('voice:ui:index', { path: '/x', title: 'X', elements: [], textOnDemand: true });
+    expect(() => socket.fire('voice:ui:read-response', null)).not.toThrow();
+    expect(() => socket.fire('voice:ui:read-response', 'nope')).not.toThrow();
+    // Unmatched requestId — no waiter to resolve, must not throw.
+    expect(() => socket.fire('voice:ui:read-response', { requestId: 'missing', text: 'hi' })).not.toThrow();
+  });
+});
+
+describe('voice:screenshot:result socket handler', () => {
+  it('registers the screenshot-result handler', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(socket.has('voice:screenshot:result')).toBe(true);
+  });
+
+  it('tolerates malformed / unmatched screenshot-result payloads', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(() => socket.fire('voice:screenshot:result', null)).not.toThrow();
+    expect(() => socket.fire('voice:screenshot:result', 'nope')).not.toThrow();
+    // Unmatched requestId — no waiter parked for it, must not throw (and must
+    // not resolve a stale waiter, which is the whole point of the id keying).
+    expect(() => socket.fire('voice:screenshot:result', { requestId: 'missing', dataUrl: 'data:image/png;base64,AAAA' })).not.toThrow();
   });
 });

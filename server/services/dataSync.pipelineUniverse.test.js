@@ -27,6 +27,24 @@ const SERIES_DIR = join(tempRoot, 'pipeline-series');
 const ISSUES_DIR = join(tempRoot, 'pipeline-issues');
 const UNIVERSES_DIR = join(tempRoot, 'universes');
 const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
+const PEER_SUBS_PATH = join(tempRoot, 'sharing', 'peer_subscriptions.json');
+const VIDEO_HISTORY_PATH = join(tempRoot, 'video-history.json');
+
+// Write the outbound peer-subscription store that drives the per-peer
+// snapshot exclude-set. Each row is `{ peerId, recordKind, recordId }`.
+function writePeerSubs(rows) {
+  mkdirSync(join(tempRoot, 'sharing'), { recursive: true });
+  writeFileSync(PEER_SUBS_PATH, JSON.stringify({
+    subscriptions: rows.map((r) => ({
+      id: `peer-${r.recordKind}-${r.recordId}-${r.peerId}`,
+      peerId: r.peerId,
+      recordKind: r.recordKind,
+      recordId: r.recordId,
+      createdAt: '2026-05-25T00:00:00Z',
+      updatedAt: '2026-05-25T00:00:00Z',
+    })),
+  }, null, 2));
+}
 
 function writeJSON(path, obj) {
   mkdirSync(tempRoot, { recursive: true });
@@ -511,5 +529,292 @@ describe('dataSync — mediaCollections category', () => {
     });
     const b = await dataSync.getSnapshot('mediaCollections');
     expect(b.checksum).toBe(a.checksum);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-peer snapshot scoping (`forPeerId`) — the Item A / Item B fix.
+//
+// When the requesting peer is passed via `forPeerId`, the source EXCLUDES the
+// records it already pushes that peer per-record (the records THIS instance
+// has outbound subscriptions for to that peer) — leaving un-subscribed records
+// and torn-down-sub tombstones to ride the snapshot. With NO forPeerId, the
+// snapshot is the full category (legacy behavior).
+// ---------------------------------------------------------------------------
+describe('dataSync — per-peer snapshot scoping (forPeerId exclude-set)', () => {
+  it('universe: excludes the requesting peer\'s subscribed ids, keeps un-subscribed (partial-subscription gap)', async () => {
+    writeUniverseState({
+      universes: [
+        { id: 'u-a', name: 'A', updatedAt: '2026-05-25T10:00:00Z' },
+        { id: 'u-b', name: 'B', updatedAt: '2026-05-25T10:00:00Z' },
+        { id: 'u-d', name: 'D', updatedAt: '2026-05-25T10:00:00Z' }, // never subscribed
+      ],
+    });
+    // We push u-a + u-b to peer-A per-record; u-d has no sub.
+    writePeerSubs([
+      { peerId: 'peer-A', recordKind: 'universe', recordId: 'u-a' },
+      { peerId: 'peer-A', recordKind: 'universe', recordId: 'u-b' },
+    ]);
+    const scoped = await dataSync.getSnapshot('universe', { forPeerId: 'peer-A' });
+    const ids = scoped.data.universes.map((u) => u.id).sort();
+    // Subscribed records excluded; the un-subscribed one still rides.
+    expect(ids).toEqual(['u-d']);
+
+    // No forPeerId → full snapshot (legacy / all-or-none common case).
+    const full = await dataSync.getSnapshot('universe');
+    expect(full.data.universes.map((u) => u.id).sort()).toEqual(['u-a', 'u-b', 'u-d']);
+  });
+
+  it('universe: a tombstone for a torn-down sub rides the snapshot (ephemeralize-then-delete, Item B)', async () => {
+    // u-x was shared, then marked ephemeral (sub torn down), then deleted →
+    // the record is now a tombstone on disk and has NO peer subscription. It
+    // must ride the snapshot so the peer converges the delete.
+    writeUniverseState({
+      universes: [
+        { id: 'u-x', name: 'Gone', ephemeral: true, deleted: true, deletedAt: '2026-05-25T11:00:00Z', updatedAt: '2026-05-25T11:00:00Z' },
+        { id: 'u-y', name: 'Live', updatedAt: '2026-05-25T10:00:00Z' },
+      ],
+    });
+    // peer-A still subscribes to u-y only (u-x's sub was removed on ephemeralize).
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'universe', recordId: 'u-y' }]);
+    const scoped = await dataSync.getSnapshot('universe', { forPeerId: 'peer-A' });
+    const byId = Object.fromEntries(scoped.data.universes.map((u) => [u.id, u]));
+    // u-y excluded (covered per-record); u-x tombstone present so the delete converges.
+    expect(byId['u-y']).toBeUndefined();
+    expect(byId['u-x']).toBeDefined();
+    expect(byId['u-x'].deleted).toBe(true);
+  });
+
+  it('pipeline: excluding a subscribed series ALSO drops its child issues; un-subscribed series + issues ride', async () => {
+    writeSeriesState([
+      { id: 'ser-sub', name: 'Subbed', updatedAt: '2026-05-25T10:00:00Z' },
+      { id: 'ser-free', name: 'Free', updatedAt: '2026-05-25T10:00:00Z' },
+    ]);
+    writeIssueState([
+      { id: 'iss-1', seriesId: 'ser-sub', title: 'child of subbed', updatedAt: '2026-05-25T10:00:00Z' },
+      { id: 'iss-2', seriesId: 'ser-free', title: 'child of free', updatedAt: '2026-05-25T10:00:00Z' },
+    ]);
+    // series → pipeline category; we push ser-sub (+ its issues) per-record.
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'series', recordId: 'ser-sub' }]);
+    const scoped = await dataSync.getSnapshot('pipeline', { forPeerId: 'peer-A' });
+    expect(scoped.data.series.map((s) => s.id)).toEqual(['ser-free']);
+    // iss-1 (child of the excluded series) dropped; iss-2 (free series) rides.
+    expect(scoped.data.issues.map((i) => i.id)).toEqual(['iss-2']);
+  });
+
+  it('mediaCollections: excludes the requesting peer\'s subscribed collection ids', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [
+        { id: 'col-sub', name: 'Subbed', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-25T00:00:00Z', updatedAt: '2026-05-25T01:00:00Z' },
+        { id: 'col-free', name: 'Free', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-25T00:00:00Z', updatedAt: '2026-05-25T01:00:00Z' },
+      ],
+    });
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'mediaCollection', recordId: 'col-sub' }]);
+    const scoped = await dataSync.getSnapshot('mediaCollections', { forPeerId: 'peer-A' });
+    expect(scoped.data.collections.map((c) => c.id)).toEqual(['col-free']);
+  });
+
+  it('subscriptions to a DIFFERENT peer do not scope this peer\'s snapshot (per-peer isolation)', async () => {
+    writeUniverseState({
+      universes: [{ id: 'u-a', name: 'A', updatedAt: '2026-05-25T10:00:00Z' }],
+    });
+    // u-a is subscribed to peer-B, but peer-A pulls — peer-A must still get u-a.
+    writePeerSubs([{ peerId: 'peer-B', recordKind: 'universe', recordId: 'u-a' }]);
+    const scopedForA = await dataSync.getSnapshot('universe', { forPeerId: 'peer-A' });
+    expect(scopedForA.data.universes.map((u) => u.id)).toEqual(['u-a']);
+    const scopedForB = await dataSync.getSnapshot('universe', { forPeerId: 'peer-B' });
+    expect(scopedForB.data.universes.map((u) => u.id)).toEqual([]);
+  });
+
+  it('checksum is per-peer: a peer\'s scoped checksum differs once any of its subs exclude a record', async () => {
+    // Single universe so the (un-canonicalized) universe snapshot order can't
+    // perturb the comparison — a peer that excludes the only record gets an
+    // empty snapshot whose checksum necessarily differs from the 1-record one.
+    // `createdAt` is set explicitly: without it, sanitizeTemplate backfills
+    // `createdAt: now` on every read, making the snapshot non-deterministic
+    // across calls (the comparison below relies on byte-stable snapshots).
+    writeUniverseState({
+      universes: [{ id: 'u-a', name: 'A', createdAt: '2026-05-25T09:00:00Z', updatedAt: '2026-05-25T10:00:00Z' }],
+    });
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'universe', recordId: 'u-a' }]);
+    const full = await dataSync.getChecksum('universe');
+    const scopedA = await dataSync.getChecksum('universe', { forPeerId: 'peer-A' });
+    // peer-A's scoped checksum (u-a excluded → empty) differs from the full one.
+    expect(scopedA.checksum).not.toBe(full.checksum);
+    // A peer with NO subs excludes nothing → its scoped snapshot ids match the
+    // full set (checksum equality would also assert ordering, which the
+    // universe snapshot doesn't canonicalize — assert on content instead).
+    const scopedC = await dataSync.getSnapshot('universe', { forPeerId: 'peer-C' });
+    expect(scopedC.data.universes.map((u) => u.id)).toEqual(['u-a']);
+  });
+
+  it('checksum cache invalidates when a subscription changes even though no record file moved', async () => {
+    // One universe so the empty-vs-present checksum comparison is unambiguous.
+    // Explicit `createdAt` keeps the snapshot byte-stable across reads (see the
+    // sanitizeTemplate backfill note in the previous test).
+    writeUniverseState({
+      universes: [{ id: 'u-a', name: 'A', createdAt: '2026-05-25T09:00:00Z', updatedAt: '2026-05-25T10:00:00Z' }],
+    });
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'universe', recordId: 'u-a' }]);
+    const before = await dataSync.getChecksum('universe', { forPeerId: 'peer-A' });
+    // Tear down the sub (ephemeralize-then-delete teardown) — no record file
+    // moves, but the exclude-set shrinks so the scoped snapshot now includes
+    // u-a again. PEER_SUBSCRIPTIONS_FILE is in CHECKSUM_PATHS, so the cache
+    // must invalidate (otherwise the stale empty-snapshot checksum is served).
+    await new Promise((r) => setTimeout(r, 5)); // distinct mtime for the subs file
+    writePeerSubs([]);
+    const after = await dataSync.getChecksum('universe', { forPeerId: 'peer-A' });
+    expect(after.checksum).not.toBe(before.checksum);
+    // And it now matches the full snapshot (nothing excluded).
+    const full = await dataSync.getChecksum('universe');
+    expect(after.checksum).toBe(full.checksum);
+  });
+});
+
+describe('dataSync — videoHistory category', () => {
+  const row = (id, overrides = {}) => ({
+    id,
+    prompt: `prompt ${id}`,
+    filename: `${id}.mp4`,
+    thumbnail: `${id}.jpg`,
+    createdAt: '2026-05-22T00:00:00Z',
+    ...overrides,
+  });
+
+  it('is registered alongside the other categories', () => {
+    expect(dataSync.getSupportedCategories()).toContain('videoHistory');
+  });
+
+  it('snapshot returns the videos array under a stable key', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v2')]);
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos).toHaveLength(2);
+    expect(snap.data.videos.map((v) => v.id).sort()).toEqual(['v1', 'v2']);
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('snapshot handles a missing file gracefully', async () => {
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos).toEqual([]);
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('snapshot includes hidden rows but strips the hidden flag (hide stays local, checksums converge)', async () => {
+    // `hidden` is local-only visibility. The row CONTENT must still ride the wire
+    // (so the checksum is hide-state-independent and peers converge), but the
+    // `hidden` flag itself must be stripped so it doesn't propagate.
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v-hidden', { hidden: true }), row('v2')]);
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos.map((v) => v.id).sort()).toEqual(['v1', 'v-hidden', 'v2'].sort());
+    expect(snap.data.videos.every((v) => !('hidden' in v))).toBe(true);
+  });
+
+  it('snapshot checksum is identical whether or not a row is hidden (convergence across divergent hide-state)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v2')]);
+    const visible = await dataSync.getSnapshot('videoHistory');
+    await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v2', { hidden: true })]);
+    const oneHidden = await dataSync.getSnapshot('videoHistory');
+    // Two peers that disagree only on v2's hidden flag compute the SAME checksum.
+    expect(oneHidden.checksum).toBe(visible.checksum);
+  });
+
+  it('applying a remote (hidden-stripped) row does not unhide a locally-hidden row', async () => {
+    // The immutable-createdAt LWW merge keeps the existing local row on a tie, so
+    // a peer's visible copy of a row the user hid locally must not undo the hide.
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1', { hidden: true })]);
+    await dataSync.applyRemote('videoHistory', { videos: [row('v1')] }); // remote has no hidden flag
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.find((v) => v.id === 'v1')?.hidden).toBe(true);
+  });
+
+  it('snapshot excludes id-less rows so checksums converge (apply side drops them too)', async () => {
+    // An id-less local row can't be merged by applyVideoHistoryRemote, so it
+    // MUST be kept off the wire snapshot/checksum — otherwise a receiver that
+    // drops it recomputes a different checksum and the peers re-download forever.
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), { prompt: 'legacy no-id', filename: 'legacy.mp4' }, row('v2')]);
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos.map((v) => v.id)).toEqual(['v1', 'v2']);
+    // Convergence: a fresh receiver applies the wire snapshot onto an empty
+    // store, then recomputes its OWN snapshot checksum — it must equal the
+    // sender's. If an id-less row had leaked onto the wire, the receiver (which
+    // drops it on apply) would compute a different checksum and never converge.
+    writeJSON(VIDEO_HISTORY_PATH, []);
+    const applied = await dataSync.applyRemote('videoHistory', snap.data);
+    expect(applied.applied).toBe(true);
+    const receiverSnap = await dataSync.getSnapshot('videoHistory');
+    expect(receiverSnap.checksum).toBe(snap.checksum);
+  });
+
+  it('snapshot checksum is order-insensitive (rows sorted by id on the wire)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v-b'), row('v-a')]);
+    const a = await dataSync.getSnapshot('videoHistory');
+    await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
+    writeJSON(VIDEO_HISTORY_PATH, [row('v-a'), row('v-b')]);
+    const b = await dataSync.getSnapshot('videoHistory');
+    expect(b.checksum).toBe(a.checksum);
+  });
+
+  it('applyRemote inserts new rows (union by id)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const result = await dataSync.applyRemote('videoHistory', {
+      videos: [row('v2')],
+    });
+    expect(result.applied).toBe(true);
+    expect(result.count).toBe(1);
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.map((v) => v.id).sort()).toEqual(['v1', 'v2']);
+  });
+
+  it('applyRemote keeps local rows the remote does not carry (no data loss)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('local-only'), row('shared')]);
+    await dataSync.applyRemote('videoHistory', {
+      videos: [row('shared'), row('remote-only')],
+    });
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.map((v) => v.id).sort()).toEqual(['local-only', 'remote-only', 'shared']);
+  });
+
+  it('applyRemote LWW: newer remote createdAt wins for the same id', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1', { createdAt: '2026-05-22T00:00:00Z', prompt: 'old' })]);
+    await dataSync.applyRemote('videoHistory', {
+      videos: [row('v1', { createdAt: '2026-05-22T05:00:00Z', prompt: 'new' })],
+    });
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].prompt).toBe('new');
+  });
+
+  it('applyRemote is a no-op when nothing is newer or new', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const result = await dataSync.applyRemote('videoHistory', { videos: [row('v1')] });
+    expect(result.applied).toBe(false);
+    expect(result.count).toBe(0);
+  });
+
+  it('applyRemote skips rows without a string id (cannot clobber real rows)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const result = await dataSync.applyRemote('videoHistory', {
+      videos: [{ prompt: 'no id', filename: 'x.mp4', createdAt: '2026-05-22T09:00:00Z' }],
+    });
+    expect(result.applied).toBe(false);
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.map((v) => v.id)).toEqual(['v1']);
+  });
+
+  it('applyRemote preserves an id-less LOCAL row instead of dropping it', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [{ prompt: 'legacy', filename: 'legacy.mp4' }]);
+    await dataSync.applyRemote('videoHistory', { videos: [row('v-new')] });
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.some((v) => v.prompt === 'legacy')).toBe(true);
+    expect(persisted.some((v) => v.id === 'v-new')).toBe(true);
+  });
+
+  it('checksum changes after applyRemote mutates the file', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const before = await dataSync.getChecksum('videoHistory');
+    await dataSync.applyRemote('videoHistory', { videos: [row('v2')] });
+    const after = await dataSync.getChecksum('videoHistory');
+    expect(after.checksum).not.toBe(before.checksum);
   });
 });

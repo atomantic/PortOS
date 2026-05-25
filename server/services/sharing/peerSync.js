@@ -44,6 +44,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
@@ -82,7 +83,11 @@ export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'med
  * emits `asset-arrived` ({ filename, kind, peerId }) when a previously-missing
  * file lands locally; `sharing/index.js` wires that to a socket emission so
  * the client's MediaImage component can swap its "syncing" placeholder for
- * the real bytes without polling.
+ * the real bytes without polling. `maybeCreateReverseSubscription` emits
+ * `subscription-created` ({ peerId, recordKind, recordId, subId }) when an
+ * incoming push auto-creates a reverse subscription, which `sharing/index.js`
+ * relays as the `peerSync:subscription:created` socket event so the Instances
+ * page can re-fetch that peer's subscriptions without a manual reload.
  */
 export const peerSyncEvents = new EventEmitter();
 peerSyncEvents.setMaxListeners(100);
@@ -160,6 +165,45 @@ export async function findPeerSubscription(peerId, recordKind, recordId) {
 }
 
 /**
+ * Coverage map for the snapshot-sync exclude-set, grouped by snapshot
+ * CATEGORY (universe / pipeline / mediaCollections) — NOT by record kind.
+ * `series` subscriptions roll into the `pipeline` category (series + its
+ * child issues are bundled by the per-record push pipeline), matching the
+ * single composite `getPipelineSnapshot` produces.
+ *
+ * DIRECTION — this is the crux of the Item-A fix. The returned ids are the
+ * records THIS instance has OUTBOUND subscriptions for to `peerId` (i.e.
+ * records we push to that peer via the per-record pipeline). When THIS
+ * instance is the SNAPSHOT SOURCE answering a pull from `peerId`, those
+ * exact records are the ones the requester already receives from us via
+ * push — so they are the requester's INBOUND coverage and must be excluded
+ * from the snapshot we serve it. Everything NOT in these sets (un-subscribed
+ * records, and tombstones for records whose sub was torn down) still rides
+ * the snapshot, which is what fixes both the partial-subscription gap and
+ * the ephemeralize-then-delete tombstone stall.
+ *
+ * Why outbound-at-the-source and not inbound-at-the-puller: only the source
+ * authoritatively knows which records it pushes per-record to the requester.
+ * The puller cannot infer that from its own subscription store (every local
+ * sub is outbound from the puller's view; a local sub to peer-A does NOT
+ * prove peer-A pushes back). Computing the exclude-set at the source closes
+ * the inbound-vs-outbound conflation with zero extra round-trips.
+ *
+ * Returns `{ universe, pipeline, mediaCollections }`, each a `Set<recordId>`.
+ */
+export async function getOutboundCoverageForPeer(peerId) {
+  const coverage = { universe: new Set(), pipeline: new Set(), mediaCollections: new Set() };
+  if (!isNonEmptyStr(peerId)) return coverage;
+  const subs = await listPeerSubscriptions({ peerId });
+  for (const sub of subs) {
+    const category = KIND_TO_CATEGORY[sub.recordKind];
+    if (!category || !isNonEmptyStr(sub.recordId)) continue;
+    coverage[category]?.add(sub.recordId);
+  }
+  return coverage;
+}
+
+/**
  * Create a peer subscription. Idempotent — re-subscribing returns the existing
  * record. The first subscribe also initializes the tombstone cursor with
  * `subscribedSince=now` so tombstones older than the subscription aren't
@@ -194,6 +238,19 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
         updatedAt: now,
         lastPushedAt: null,
         lastPushedHash: null,
+        // Per-(peer,record) confirmed-delivery water-mark (ms epoch). Set ONLY
+        // when a push to this peer for THIS record lands successfully (the
+        // receiver returned 2xx). Distinct from the per-peer tombstone ack
+        // cursor (`peer_tombstone_cursors.json`) which advances to the MAX
+        // acked deletedAt across ALL of a peer's pushes — a later record-B
+        // success would otherwise advance that cursor past a failed record-A,
+        // letting GC prune A's tombstone before A's delete-push was ever
+        // confirmed. tombstoneGc clamps its prune cutoff to the MIN of this
+        // field across a kind's subscription rows, so an unconfirmed record
+        // (still `null`, or stuck at a pre-delete success time) holds the
+        // line. Lives on the row → cleaned up for free when the row is
+        // removed (`unsubscribePeer`), no separate storage to leak.
+        lastConfirmedPushedAt: null,
         adoptedFromReverse: opts.adoptedFromReverse === true,
       };
       state.subscriptions.push(existing);
@@ -864,7 +921,16 @@ export async function pushRecordToPeer(sub, options = {}) {
   // merge LWW path; only cost is one redundant POST per push cycle
   // until the receiver finishes pulling).
   const missingCount = Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0;
-  await persistPushSuccess(sub.id, missingCount > 0 ? null : hash);
+  // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
+  // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
+  // until its delete-push has been confirmed — even if a later push for a
+  // DIFFERENT record advances the per-peer ack cursor past it. We stamp on
+  // every confirmed push (not just deletes): a successful pre-delete push
+  // establishes the floor, and the subsequent delete-push raises it above
+  // the tombstone's deletedAt once it lands. The `missingAssets` case still
+  // counts as confirmed delivery of the RECORD (merge ran on the receiver);
+  // only the asset-stranded hash is withheld, not the confirmation mark.
+  await persistPushSuccess(sub.id, missingCount > 0 ? null : hash, { confirmedAtMs: Date.now() });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -876,7 +942,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   };
 }
 
-async function persistPushSuccess(subId, hash) {
+async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now() } = {}) {
   await withStateLock(async () => {
     const state = await readState();
     const sub = state.subscriptions.find((s) => s.id === subId);
@@ -885,6 +951,13 @@ async function persistPushSuccess(subId, hash) {
     sub.lastPushedAt = now;
     sub.lastPushedHash = hash;
     sub.updatedAt = now;
+    // Advance the per-record confirmed-delivery water-mark monotonically — an
+    // out-of-order retry must not retract it (mirrors ackDeletesUpTo's
+    // never-move-backward guarantee). tombstoneGc reads MIN-of-this across a
+    // kind's rows, so a regression here would let a stale tombstone prune.
+    if (Number.isFinite(confirmedAtMs) && confirmedAtMs > (sub.lastConfirmedPushedAt ?? 0)) {
+      sub.lastConfirmedPushedAt = confirmedAtMs;
+    }
     // A successful push (or even a no-asset-stranded push) clears any prior
     // schema-version block — the peer can receive again.
     if (sub.blockedBySchema) delete sub.blockedBySchema;
@@ -1394,7 +1467,22 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   const localState = await classifyLocalRecord(recordKind, recordId);
   if (localState !== 'syncable') return false;
 
-  await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
+  const sub = await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
+  // subscribePeer is idempotent — only announce when a row was genuinely
+  // inserted (created=true). The existing-sub short-circuit at the top of
+  // this function already returns early, but guarding on `created` keeps the
+  // event honest if a race ever lands an identical row between the
+  // findPeerSubscription check and the insert. `sharing/index.js` wires this
+  // to the `peerSync:subscription:created` socket event so the Instances page
+  // re-fetches that peer's subs without a manual reload.
+  if (sub?.created) {
+    peerSyncEvents.emit('subscription-created', {
+      peerId,
+      recordKind,
+      recordId,
+      subId: sub.id,
+    });
+  }
   return true;
 }
 
@@ -1624,6 +1712,20 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   // a missing sidecar just means the image lands in Unsorted without a prompt.
   if (entry.kind === 'image') {
     await pullSidecarForImage(peer, base, safeName).catch(() => {});
+  }
+  // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it
+  // as a sibling asset. Cheaper end-to-end: no new asset kind / URL-prefix /
+  // manifest-diff plumbing, and the thumbnail filename is deterministic
+  // (`<jobId>.jpg`, where jobId === the video filename minus `.mp4`). The
+  // synced video-history row already carries `thumbnail: '<jobId>.jpg'`, so
+  // once this file exists on disk `normalizeVideo` renders the collection
+  // tile. Best-effort: if ffmpeg is missing the row still syncs (the item
+  // stops being filtered as "missing"); the tile just falls back to no
+  // preview. Mirrors generateThumbnail's null-on-failure contract.
+  if (entry.kind === 'video') {
+    const jobId = safeName.replace(/\.[a-z0-9]+$/i, '');
+    const videoPath = join(localDir, safeName);
+    await generateThumbnail(videoPath, jobId).catch(() => null);
   }
 }
 
@@ -1894,17 +1996,19 @@ export function installPeerSyncListener() {
     });
   };
   recordEvents.on('updated', onUpdated);
-  // ALSO listen for `deleted` events so soft-deletes propagate via the
-  // per-record push pipeline. Without this, `deleteUniverse` /
-  // `deleteSeries` (which emit `recordEvents.deleted`, NOT `updated`) only
-  // reached peers via the 60s snapshot loop — and that loop is skipped for
-  // any (peer, kind) pair covered by a per-record sub
-  // (syncOrchestrator.categoriesCoveredByPeerSync). The result was that
-  // every soft-delete on a record with active peer subs got stranded
-  // locally. Route delete events through the same `triggerPushForRecord`
-  // path: pushRecordToPeer reads the record with `includeDeleted: true`
-  // and the wire sanitizer (now updated) lets tombstones cross even for
-  // ephemeral records.
+  // ALSO listen for `deleted` events so soft-deletes propagate immediately via
+  // the per-record push pipeline. `deleteUniverse` / `deleteSeries` emit
+  // `recordEvents.deleted` (NOT `updated`); without this listener a delete on
+  // a still-subscribed record would only reach peers on the next 60s snapshot
+  // cycle (and historically not at all, when the snapshot category was skipped
+  // wholesale for subscribed peers). Route delete events through the same
+  // `triggerPushForRecord` path: pushRecordToPeer reads the record with
+  // `includeDeleted: true` and the wire sanitizer lets tombstones cross even
+  // for ephemeral records. (Tombstones for records whose sub was ALREADY torn
+  // down — the ephemeralize-then-delete case — have no live sub to push, so
+  // they ride the per-peer-scoped snapshot instead: the source no longer
+  // excludes them once their sub is gone. See dataSync.getSnapshot's
+  // `forPeerId` scoping.)
   onDeleted = ({ recordKind, recordId }) => {
     triggerPushForRecord(recordKind, recordId).catch((err) => {
       console.log(`⚠️ peerSync: delete listener error for ${recordKind}/${recordId}: ${err.message}`);

@@ -14,8 +14,40 @@ vi.mock('../meatspaceNicotine.js', () => ({
   logNicotine: vi.fn(async () => ({ totalMg: 1, dayTotal: 1 })),
   getNicotineSummary: vi.fn(async () => ({ today: 0 })),
 }));
+const addWorkoutMock = vi.fn(async ({ date, type, durationMinutes, intensity, notes }) => ({
+  date: date || '2026-04-17',
+  type,
+  durationMinutes: durationMinutes ?? null,
+  intensity: intensity ?? null,
+  notes: notes ?? null,
+}));
 vi.mock('../meatspaceHealth.js', () => ({
   addBodyEntry: vi.fn(async () => ({ date: '2026-04-17' })),
+  addWorkout: (...args) => addWorkoutMock(...args),
+}));
+// Calendar events — controllable per-test via calendarEventsRef.
+const calendarEventsRef = { value: [] };
+vi.mock('../calendarSync.js', () => ({
+  getEvents: vi.fn(async () => ({ events: calendarEventsRef.value, total: calendarEventsRef.value.length })),
+}));
+const addNotificationMock = vi.fn(async () => ({ id: 'notif-1' }));
+vi.mock('../notifications.js', () => ({
+  addNotification: (...args) => addNotificationMock(...args),
+  NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
+  PRIORITY_LEVELS: { HIGH: 'high' },
+}));
+// Open-Meteo fetch — controllable per-test via weatherFetchRef.
+const weatherFetchRef = { value: { ok: true, json: async () => ({ current: { temperature_2m: 64, weather_code: 3 } }) } };
+vi.mock('../../lib/fetchWithTimeout.js', () => ({
+  fetchWithTimeout: vi.fn(async () => weatherFetchRef.value),
+}));
+// Timezone — pin to deterministic values so calendar/time tests don't depend
+// on the host TZ or settings file.
+vi.mock('../../lib/timezone.js', () => ({
+  getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),
+  todayInTimezone: vi.fn(() => '2026-04-17'),
+  getLocalParts: vi.fn(() => ({ year: 2026, month: 4, day: 17 })),
+  getUtcOffsetMs: vi.fn(() => -7 * 3600 * 1000), // PDT
 }));
 vi.mock('../identity.js', () => ({
   getGoals: vi.fn(async () => ({ goals: [] })),
@@ -89,7 +121,8 @@ vi.mock('../askService.js', () => ({
   }),
 }));
 
-const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
+const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent, anchorLocalMidnightUtc } = await import('./tools.js');
+const { getUtcOffsetMs: mockedGetUtcOffsetMs } = await import('../../lib/timezone.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -499,6 +532,51 @@ describe('ui_read', () => {
     const names = specs.map((s) => s.function.name);
     expect(names).toContain('ui_read');
   });
+
+  // Lazy text path: the client no longer ships `text` on every index; it sets
+  // textOnDemand and ui_read pulls the blob via ctx.requestUiText().
+  it('lazily fetches text via ctx.requestUiText when index omits text', async () => {
+    const text = 'Lazily fetched page body.';
+    let requested = 0;
+    const ctx = {
+      state: { ui: { textOnDemand: true, path: '/tasks', title: 'Tasks' } },
+      requestUiText: async () => { requested += 1; return text; },
+    };
+    const r = await dispatchTool('ui_read', {}, ctx);
+    expect(requested).toBe(1);
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe(text);
+    expect(r.title).toBe('Tasks');
+    expect(r.chars).toBe(text.length);
+  });
+
+  it('does not request lazily when text is already present (eager/legacy)', async () => {
+    let requested = 0;
+    const ctx = {
+      state: { ui: { text: 'already here', textOnDemand: true } },
+      requestUiText: async () => { requested += 1; return 'should-not-be-used'; },
+    };
+    const r = await dispatchTool('ui_read', {}, ctx);
+    expect(requested).toBe(0);
+    expect(r.content).toBe('already here');
+  });
+
+  it('returns ok:false when lazy fetch times out / returns null', async () => {
+    const ctx = {
+      state: { ui: { textOnDemand: true } },
+      requestUiText: async () => null,
+    };
+    const r = await dispatchTool('ui_read', {}, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/can't see/i);
+  });
+
+  it('returns ok:false when client neither ships text nor advertises textOnDemand', async () => {
+    // Very old client / no widget — no eager text, no lazy capability.
+    const ctx = { state: { ui: { path: '/tasks' } }, requestUiText: async () => 'x' };
+    const r = await dispatchTool('ui_read', {}, ctx);
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('ui_click — destructive confirmation gate', () => {
@@ -838,5 +916,250 @@ describe('pipeline stage navigation tools', () => {
       expect(classifyIntent('open video').has('pipeline')).toBe(true);
       expect(classifyIntent('back to story').has('pipeline')).toBe(true);
     });
+  });
+});
+
+describe('calendar_today', () => {
+  it('summarizes today\'s events', async () => {
+    calendarEventsRef.value = [
+      { title: 'Standup', startTime: '2026-04-17T17:00:00Z', location: 'Zoom', isAllDay: false },
+      { title: 'All-hands', startTime: '2026-04-17T20:00:00Z', isAllDay: false },
+    ];
+    const r = await dispatchTool('calendar_today', {});
+    expect(r.ok).toBe(true);
+    expect(r.count).toBe(2);
+    expect(r.date).toBe('2026-04-17');
+    expect(r.events[0].title).toBe('Standup');
+    expect(r.summary).toMatch(/2 events today/);
+  });
+
+  it('reports an empty day cleanly', async () => {
+    calendarEventsRef.value = [];
+    const r = await dispatchTool('calendar_today', {});
+    expect(r.ok).toBe(true);
+    expect(r.count).toBe(0);
+    expect(r.summary).toMatch(/Nothing on your calendar today/);
+  });
+});
+
+describe('calendar_next', () => {
+  it('returns the soonest future event', async () => {
+    const soon = new Date(Date.now() + 3600_000).toISOString();
+    calendarEventsRef.value = [{ title: 'Dentist', startTime: soon, isAllDay: false }];
+    const r = await dispatchTool('calendar_next', {});
+    expect(r.ok).toBe(true);
+    expect(r.found).toBe(true);
+    expect(r.title).toBe('Dentist');
+    expect(r.summary).toMatch(/Next up: Dentist/);
+  });
+
+  it('reports nothing upcoming when the list is empty', async () => {
+    calendarEventsRef.value = [];
+    const r = await dispatchTool('calendar_next', {});
+    expect(r.ok).toBe(true);
+    expect(r.found).toBe(false);
+    expect(r.summary).toMatch(/Nothing coming up/);
+  });
+
+  it('returns an in-progress meeting (started before now, ends after) as "next"', async () => {
+    // A meeting that's currently happening must count — startTime is in the
+    // past but endTime is in the future, matching calendarSync's range.
+    const startedAgo = new Date(Date.now() - 1800_000).toISOString();
+    const endsSoon = new Date(Date.now() + 1800_000).toISOString();
+    calendarEventsRef.value = [{ title: 'Standup (in progress)', startTime: startedAgo, endTime: endsSoon, isAllDay: false }];
+    const r = await dispatchTool('calendar_next', {});
+    expect(r.found).toBe(true);
+    expect(r.title).toBe('Standup (in progress)');
+  });
+
+  it('returns an all-day event occurring today (start at past midnight, end later today)', async () => {
+    // All-day events begin at local midnight (already past mid-day), but with an
+    // endTime later today they must still surface as "next".
+    const pastMidnight = new Date(Date.now() - 8 * 3600_000).toISOString();
+    const endOfDay = new Date(Date.now() + 8 * 3600_000).toISOString();
+    calendarEventsRef.value = [{ title: 'Conference Day', startTime: pastMidnight, endTime: endOfDay, isAllDay: true }];
+    const r = await dispatchTool('calendar_next', {});
+    expect(r.found).toBe(true);
+    expect(r.title).toBe('Conference Day');
+    expect(r.allDay).toBe(true);
+  });
+});
+
+describe('anchorLocalMidnightUtc (DST-safe local-midnight anchor)', () => {
+  it('subtracts the constant offset off the naive UTC parse', () => {
+    // Both passes see the mocked -7h (PDT) offset → local midnight is +7h of the
+    // naive UTC parse of the day string (PDT midnight = 07:00 UTC).
+    const naive = Date.parse('2026-04-17T00:00:00Z');
+    expect(anchorLocalMidnightUtc('2026-04-17', 'America/Los_Angeles'))
+      .toBe(naive + 7 * 3600 * 1000);
+  });
+
+  it('uses the offset evaluated AT the target midnight, not the first guess', () => {
+    // Simulate a DST boundary: the offset at the naive-parse instant differs
+    // from the offset at the refined candidate instant. The returned anchor must
+    // use the SECOND (refined) offset, proving the two-pass convergence.
+    const naive = Date.parse('2026-03-08T00:00:00Z');
+    mockedGetUtcOffsetMs
+      .mockImplementationOnce(() => -8 * 3600 * 1000)  // first pass: PST
+      .mockImplementationOnce(() => -7 * 3600 * 1000); // refined: PDT
+    expect(anchorLocalMidnightUtc('2026-03-08', 'America/Los_Angeles'))
+      .toBe(naive + 7 * 3600 * 1000); // refined offset wins
+    mockedGetUtcOffsetMs.mockReturnValue(-7 * 3600 * 1000); // restore default
+  });
+});
+
+describe('meatspace_log_workout', () => {
+  it('rejects missing type', async () => {
+    await expect(dispatchTool('meatspace_log_workout', {})).rejects.toThrow(/type is required/);
+  });
+  it('rejects absurd duration', async () => {
+    await expect(dispatchTool('meatspace_log_workout', { type: 'run', durationMinutes: 5000 }))
+      .rejects.toThrow(/durationMinutes must be a positive number/);
+  });
+  it('rejects invalid intensity', async () => {
+    await expect(dispatchTool('meatspace_log_workout', { type: 'run', intensity: 'extreme' }))
+      .rejects.toThrow(/intensity must be/);
+  });
+  it('logs a workout via addWorkout', async () => {
+    addWorkoutMock.mockClear();
+    const r = await dispatchTool('meatspace_log_workout', { type: 'yoga', durationMinutes: 30, intensity: 'moderate' });
+    expect(r.ok).toBe(true);
+    expect(r.type).toBe('yoga');
+    expect(addWorkoutMock).toHaveBeenCalledWith(expect.objectContaining({ type: 'yoga', durationMinutes: 30, intensity: 'moderate' }));
+    expect(r.summary).toMatch(/Logged yoga \(30 min\)/);
+  });
+});
+
+describe('weather_now', () => {
+  it('returns temperature + mapped conditions', async () => {
+    weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 71.4, weather_code: 3 } }) };
+    const r = await dispatchTool('weather_now', { lat: 40, lon: -74 });
+    expect(r.ok).toBe(true);
+    expect(r.temperatureF).toBe(71);
+    expect(r.conditions).toBe('overcast');
+    expect(r.summary).toMatch(/71°F and overcast/);
+  });
+  it('rejects out-of-range coordinates', async () => {
+    const r = await dispatchTool('weather_now', { lat: 200, lon: 0 });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/Latitude must be/);
+  });
+  it('handles an unreachable weather service', async () => {
+    weatherFetchRef.value = { ok: false };
+    const r = await dispatchTool('weather_now', { lat: 1, lon: 1 });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/Couldn't reach the weather service/);
+  });
+});
+
+describe('timer_set', () => {
+  it('rejects a missing/zero duration', async () => {
+    const r = await dispatchTool('timer_set', { label: 'tea' });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/Tell me how long/);
+  });
+  it('rejects durations over 24 hours', async () => {
+    const r = await dispatchTool('timer_set', { minutes: 2000 });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/capped at 24 hours/);
+  });
+  it('sets a timer and schedules a notification', async () => {
+    vi.useFakeTimers();
+    addNotificationMock.mockClear();
+    const r = await dispatchTool('timer_set', { minutes: 10, label: 'call mom' });
+    expect(r.ok).toBe(true);
+    expect(r.durationMs).toBe(600000);
+    expect(r.summary).toMatch(/Timer set for 10 minutes/);
+    await vi.advanceTimersByTimeAsync(600000);
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/call mom/) }));
+    vi.useRealTimers();
+  });
+});
+
+describe('ui_describe_visually', () => {
+  it('fails gracefully without a screenshot channel', async () => {
+    const r = await dispatchTool('ui_describe_visually', { question: 'what is this?' }, { sideEffects: [] });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/can't capture the screen/);
+  });
+  it('returns null-capture as a friendly failure', async () => {
+    const ctx = { sideEffects: [], captureScreenshot: async () => null, describeImage: async () => 'x' };
+    const r = await dispatchTool('ui_describe_visually', {}, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/couldn't capture the screen/i);
+  });
+  it('captures + describes the screen and returns the description', async () => {
+    const ctx = {
+      sideEffects: [],
+      state: { ui: { path: '/cybercity' } },
+      captureScreenshot: async () => 'data:image/jpeg;base64,abc',
+      describeImage: async (dataUrl, prompt) => {
+        expect(dataUrl).toBe('data:image/jpeg;base64,abc');
+        expect(prompt).toMatch(/chart/i);
+        return 'A neon skyline with three towers.';
+      },
+    };
+    const r = await dispatchTool('ui_describe_visually', { question: 'what is on this chart?' }, ctx);
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe('A neon skyline with three towers.');
+    expect(r.path).toBe('/cybercity');
+  });
+  it('surfaces a vision-model error', async () => {
+    const ctx = {
+      sideEffects: [],
+      captureScreenshot: async () => 'data:image/jpeg;base64,abc',
+      describeImage: async () => { throw new Error('model offline'); },
+    };
+    const r = await dispatchTool('ui_describe_visually', {}, ctx);
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/model offline/);
+  });
+});
+
+describe('new tool intent routing', () => {
+  it('routes calendar utterances to the calendar group', () => {
+    expect(classifyIntent("what's on my calendar today?").has('calendar')).toBe(true);
+    expect(classifyIntent("what's my next meeting?").has('calendar')).toBe(true);
+    expect(classifyIntent('any appointments today').has('calendar')).toBe(true);
+  });
+  it('routes weather utterances to the weather group', () => {
+    expect(classifyIntent("what's the weather?").has('weather')).toBe(true);
+    expect(classifyIntent('is it raining outside').has('weather')).toBe(true);
+  });
+  it('routes timer utterances to the timer group', () => {
+    expect(classifyIntent('set a timer for 10 minutes').has('timer')).toBe(true);
+    expect(classifyIntent('remind me in 30 minutes to call mom').has('timer')).toBe(true);
+  });
+  it('routes workout utterances to the meatspace group', () => {
+    expect(classifyIntent('log a workout').has('meatspace')).toBe(true);
+    expect(classifyIntent('I went for a run').has('meatspace')).toBe(true);
+    expect(classifyIntent('went for a 30 minute run').has('meatspace')).toBe(true);
+    expect(classifyIntent('I ran a 5k this morning').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran 3 miles before work').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran a marathon yesterday').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran my usual route').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran for 30 minutes').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran for an hour').has('meatspace')).toBe(true);
+    expect(classifyIntent('did some cardio at the gym').has('meatspace')).toBe(true);
+  });
+  it('does NOT route command phrasings of run/ran to the meatspace group', () => {
+    // Bare run/ran collide with common commands — must not expose the workout tool.
+    // The "ran …" branch requires a fitness object (distance/route/duration), so
+    // these non-fitness "ran a/an/my X" phrasings must NOT match.
+    expect(classifyIntent('run the pipeline render').has('meatspace')).toBe(false);
+    expect(classifyIntent('I ran the report again').has('meatspace')).toBe(false);
+    expect(classifyIntent('run it one more time').has('meatspace')).toBe(false);
+    expect(classifyIntent('I ran a report').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran an errand').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran my mouth').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran for office').has('meatspace')).toBe(false);
+    // The duration branch requires a real time unit — "for a/the X" without a
+    // minute/hour/second unit must NOT route to the workout tool.
+    expect(classifyIntent('ran for a report').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran for president').has('meatspace')).toBe(false);
+  });
+  it('routes visual-description utterances to the vision group', () => {
+    expect(classifyIntent("what's on this chart?").has('vision')).toBe(true);
+    expect(classifyIntent('describe the cybercity').has('vision')).toBe(true);
   });
 });

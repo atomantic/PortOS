@@ -11,7 +11,7 @@ import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, DEFAULT_SYNC_CATEGORIES, updatePeer } from './instances.js';
+import { getPeers, DEFAULT_SYNC_CATEGORIES, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -25,6 +25,7 @@ const SYNC_INTERVAL_MS = 60000;
 const FETCH_TIMEOUT_MS = 15000;
 
 const withLock = createMutex();
+const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
@@ -248,9 +249,18 @@ function getEffectiveCategories(peer) {
  * Sync a snapshot-based data category from a peer.
  * Fetches checksum first to avoid full data transfer when unchanged.
  */
-async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums) {
+async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums, ourInstanceId) {
+  // Pass our own instanceId as `forPeer` so the SOURCE peer can scope the
+  // snapshot it serves us: it excludes records it already pushes to us
+  // per-record (our inbound coverage) and includes everything else
+  // (un-subscribed records + tombstones for torn-down subs). An older source
+  // peer ignores the unknown param and returns the full snapshot — safe,
+  // applied idempotently. The query string is only appended for the three
+  // peer-record-subscribable categories; for goals/character/etc. it's inert
+  // server-side, but we still pass it uniformly to keep the URL builder simple.
+  const forPeerQs = isNonEmptyStr(ourInstanceId) ? `?forPeer=${encodeURIComponent(ourInstanceId)}` : '';
   // Lightweight checksum check first
-  const checksumRes = await fetchPeer(peer, `/api/sync/${category}/checksum`);
+  const checksumRes = await fetchPeer(peer, `/api/sync/${category}/checksum${forPeerQs}`);
   if (!checksumRes?.checksum) return { totalApplied: 0, checksum: null };
 
   const lastChecksum = cachedChecksums?.[category] ?? null;
@@ -258,8 +268,9 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums)
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }
 
-  // Checksum changed — fetch full snapshot
-  const snapshot = await fetchPeer(peer, `/api/sync/${category}/snapshot`);
+  // Checksum changed — fetch full snapshot (same forPeer scoping as checksum
+  // so the snapshot we apply matches the checksum we just cached).
+  const snapshot = await fetchPeer(peer, `/api/sync/${category}/snapshot${forPeerQs}`);
   if (!snapshot?.data) return { totalApplied: 0, checksum: null };
 
   // Forward the sender's portosMeta envelope so applyRemote can run the
@@ -340,20 +351,40 @@ async function clearPeerSchemaGap(peerId, category) {
 const isPlainObjectShallow = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
- * For a given peerId, return the set of `dataSync` category names whose
- * underlying record kind has at least one active peer subscription. Used by
- * the per-peer sync loop to skip categories the per-record push pipeline
- * already owns.
+ * Per-direction peer-sync coverage for a peer, by snapshot CATEGORY.
  *
- * Mapping:
- *   - recordKind 'universe' → category 'universe'
- *   - recordKind 'series'   → category 'pipeline' (covers series + issues)
+ * Returns `{ outbound, inbound }` where each is
+ * `{ universe: Set<id>, pipeline: Set<id>, mediaCollections: Set<id> }`:
  *
- * Series subscriptions bundle child issues in the push payload, so the
- * 'pipeline' category (series + issues) is a single skip unit — same as
- * how `dataSync.getPipelineSnapshot` produces them as one composite.
+ *   - `outbound` — records WE push to the peer per-record (our local
+ *     subscriptions targeting the peer). These flow to the peer via the push
+ *     pipeline regardless of the snapshot.
+ *   - `inbound` — records the PEER pushes to US per-record (the peer's
+ *     subscriptions targeting our instanceId). We can only learn these by
+ *     asking the peer, so this is populated from
+ *     `GET /api/peer-sync/subscriptions?peerId=<ourId>` on the peer; on any
+ *     failure (older peer, offline, network) it stays EMPTY → we pull the
+ *     full snapshot (safe, idempotent).
+ *
+ * This is the fix for the old conflation: the previous coarse boolean used
+ * OUR OUTBOUND subs to suppress the INBOUND snapshot pull for an ENTIRE
+ * category. Outbound proves only that WE push to the peer — NOT that the peer
+ * pushes back. So we now drive the inbound snapshot-pull scoping off the
+ * `inbound` set, never the `outbound` set.
+ *
+ * NOTE — in the live sync path the snapshot pull is actually scoped at the
+ * SOURCE (we send `forPeer=<ourId>` and the source excludes records it pushes
+ * to us, i.e. ITS outbound = OUR inbound), which needs no extra round-trip and
+ * is the authoritative inbound signal. This function exists for callers /
+ * tests / future transports that want the explicit per-direction breakdown
+ * computed locally; `inbound` here is the best-effort peer-queried mirror of
+ * what the source excludes.
+ *
+ * Mapping: recordKind 'universe' → 'universe'; 'series' → 'pipeline'
+ * (series + child issues are one composite, same as getPipelineSnapshot);
+ * 'mediaCollection' → 'mediaCollections'.
  */
-async function categoriesCoveredByPeerSync(peerId) {
+export async function categoriesCoveredByPeerSync(peerId, peer = null, ourInstanceId = null) {
   // Dynamic import keeps `sharing/peerSync.js` (which transitively pulls
   // every merge*FromSync service + recordEvents) OUT of this orchestrator's
   // module-load graph. Two reasons: (1) shaves the startup cost of evaluating
@@ -361,16 +392,32 @@ async function categoriesCoveredByPeerSync(peerId) {
   // against a future circular dep — peerSync's graph never needs the
   // orchestrator today, but a top-level import here would manifest as a
   // confusing "undefined" crash at boot the day that changes.
-  const { listPeerSubscriptions } = await import('./sharing/peerSync.js');
-  const subs = await listPeerSubscriptions({ peerId });
-  const skip = new Set();
-  for (const sub of subs) {
-    if (sub.recordKind === 'universe') skip.add('universe');
-    if (sub.recordKind === 'series') skip.add('pipeline');
-    if (sub.recordKind === 'mediaCollection') skip.add('mediaCollections');
+  const { getOutboundCoverageForPeer } = await import('./sharing/peerSync.js');
+  const outbound = await getOutboundCoverageForPeer(peerId).catch(() => emptyCoverage());
+
+  // Inbound: ask the peer which records it subscribes US to. The peer's
+  // /subscriptions endpoint lists ITS outgoing subs; filtering by our
+  // instanceId yields the records it pushes to us. Best-effort — a null
+  // response (older peer / offline) leaves inbound empty → full snapshot.
+  const inbound = emptyCoverage();
+  if (peer && isNonEmptyStr(ourInstanceId)) {
+    const res = await fetchPeer(peer, `/api/peer-sync/subscriptions?peerId=${encodeURIComponent(ourInstanceId)}`);
+    const subs = Array.isArray(res?.subscriptions) ? res.subscriptions : [];
+    for (const sub of subs) {
+      const cat = RECORD_KIND_TO_CATEGORY[sub?.recordKind];
+      if (cat && isNonEmptyStr(sub?.recordId)) inbound[cat].add(sub.recordId);
+    }
   }
-  return skip;
+  return { outbound, inbound };
 }
+
+const RECORD_KIND_TO_CATEGORY = Object.freeze({
+  universe: 'universe',
+  series: 'pipeline',
+  mediaCollection: 'mediaCollections',
+});
+
+const emptyCoverage = () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() });
 
 /**
  * Sync all data from a single peer
@@ -383,6 +430,15 @@ export async function syncWithPeer(peer) {
   // Prevent concurrent syncs for the same peer
   if (syncingPeers.has(peerId)) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
   syncingPeers.add(peerId);
+
+  // Our own instanceId — sent as `forPeer` so the SOURCE peer can scope each
+  // snapshot it serves us (excludes records it already pushes to us
+  // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
+  // scoping (full snapshots, legacy behavior).
+  const ourInstanceId = await getInstanceId().catch(() => null);
+  const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
+    ? ourInstanceId
+    : null;
 
   const categories = getEffectiveCategories(peer);
   const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
@@ -413,26 +469,29 @@ export async function syncWithPeer(peer) {
 
     // --- Snapshot-based category syncs (parallel) ---
     const dataCategoryResults = {};
-    // Drop any categories this peer is on the per-record peer-sync path for.
-    // When a peer has at least one peer subscription for the underlying
-    // record-kind (universe → 'universe' category; series → 'pipeline'
-    // category, which is series+issues bundled), the push pipeline is
-    // authoritative — keeping the 60s snapshot loop running on the same
-    // kind would re-apply the same records under a stale checksum and
-    // burn bandwidth for no gain. The snapshot path stays in place for
-    // non-subscribed peers and for kinds the peer hasn't subscribed yet
-    // (e.g. a peer subscribed to universes but not to any series still
-    // gets pipeline snapshots).
-    const skipCats = await categoriesCoveredByPeerSync(peerId).catch(() => new Set());
+    // We no longer skip whole categories when a peer has SOME per-record
+    // subscriptions. The old coarse skip dropped the inbound snapshot for an
+    // ENTIRE category whenever ANY record in it had a sub — stranding edits
+    // for every UN-subscribed record (partial-subscription gap) and every
+    // tombstone whose sub was torn down (ephemeralize-then-delete stall).
+    //
+    // Instead we ALWAYS pull every enabled snapshot category, but pass our
+    // instanceId as `forPeer` so the SOURCE peer excludes exactly the records
+    // it already pushes to us per-record (our inbound coverage) — leaving
+    // un-subscribed records + torn-down-sub tombstones to ride the snapshot.
+    // In the all-or-none common case (every record covered) the source
+    // excludes them all → an empty snapshot whose stable checksum the
+    // checksum short-circuit skips, so the network cost collapses to one tiny
+    // cached checksum fetch (vs. the old full skip). Source-side scoping needs
+    // no inbound round-trip and is the authoritative inbound signal.
     const enabledDataCats = dataSync.getSupportedCategories()
-      .filter(cat => categories[cat])
-      .filter(cat => !skipCats.has(cat));
+      .filter(cat => categories[cat]);
     const cachedChecksums = cursor.checksums || {};
 
     if (enabledDataCats.length > 0) {
       const settled = await Promise.allSettled(
         enabledDataCats.map(cat =>
-          syncDataCategoryFromPeer(peer, peerId, cat, cachedChecksums)
+          syncDataCategoryFromPeer(peer, peerId, cat, cachedChecksums, scopedInstanceId)
             .catch(err => {
               console.error(`⚠️ ${cat} sync with ${peer.name} failed: ${err.message}`);
               return { totalApplied: 0, checksum: null };

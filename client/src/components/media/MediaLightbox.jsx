@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import PromptRefineModal from './PromptRefineModal';
 import AddToCollectionMenu from './AddToCollectionMenu';
+import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { copyToClipboard } from '../../lib/clipboard';
@@ -230,7 +231,7 @@ export default function MediaLightbox({
                laid out as a tiny strip with no reachable close button. */
             <video src={item.downloadUrl} controls autoPlay loop playsInline className={imgMax} />
           ) : (
-            <img src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} />
+            <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}
           {/* Fail-safe close — the SettingsPane's X is hidden in fullscreen
               and unreachable if iOS Safari mis-lays out the page. */}

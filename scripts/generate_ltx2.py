@@ -27,14 +27,31 @@ Modes:
 Output: writes the rendered .mp4 to --output. Emits a final JSON line on
 stdout ({"video_path": "<output>"}) so the Node parent can read the result
 metadata, mirroring the contract used by mlx_video.generate_av.
+
+Exit strategy — os._exit(0) in main():
+  At LTX2 pins past the upstream May-9 refactor, Metal command-buffer
+  completion handlers hold the GIL through CPython frame teardown, stalling
+  every Distilled/Extend/two-stage render 5-15 min after "Decoding done".
+  The .mp4 is already on disk and stdout flushed before we exit, so skipping
+  the normal deallocator teardown is safe and saves up to 15 min per render.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
 from pathlib import Path
+from typing import NoReturn
+
+# Must be set BEFORE any ltx_core_mlx import: ltx_core_mlx.model.transformer.model
+# reads LTX2_DIT_EVAL_EVERY at import time. The upstream default (=8) causes
+# ~15-25x perf loss on M-series Macs via per-block Metal command-buffer churn;
+# =0 disables lazy evaluation and avoids that overhead. setdefault lets a
+# caller-supplied env var override these if needed.
+os.environ.setdefault("LTX2_DIT_EVAL_EVERY", "0")
+os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "0")
 
 
 def emit_status(msg: str) -> None:
@@ -55,19 +72,37 @@ def emit_download(msg: str) -> None:
 def configure_negative_prompt(negative_prompt: str) -> None:
     """Thread PortOS' negative prompt into ltx-2-mlx's CFG encoder.
 
-    The current dgrauet pipeline APIs don't expose `negative_prompt` on every
-    public generate method. Internally, though, all the text/video/audio
-    pipelines share `TextToVideoPipeline._encode_text_with_negative()`, which
-    reads `ti2vid_one_stage.DEFAULT_NEGATIVE_PROMPT` at call time. This helper
-    updates that module-level default for this short-lived bridge process so
-    text, image, fflf, extend, and a2v modes all honor the prompt consistently.
+    The dgrauet pipeline APIs don't expose `negative_prompt` on every public
+    generate method. Internally, all text/video/audio pipelines read
+    DEFAULT_NEGATIVE_PROMPT at call time. Post-May-9 upstream refactor the
+    constant lives in up to three places:
+      - ltx_pipelines_mlx.ti2vid_one_stage  (T2V / I2V / A2V one-stage paths)
+      - ltx_pipelines_mlx._base             (base class used by Q8/HQ paths)
+      - utils.constants                     (two-stage / extend shared import)
+
+    We overwrite it on every module that already defines it (REPLACE semantics,
+    not append). Modules absent at the current LTX2 pin are skipped silently.
     """
     if not negative_prompt:
         return
-    from ltx_pipelines_mlx import ti2vid_one_stage
 
-    ti2vid_one_stage.DEFAULT_NEGATIVE_PROMPT = negative_prompt
-    emit_status("Using custom negative prompt")
+    _candidates = [
+        ("ltx_pipelines_mlx", "ti2vid_one_stage"),
+        ("ltx_pipelines_mlx", "_base"),
+        ("utils", "constants"),
+    ]
+    patched = 0
+    for pkg, mod in _candidates:
+        try:
+            m = importlib.import_module(f"{pkg}.{mod}")
+        except ImportError:
+            continue
+        if hasattr(m, "DEFAULT_NEGATIVE_PROMPT"):
+            m.DEFAULT_NEGATIVE_PROMPT = negative_prompt
+            patched += 1
+
+    if patched:
+        emit_status("Using custom negative prompt")
 
 
 def parse_args() -> argparse.Namespace:
@@ -431,7 +466,7 @@ def maybe_strip_audio(output_path: str) -> None:
         emit_status(f"ffmpeg audio-strip skipped: {e}")
 
 
-def main() -> int:
+def main() -> NoReturn:
     args = parse_args()
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     configure_negative_prompt(args.negative_prompt)
@@ -451,9 +486,11 @@ def main() -> int:
     # Final JSON line on stdout — matches the contract mlx_video.generate_av
     # provides, so videoGen/local.js can pick up `result.video_path` from
     # job.resultJson without a separate parser branch per runtime.
+    # flush=True ensures the JSON line reaches Node before os._exit skips
+    # CPython teardown (see module docstring for why we avoid normal return).
     print(json.dumps({"video_path": saved_path}), flush=True)
-    return 0
+    os._exit(0)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

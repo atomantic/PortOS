@@ -21,6 +21,8 @@ vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const svc = await import('./series.js');
+const peerSyncMock = await import('../sharing/peerSync.js');
+const { recordEvents } = await import('../sharing/recordEvents.js');
 
 describe('pipeline series service', () => {
   beforeEach(() => {
@@ -119,6 +121,35 @@ describe('pipeline series service', () => {
       const restored = await svc.insertSeriesWithId({ id, name: 'Restored' });
       expect(restored).toMatchObject({ id, name: 'Restored', deleted: false });
       expect((await svc.listSeries()).map((s) => s.id)).toContain(id);
+    });
+
+    it('insertSeriesWithId resurrection fires emitRecordUpdated + autoSubscribeRecordToAllPeers', async () => {
+      const id = 'ser-550e8400-e29b-41d4-a716-44665544abcf';
+      await svc.insertSeriesWithId({ id, name: 'ToResurrect' });
+      await svc.deleteSeries(id);
+
+      const emitSpy = vi.spyOn(recordEvents, 'emit');
+      const subscribeSpy = vi.spyOn(peerSyncMock, 'autoSubscribeRecordToAllPeers');
+
+      await svc.insertSeriesWithId({ id, name: 'Resurrected' });
+      // Allow the fire-and-forget peerSync dynamic import to settle.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(emitSpy).toHaveBeenCalledWith('updated', { recordKind: 'series', recordId: id });
+      expect(subscribeSpy).toHaveBeenCalledWith('series', id);
+
+      emitSpy.mockRestore();
+      subscribeSpy.mockRestore();
+    });
+
+    it('insertSeriesWithId fresh insert does NOT fire emitRecordUpdated', async () => {
+      const id = 'ser-550e8400-e29b-41d4-a716-44665544abd0';
+      const emitSpy = vi.spyOn(recordEvents, 'emit');
+
+      await svc.insertSeriesWithId({ id, name: 'Fresh' });
+
+      expect(emitSpy).not.toHaveBeenCalledWith('updated', { recordKind: 'series', recordId: id });
+      emitSpy.mockRestore();
     });
 
     it('insertSeriesWithId still rejects DUPLICATE on a LIVE record', async () => {

@@ -19,6 +19,7 @@ vi.mock('../services/dataSync.js', () => ({
 }));
 
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
+import { getChecksum, getSnapshot } from '../services/dataSync.js';
 import dataSyncRoutes from './dataSync.js';
 
 const buildApp = () => {
@@ -85,5 +86,31 @@ describe('POST /api/sync/tombstones/sweep', () => {
     const res = await request(buildApp()).post('/api/sync/tombstones/sweep').send({ graceMS: 0 });
     expect(res.status).toBe(400);
     expect(sweepTombstones).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/sync/:category/checksum — forPeer scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getChecksum.mockResolvedValue({ checksum: 'abc' });
+    getSnapshot.mockResolvedValue({ data: {}, checksum: 'abc' });
+  });
+
+  it('threads a trimmed forPeer to getChecksum as forPeerId', async () => {
+    const res = await request(buildApp()).get('/api/sync/universe/checksum?forPeer=%20peer-1%20');
+    expect(res.status).toBe(200);
+    expect(getChecksum).toHaveBeenCalledWith('universe', { forPeerId: 'peer-1' });
+  });
+
+  it('drops a blank/whitespace-only forPeer to undefined (full snapshot)', async () => {
+    const res = await request(buildApp()).get('/api/sync/universe/checksum?forPeer=%20%20');
+    expect(res.status).toBe(200);
+    expect(getChecksum).toHaveBeenCalledWith('universe', { forPeerId: undefined });
+  });
+
+  it('drops a repeated forPeer (array) to undefined so only a scalar id scopes', async () => {
+    const res = await request(buildApp()).get('/api/sync/universe/checksum?forPeer=a&forPeer=b');
+    expect(res.status).toBe(200);
+    expect(getChecksum).toHaveBeenCalledWith('universe', { forPeerId: undefined });
   });
 });

@@ -172,7 +172,7 @@ const extractText = (node) => {
   return raw.replace(/\s+/g, ' ').trim();
 };
 
-const extractVisibleText = () => {
+export const extractVisibleText = () => {
   const blocks = [];
   for (const sel of TEXT_BLOCK_SELECTORS) {
     document.querySelectorAll(sel).forEach((node) => {
@@ -196,7 +196,16 @@ const extractVisibleText = () => {
   return `${cut.slice(0, lastWs > 0 ? lastWs : MAX_TEXT_CHARS)}…`;
 };
 
-export const buildIndex = () => {
+// Build the per-page index the voice server uses to drive ui_* tools.
+//
+// The visible-text blob (extractVisibleText) is the heaviest part of the
+// payload and is only needed by the `ui_read` tool. By default we OMIT it and
+// set `textOnDemand: true` so the server knows it can request the text lazily
+// via `voice:ui:read-request` (answered by the client recomputing
+// extractVisibleText on the live DOM). Pass `{ includeText: true }` to embed
+// the text eagerly — kept for the legacy/fallback path where the server never
+// sends a read-request.
+export const buildIndex = ({ includeText = false } = {}) => {
   clearRefs();
   const root = pickRoot();
   const elements = [];
@@ -235,12 +244,19 @@ export const buildIndex = () => {
     elements.push(entry);
   }
 
-  return {
+  const index = {
     path: window.location.pathname + window.location.search,
     title: findTitle(),
     elements,
-    text: extractVisibleText(),
   };
+  if (includeText) {
+    // Legacy/fallback path: embed the text eagerly.
+    index.text = extractVisibleText();
+  } else {
+    // Lazy path: tell the server it can ask for the text on demand.
+    index.textOnDemand = true;
+  }
+  return index;
 };
 
 const normalize = (s) => (s || '')

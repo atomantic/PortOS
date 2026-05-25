@@ -80,6 +80,8 @@ vi.mock("crypto", async () => {
 });
 
 const svc = await import("./universeBuilder.js");
+const peerSyncMock = await import("./sharing/peerSync.js");
+const { recordEvents } = await import("./sharing/recordEvents.js");
 
 // Default universe with non-empty influences. Override `influences` for tests
 // that need isolation from the seed tokens.
@@ -628,6 +630,35 @@ describe("universeBuilder service", () => {
       expect(restored).toMatchObject({ id, name: "Restored", deleted: false });
       // listUniverses shows it (no longer hidden).
       expect((await svc.listUniverses()).map((u) => u.id)).toContain(id);
+    });
+
+    it("insertUniverseWithId resurrection fires emitRecordUpdated + autoSubscribeRecordToAllPeers", async () => {
+      const id = "550e8400-e29b-41d4-a716-44665544abcf";
+      await svc.insertUniverseWithId({ id, name: "ToResurrect" });
+      await svc.deleteUniverse(id);
+
+      const emitSpy = vi.spyOn(recordEvents, "emit");
+      const subscribeSpy = vi.spyOn(peerSyncMock, "autoSubscribeRecordToAllPeers");
+
+      await svc.insertUniverseWithId({ id, name: "Resurrected" });
+      // Allow the fire-and-forget peerSync dynamic import to settle.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(emitSpy).toHaveBeenCalledWith("updated", { recordKind: "universe", recordId: id });
+      expect(subscribeSpy).toHaveBeenCalledWith("universe", id);
+
+      emitSpy.mockRestore();
+      subscribeSpy.mockRestore();
+    });
+
+    it("insertUniverseWithId fresh insert does NOT fire emitRecordUpdated", async () => {
+      const id = "550e8400-e29b-41d4-a716-44665544abd0";
+      const emitSpy = vi.spyOn(recordEvents, "emit");
+
+      await svc.insertUniverseWithId({ id, name: "Fresh" });
+
+      expect(emitSpy).not.toHaveBeenCalledWith("updated", { recordKind: "universe", recordId: id });
+      emitSpy.mockRestore();
     });
 
     it("insertUniverseWithId still rejects DUPLICATE on a LIVE record", async () => {

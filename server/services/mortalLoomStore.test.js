@@ -321,6 +321,56 @@ describe('getStatus', () => {
   });
 });
 
+describe('readStore — EBUSY / EIO retry (bird daemon contention)', () => {
+  it('retries on EBUSY and succeeds on a later attempt', async () => {
+    const transient = Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+    readFileMock.mockRejectedValueOnce(transient);
+    readFileMock.mockResolvedValueOnce(JSON.stringify({ goals: [{ id: 'busy-recovered' }] }));
+
+    const result = await store.readStore();
+
+    expect(result).toEqual({ goals: [{ id: 'busy-recovered' }] });
+    expect(readFileMock).toHaveBeenCalledTimes(2);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('retries on EIO and succeeds on a later attempt', async () => {
+    const transient = Object.assign(new Error('EIO'), { code: 'EIO' });
+    readFileMock.mockRejectedValueOnce(transient);
+    readFileMock.mockResolvedValueOnce(JSON.stringify({ goals: [{ id: 'eio-recovered' }] }));
+
+    const result = await store.readStore();
+
+    expect(result).toEqual({ goals: [{ id: 'eio-recovered' }] });
+    expect(readFileMock).toHaveBeenCalledTimes(2);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('exhausts retries on persistent EBUSY (3 attempts total) and warns once', async () => {
+    const transient = Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+    readFileMock.mockRejectedValue(transient);
+
+    const result = await store.readStore();
+
+    expect(result).toBeNull();
+    expect(readFileMock).toHaveBeenCalledTimes(3);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('MortalLoom store unavailable (EBUSY)'));
+  });
+
+  it('exhausts retries on persistent EIO (3 attempts total) and warns once', async () => {
+    const transient = Object.assign(new Error('EIO'), { code: 'EIO' });
+    readFileMock.mockRejectedValue(transient);
+
+    const result = await store.readStore();
+
+    expect(result).toBeNull();
+    expect(readFileMock).toHaveBeenCalledTimes(3);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('MortalLoom store unavailable (EIO)'));
+  });
+});
+
 describe('readStore — EAGAIN retry', () => {
   it('retries on transient EAGAIN and succeeds when a later attempt resolves', async () => {
     // First attempt: EAGAIN (iCloud coordination lock). Second attempt: success.

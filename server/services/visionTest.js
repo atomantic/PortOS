@@ -205,6 +205,40 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
 }
 
 /**
+ * Describe an in-memory image (base64 data URL) using a provider's vision
+ * endpoint and return the model's text. Used by the voice agent's
+ * ui_describe_visually tool, which captures a screenshot client-side rather
+ * than reading one off disk. Throws on provider/transport errors so the caller
+ * can surface them.
+ * @param {Object} options
+ * @param {string} options.dataUrl - base64 image data URL (data:image/...;base64,...)
+ * @param {string} options.prompt - What to ask about the image
+ * @param {string} [options.providerId='lmstudio'] - Vision-capable API provider
+ * @param {string} [options.model] - Model override (defaults to provider default)
+ * @returns {Promise<string>} - The model's description text
+ */
+export async function describeImageDataUrl({ dataUrl, prompt, providerId = 'lmstudio', model }) {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+    throw new Error('dataUrl must be a base64 image data URL');
+  }
+  const provider = await getProviderById(providerId);
+  if (!provider) throw new Error(`Provider '${providerId}' not found`);
+  if (provider.type !== 'api') throw new Error(`Provider '${providerId}' is not an API provider (type: ${provider.type})`);
+  const visionModel = model || provider.defaultModel;
+  if (!visionModel) throw new Error('No model specified and provider has no default model');
+
+  const apiResponse = await callVisionAPI({
+    endpoint: provider.endpoint,
+    apiKey: provider.apiKey,
+    model: visionModel,
+    imageDataUrl: dataUrl,
+    prompt: prompt || 'Describe what you see in this image.',
+    timeout: provider.timeout || DEFAULT_VISION_TIMEOUT_MS,
+  });
+  return apiResponse.choices?.[0]?.message?.content || '';
+}
+
+/**
  * Run a comprehensive vision test suite
  * @param {string} [providerId='lmstudio'] - Provider to test
  * @param {string} [model] - Specific model to test

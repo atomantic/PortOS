@@ -17,7 +17,7 @@ import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
 import { timeAgo } from '../utils/formatters';
-import { listUniverses, deleteUniverse, listPipelineSeries } from '../services/api';
+import { listUniverses, deleteUniverse, listPipelineSeries, listMediaCollections } from '../services/api';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 
 // Named canon entities across all trunks — the "Canon" column reflects the
@@ -27,6 +27,53 @@ const canonCount = (u) =>
   (Array.isArray(u?.characters) ? u.characters.length : 0) +
   (Array.isArray(u?.places) ? u.places.length : 0) +
   (Array.isArray(u?.objects) ? u.objects.length : 0);
+
+// Build universeId → latest image filename from media collections. Mirrors
+// resolveCover() in MediaCollections.jsx but trimmed: we only care about image
+// items (videos don't render as a row thumbnail here) and the bucket is
+// already identified by `collection.universeId`, so coverKey-pinning + cross-
+// gallery lookup are unnecessary — items are already keyed to /data/images.
+// Single O(n) pass per collection to avoid O(n log n) on near-ITEMS_MAX buckets.
+const buildLatestImageByUniverse = (collections) => {
+  const out = new Map();
+  for (const c of collections || []) {
+    if (!c?.universeId) continue;
+    let bestRef = null;
+    let bestTs = -Infinity;
+    for (const it of c.items || []) {
+      if (it.kind !== 'image') continue;
+      const ts = new Date(it.addedAt || 0).getTime();
+      if (ts > bestTs) { bestTs = ts; bestRef = it.ref; }
+    }
+    if (bestRef) out.set(c.universeId, bestRef);
+  }
+  return out;
+};
+
+// 48px square thumbnail showing the latest image from the universe's
+// auto-managed media collection (or a Globe placeholder when the collection
+// is empty or hasn't loaded yet). onError hides the <img> so a stale
+// collection entry pointing at a deleted file falls back to the placeholder
+// instead of a broken-image icon. Shared between desktop row and mobile card.
+function UniverseThumb({ imageRef }) {
+  const [broken, setBroken] = useState(false);
+  const showImage = imageRef && !broken;
+  return (
+    <div className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-port-bg border border-port-border flex items-center justify-center">
+      {showImage ? (
+        <img
+          src={`/data/images/${encodeURIComponent(imageRef)}`}
+          alt=""
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <Globe className="w-5 h-5 text-gray-600" aria-hidden="true" />
+      )}
+    </div>
+  );
+}
 
 // Shared between the desktop table row and the mobile card so the armed-state
 // styling + a11y labels stay in one place.
@@ -49,6 +96,7 @@ export default function Universes() {
   const navigate = useNavigate();
   const [universes, setUniverses] = useState([]);
   const [series, setSeries] = useState([]);
+  const [latestImageByUniverse, setLatestImageByUniverse] = useState(() => new Map());
   const [loading, setLoading] = useState(true);
 
   const sync = useSyncIntegrity('universe');
@@ -78,6 +126,16 @@ export default function Universes() {
       .then((s) => {
         if (cancelled) return;
         setSeries(Array.isArray(s) ? s : []);
+      });
+    // Latest-image thumbnails come from each universe's auto-managed media
+    // collection (bucket links via `collection.universeId`). Independent fetch
+    // so a slow/failed media-collections endpoint never blocks the list —
+    // rows just render without a thumbnail.
+    listMediaCollections({ silent: true })
+      .catch(() => [])
+      .then((cols) => {
+        if (cancelled) return;
+        setLatestImageByUniverse(buildLatestImageByUniverse(cols));
       });
     return () => { cancelled = true; };
   }, []);
@@ -164,14 +222,17 @@ export default function Universes() {
                   <tr key={u.id} className="border-b border-port-border/50 last:border-0 hover:bg-port-bg/40 transition-colors">
                     <td className="px-4 py-3 align-top">
                       <div className="flex items-start gap-2 min-w-0">
-                        <Link to={`/universes/${encodeURIComponent(u.id)}`} className="block min-w-0 group flex-1">
-                          <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
-                            <span>{u.name || '(untitled universe)'}</span>
-                            {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
+                        <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex items-start gap-3 min-w-0 group flex-1">
+                          <UniverseThumb imageRef={latestImageByUniverse.get(u.id)} />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
+                              <span>{u.name || '(untitled universe)'}</span>
+                              {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
+                            </div>
+                            {u.logline ? (
+                              <div className="text-xs text-gray-500 mt-0.5 line-clamp-1 break-words">{u.logline}</div>
+                            ) : null}
                           </div>
-                          {u.logline ? (
-                            <div className="text-xs text-gray-500 mt-0.5 line-clamp-1 break-words">{u.logline}</div>
-                          ) : null}
                         </Link>
                         <SyncBadge
                           status={syncBadgeStatus(sync, u.id)}
@@ -200,18 +261,21 @@ export default function Universes() {
             {universes.map((u) => (
               <li key={u.id} className="p-3 bg-port-card border border-port-border rounded-lg">
                 <div className="flex items-start justify-between gap-3">
-                  <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex-1 min-w-0">
-                    <div className="text-white font-medium flex items-center gap-2 flex-wrap">
-                      <span>{u.name || '(untitled universe)'}</span>
-                      {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
-                    </div>
-                    {u.logline ? (
-                      <div className="text-xs text-gray-500 mt-0.5 break-words">{u.logline}</div>
-                    ) : null}
-                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                      <span className="inline-flex items-center gap-1"><Users size={12} /> {canonCount(u)} canon</span>
-                      <span className="inline-flex items-center gap-1"><WorkflowIcon size={12} /> {seriesCountByUniverse[u.id] || 0} series</span>
-                      <span>{timeAgo(u.updatedAt || u.createdAt)}</span>
+                  <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex items-start gap-3 flex-1 min-w-0">
+                    <UniverseThumb imageRef={latestImageByUniverse.get(u.id)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-white font-medium flex items-center gap-2 flex-wrap">
+                        <span>{u.name || '(untitled universe)'}</span>
+                        {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
+                      </div>
+                      {u.logline ? (
+                        <div className="text-xs text-gray-500 mt-0.5 break-words">{u.logline}</div>
+                      ) : null}
+                      <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+                        <span className="inline-flex items-center gap-1"><Users size={12} /> {canonCount(u)} canon</span>
+                        <span className="inline-flex items-center gap-1"><WorkflowIcon size={12} /> {seriesCountByUniverse[u.id] || 0} series</span>
+                        <span>{timeAgo(u.updatedAt || u.createdAt)}</span>
+                      </div>
                     </div>
                   </Link>
                   <DeleteButton universe={u} armed={armedId === u.id} onDelete={handleDelete} />

@@ -523,6 +523,9 @@ export async function spawnTuiAgent({
       if (!promptSentAt) {
         const lowerStripped = streamingStrip(text).toLowerCase();
         if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
+          // finish() uses try/finally internally: finalizeAgent errors re-throw after
+          // cleanup, so finish() can reject. The outer try/catch in handleData already
+          // handles any such rejection via emitLog — no additional .catch() needed here.
           await finish({
             success: false,
             exitCode: 127,

@@ -36,8 +36,12 @@ function normalizePath(rawPath) {
 
 // iCloud's `bird` daemon takes brief exclusive coordination locks during sync
 // windows and on-demand materialization of evicted files. These surface as
-// EAGAIN (errno -11) or EDEADLK from Node's fs calls. 50ms + 100ms covers the
-// common sub-200ms coordination windows without making transients observable.
+// EAGAIN (errno -11), EDEADLK, EBUSY, or EIO from Node's fs calls. EBUSY and
+// EIO are included because bird contention on busy iCloud paths (e.g. a large
+// file mid-upload or a coordination handoff) can surface either code, and
+// treating them as fatal would surface unnecessary errors to callers when a
+// single retry is sufficient. 50ms + 100ms covers the common sub-200ms
+// coordination windows without making transients observable.
 // Exposed (not const) so tests can set it to `[0, 0]` to keep the retry path
 // covered without paying the backoff sleep. (An empty array would still work
 // — and run faster still — but it would disable the retry loop entirely,
@@ -46,7 +50,9 @@ export let TRANSIENT_RETRY_DELAYS_MS = [50, 100];
 export function _setRetryDelaysForTest(delays) { TRANSIENT_RETRY_DELAYS_MS = delays; }
 
 function isTransientFsError(err) {
-  return !!err && (err.code === 'EAGAIN' || err.code === 'EDEADLK' || err.errno === -11);
+  if (!err) return false;
+  const { code, errno } = err;
+  return code === 'EAGAIN' || code === 'EDEADLK' || code === 'EBUSY' || code === 'EIO' || errno === -11;
 }
 
 /**

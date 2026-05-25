@@ -393,6 +393,10 @@ export default function VideoGen() {
   // outstanding Promise dangles forever — and the queue worker's .finally()
   // never runs, leaving runningQueueId stuck and freezing further dequeue.
   const runRejectRef = useRef(null);
+  // Tracks the last stale modelId we already toasted about so the
+  // validateModelId effect fires the "original model gone" toast exactly once
+  // per unique stale id, even if the effect re-runs (e.g. models list updates).
+  const staleModelToastRef = useRef(null);
   // Per-run abort token. Bumped at the start of each runGeneration() and
   // again on cancel; runGeneration captures the value at start and bails
   // when the token has moved on (e.g. POST resolves after cancel).
@@ -432,7 +436,16 @@ export default function VideoGen() {
     if (!modelId || models.length === 0) return;
     if (models.some((m) => m.id === modelId)) return;
     const fallback = status?.defaultModel || models[0]?.id || '';
-    if (fallback) setModelId(fallback);
+    if (fallback) {
+      // Notify the user once per unique stale id so a Remix of an uninstalled
+      // model doesn't silently drop to default. staleModelToastRef prevents
+      // re-firing when the effect re-runs with the same stale modelId.
+      if (staleModelToastRef.current !== modelId) {
+        staleModelToastRef.current = modelId;
+        toast(`Original model "${modelId}" is no longer available — using default`);
+      }
+      setModelId(fallback);
+    }
   }, [modelId, models, status?.defaultModel]);
 
   const currentModel = models.find((m) => m.id === modelId);
