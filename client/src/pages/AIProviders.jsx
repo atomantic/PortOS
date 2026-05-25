@@ -388,9 +388,9 @@ export default function AIProviders() {
       {/* Provider List */}
       <div className="grid gap-4">
         {(() => {
-          const active = providers.find(p => p.id === activeProviderId);
-          const rest = providers.filter(p => p.id !== activeProviderId);
-          return active ? [active, ...rest] : providers;
+          const idx = providers.findIndex(p => p.id === activeProviderId);
+          if (idx <= 0) return providers;
+          return [providers[idx], ...providers.slice(0, idx), ...providers.slice(idx + 1)];
         })().map(provider => (
           <div
             key={provider.id}
