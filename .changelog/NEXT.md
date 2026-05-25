@@ -17,3 +17,4 @@ TBD
 ## Fixed
 
 - **Chief of Staff pane overflow** — content panel collapses to a single `flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden` div so tall tab content scrolls inside the panel instead of expanding it. Event log rows in both `EventLog` and `TerminalCoSPanel` get `break-all` so long unbreakable tokens (URLs, hashes, paths) wrap inside the 320px sidebar instead of pushing the column wider visually.
+- **Videos now load in the Media Gen preview on mobile.** Both the preview-modal (lightbox) `<video>` and the Video Gen page's inline result preview autoplayed unmuted, which iOS/Android block outside a direct user gesture — so the clip never started and the area showed only black ("not loading"). They now play `muted` (autoplay-eligible everywhere; controls let you unmute) and render the thumbnail as a `poster`, so the frame is visible immediately even while the clip buffers.
