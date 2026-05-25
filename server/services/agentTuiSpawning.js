@@ -192,8 +192,9 @@ export async function spawnTuiAgent({
 
   let outputBuffer = '';
   let finalized = false;
-  // Guards ingestDoneSentinel so the sentinel is read at most once even when
-  // both the poll watcher and finish() try to ingest it.
+  // Guards ingestDoneSentinel to a single read. finish() is its only caller and
+  // is itself guarded by `finalized`, so this is defensive — it pins the
+  // read-at-most-once invariant at the helper.
   let sentinelIngested = false;
   let hasStartedWorking = false;
   let promptSentAt = null;
@@ -344,9 +345,10 @@ export async function spawnTuiAgent({
   // Read the `.agent-done` sentinel (if present) and append its markdown task
   // summary line-by-line into the agent's output so downstream consumers
   // (extractFinalSummary, persistSimplifySummaries, completion hooks, the agent
-  // card, output.txt) get the resolution. Idempotent: both the poll watcher and
-  // finish() call it, but it reads at most once. Capped at 4 KB so an agent that
-  // pasted the whole diff into the sentinel can't blow up the record.
+  // card, output.txt) get the resolution. Called only from finish() (the single
+  // finalize chokepoint); idempotent via `sentinelIngested` so it reads at most
+  // once. Capped at 4 KB so an agent that pasted the whole diff into the
+  // sentinel can't blow up the record.
   const ingestDoneSentinel = async () => {
     if (sentinelIngested) return;
     if (!doneSentinelPath || !existsSync(doneSentinelPath)) return;
