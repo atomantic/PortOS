@@ -3,6 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock all dependencies
 vi.mock('./instances.js', () => ({
   getPeers: vi.fn(),
+  updatePeer: vi.fn().mockResolvedValue(undefined),
+  // forPeer scoping resolves our own instanceId; the orchestrator catches a
+  // throw/UNKNOWN and just omits the query param, so the default mock returns
+  // a stable id to exercise the scoped path.
+  getInstanceId: vi.fn().mockResolvedValue('our-inst-id'),
+  UNKNOWN_INSTANCE_ID: 'unknown',
   DEFAULT_SYNC_CATEGORIES: {
     brain: false, memory: false, goals: false,
     character: false, digitalTwin: false, meatspace: false
@@ -29,6 +35,9 @@ vi.mock('./dataSync.js', () => ({
 }));
 vi.mock('./sharing/peerSync.js', () => ({
   listPeerSubscriptions: vi.fn().mockResolvedValue([]),
+  getOutboundCoverageForPeer: vi.fn().mockResolvedValue({
+    universe: new Set(), pipeline: new Set(), mediaCollections: new Set(),
+  }),
 }));
 vi.mock('./instanceEvents.js', () => ({
   instanceEvents: { on: vi.fn(), removeListener: vi.fn() }
@@ -243,73 +252,113 @@ describe('syncOrchestrator', () => {
       expect(result.memory.totalApplied).toBe(0);
     });
 
-    it('skips snapshot categories the peer is on the per-record peer-sync path for', async () => {
-      // Stage 3 skip-when-subscribed: a peer with an active 'universe' peer
-      // subscription must NOT also hit /api/sync/universe/checksum on the
-      // 60s loop — the push pipeline is authoritative for that category.
-      // Same for 'series' subs → 'pipeline' category.
+    it('ALWAYS pulls every enabled snapshot category, scoped with forPeer (no whole-category skip)', async () => {
+      // Item A fix: a per-record subscription must NO LONGER suppress the
+      // inbound snapshot pull for the whole category. The pull always fires,
+      // but with `?forPeer=<ourId>` so the SOURCE excludes the records it
+      // already pushes us. This is what lets UN-subscribed records (and
+      // torn-down-sub tombstones) keep converging via the snapshot.
       const dataSync = await import('./dataSync.js');
-      const peerSync = await import('./sharing/peerSync.js');
       dataSync.getSupportedCategories.mockReturnValue(['universe', 'pipeline', 'character']);
-      peerSync.listPeerSubscriptions.mockResolvedValueOnce([
-        { peerId: 'peer-inst-1', recordKind: 'universe', recordId: 'u1' },
-      ]);
       const peerWithCats = {
         ...mockPeer,
         syncCategories: { universe: true, pipeline: true, character: true },
       };
-      // Brain + memory return empty (we want to see only the snapshot calls).
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({ checksum: 'x', data: null }),
       });
       await syncWithPeer(peerWithCats);
       const urls = mockFetch.mock.calls.map((c) => c[0]);
-      // universe snapshot endpoints must NOT have been hit; pipeline + character must.
-      expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(false);
+      // Every category is pulled — none skipped.
+      expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(true);
       expect(urls.some((u) => u.includes('/api/sync/pipeline/'))).toBe(true);
       expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
+      // Snapshot/checksum URLs carry our instanceId so the source can scope.
+      const universeUrls = urls.filter((u) => u.includes('/api/sync/universe/'));
+      expect(universeUrls.length).toBeGreaterThan(0);
+      expect(universeUrls.every((u) => u.includes('forPeer=our-inst-id'))).toBe(true);
     });
 
-    it('skips BOTH universe and pipeline categories when peer is subscribed to both kinds', async () => {
+    it('omits forPeer when our instanceId is UNKNOWN (older/uninitialized install)', async () => {
       const dataSync = await import('./dataSync.js');
-      const peerSync = await import('./sharing/peerSync.js');
-      dataSync.getSupportedCategories.mockReturnValue(['universe', 'pipeline', 'character']);
-      peerSync.listPeerSubscriptions.mockResolvedValueOnce([
-        { peerId: 'peer-inst-1', recordKind: 'universe', recordId: 'u1' },
-        { peerId: 'peer-inst-1', recordKind: 'series', recordId: 's1' },
-      ]);
-      const peerWithCats = {
-        ...mockPeer,
-        syncCategories: { universe: true, pipeline: true, character: true },
-      };
-      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'x' }) });
-      await syncWithPeer(peerWithCats);
-      const urls = mockFetch.mock.calls.map((c) => c[0]);
-      expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(false);
-      expect(urls.some((u) => u.includes('/api/sync/pipeline/'))).toBe(false);
-      expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
-    });
-
-    it('skips mediaCollections snapshot category when peer has a mediaCollection per-record subscription', async () => {
-      // Task 1.9: a mediaCollection subscription must prevent the 60s snapshot
-      // loop from also hitting /api/sync/mediaCollections/ — the per-record
-      // push pipeline owns that category.
-      const dataSync = await import('./dataSync.js');
-      const peerSync = await import('./sharing/peerSync.js');
-      dataSync.getSupportedCategories.mockReturnValue(['mediaCollections', 'character']);
-      peerSync.listPeerSubscriptions.mockResolvedValueOnce([
-        { peerId: 'peer-inst-1', recordKind: 'mediaCollection', recordId: 'col-1' },
-      ]);
-      const peerWithCats = {
-        ...mockPeer,
-        syncCategories: { mediaCollections: true, character: true },
-      };
+      const instances = await import('./instances.js');
+      dataSync.getSupportedCategories.mockReturnValue(['universe', 'character']);
+      instances.getInstanceId.mockResolvedValueOnce('unknown'); // === UNKNOWN_INSTANCE_ID
+      const peerWithCats = { ...mockPeer, syncCategories: { universe: true, character: true } };
       mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'x', data: null }) });
       await syncWithPeer(peerWithCats);
       const urls = mockFetch.mock.calls.map((c) => c[0]);
-      expect(urls.some((u) => u.includes('/api/sync/mediaCollections/'))).toBe(false);
-      expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
+      // Categories still pulled, but WITHOUT the forPeer param (full snapshot).
+      expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(true);
+      expect(urls.some((u) => u.includes('forPeer='))).toBe(false);
+    });
+  });
+
+  describe('categoriesCoveredByPeerSync (per-direction coverage)', () => {
+    it('returns outbound from our local subs, grouped by snapshot category', async () => {
+      const peerSync = await import('./sharing/peerSync.js');
+      peerSync.getOutboundCoverageForPeer.mockResolvedValueOnce({
+        universe: new Set(['u1', 'u2']),
+        pipeline: new Set(['s1']),
+        mediaCollections: new Set(),
+      });
+      const { categoriesCoveredByPeerSync } = await import('./syncOrchestrator.js');
+      // No peer/ourId → inbound stays empty (no peer query).
+      const { outbound, inbound } = await categoriesCoveredByPeerSync('peer-inst-1');
+      expect([...outbound.universe].sort()).toEqual(['u1', 'u2']);
+      expect([...outbound.pipeline]).toEqual(['s1']);
+      expect(inbound.universe.size).toBe(0);
+      expect(inbound.pipeline.size).toBe(0);
+    });
+
+    it('populates inbound from the peer\'s subscriptions targeting our instanceId (NOT our outbound)', async () => {
+      const peerSync = await import('./sharing/peerSync.js');
+      // Our OUTBOUND coverage is EMPTY — proving inbound is sourced separately
+      // (the inbound-vs-outbound distinction). The peer pushes us s9 (series →
+      // pipeline) and col-7 (mediaCollection).
+      peerSync.getOutboundCoverageForPeer.mockResolvedValueOnce({
+        universe: new Set(), pipeline: new Set(), mediaCollections: new Set(),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          subscriptions: [
+            { peerId: 'our-inst-id', recordKind: 'series', recordId: 's9' },
+            { peerId: 'our-inst-id', recordKind: 'mediaCollection', recordId: 'col-7' },
+          ],
+        }),
+      });
+      const { categoriesCoveredByPeerSync } = await import('./syncOrchestrator.js');
+      const { outbound, inbound } = await categoriesCoveredByPeerSync(
+        'peer-inst-1',
+        { ...mockPeer, instanceId: 'peer-inst-1' },
+        'our-inst-id',
+      );
+      // Outbound empty; inbound carries the peer-pushed records.
+      expect(outbound.pipeline.size).toBe(0);
+      expect([...inbound.pipeline]).toEqual(['s9']);
+      expect([...inbound.mediaCollections]).toEqual(['col-7']);
+      // The peer's /subscriptions endpoint was queried filtered by our id.
+      const calledUrl = mockFetch.mock.calls.map((c) => c[0]).find((u) => u.includes('/api/peer-sync/subscriptions'));
+      expect(calledUrl).toContain('peerId=our-inst-id');
+    });
+
+    it('inbound stays empty when the peer query fails (older/offline peer → full snapshot)', async () => {
+      const peerSync = await import('./sharing/peerSync.js');
+      peerSync.getOutboundCoverageForPeer.mockResolvedValueOnce({
+        universe: new Set(), pipeline: new Set(), mediaCollections: new Set(),
+      });
+      mockFetch.mockRejectedValueOnce(new Error('peer offline'));
+      const { categoriesCoveredByPeerSync } = await import('./syncOrchestrator.js');
+      const { inbound } = await categoriesCoveredByPeerSync(
+        'peer-inst-1',
+        { ...mockPeer, instanceId: 'peer-inst-1' },
+        'our-inst-id',
+      );
+      expect(inbound.universe.size).toBe(0);
+      expect(inbound.pipeline.size).toBe(0);
+      expect(inbound.mediaCollections.size).toBe(0);
     });
   });
 

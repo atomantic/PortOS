@@ -55,6 +55,7 @@ import {
   PEER_SUBSCRIBABLE_KINDS,
   listPeerSubscriptions,
   findPeerSubscription,
+  getOutboundCoverageForPeer,
   subscribePeer,
   unsubscribePeer,
   unsubscribeAllForPeer,
@@ -270,6 +271,46 @@ describe('peerSync', () => {
       // synchronously from this code path. Allow a small wait to be sure.
       await new Promise((r) => setTimeout(r, 10));
       expect(peerFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getOutboundCoverageForPeer', () => {
+    beforeEach(() => {
+      // No push side effects — we only assert on the returned coverage map.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Ser', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getCollection).mockResolvedValue({ id: 'c1', name: 'Col', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(findCollectionByUniverseId).mockResolvedValue(null);
+      vi.mocked(findCollectionBySeriesId).mockResolvedValue(null);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+    });
+
+    it('groups outbound subs by snapshot category (series → pipeline)', async () => {
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'c1' });
+      const cov = await getOutboundCoverageForPeer('peer-a');
+      expect([...cov.universe]).toEqual(['u1']);
+      // series rolls into the pipeline category (series + child issues bundle).
+      expect([...cov.pipeline]).toEqual(['s1']);
+      expect([...cov.mediaCollections]).toEqual(['c1']);
+    });
+
+    it('only reports subs for the named peer (per-peer isolation)', async () => {
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await subscribePeer({ peerId: 'peer-b', recordKind: 'universe', recordId: 'u1' });
+      const covA = await getOutboundCoverageForPeer('peer-a');
+      const covB = await getOutboundCoverageForPeer('peer-b');
+      expect([...covA.universe]).toEqual(['u1']);
+      expect([...covB.universe]).toEqual(['u1']);
+      const covC = await getOutboundCoverageForPeer('peer-c');
+      expect(covC.universe.size).toBe(0);
+    });
+
+    it('returns empty coverage for a missing/blank peerId', async () => {
+      const cov = await getOutboundCoverageForPeer('');
+      expect(cov.universe.size + cov.pipeline.size + cov.mediaCollections.size).toBe(0);
     });
   });
 

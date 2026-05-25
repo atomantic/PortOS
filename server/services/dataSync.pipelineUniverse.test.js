@@ -27,6 +27,23 @@ const SERIES_DIR = join(tempRoot, 'pipeline-series');
 const ISSUES_DIR = join(tempRoot, 'pipeline-issues');
 const UNIVERSES_DIR = join(tempRoot, 'universes');
 const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
+const PEER_SUBS_PATH = join(tempRoot, 'sharing', 'peer_subscriptions.json');
+
+// Write the outbound peer-subscription store that drives the per-peer
+// snapshot exclude-set. Each row is `{ peerId, recordKind, recordId }`.
+function writePeerSubs(rows) {
+  mkdirSync(join(tempRoot, 'sharing'), { recursive: true });
+  writeFileSync(PEER_SUBS_PATH, JSON.stringify({
+    subscriptions: rows.map((r) => ({
+      id: `peer-${r.recordKind}-${r.recordId}-${r.peerId}`,
+      peerId: r.peerId,
+      recordKind: r.recordKind,
+      recordId: r.recordId,
+      createdAt: '2026-05-25T00:00:00Z',
+      updatedAt: '2026-05-25T00:00:00Z',
+    })),
+  }, null, 2));
+}
 
 function writeJSON(path, obj) {
   mkdirSync(tempRoot, { recursive: true });
@@ -511,5 +528,144 @@ describe('dataSync — mediaCollections category', () => {
     });
     const b = await dataSync.getSnapshot('mediaCollections');
     expect(b.checksum).toBe(a.checksum);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-peer snapshot scoping (`forPeerId`) — the Item A / Item B fix.
+//
+// When the requesting peer is passed via `forPeerId`, the source EXCLUDES the
+// records it already pushes that peer per-record (the records THIS instance
+// has outbound subscriptions for to that peer) — leaving un-subscribed records
+// and torn-down-sub tombstones to ride the snapshot. With NO forPeerId, the
+// snapshot is the full category (legacy behavior).
+// ---------------------------------------------------------------------------
+describe('dataSync — per-peer snapshot scoping (forPeerId exclude-set)', () => {
+  it('universe: excludes the requesting peer\'s subscribed ids, keeps un-subscribed (partial-subscription gap)', async () => {
+    writeUniverseState({
+      universes: [
+        { id: 'u-a', name: 'A', updatedAt: '2026-05-25T10:00:00Z' },
+        { id: 'u-b', name: 'B', updatedAt: '2026-05-25T10:00:00Z' },
+        { id: 'u-d', name: 'D', updatedAt: '2026-05-25T10:00:00Z' }, // never subscribed
+      ],
+    });
+    // We push u-a + u-b to peer-A per-record; u-d has no sub.
+    writePeerSubs([
+      { peerId: 'peer-A', recordKind: 'universe', recordId: 'u-a' },
+      { peerId: 'peer-A', recordKind: 'universe', recordId: 'u-b' },
+    ]);
+    const scoped = await dataSync.getSnapshot('universe', { forPeerId: 'peer-A' });
+    const ids = scoped.data.universes.map((u) => u.id).sort();
+    // Subscribed records excluded; the un-subscribed one still rides.
+    expect(ids).toEqual(['u-d']);
+
+    // No forPeerId → full snapshot (legacy / all-or-none common case).
+    const full = await dataSync.getSnapshot('universe');
+    expect(full.data.universes.map((u) => u.id).sort()).toEqual(['u-a', 'u-b', 'u-d']);
+  });
+
+  it('universe: a tombstone for a torn-down sub rides the snapshot (ephemeralize-then-delete, Item B)', async () => {
+    // u-x was shared, then marked ephemeral (sub torn down), then deleted →
+    // the record is now a tombstone on disk and has NO peer subscription. It
+    // must ride the snapshot so the peer converges the delete.
+    writeUniverseState({
+      universes: [
+        { id: 'u-x', name: 'Gone', ephemeral: true, deleted: true, deletedAt: '2026-05-25T11:00:00Z', updatedAt: '2026-05-25T11:00:00Z' },
+        { id: 'u-y', name: 'Live', updatedAt: '2026-05-25T10:00:00Z' },
+      ],
+    });
+    // peer-A still subscribes to u-y only (u-x's sub was removed on ephemeralize).
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'universe', recordId: 'u-y' }]);
+    const scoped = await dataSync.getSnapshot('universe', { forPeerId: 'peer-A' });
+    const byId = Object.fromEntries(scoped.data.universes.map((u) => [u.id, u]));
+    // u-y excluded (covered per-record); u-x tombstone present so the delete converges.
+    expect(byId['u-y']).toBeUndefined();
+    expect(byId['u-x']).toBeDefined();
+    expect(byId['u-x'].deleted).toBe(true);
+  });
+
+  it('pipeline: excluding a subscribed series ALSO drops its child issues; un-subscribed series + issues ride', async () => {
+    writeSeriesState([
+      { id: 'ser-sub', name: 'Subbed', updatedAt: '2026-05-25T10:00:00Z' },
+      { id: 'ser-free', name: 'Free', updatedAt: '2026-05-25T10:00:00Z' },
+    ]);
+    writeIssueState([
+      { id: 'iss-1', seriesId: 'ser-sub', title: 'child of subbed', updatedAt: '2026-05-25T10:00:00Z' },
+      { id: 'iss-2', seriesId: 'ser-free', title: 'child of free', updatedAt: '2026-05-25T10:00:00Z' },
+    ]);
+    // series → pipeline category; we push ser-sub (+ its issues) per-record.
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'series', recordId: 'ser-sub' }]);
+    const scoped = await dataSync.getSnapshot('pipeline', { forPeerId: 'peer-A' });
+    expect(scoped.data.series.map((s) => s.id)).toEqual(['ser-free']);
+    // iss-1 (child of the excluded series) dropped; iss-2 (free series) rides.
+    expect(scoped.data.issues.map((i) => i.id)).toEqual(['iss-2']);
+  });
+
+  it('mediaCollections: excludes the requesting peer\'s subscribed collection ids', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, {
+      collections: [
+        { id: 'col-sub', name: 'Subbed', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-25T00:00:00Z', updatedAt: '2026-05-25T01:00:00Z' },
+        { id: 'col-free', name: 'Free', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-25T00:00:00Z', updatedAt: '2026-05-25T01:00:00Z' },
+      ],
+    });
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'mediaCollection', recordId: 'col-sub' }]);
+    const scoped = await dataSync.getSnapshot('mediaCollections', { forPeerId: 'peer-A' });
+    expect(scoped.data.collections.map((c) => c.id)).toEqual(['col-free']);
+  });
+
+  it('subscriptions to a DIFFERENT peer do not scope this peer\'s snapshot (per-peer isolation)', async () => {
+    writeUniverseState({
+      universes: [{ id: 'u-a', name: 'A', updatedAt: '2026-05-25T10:00:00Z' }],
+    });
+    // u-a is subscribed to peer-B, but peer-A pulls — peer-A must still get u-a.
+    writePeerSubs([{ peerId: 'peer-B', recordKind: 'universe', recordId: 'u-a' }]);
+    const scopedForA = await dataSync.getSnapshot('universe', { forPeerId: 'peer-A' });
+    expect(scopedForA.data.universes.map((u) => u.id)).toEqual(['u-a']);
+    const scopedForB = await dataSync.getSnapshot('universe', { forPeerId: 'peer-B' });
+    expect(scopedForB.data.universes.map((u) => u.id)).toEqual([]);
+  });
+
+  it('checksum is per-peer: a peer\'s scoped checksum differs once any of its subs exclude a record', async () => {
+    // Single universe so the (un-canonicalized) universe snapshot order can't
+    // perturb the comparison — a peer that excludes the only record gets an
+    // empty snapshot whose checksum necessarily differs from the 1-record one.
+    // `createdAt` is set explicitly: without it, sanitizeTemplate backfills
+    // `createdAt: now` on every read, making the snapshot non-deterministic
+    // across calls (the comparison below relies on byte-stable snapshots).
+    writeUniverseState({
+      universes: [{ id: 'u-a', name: 'A', createdAt: '2026-05-25T09:00:00Z', updatedAt: '2026-05-25T10:00:00Z' }],
+    });
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'universe', recordId: 'u-a' }]);
+    const full = await dataSync.getChecksum('universe');
+    const scopedA = await dataSync.getChecksum('universe', { forPeerId: 'peer-A' });
+    // peer-A's scoped checksum (u-a excluded → empty) differs from the full one.
+    expect(scopedA.checksum).not.toBe(full.checksum);
+    // A peer with NO subs excludes nothing → its scoped snapshot ids match the
+    // full set (checksum equality would also assert ordering, which the
+    // universe snapshot doesn't canonicalize — assert on content instead).
+    const scopedC = await dataSync.getSnapshot('universe', { forPeerId: 'peer-C' });
+    expect(scopedC.data.universes.map((u) => u.id)).toEqual(['u-a']);
+  });
+
+  it('checksum cache invalidates when a subscription changes even though no record file moved', async () => {
+    // One universe so the empty-vs-present checksum comparison is unambiguous.
+    // Explicit `createdAt` keeps the snapshot byte-stable across reads (see the
+    // sanitizeTemplate backfill note in the previous test).
+    writeUniverseState({
+      universes: [{ id: 'u-a', name: 'A', createdAt: '2026-05-25T09:00:00Z', updatedAt: '2026-05-25T10:00:00Z' }],
+    });
+    writePeerSubs([{ peerId: 'peer-A', recordKind: 'universe', recordId: 'u-a' }]);
+    const before = await dataSync.getChecksum('universe', { forPeerId: 'peer-A' });
+    // Tear down the sub (ephemeralize-then-delete teardown) — no record file
+    // moves, but the exclude-set shrinks so the scoped snapshot now includes
+    // u-a again. PEER_SUBSCRIPTIONS_FILE is in CHECKSUM_PATHS, so the cache
+    // must invalidate (otherwise the stale empty-snapshot checksum is served).
+    await new Promise((r) => setTimeout(r, 5)); // distinct mtime for the subs file
+    writePeerSubs([]);
+    const after = await dataSync.getChecksum('universe', { forPeerId: 'peer-A' });
+    expect(after.checksum).not.toBe(before.checksum);
+    // And it now matches the full snapshot (nothing excluded).
+    const full = await dataSync.getChecksum('universe');
+    expect(after.checksum).toBe(full.checksum);
   });
 });
