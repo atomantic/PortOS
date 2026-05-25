@@ -440,7 +440,12 @@ async function getMediaCollectionsSnapshot() {
   // listCollections re-reads + sanitizes from disk; we don't cache here since
   // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
   // circuits the I/O when the file hasn't moved.
-  const collections = await listCollections();
+  // includeDeleted:true so tombstones cross the wire — matches getUniverseSnapshot
+  // / getPipelineSnapshot. Without it, a peer that missed the live delete push
+  // (offline/unsubscribed at delete time) never learns the collection was deleted
+  // and keeps it live; the receiver (mergeMediaCollectionsFromSync) already LWWs
+  // the incoming tombstone so this converges deletes without resurrecting them.
+  const collections = await listCollections({ includeDeleted: true });
   // Filter out collections whose linked record (universe or series) is marked
   // ephemeral. Mirrors the per-record push pipeline's local-ephemeral guard
   // (see peerSync.js applyIncomingPush) — without this filter, the

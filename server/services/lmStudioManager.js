@@ -504,7 +504,12 @@ const normalizeRepoKey = (s) => String(s || '')
   .replace(/[-.]mlx[-.].*$/i, '')
 
 async function findModelDir(modelsDir, modelId) {
-  const direct = join(modelsDir, ...String(modelId || '').split('/'))
+  // Reject `.`/`..` traversal segments before joining — mirrors the stricter
+  // findDeletableModelDirs guard so the read path can't resolve outside the
+  // models tree either (trusted ids today, but defense-in-depth parity).
+  const segments = String(modelId || '').split('/').map((s) => s.trim()).filter(Boolean)
+  if (segments.some((s) => s === '.' || s === '..')) return null
+  const direct = join(modelsDir, ...segments)
   if (await dirExists(direct)) return direct
 
   const wanted = normalizeRepoKey(modelId)

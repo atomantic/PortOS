@@ -226,6 +226,9 @@ export function LocalLlmTab() {
   const [actionInProgress, setActionInProgress] = useState(null);
   const [progressMsg, setProgressMsg] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
+  // id of the installed model awaiting a delete confirmation (two-step inline
+  // confirm — deleting weights is an irreversible multi-GB rm -rf / DELETE).
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const progressTimer = useRef(null);
   const statusRequestId = useRef(0);
   const catalogRequestId = useRef(0);
@@ -642,14 +645,35 @@ export function LocalLlmTab() {
                 </div>
               </div>
               {m.size != null && <span className="text-xs text-gray-400 shrink-0">{formatBytes(m.size)}</span>}
-              <button
-                onClick={() => remove(m.id)}
-                disabled={busy}
-                className="px-2.5 py-1 text-xs bg-port-error/20 hover:bg-port-error/40 text-port-error rounded disabled:opacity-50 flex items-center gap-1 shrink-0"
-              >
-                {actionInProgress === `delete-${m.id}` ? <BrailleSpinner /> : <Trash2 size={12} />}
-                Delete
-              </button>
+              {confirmDeleteId === m.id ? (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs text-port-error">Delete?</span>
+                  <button
+                    onClick={() => { setConfirmDeleteId(null); remove(m.id); }}
+                    disabled={busy}
+                    className="px-2 py-1 text-xs bg-port-error/30 hover:bg-port-error/50 text-port-error rounded disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <Trash2 size={12} />
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(m.id)}
+                  disabled={busy}
+                  className="px-2.5 py-1 text-xs bg-port-error/20 hover:bg-port-error/40 text-port-error rounded disabled:opacity-50 flex items-center gap-1 shrink-0"
+                  aria-label={`Delete ${m.name}`}
+                >
+                  {actionInProgress === `delete-${m.id}` ? <BrailleSpinner /> : <Trash2 size={12} />}
+                  Delete
+                </button>
+              )}
             </div>
           ))}
         </div>
