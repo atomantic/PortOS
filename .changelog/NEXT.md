@@ -12,6 +12,8 @@ TBD
 
 ## Changed
 
+- **Dashboard Quick Image widget** — now exposes **resolution** and **negative prompt** options (collapsible) alongside the prompt, and renders the result inline: async backends stream the diffusion loading animation (spinner / step counter / latent preview) and resolve to the final image, mirroring the Universe asset slots via the shared `MediaJobThumb`. Sync (external) backends show the completed image directly. The "Edit" hand-off now carries the chosen size + negative prompt into the full Image Gen page.
+
 - **Universes table** — each row now shows a 48×48 thumbnail of the latest image from the universe's auto-managed media collection (the `Universe: <name>` bucket linked by `collection.universeId`). Rows without media fall back to a Globe placeholder; a broken file ref also degrades to the placeholder via `<img onError>`. Applies to both the desktop table and the mobile card layout.
 
 ## Fixed

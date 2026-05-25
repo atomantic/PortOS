@@ -1,15 +1,38 @@
 import { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sparkles, Pencil } from 'lucide-react';
+import { Sparkles, Pencil, ChevronDown, ChevronRight } from 'lucide-react';
 import { generateImage } from '../services/api';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
+import { RESOLUTIONS, resolveResolutionLabel } from '../lib/imageGenResolutions';
+import MediaJobThumb from './pipeline/MediaJobThumb';
 import toast from './ui/Toast';
+
+// Universal presets only (no `compatible` gate) so the quick widget can offer
+// a resolution dropdown without knowing the active backend/model — these sizes
+// render on every image-gen mode. The full Image Gen page keeps the
+// backend-filtered list via ImageGenControls.
+const QUICK_RESOLUTIONS = RESOLUTIONS.filter((r) => !r.compatible);
 
 export default function QuickImagePrompt() {
   const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE_PROMPT);
+  const [showNegative, setShowNegative] = useState(false);
+  const [width, setWidth] = useState(1024);
+  const [height, setHeight] = useState(1024);
+  // The current/last submission. `jobId` set → async backend (local/codex):
+  // render the live MediaJobThumb so the user sees the diffusion spinner →
+  // final image, exactly like the Universe asset slots. `filename` only →
+  // sync external backend returned a completed render directly.
+  const [job, setJob] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const navigate = useNavigate();
+
+  const { label: resolutionLabel } = resolveResolutionLabel(QUICK_RESOLUTIONS, width, height);
+  const handleResolution = (e) => {
+    const r = QUICK_RESOLUTIONS.find((opt) => opt.label === e.target.value);
+    if (r) { setWidth(r.w); setHeight(r.h); }
+  };
 
   const handleGenerate = async (e) => {
     e?.preventDefault();
@@ -22,12 +45,16 @@ export default function QuickImagePrompt() {
     // Omit `mode` so the server falls back to the user's saved
     // `settings.imageGen.mode` default. Async backends (local/codex) respond
     // with { jobId, status, position } — sync external responds with the
-    // generation result. Toast wording covers both cases without inspecting
-    // backend internals. Preserve the input on failure so the user doesn't
-    // have to retype after a server error (the API helper toasts on its own).
+    // generation result ({ filename, path }). Send the negative prompt as-is
+    // (empty string is an intentional clear; the server treats present-but-
+    // empty as "no negative prompt"). Preserve the input on failure so the
+    // user doesn't have to retype after a server error (the API helper toasts
+    // on its own).
     const result = await generateImage({
       prompt: text,
-      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
+      negativePrompt,
+      width,
+      height,
     }).catch(() => null);
 
     submittingRef.current = false;
@@ -37,21 +64,36 @@ export default function QuickImagePrompt() {
       // can keep typing while the request is in flight and we don't want to
       // wipe out new input on resolve.
       setPrompt((current) => (current === text ? '' : current));
-      toast.success(result.status === 'queued' || result.status === 'running' ? 'Image queued' : 'Image generated');
+      if (result.jobId) {
+        setJob({ jobId: result.jobId, filename: null });
+        toast.success('Image queued');
+      } else if (result.filename) {
+        setJob({ jobId: null, filename: result.filename });
+        toast.success('Image generated');
+      }
     }
   };
 
   const handleOpenInEditor = (e) => {
     e?.preventDefault();
     const text = prompt.trim();
-    // ImageGen page's remix-param effect reads ?prompt=… on mount and strips
-    // it from the URL, so the widget can hand off a one-shot prompt without
-    // coupling to the form's internal state.
-    navigate(`/media/image${text ? `?prompt=${encodeURIComponent(text)}` : ''}`);
+    // ImageGen page's remix-param effect reads ?prompt=…&width=…&height=… on
+    // mount and strips them from the URL, so the widget can hand off the
+    // current prompt + size + negative prompt without coupling to the form's
+    // internal state.
+    const params = new URLSearchParams();
+    if (text) params.set('prompt', text);
+    if (negativePrompt) params.set('negativePrompt', negativePrompt);
+    params.set('width', String(width));
+    params.set('height', String(height));
+    const qs = params.toString();
+    navigate(`/media/image${qs ? `?${qs}` : ''}`);
   };
 
+  const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
+
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 h-full flex flex-col min-h-0">
+    <div className="bg-port-card border border-port-border rounded-xl p-4 h-full flex flex-col min-h-0 overflow-y-auto">
       <div className="flex items-center justify-between mb-3 shrink-0">
         <h3 className="text-sm font-semibold text-white">Quick Image</h3>
         <Link to="/media/image" className="text-xs text-gray-500 hover:text-port-accent transition-colors">
@@ -69,14 +111,53 @@ export default function QuickImagePrompt() {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleGenerate(e);
           }}
           rows={3}
-          className="flex-1 min-h-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
+          className="flex-1 min-h-[60px] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
         />
-        <div className="flex items-center gap-2">
+
+        <div className="shrink-0">
+          <label htmlFor="quick-image-resolution" className="block text-xs font-medium text-gray-400 mb-1">Resolution</label>
+          <select
+            id="quick-image-resolution"
+            value={resolutionLabel}
+            onChange={handleResolution}
+            disabled={isSubmitting}
+            className={`${inputCls} disabled:opacity-50`}
+          >
+            {QUICK_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
+          </select>
+        </div>
+
+        <div className="shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowNegative((v) => !v)}
+            className="flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white transition-colors"
+            aria-expanded={showNegative}
+          >
+            {showNegative ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            Negative prompt
+          </button>
+          {showNegative && (
+            <>
+              <label htmlFor="quick-image-negative" className="sr-only">Negative prompt</label>
+              <textarea
+                id="quick-image-negative"
+                value={negativePrompt}
+                onChange={(e) => setNegativePrompt(e.target.value)}
+                placeholder="Things to avoid…"
+                rows={2}
+                className="mt-1 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
+              />
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="submit"
             disabled={!prompt.trim() || isSubmitting}
             className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
-            title="Generate with default settings"
+            title="Generate with these settings"
           >
             <Sparkles size={14} />
             {isSubmitting ? 'Submitting…' : 'Generate'}
@@ -86,12 +167,28 @@ export default function QuickImagePrompt() {
             onClick={handleOpenInEditor}
             disabled={isSubmitting}
             className="flex items-center justify-center gap-2 px-3 py-2 border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
-            title="Open in editor with this prompt"
+            title="Open in editor with these settings"
           >
             <Pencil size={14} />
             Edit
           </button>
         </div>
+
+        {job && (
+          // Live render preview — async jobs stream the diffusion spinner /
+          // step counter / latent frame and resolve to the final image;
+          // sync results render the completed image directly (fallbackFilename
+          // short-circuits the live subscription). Mirrors the Universe asset
+          // slot via the shared MediaJobThumb.
+          <div className="mt-1 shrink-0">
+            <MediaJobThumb
+              jobId={job.jobId || job.filename}
+              fallbackFilename={job.jobId ? null : job.filename}
+              size="fill"
+              label="Quick image"
+            />
+          </div>
+        )}
       </form>
     </div>
   );
