@@ -86,4 +86,17 @@ describe('classifyByWordCount', () => {
   it('treats anything above every band as a novel', () => {
     expect(classifyByWordCount(500000).id).toBe('novel');
   });
+
+  it('assigns shared boundary values to the higher band', () => {
+    // Adjacent bands share boundary values by literary convention (the lower
+    // band's max equals the higher band's min). Classification must be
+    // deterministic, with the higher band owning the boundary.
+    expect(classifyByWordCount(7500).id).toBe('novelette'); // short-story.max === novelette.min
+    expect(classifyByWordCount(17500).id).toBe('novella'); // novelette.max === novella.min
+    expect(classifyByWordCount(40000).id).toBe('novel'); // novella.max === novel.min
+    // One word below each boundary still lands in the lower band.
+    expect(classifyByWordCount(7499).id).toBe('short-story');
+    expect(classifyByWordCount(17499).id).toBe('novelette');
+    expect(classifyByWordCount(39999).id).toBe('novella');
+  });
 });

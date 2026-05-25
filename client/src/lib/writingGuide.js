@@ -19,7 +19,7 @@ export const WRITING_LENGTH_TARGETS = [
     label: 'Microfiction',
     core: true,
     words: { min: null, max: 500, label: 'under 500 words' },
-    chars: { min: 2500, max: 3000, label: 'under 2,500–3,000 chars' },
+    chars: { min: null, max: 3000, label: 'under 2,500–3,000 chars' },
     note: 'A single sharp image or turn. Every word load-bearing; no room for sub-plots.',
   },
   {
@@ -157,13 +157,30 @@ export const PLANNED_ANALYSES = [
 // ascending by upper bound, and the brief's bands have gaps (≤500 then 750–1000
 // then 1,500–7,500…), so we match on the first band whose `max` the count fits
 // under rather than requiring `min ≤ count ≤ max` — a 600-word draft rounds up
-// to flash instead of falling into a gap. Returns null only for invalid input;
-// anything above every band is a (large) novel. Future word-count gauges call
-// this to label a draft.
+// to flash instead of falling into a gap.
+//
+// Boundary handling: the conventional literary ladder shares boundary values
+// between adjacent bands (a 7,500-word piece is the floor of "novelette" and the
+// ceiling of "short story"; likewise 17,500 and 40,000). The display labels keep
+// the conventional inclusive ranges, but classification must be deterministic, so
+// at a shared boundary the HIGHER band wins (7,500 → novelette, 17,500 → novella,
+// 40,000 → novel). We implement that by treating a band's `max` as exclusive when
+// it equals the next band's `min`; otherwise the `max` is inclusive (so the gap
+// rounding above still works — 600 ≤ flash.max 1000 with no overlap to skip).
+//
+// Returns null only for invalid input; anything above every band is a (large)
+// novel. Future word-count gauges call this to label a draft.
 export function classifyByWordCount(wordCount) {
   if (typeof wordCount !== 'number' || !Number.isFinite(wordCount) || wordCount < 0) return null;
-  for (const target of WRITING_LENGTH_TARGETS) {
-    if (target.words.max == null || wordCount <= target.words.max) return target;
+  for (let i = 0; i < WRITING_LENGTH_TARGETS.length; i++) {
+    const target = WRITING_LENGTH_TARGETS[i];
+    const max = target.words.max;
+    if (max == null) return target; // open-ended top band
+    const next = WRITING_LENGTH_TARGETS[i + 1];
+    // At a shared boundary (this.max === next.min) the higher band owns the
+    // boundary value, so treat max as exclusive there; otherwise inclusive.
+    const boundaryBelongsToNext = next != null && next.words.min === max;
+    if (boundaryBelongsToNext ? wordCount < max : wordCount <= max) return target;
   }
   return WRITING_LENGTH_TARGETS[WRITING_LENGTH_TARGETS.length - 1];
 }
