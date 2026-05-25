@@ -27,6 +27,7 @@ const SERIES_DIR = join(tempRoot, 'pipeline-series');
 const ISSUES_DIR = join(tempRoot, 'pipeline-issues');
 const UNIVERSES_DIR = join(tempRoot, 'universes');
 const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
+const VIDEO_HISTORY_PATH = join(tempRoot, 'video-history.json');
 
 function writeJSON(path, obj) {
   mkdirSync(tempRoot, { recursive: true });
@@ -511,5 +512,106 @@ describe('dataSync — mediaCollections category', () => {
     });
     const b = await dataSync.getSnapshot('mediaCollections');
     expect(b.checksum).toBe(a.checksum);
+  });
+});
+
+describe('dataSync — videoHistory category', () => {
+  const row = (id, overrides = {}) => ({
+    id,
+    prompt: `prompt ${id}`,
+    filename: `${id}.mp4`,
+    thumbnail: `${id}.jpg`,
+    createdAt: '2026-05-22T00:00:00Z',
+    ...overrides,
+  });
+
+  it('is registered alongside the other categories', () => {
+    expect(dataSync.getSupportedCategories()).toContain('videoHistory');
+  });
+
+  it('snapshot returns the videos array under a stable key', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v2')]);
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos).toHaveLength(2);
+    expect(snap.data.videos.map((v) => v.id).sort()).toEqual(['v1', 'v2']);
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('snapshot handles a missing file gracefully', async () => {
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos).toEqual([]);
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('snapshot checksum is order-insensitive (rows sorted by id on the wire)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v-b'), row('v-a')]);
+    const a = await dataSync.getSnapshot('videoHistory');
+    await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
+    writeJSON(VIDEO_HISTORY_PATH, [row('v-a'), row('v-b')]);
+    const b = await dataSync.getSnapshot('videoHistory');
+    expect(b.checksum).toBe(a.checksum);
+  });
+
+  it('applyRemote inserts new rows (union by id)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const result = await dataSync.applyRemote('videoHistory', {
+      videos: [row('v2')],
+    });
+    expect(result.applied).toBe(true);
+    expect(result.count).toBe(1);
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.map((v) => v.id).sort()).toEqual(['v1', 'v2']);
+  });
+
+  it('applyRemote keeps local rows the remote does not carry (no data loss)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('local-only'), row('shared')]);
+    await dataSync.applyRemote('videoHistory', {
+      videos: [row('shared'), row('remote-only')],
+    });
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.map((v) => v.id).sort()).toEqual(['local-only', 'remote-only', 'shared']);
+  });
+
+  it('applyRemote LWW: newer remote createdAt wins for the same id', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1', { createdAt: '2026-05-22T00:00:00Z', prompt: 'old' })]);
+    await dataSync.applyRemote('videoHistory', {
+      videos: [row('v1', { createdAt: '2026-05-22T05:00:00Z', prompt: 'new' })],
+    });
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].prompt).toBe('new');
+  });
+
+  it('applyRemote is a no-op when nothing is newer or new', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const result = await dataSync.applyRemote('videoHistory', { videos: [row('v1')] });
+    expect(result.applied).toBe(false);
+    expect(result.count).toBe(0);
+  });
+
+  it('applyRemote skips rows without a string id (cannot clobber real rows)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const result = await dataSync.applyRemote('videoHistory', {
+      videos: [{ prompt: 'no id', filename: 'x.mp4', createdAt: '2026-05-22T09:00:00Z' }],
+    });
+    expect(result.applied).toBe(false);
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.map((v) => v.id)).toEqual(['v1']);
+  });
+
+  it('applyRemote preserves an id-less LOCAL row instead of dropping it', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [{ prompt: 'legacy', filename: 'legacy.mp4' }]);
+    await dataSync.applyRemote('videoHistory', { videos: [row('v-new')] });
+    const persisted = readJSON(VIDEO_HISTORY_PATH);
+    expect(persisted.some((v) => v.prompt === 'legacy')).toBe(true);
+    expect(persisted.some((v) => v.id === 'v-new')).toBe(true);
+  });
+
+  it('checksum changes after applyRemote mutates the file', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1')]);
+    const before = await dataSync.getChecksum('videoHistory');
+    await dataSync.applyRemote('videoHistory', { videos: [row('v2')] });
+    const after = await dataSync.getChecksum('videoHistory');
+    expect(after.checksum).not.toBe(before.checksum);
   });
 });
