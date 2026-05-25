@@ -6,7 +6,7 @@
  */
 
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { readdir, stat, mkdir, copyFile } from 'fs/promises'
 import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
@@ -494,11 +494,11 @@ async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath }) {
   const destDir = join(modelsDir, publisher, repo)
   const r = await mkdir(destDir, { recursive: true })
     .then(async () => {
-      const base = ggufPath.split('/').pop()
+      const base = basename(ggufPath)
       const destName = /\.gguf$/i.test(base) ? base : `${repo}.gguf`
       await copyFile(ggufPath, join(destDir, destName))
       if (projectorPath) {
-        const projBase = projectorPath.split('/').pop()
+        const projBase = basename(projectorPath)
         await copyFile(projectorPath, join(destDir, /\.gguf$/i.test(projBase) ? projBase : `${repo}-mmproj.gguf`))
       }
     })

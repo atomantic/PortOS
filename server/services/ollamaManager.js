@@ -267,12 +267,12 @@ async function resolveLocalModel(modelId) {
   if (!modelDigest) return null
   const ggufPath = join(modelsDir, 'blobs', digestToBlobFilename(modelDigest))
   if (!(await fileExists(ggufPath))) return null
-  return {
-    ggufPath,
-    projectorPath: projectorDigest ? join(modelsDir, 'blobs', digestToBlobFilename(projectorDigest)) : null,
-    isMlx: false,
-    isSharded: false
-  }
+  // Only report a projector the manifest references AND that's actually on disk
+  // — a missing/corrupt projector blob shouldn't flag the model multimodal (and
+  // block the fast path) or fail an LM Studio copy mid-way.
+  let projectorPath = projectorDigest ? join(modelsDir, 'blobs', digestToBlobFilename(projectorDigest)) : null
+  if (projectorPath && !(await fileExists(projectorPath))) projectorPath = null
+  return { ggufPath, projectorPath, isMlx: false, isSharded: false }
 }
 
 /**

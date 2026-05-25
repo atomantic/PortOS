@@ -181,7 +181,10 @@ export function LocalLlmTab() {
   const selectedData = status?.[selected];
   const installedModels = selectedData?.models || [];
 
-  const install = (modelId) => runAction(`install-${modelId}`, () => installLocalLlmModel(selected, modelId), `${modelId} installed`);
+  // LM Studio's REST fallback returns { pending: true } — the download was only
+  // queued, not finished — so don't claim "installed" in that case.
+  const install = (modelId) => runAction(`install-${modelId}`, () => installLocalLlmModel(selected, modelId),
+    (r) => r?.pending ? `${modelId} download started` : `${modelId} installed`);
   const remove = (modelId) => runAction(`delete-${modelId}`, () => deleteLocalLlmModel(selected, modelId), `${modelId} deleted`);
 
   return (
