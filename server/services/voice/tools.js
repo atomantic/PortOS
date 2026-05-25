@@ -1558,7 +1558,7 @@ const TOOLS = [
   {
     name: 'meatspace_log_workout',
     description:
-      'Log a workout / exercise session to MortalLoom / Meatspace tracking. Use when the user says "log a workout", "I went for a 30 minute run", "did an hour of yoga", "lifted weights for 45 minutes". The `type` is free-form (run, yoga, lifting, cycling, swim, etc.). Duration and intensity are optional.',
+      'Log a workout / exercise session to Meatspace tracking. Use when the user says "log a workout", "I went for a 30 minute run", "did an hour of yoga", "lifted weights for 45 minutes". The `type` is free-form (run, yoga, lifting, cycling, swim, etc.). Duration and intensity are optional.',
     parameters: {
       type: 'object',
       properties: {

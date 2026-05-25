@@ -7,6 +7,14 @@
  * to any registered peers (e.g. the user's `null` sync machine).  Without a
  * global guard, every `npm test` run creates spurious records on live peers.
  *
+ * Forcing `getPeers → []` is sufficient to stop the fan-out on its own:
+ * `autoSubscribeRecordToAllPeers` early-returns the moment the target list is
+ * empty, before any `subscribePeer`/HTTP work — so the `peerSync.js` module
+ * may still get dynamically imported, but it issues no network calls.  A suite
+ * only needs the additional `peerSync.js` mock (per the CLAUDE.md convention)
+ * when it wants to *assert against* the peer-sync import path, not to suppress
+ * fan-out, which this guard already handles.
+ *
  * WHAT: This file is loaded by Vitest as a `setupFiles` entry (see
  * `vitest.config.js`).  It registers a global `vi.mock` for
  * `services/instances.js` that forces `getPeers` to return `[]` while
