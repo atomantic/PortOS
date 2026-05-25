@@ -21,6 +21,7 @@ import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
+import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import * as shellService from './shell.js';
 import {
   validateSocketData,
@@ -559,6 +560,10 @@ export function initSocket(io) {
 
   // Set up AI status event forwarding (broadcast to all clients)
   setupAIStatusEventForwarding();
+
+  // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
+  // and high-priority notifications — rate-limited per source).
+  setupProactiveSpeechForwarding();
 }
 
 let aiStatusForwardingSetup = false;
@@ -568,6 +573,13 @@ function setupAIStatusEventForwarding() {
   aiStatusEvents.on('status', (data) => {
     if (ioInstance) ioInstance.emit('ai:status', data);
   });
+}
+
+let proactiveSpeechForwardingSetup = false;
+function setupProactiveSpeechForwarding() {
+  if (proactiveSpeechForwardingSetup) return;
+  proactiveSpeechForwardingSetup = true;
+  wireProactiveTriggers({ io: ioInstance });
 }
 
 function cleanupStream(socketId) {

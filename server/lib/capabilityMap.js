@@ -208,12 +208,24 @@ export function messagesRow(accounts = []) {
 }
 
 export function appsRow(summary = {}) {
+  // getAppStatusSummary().total counts only PM2-runnable apps; native/Xcode
+  // projects are reported separately under `unmanaged` (no runtime state).
   const total = Number(summary?.total) || 0;
-  if (total === 0) {
+  const unmanaged = Number(summary?.unmanaged) || 0;
+  if (total === 0 && unmanaged === 0) {
     return row('apps', 'Apps & Processes', '/apps', {
       status: UNCONFIGURED,
       configured: false,
       summary: 'No apps registered',
+    });
+  }
+  if (total === 0) {
+    // Only native apps registered — they exist but have no PM2 lifecycle to health-check.
+    return row('apps', 'Apps & Processes', '/apps', {
+      status: OK,
+      configured: true,
+      summary: `${unmanaged} native ${plural(unmanaged, 'app')} · no runtime status`,
+      detail: { total: 0, online: 0, stopped: 0, notStarted: 0, unmanaged },
     });
   }
   const online = Number(summary?.online) || 0;
@@ -228,7 +240,7 @@ export function appsRow(summary = {}) {
     summary: `${total} ${plural(total, 'app')} · ${online} online`
       + (stopped > 0 ? ` · ${stopped} stopped` : '')
       + (notStarted > 0 ? ` · ${notStarted} not started` : ''),
-    detail: { total, online, stopped, notStarted },
+    detail: { total, online, stopped, notStarted, unmanaged },
   });
 }
 
@@ -261,10 +273,14 @@ export function summarizeCapabilities(rows = []) {
   for (const r of list) {
     if (counts[r?.status] !== undefined) counts[r.status] += 1;
   }
-  // Empty/garbage input is "nothing set up", not "all healthy" — don't default OK.
-  let overall = list.length > 0 ? OK : UNCONFIGURED;
+  // Derive `overall` purely from the tallied counts (worst-wins). Empty input
+  // AND a non-empty list whose rows all carry missing/unknown statuses both fall
+  // through to UNCONFIGURED — never default to OK when nothing is recognized.
+  let overall;
   if (counts.error > 0) overall = ERROR;
   else if (counts.warn > 0) overall = WARN;
   else if (counts.unconfigured > 0) overall = UNCONFIGURED;
+  else if (counts.ok > 0) overall = OK;
+  else overall = UNCONFIGURED;
   return { ...counts, total: list.length, overall };
 }

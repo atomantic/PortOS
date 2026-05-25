@@ -1,4 +1,5 @@
 import { X, MapPin, Clock, Users, Repeat, CalendarDays } from 'lucide-react';
+import { formatEventDateTime } from '../../utils/formatters';
 
 const RSVP_STYLES = {
   accepted: 'bg-port-success/20 text-port-success',
@@ -6,11 +7,6 @@ const RSVP_STYLES = {
   tentative: 'bg-port-warning/20 text-port-warning',
   none: 'bg-gray-700 text-gray-400'
 };
-
-function formatDateTime(dateStr, isAllDay) {
-  if (isAllDay) return new Date(dateStr).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  return new Date(dateStr).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
 
 export default function EventDetail({ event, onClose }) {
   return (
@@ -47,13 +43,13 @@ export default function EventDetail({ event, onClose }) {
                 </div>
               ) : (
                 <>
-                  <div>{formatDateTime(event.startTime, false)}</div>
+                  <div>{formatEventDateTime(event.startTime)}</div>
                   <div className="text-gray-500">to</div>
-                  <div>{formatDateTime(event.endTime, false)}</div>
+                  <div>{formatEventDateTime(event.endTime)}</div>
                 </>
               )}
               {event.isAllDay && (
-                <div className="mt-1 text-gray-500">{formatDateTime(event.startTime, true)}</div>
+                <div className="mt-1 text-gray-500">{formatEventDateTime(event.startTime, { allDay: true })}</div>
               )}
             </div>
           </div>
