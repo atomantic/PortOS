@@ -452,8 +452,8 @@ async function importModelFromGguf({ name, ggufPath, mode = 'copy' }) {
 /**
  * Aggregate status for the unified local-LLM UI.
  */
-async function getStatus() {
-  const available = await checkOllamaAvailable()
+async function getStatus(forceRefresh = false) {
+  const available = await checkOllamaAvailable(forceRefresh)
   const models = available ? await getInstalledModels(true) : []
   return {
     available,

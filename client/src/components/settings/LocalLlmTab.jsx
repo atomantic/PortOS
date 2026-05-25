@@ -163,12 +163,15 @@ export function LocalLlmTab() {
   const [progressMsg, setProgressMsg] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
   const progressTimer = useRef(null);
+  const statusRequestId = useRef(0);
   const selectedInitialized = useRef(false);
 
   const loadStatus = useCallback(() => {
+    const requestId = ++statusRequestId.current;
     setLoading(true);
     return getLocalLlmStatus()
       .then((s) => {
+        if (requestId !== statusRequestId.current) return;
         setStatus(s);
         // Default the model-management view to the active backend on first load.
         if (!selectedInitialized.current && s?.backend) {
@@ -176,8 +179,12 @@ export function LocalLlmTab() {
           selectedInitialized.current = true;
         }
       })
-      .catch(() => toast.error('Failed to load local LLM status'))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (requestId === statusRequestId.current) toast.error('Failed to load local LLM status');
+      })
+      .finally(() => {
+        if (requestId === statusRequestId.current) setLoading(false);
+      });
   }, []);
 
   const loadCatalog = useCallback((backend, q) => {
@@ -219,6 +226,16 @@ export function LocalLlmTab() {
     return fn()
       .then((result) => {
         if (successMsg) toast.success(typeof successMsg === 'function' ? successMsg(result) : successMsg);
+        if (typeof result?.running === 'boolean') {
+          setStatus((prev) => prev ? ({
+            ...prev,
+            ollama: {
+              ...prev.ollama,
+              installed: true,
+              available: result.running
+            }
+          }) : prev);
+        }
         loadStatus();
         loadCatalog(selected, query);
       })

@@ -263,7 +263,7 @@ export async function listModels(backend, forceRefresh = false) {
  */
 export async function getStatus() {
   const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels] = await Promise.all([
-    ollamaManager.getStatus(),
+    ollamaManager.getStatus(true),
     commandExists('ollama', ['--version']),
     lmStudioManager.getStatus(),
     commandExists('lms', ['version']),
