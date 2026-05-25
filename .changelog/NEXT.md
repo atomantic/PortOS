@@ -13,3 +13,7 @@ TBD
 ## Changed
 
 - **Universes table** — each row now shows a 48×48 thumbnail of the latest image from the universe's auto-managed media collection (the `Universe: <name>` bucket linked by `collection.universeId`). Rows without media fall back to a Globe placeholder; a broken file ref also degrades to the placeholder via `<img onError>`. Applies to both the desktop table and the mobile card layout.
+
+## Fixed
+
+- **Chief of Staff pane overflow** — content panel collapses to a single `flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden` div so tall tab content scrolls inside the panel instead of expanding it. Event log rows in both `EventLog` and `TerminalCoSPanel` get `break-all` so long unbreakable tokens (URLs, hashes, paths) wrap inside the 320px sidebar instead of pushing the column wider visually.
