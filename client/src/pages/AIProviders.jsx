@@ -387,7 +387,11 @@ export default function AIProviders() {
 
       {/* Provider List */}
       <div className="grid gap-4">
-        {providers.map(provider => (
+        {(() => {
+          const active = providers.find(p => p.id === activeProviderId);
+          const rest = providers.filter(p => p.id !== activeProviderId);
+          return active ? [active, ...rest] : providers;
+        })().map(provider => (
           <div
             key={provider.id}
             className={`bg-port-card border rounded-xl p-4 ${
