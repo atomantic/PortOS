@@ -2,7 +2,7 @@
 // `imageGenResolutions.js` — both pages drive a "preset dropdown + custom
 // fallback" pattern off these tables so the size dropdown stays consistent.
 //
-// Video sizes follow LTX-2's preferred latent boundaries (multiples of 32 on
+// Video sizes follow LTX-2's preferred latent boundaries (multiples of 64 on
 // each edge); the aspect-ratio hints in the labels surface common shapes the
 // user picks for (16:9 social, 9:16 vertical, 2:3 portrait, 1:1 grid).
 export const VIDEO_RESOLUTIONS = [
