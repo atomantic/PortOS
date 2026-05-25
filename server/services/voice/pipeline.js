@@ -165,10 +165,15 @@ const requestUiText = (state, emit, signal, timeoutMs = UI_TEXT_READ_TIMEOUT_MS)
     // Drop our own waiter so a late response (after timeout/abort) is a no-op
     // rather than resolving a stale promise.
     state.uiTextWaiters.delete(requestId);
-    // Cache onto the snapshot only when it's STILL the one we requested for, so
-    // a follow-up same-turn ui_read on the same page skips another round-trip
-    // without risking a stale-page overwrite.
-    if (value !== null && state.ui && state.ui === snapshotAtRequest) state.ui.text = value;
+    // If the snapshot changed (navigation / new index) between request and
+    // response, the fetched text is for a page that's no longer current —
+    // resolve null (stale) rather than handing ui_read the wrong page's text.
+    // Reference equality treats "no snapshot at request AND none now" as
+    // unchanged (e.g. tests with a bare state). When still current, cache the
+    // text for a same-turn re-read (only when there's a snapshot object to hold it).
+    const stillCurrent = state.ui === snapshotAtRequest;
+    if (!stillCurrent) { resolve(null); return; }
+    if (value !== null && state.ui) state.ui.text = value;
     resolve(value);
   };
   const onAbort = () => finish(null);

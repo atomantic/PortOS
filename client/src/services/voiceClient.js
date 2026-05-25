@@ -478,8 +478,13 @@ let visionStream = null;
 let onVisionEndedCb = null;
 
 const clearVisionStream = ({ notify = true } = {}) => {
-  if (visionStream) visionStream.getTracks().forEach((t) => t.stop());
+  const stream = visionStream;
+  // Null the global BEFORE stopping tracks: t.stop() synchronously fires the
+  // track 'ended' handler, and that handler no-ops unless `visionStream === its
+  // own stream` — so clearing first keeps a caller-initiated stop (notify:false)
+  // from re-entering via the 'ended' path and firing onVisionCaptureEnded.
   visionStream = null;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
   if (notify && typeof onVisionEndedCb === 'function') onVisionEndedCb();
 };
 
@@ -510,7 +515,11 @@ export const enableVisionCapture = async () => {
   if (!stream) return false;
   visionStream = stream;
   // User-stopped (browser chrome) → clear + notify the UI so the toggle flips.
-  stream.getVideoTracks().forEach((t) => t.addEventListener('ended', () => clearVisionStream(), { once: true }));
+  // Guard on `visionStream === stream` so a late 'ended' from a SUPERSEDED
+  // stream (quick disable→re-enable) can't tear down the newer capture session.
+  stream.getVideoTracks().forEach((t) => t.addEventListener('ended', () => {
+    if (visionStream === stream) clearVisionStream();
+  }, { once: true }));
   return true;
 };
 

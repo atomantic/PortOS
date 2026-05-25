@@ -166,6 +166,31 @@ describe('requestUiText (lazy visible-text fetch)', () => {
     expect(state.uiTextWaiters.has(requestId)).toBe(false);
   });
 
+  it('caches the text onto the current snapshot for a same-turn re-read', async () => {
+    const snap = { path: '/tasks', text: null };
+    const state = { ui: snap };
+    const emitted = [];
+    const p = requestUiText(state, (e, d) => emitted.push(d), undefined);
+    state.uiTextWaiters.get(emitted[0].requestId)('tasks page body');
+    await expect(p).resolves.toBe('tasks page body');
+    expect(state.ui.text).toBe('tasks page body');
+  });
+
+  it('resolves null (stale) and does not cache when the snapshot changed mid-flight', async () => {
+    const oldSnap = { path: '/tasks', text: null };
+    const state = { ui: oldSnap };
+    const emitted = [];
+    const p = requestUiText(state, (e, d) => emitted.push(d), undefined);
+    // Navigation: a new voice:ui:index replaced state.ui before the response.
+    const newSnap = { path: '/calendar', text: null };
+    state.ui = newSnap;
+    state.uiTextWaiters.get(emitted[0].requestId)('tasks page body');
+    await expect(p).resolves.toBeNull();
+    // Neither snapshot is polluted with the other page's text.
+    expect(oldSnap.text).toBeNull();
+    expect(newSnap.text).toBeNull();
+  });
+
   it('resolves null on timeout (legacy client never replies)', async () => {
     const state = {};
     const emit = () => {};

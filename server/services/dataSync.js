@@ -714,11 +714,25 @@ const CATEGORIES = {
   videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote }
 };
 
-// Per-category `{ fingerprints, checksum }` cache. The orchestrator hits
-// getChecksum every cycle — by far the hottest sync-side I/O — so caching
-// keyed on underlying-file `(mtime, size)` lets it stat-and-return when
-// nothing has changed, instead of re-materializing the full payload.
+// Per-`(category, forPeerId)` `{ fingerprints, checksum }` cache. The
+// orchestrator hits getChecksum every cycle — by far the hottest sync-side I/O —
+// so caching keyed on underlying-file `(mtime, size)` lets it stat-and-return
+// when nothing has changed, instead of re-materializing the full payload.
 const checksumCache = new Map();
+// `forPeerId` segments the key and ultimately comes from an inbound `?forPeer=`
+// query param, so left unbounded the Map could grow once per distinct peer id
+// ever seen (peers re-register with fresh instanceIds over time). Bound it with
+// simple insertion-order (oldest-first) eviction — a home federation has only a
+// handful of peers × ~7 categories, so this cap is never hit in practice; it
+// just caps the worst case. Re-inserting an existing key refreshes its order.
+const CHECKSUM_CACHE_MAX = 256;
+const setChecksumCache = (key, value) => {
+  if (checksumCache.has(key)) checksumCache.delete(key);
+  checksumCache.set(key, value);
+  while (checksumCache.size > CHECKSUM_CACHE_MAX) {
+    checksumCache.delete(checksumCache.keys().next().value);
+  }
+};
 
 // Combine mtime/size/inode of one regular file into a single fingerprint
 // string. Inode is included so an atomic-write replace (which mints a new
@@ -833,7 +847,7 @@ export async function getChecksum(category, { forPeerId } = {}) {
     // that I/O on every poll that hits the cache.
     const exclude = await resolveExcludeSet(category, forPeerId);
     const snapshot = await cat.getSnapshot({ exclude });
-    checksumCache.set(cacheKey, { fingerprints, checksum: snapshot.checksum });
+    setChecksumCache(cacheKey, { fingerprints, checksum: snapshot.checksum });
     return { checksum: snapshot.checksum };
   }
   const exclude = await resolveExcludeSet(category, forPeerId);
