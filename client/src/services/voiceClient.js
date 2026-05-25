@@ -502,9 +502,11 @@ export const captureScreenForVision = async () => {
 };
 
 // Reply to a server voice:screenshot:request. Always emits a result (data URL
-// or null) so the server-side waiter resolves instead of timing out.
-export const sendScreenshotResult = (dataUrl) => {
-  socket.emit('voice:screenshot:result', { dataUrl: dataUrl || null });
+// or null) so the server-side waiter resolves instead of timing out. Echo the
+// requestId so the server resolves the matching waiter and a late reply can't
+// satisfy a newer capture.
+export const sendScreenshotResult = (requestId, dataUrl) => {
+  socket.emit('voice:screenshot:result', { requestId, dataUrl: dataUrl || null });
 };
 
 export const playWav = (arrayBuffer) => enqueuePlay(arrayBuffer);

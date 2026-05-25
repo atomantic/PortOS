@@ -121,7 +121,8 @@ vi.mock('../askService.js', () => ({
   }),
 }));
 
-const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
+const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent, anchorLocalMidnightUtc } = await import('./tools.js');
+const { getUtcOffsetMs: mockedGetUtcOffsetMs } = await import('../../lib/timezone.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -961,6 +962,29 @@ describe('calendar_next', () => {
   });
 });
 
+describe('anchorLocalMidnightUtc (DST-safe local-midnight anchor)', () => {
+  it('subtracts the constant offset off the naive UTC parse', () => {
+    // Both passes see the mocked -7h (PDT) offset → local midnight is +7h of the
+    // naive UTC parse of the day string (PDT midnight = 07:00 UTC).
+    const naive = Date.parse('2026-04-17T00:00:00Z');
+    expect(anchorLocalMidnightUtc('2026-04-17', 'America/Los_Angeles'))
+      .toBe(naive + 7 * 3600 * 1000);
+  });
+
+  it('uses the offset evaluated AT the target midnight, not the first guess', () => {
+    // Simulate a DST boundary: the offset at the naive-parse instant differs
+    // from the offset at the refined candidate instant. The returned anchor must
+    // use the SECOND (refined) offset, proving the two-pass convergence.
+    const naive = Date.parse('2026-03-08T00:00:00Z');
+    mockedGetUtcOffsetMs
+      .mockImplementationOnce(() => -8 * 3600 * 1000)  // first pass: PST
+      .mockImplementationOnce(() => -7 * 3600 * 1000); // refined: PDT
+    expect(anchorLocalMidnightUtc('2026-03-08', 'America/Los_Angeles'))
+      .toBe(naive + 7 * 3600 * 1000); // refined offset wins
+    mockedGetUtcOffsetMs.mockReturnValue(-7 * 3600 * 1000); // restore default
+  });
+});
+
 describe('meatspace_log_workout', () => {
   it('rejects missing type', async () => {
     await expect(dispatchTool('meatspace_log_workout', {})).rejects.toThrow(/type is required/);
@@ -1088,13 +1112,23 @@ describe('new tool intent routing', () => {
     expect(classifyIntent('I went for a run').has('meatspace')).toBe(true);
     expect(classifyIntent('went for a 30 minute run').has('meatspace')).toBe(true);
     expect(classifyIntent('I ran a 5k this morning').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran 3 miles before work').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran a marathon yesterday').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran my usual route').has('meatspace')).toBe(true);
+    expect(classifyIntent('ran for 30 minutes').has('meatspace')).toBe(true);
     expect(classifyIntent('did some cardio at the gym').has('meatspace')).toBe(true);
   });
   it('does NOT route command phrasings of run/ran to the meatspace group', () => {
     // Bare run/ran collide with common commands — must not expose the workout tool.
+    // The "ran …" branch requires a fitness object (distance/route/duration), so
+    // these non-fitness "ran a/an/my X" phrasings must NOT match.
     expect(classifyIntent('run the pipeline render').has('meatspace')).toBe(false);
     expect(classifyIntent('I ran the report again').has('meatspace')).toBe(false);
     expect(classifyIntent('run it one more time').has('meatspace')).toBe(false);
+    expect(classifyIntent('I ran a report').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran an errand').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran my mouth').has('meatspace')).toBe(false);
+    expect(classifyIntent('ran for office').has('meatspace')).toBe(false);
   });
   it('routes visual-description utterances to the vision group', () => {
     expect(classifyIntent("what's on this chart?").has('vision')).toBe(true);

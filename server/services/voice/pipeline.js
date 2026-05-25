@@ -96,27 +96,33 @@ const waitForUiRefresh = (state, timeoutMs, signal) => new Promise((resolve) => 
 });
 
 // Ask the client to screenshot the active tab and await the data URL. Mirrors
-// waitForUiRefresh's waiter pattern: emit voice:screenshot:request, then resolve
-// when the client posts voice:screenshot:result (handled in sockets/voice.js).
+// requestUiText's requestId-keyed waiter pattern: emit voice:screenshot:request
+// with a requestId, park a resolver keyed by that id, and resolve only when the
+// client echoes the same id back on voice:screenshot:result (handled in
+// sockets/voice.js). Keying by id means a late result from an earlier capture
+// can't satisfy a newer waiter and describe the wrong screen.
 // Resolves with the data URL or null on timeout/abort/denied-capture.
+let screenshotRequestSeq = 0;
 const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resolve) => {
   if (!state) { resolve(null); return; }
-  if (!Array.isArray(state.screenshotWaiters)) state.screenshotWaiters = [];
+  if (!(state.screenshotWaiters instanceof Map)) state.screenshotWaiters = new Map();
+  const requestId = `shot_${++screenshotRequestSeq}`;
   let done = false;
   const finish = (value) => {
     if (done) return;
     done = true;
     clearTimeout(timer);
     signal?.removeEventListener?.('abort', onAbort);
-    const i = state.screenshotWaiters.indexOf(finish);
-    if (i !== -1) state.screenshotWaiters.splice(i, 1);
+    // Drop our own waiter so a late response (after timeout/abort) is a no-op
+    // rather than resolving a stale promise.
+    state.screenshotWaiters.delete(requestId);
     resolve(value);
   };
   const onAbort = () => finish(null);
   const timer = setTimeout(() => finish(null), timeoutMs);
   signal?.addEventListener?.('abort', onAbort, { once: true });
-  state.screenshotWaiters.push(finish);
-  emit('voice:screenshot:request', {});
+  state.screenshotWaiters.set(requestId, finish);
+  emit('voice:screenshot:request', { requestId });
 });
 
 // Send a captured image (base64 data URL) to the voice LLM provider's vision

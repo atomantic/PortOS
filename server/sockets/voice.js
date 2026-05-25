@@ -66,10 +66,12 @@ export const registerVoiceHandlers = (socket) => {
     // ui:click, wait for the client's fresh index before the next tool
     // runs so the LLM can see the modal/new content it just opened.
     uiWaiters: [],
-    // Promises awaiting a voice:screenshot:result for an in-flight
-    // ui_describe_visually capture. The server emits voice:screenshot:request,
-    // the client captures the active tab and replies with a data URL.
-    screenshotWaiters: [],
+    // Resolvers keyed by requestId, awaiting a voice:screenshot:result for an
+    // in-flight ui_describe_visually capture. The server emits
+    // voice:screenshot:request with a requestId, the client captures the active
+    // tab and replies with the same requestId + a data URL. Keying by id stops
+    // a late result from an earlier capture satisfying a newer waiter.
+    screenshotWaiters: new Map(),
     // Resolvers keyed by requestId, awaiting a voice:ui:read-response. The
     // ui_read tool emits voice:ui:read-request and parks a resolver here so
     // the heavy visible-text blob is only computed by the client (and shipped
@@ -270,19 +272,22 @@ export const registerVoiceHandlers = (socket) => {
   });
 
   // Client replies to a voice:screenshot:request with a base64 data URL of the
-  // captured tab (or null if capture failed / the user denied permission).
+  // captured tab (or null if capture failed / the user denied permission). The
+  // requestId echoes the request so a late result can't resolve a newer waiter.
   // Cap the payload to bound memory from a runaway/malicious client — a
   // full-screen PNG data URL is typically a few MB, so 16 MB is generous.
   const MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024;
   socket.on('voice:screenshot:result', (payload) => {
-    if (!state.screenshotWaiters.length) return;
-    const raw = payload && typeof payload === 'object' ? payload.dataUrl : null;
+    if (!payload || typeof payload !== 'object') return;
+    const { requestId, dataUrl: raw } = payload;
     const dataUrl = (typeof raw === 'string' && raw.startsWith('data:image/') && raw.length <= MAX_SCREENSHOT_BYTES)
       ? raw
       : null;
-    const waiters = state.screenshotWaiters;
-    state.screenshotWaiters = [];
-    waiters.forEach((resolve) => resolve(dataUrl));
+    const resolve = state.screenshotWaiters.get(requestId);
+    if (resolve) {
+      state.screenshotWaiters.delete(requestId);
+      resolve(dataUrl);
+    }
   });
 
   // Lazy visible-text reply. The ui_read tool emitted voice:ui:read-request;
@@ -311,8 +316,8 @@ export const registerVoiceHandlers = (socket) => {
     state.uiWaiters = [];
     waiters.forEach((resolve) => resolve(null));
     // Same for any pending screenshot capture.
-    const shotWaiters = state.screenshotWaiters;
-    state.screenshotWaiters = [];
+    const shotWaiters = Array.from(state.screenshotWaiters.values());
+    state.screenshotWaiters.clear();
     shotWaiters.forEach((resolve) => resolve(null));
     // Same for any pending lazy-text read waiters — resolve null so a
     // ui_read awaiting a response that will never arrive doesn't hang.

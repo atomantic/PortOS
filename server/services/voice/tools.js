@@ -217,9 +217,13 @@ const GROUP_INTENT = {
   // Bare `run`/`ran` were dropped — they collide with common command phrasing
   // ("run the pipeline", "I ran the report") and would expose the workout tool
   // on non-fitness turns. Genuine run-logging is recovered via the "went
-  // for/on a … run" and "ran a/N/for/my …" phrasings below; the other activity
-  // nouns (jog/yoga/cardio/gym/cycling/swim/…) rarely collide in voice commands.
-  meatspace: /\b(drink|drank|beer|wine|whiskey|shot|cocktail|cigarette|vape|pouch|nicotine|weigh|pound|kilo|kg|smoke|smoking|workout|exercise|exercised|jog|yoga|lift(?:ed|ing)?|cardio|gym|cycling|cycled|swim|swam|how am I|summary today|log (?:a|my) (?:drink|weight|nicotine|workout|run|exercise))\b|\bwent (?:for|on) (?:a |an )?(?:\w+ ){0,2}(?:run|jog|swim|ride|walk|hike|workout)\b|\bran (?:a |an |\d|for |my )/i,
+  // for/on a … run" phrasing and the "ran …" branch below, which requires a
+  // fitness OBJECT — a distance/race ("ran a 5k", "ran 3 miles", "ran a
+  // marathon"), a route ("ran my usual route", "ran my loop"), or a duration
+  // ("ran for 30 minutes") — so "I ran a report", "ran an errand", and "ran my
+  // mouth" no longer match. The other activity nouns (jog/yoga/cardio/gym/…)
+  // rarely collide in voice commands.
+  meatspace: /\b(drink|drank|beer|wine|whiskey|shot|cocktail|cigarette|vape|pouch|nicotine|weigh|pound|kilo|kg|smoke|smoking|workout|exercise|exercised|jog|yoga|lift(?:ed|ing)?|cardio|gym|cycling|cycled|swim|swam|how am I|summary today|log (?:a|my) (?:drink|weight|nicotine|workout|run|exercise))\b|\bwent (?:for|on) (?:a |an )?(?:\w+ ){0,2}(?:run|jog|swim|ride|walk|hike|workout)\b|\bran (?:a |an |my )?(?:\w+ ){0,2}(?:\d+\s?k\b|\d+\s?km\b|miles?\b|marathons?\b|half[- ]?marathons?\b|5k\b|10k\b|loops?\b|routes?\b|trails?\b|laps?\b)|\bran for (?:about |around |roughly )?(?:\d|an? |half|the )/i,
   // Calendar reads — "what's on my calendar", "what do I have today",
   // "next meeting", "what's next", "upcoming", "any appointments". Tight-ish
   // so plain "open calendar" still routes to ui_navigate, not calendar_today.
@@ -374,6 +378,20 @@ const summarizeEvent = (e, tz) => {
   const when = e?.allDay ? 'all day' : (start || 'time TBD');
   const loc = e?.location ? ` at ${e.location}` : '';
   return `${e?.title || 'Untitled event'} (${when})${loc}`;
+};
+// UTC timestamp (ms) of local midnight for the `YYYY-MM-DD` day string in `tz`.
+// The server runs TZ=UTC, so we subtract the TZ offset from the naive UTC parse
+// of the day string. Evaluate the offset AT the target day's midnight (not at
+// `now`) so a DST transition elsewhere in the day can't shift the result by an
+// hour. The naive parse lands within ~14h of local midnight — close enough that
+// re-evaluating the offset at that candidate instant converges to the correct
+// offset across a DST boundary.
+export const anchorLocalMidnightUtc = (dayStr, tz) => {
+  const naiveUtc = Date.parse(`${dayStr}T00:00:00Z`);
+  const firstOffset = getUtcOffsetMs(new Date(naiveUtc), tz);
+  const candidate = naiveUtc - firstOffset;
+  const refinedOffset = getUtcOffsetMs(new Date(candidate), tz);
+  return naiveUtc - refinedOffset;
 };
 
 // ----- Weather helpers (weather_now) -----
@@ -1489,10 +1507,13 @@ const TOOLS = [
       // The server runs TZ=UTC and event startTimes carry an offset/Z, so the
       // [startDate, endDate] bounds must be the user's LOCAL day expressed in
       // UTC — otherwise a late-evening PT event lands on the next UTC day and
-      // gets dropped. Anchor midnight-local by subtracting the TZ offset from
-      // the naive UTC parse of the local-day string.
-      const offsetMs = getUtcOffsetMs(new Date(), tz);
-      const localMidnightUtc = Date.parse(`${today}T00:00:00Z`) - offsetMs;
+      // gets dropped. Anchor midnight-local by subtracting the TZ offset, but
+      // evaluate that offset at the TARGET day's midnight (not at `now`): on a
+      // DST-transition day the offset at `now` can differ from the offset at
+      // midnight by an hour, shifting the window and dropping/duplicating
+      // boundary events. Two passes converge (the first guess lands within
+      // ~14h of local midnight; the second re-evaluates at that instant).
+      const localMidnightUtc = anchorLocalMidnightUtc(today, tz);
       const startDate = new Date(localMidnightUtc).toISOString();
       const endDate = new Date(localMidnightUtc + 86399999).toISOString();
       const { events = [] } = await getCalendarEvents({ startDate, endDate, limit: max });

@@ -105,3 +105,21 @@ describe('voice:ui lazy-text socket handlers', () => {
     expect(() => socket.fire('voice:ui:read-response', { requestId: 'missing', text: 'hi' })).not.toThrow();
   });
 });
+
+describe('voice:screenshot:result socket handler', () => {
+  it('registers the screenshot-result handler', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(socket.has('voice:screenshot:result')).toBe(true);
+  });
+
+  it('tolerates malformed / unmatched screenshot-result payloads', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(() => socket.fire('voice:screenshot:result', null)).not.toThrow();
+    expect(() => socket.fire('voice:screenshot:result', 'nope')).not.toThrow();
+    // Unmatched requestId — no waiter parked for it, must not throw (and must
+    // not resolve a stale waiter, which is the whole point of the id keying).
+    expect(() => socket.fire('voice:screenshot:result', { requestId: 'missing', dataUrl: 'data:image/png;base64,AAAA' })).not.toThrow();
+  });
+});

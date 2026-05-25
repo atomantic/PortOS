@@ -224,10 +224,11 @@ export default function VoiceWidget() {
       // tab. captureScreenForVision prompts for screen-capture permission and
       // returns a data URL (or null on denial/failure); always reply so the
       // server-side waiter resolves rather than timing out.
-      onVoiceEvent('voice:screenshot:request', async () => {
+      onVoiceEvent('voice:screenshot:request', async (payload) => {
+        const requestId = payload && typeof payload === 'object' ? payload.requestId : undefined;
         const dataUrl = await captureScreenForVision();
         if (!dataUrl) toast('Voice: screen capture was blocked or unavailable.', { icon: '📷' });
-        sendScreenshotResult(dataUrl);
+        sendScreenshotResult(requestId, dataUrl);
       }),
     ];
     return () => offs.forEach((off) => off());
