@@ -226,10 +226,28 @@ export default function MediaLightbox({
           onTouchEnd={onTouchEnd}
         >
           {isVideo ? (
-            /* playsInline keeps iOS Safari from auto-promoting autoplay video
-               to a native fullscreen player — exiting that leaves the modal
-               laid out as a tiny strip with no reachable close button. */
-            <video src={item.downloadUrl} controls autoPlay loop playsInline className={imgMax} />
+            /* Mobile playback contract:
+               - playsInline keeps iOS Safari from auto-promoting autoplay video
+                 to a native fullscreen player — exiting that leaves the modal
+                 laid out as a tiny strip with no reachable close button.
+               - muted is required for autoplay under the mobile media-engagement
+                 policy: iOS/Android block unmuted autoplay that isn't fired from
+                 a direct user gesture, so without it the clip never starts and the
+                 area just shows black ("not loading"). Controls let the user unmute.
+               - poster paints the thumbnail immediately so there's no blank box
+                 while the clip buffers (and a visible frame even if playback is
+                 deferred). previewUrl is the video's thumbnail; omit when absent. */
+            <video
+              src={item.downloadUrl}
+              poster={item.previewUrl || undefined}
+              controls
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="metadata"
+              className={imgMax}
+            />
           ) : (
             <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}

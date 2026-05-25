@@ -1384,7 +1384,21 @@ export default function VideoGen() {
           </div>
           <div className="aspect-video max-w-[420px] mx-auto bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
             {result ? (
-              <video src={result.path || `/data/videos/${result.filename}`} controls autoPlay loop playsInline preload="metadata" className="w-full h-full" />
+              // muted so the clip autoplays under the mobile media-engagement
+              // policy (iOS/Android block unmuted autoplay outside a user
+              // gesture — otherwise it just shows black); poster paints the
+              // thumbnail while it buffers. Controls let the user unmute.
+              <video
+                src={result.path || `/data/videos/${result.filename}`}
+                poster={result.thumbnail ? `/data/video-thumbnails/${result.thumbnail}` : undefined}
+                controls
+                autoPlay
+                loop
+                muted
+                playsInline
+                preload="metadata"
+                className="w-full h-full"
+              />
             ) : generating ? (
               <div className="text-gray-500 text-xs flex flex-col items-center gap-1.5">
                 <BrailleSpinner />
