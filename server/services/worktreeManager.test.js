@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { shouldRefuseDefaultBranchMerge } from './worktreeManager.js';
+import { shouldRefuseDefaultBranchMerge, isHumanClaimWorktree } from './worktreeManager.js';
 
 /**
  * Tests for the worktree manager service.
@@ -290,6 +290,9 @@ describe('Orphaned Worktree Detection', () => {
     return worktrees.filter(wt => {
       if (!wt.path.startsWith(worktreesDir)) return false;
       const agentId = wt.path.split('/').pop();
+      // Mirror the real cleanup guard: human-driven `/claim` worktrees are
+      // never CoS orphans.
+      if (isHumanClaimWorktree(agentId)) return false;
       return !activeAgentIds.has(agentId);
     });
   }
@@ -326,6 +329,38 @@ describe('Orphaned Worktree Detection', () => {
     const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', activeIds);
 
     expect(orphans).toHaveLength(0);
+  });
+
+  it('never flags a human-driven /claim worktree as orphaned', () => {
+    const worktrees = [
+      { path: '/data/cos/worktrees/agent-bbb', branch: 'refs/heads/cos/task-2/agent-bbb' },
+      { path: '/data/cos/worktrees/claim-extract-compare-helpers', branch: 'refs/heads/claim/extract-compare-helpers' }
+    ];
+    // No active agents at all — the dead CoS agent IS an orphan, but the claim
+    // worktree must be left alone (it's owned by /claim's own cleanup).
+    const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', new Set());
+
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].path).toContain('agent-bbb');
+    expect(orphans.some(o => o.path.includes('claim-'))).toBe(false);
+  });
+});
+
+describe('isHumanClaimWorktree', () => {
+  it('is true for /claim worktree dir names', () => {
+    expect(isHumanClaimWorktree('claim-extract-compare-helpers')).toBe(true);
+    expect(isHumanClaimWorktree('claim-codex5-onboarding-capability-map')).toBe(true);
+  });
+
+  it('is false for CoS agent worktree dir names', () => {
+    expect(isHumanClaimWorktree('agent-1a2b3c4d')).toBe(false);
+    expect(isHumanClaimWorktree('cos-task-xyz')).toBe(false);
+  });
+
+  it('is false for non-string / empty input (fail safe)', () => {
+    expect(isHumanClaimWorktree(undefined)).toBe(false);
+    expect(isHumanClaimWorktree(null)).toBe(false);
+    expect(isHumanClaimWorktree('')).toBe(false);
   });
 });
 

@@ -20,6 +20,24 @@ const WORKTREES_DIR = PATHS.worktrees;
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
 /**
+ * True when a worktree directory belongs to a human-driven `/claim` TUI
+ * session, not a CoS agent.
+ *
+ * The `/claim` command creates its worktree at `data/cos/worktrees/claim-<slug>`
+ * — the SAME directory CoS uses for agent worktrees (`agent-<uuid>`). CoS
+ * agent IDs are always `agent-<8-char-uuid>` (see `agentLifecycle.js`), so the
+ * `claim-` prefix is unambiguous. These worktrees are owned by the `/claim`
+ * command's own Phase 7 cleanup; CoS orphan-cleanup MUST skip them. Otherwise
+ * every cleanup cycle (boot + each evaluation) sees a `claim-<slug>` dir with
+ * no matching active agent, treats it as orphaned, and removes it — pruning a
+ * human's in-flight claim mid-review (and, with `{ merge: true }`, even
+ * fast-forwarding the `claim/<slug>` branch into the default branch).
+ */
+export function isHumanClaimWorktree(agentId) {
+  return typeof agentId === 'string' && agentId.startsWith('claim-');
+}
+
+/**
  * Decide whether an auto-merge into `currentBranch` should be refused.
  *
  * Pure helper for the defense-in-depth gate in `removeWorktree`: an agent's
@@ -463,6 +481,9 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
 
     const agentId = wt.path.split('/').pop();
     handledAgentIds.add(agentId);
+    // Never reap human-driven `/claim` worktrees (`claim-<slug>`) — they belong
+    // to the `/claim` command's own Phase 7 cleanup, not CoS. See isHumanClaimWorktree.
+    if (isHumanClaimWorktree(agentId)) continue;
     if (!activeAgentIds.has(agentId)) {
       const branchName = wt.branch?.replace('refs/heads/', '') || '';
       // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
@@ -500,6 +521,8 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
     if (!entry.isDirectory()) continue;
     const agentId = entry.name;
     if (alreadyHandled.has(agentId) || activeAgentIds.has(agentId)) continue;
+    // Human-driven `/claim` worktrees are not CoS agents — never reap them.
+    if (isHumanClaimWorktree(agentId)) continue;
 
     const worktreePath = join(WORKTREES_DIR, agentId);
     const gitFile = join(worktreePath, '.git');
