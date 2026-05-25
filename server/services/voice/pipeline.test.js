@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { splitSentences, isNonSpeechMarker, detectNarrationWithoutCall, requestUiText } from './pipeline.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the memory retriever so buildMemoryContext can be tested without a live
+// embeddings backend / memory index. Default returns no memories; individual
+// tests override with mockResolvedValueOnce.
+vi.mock('../memoryRetriever.js', () => ({
+  getRelevantMemories: vi.fn(async () => []),
+}));
+
+import { splitSentences, isNonSpeechMarker, detectNarrationWithoutCall, requestUiText, isRetrievalShaped, buildMemoryContext } from './pipeline.js';
+import { getRelevantMemories } from '../memoryRetriever.js';
 
 describe('splitSentences', () => {
   it('returns empty when no terminator is present', () => {
@@ -190,5 +199,90 @@ describe('requestUiText (lazy visible-text fetch)', () => {
     await expect(p).resolves.toBeNull();
     // No resolver remains, so a late delivery just finds nothing.
     expect(state.uiTextWaiters.get(requestId)).toBeUndefined();
+  });
+});
+
+describe('isRetrievalShaped', () => {
+  it('flags first-person past recall questions', () => {
+    expect(isRetrievalShaped('What did I say about the budget last week?')).toBe(true);
+    expect(isRetrievalShaped('When did I decide to switch hosting providers?')).toBe(true);
+    expect(isRetrievalShaped('Why did I choose Postgres over SQLite?')).toBe(true);
+    expect(isRetrievalShaped('Did I mention anything about the trip?')).toBe(true);
+    expect(isRetrievalShaped('Have I talked about this before?')).toBe(true);
+  });
+
+  it('flags preference questions', () => {
+    expect(isRetrievalShaped('Do I prefer dark roast or light roast?')).toBe(true);
+    expect(isRetrievalShaped("What's my preferred editor?")).toBe(true);
+    expect(isRetrievalShaped('What is my favorite color?')).toBe(true);
+  });
+
+  it('flags explicit recall / remember phrasings', () => {
+    expect(isRetrievalShaped('Remind me what I planned for the weekend.')).toBe(true);
+    expect(isRetrievalShaped('Do you remember my doctor appointment?')).toBe(true);
+    expect(isRetrievalShaped('What do you remember about my goals?')).toBe(true);
+    expect(isRetrievalShaped('Recall what we discussed yesterday.')).toBe(true);
+    expect(isRetrievalShaped('What did we decide about the launch date?')).toBe(true);
+  });
+
+  it('does NOT flag action / navigation turns', () => {
+    expect(isRetrievalShaped('Open my daily log.')).toBe(false);
+    expect(isRetrievalShaped('Take me to tasks.')).toBe(false);
+    expect(isRetrievalShaped('Add milk to my brain inbox.')).toBe(false);
+    expect(isRetrievalShaped('Fill the description with hello.')).toBe(false);
+  });
+
+  it('does NOT flag present-tense / generic questions', () => {
+    expect(isRetrievalShaped('What time is it?')).toBe(false);
+    expect(isRetrievalShaped('How are my services doing?')).toBe(false);
+    expect(isRetrievalShaped('What are my goals?')).toBe(false);
+    expect(isRetrievalShaped('Tell me a joke.')).toBe(false);
+  });
+
+  it('tolerates empty / non-string input', () => {
+    expect(isRetrievalShaped('')).toBe(false);
+    expect(isRetrievalShaped('   ')).toBe(false);
+    expect(isRetrievalShaped(null)).toBe(false);
+    expect(isRetrievalShaped(undefined)).toBe(false);
+  });
+});
+
+describe('buildMemoryContext', () => {
+  beforeEach(() => {
+    getRelevantMemories.mockReset();
+  });
+
+  it('renders a delimited block with the top memories', async () => {
+    getRelevantMemories.mockResolvedValueOnce([
+      { content: 'User prefers dark roast coffee', type: 'preference', relevance: 0.9 },
+      { content: 'User decided to use Postgres for the DB', type: 'decision', relevance: 0.8 },
+    ]);
+    const block = await buildMemoryContext('do I prefer dark or light roast?');
+    expect(block).toContain('Relevant memories');
+    expect(block).toContain('- User prefers dark roast coffee');
+    expect(block).toContain('- User decided to use Postgres for the DB');
+  });
+
+  it('caps injection at the requested limit', async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ content: `memory ${i}`, type: 'fact', relevance: 1 - i / 10 }));
+    getRelevantMemories.mockResolvedValueOnce(many);
+    const block = await buildMemoryContext('what did I say', { limit: 3 });
+    const bulletCount = (block.match(/^- /gm) || []).length;
+    expect(bulletCount).toBe(3);
+  });
+
+  it('returns null when no memories are relevant (inject nothing)', async () => {
+    getRelevantMemories.mockResolvedValueOnce([]);
+    expect(await buildMemoryContext('what did I say about X?')).toBeNull();
+  });
+
+  it('returns null when retriever yields only empty-content entries', async () => {
+    getRelevantMemories.mockResolvedValueOnce([{ content: '   ', type: 'fact' }, { type: 'fact' }]);
+    expect(await buildMemoryContext('what did I say about X?')).toBeNull();
+  });
+
+  it('returns null when the retriever returns a non-array', async () => {
+    getRelevantMemories.mockResolvedValueOnce(null);
+    expect(await buildMemoryContext('what did I say about X?')).toBeNull();
   });
 });
