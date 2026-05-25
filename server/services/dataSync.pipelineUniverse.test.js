@@ -699,6 +699,12 @@ describe('dataSync — videoHistory category', () => {
     expect(snap.checksum).toBeTruthy();
   });
 
+  it('snapshot excludes hidden rows (local-only visibility must not propagate to peers)', async () => {
+    writeJSON(VIDEO_HISTORY_PATH, [row('v1'), row('v-hidden', { hidden: true }), row('v2')]);
+    const snap = await dataSync.getSnapshot('videoHistory');
+    expect(snap.data.videos.map((v) => v.id).sort()).toEqual(['v1', 'v2']);
+  });
+
   it('snapshot checksum is order-insensitive (rows sorted by id on the wire)', async () => {
     writeJSON(VIDEO_HISTORY_PATH, [row('v-b'), row('v-a')]);
     const a = await dataSync.getSnapshot('videoHistory');

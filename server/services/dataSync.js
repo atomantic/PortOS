@@ -597,7 +597,12 @@ async function applyMediaCollectionsRemote(remoteData) {
 // need on the sync read path, and the on-disk shape is a plain array.
 async function getVideoHistorySnapshot() {
   const raw = await readJSONFile(VIDEO_HISTORY_FILE, []);
-  const rows = Array.isArray(raw) ? raw : [];
+  // Exclude rows the user hid from their own gallery (`hidden: true`) — hiding
+  // is a local-only visibility decision (e.g. inner chunks of a stitched clip,
+  // or a clip the user tucked away) and must NOT propagate to peers. The whole
+  // point of this category is to render a SHARED collection's video items, and
+  // a hidden row is by definition not part of that shared surface.
+  const rows = (Array.isArray(raw) ? raw : []).filter((r) => r && !r.hidden);
   // Canonicalize ordering for the wire so two peers holding identical sets
   // produce identical checksums regardless of insertion (newest-first) order.
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale. Rows without a

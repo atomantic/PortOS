@@ -1598,7 +1598,7 @@ const TOOLS = [
   {
     name: 'weather_now',
     description:
-      'Report the current weather (temperature + conditions) for a location. Use when the user asks "what\'s the weather?", "is it raining?", "how hot is it outside?". Defaults to the user\'s configured location (if set in Settings); otherwise pass `lat`/`lon` for a specific place. Uses the free Open-Meteo service (no API key).',
+      'Report the current weather (temperature + conditions) for a location. Use when the user asks "what\'s the weather?", "is it raining?", "how hot is it outside?". Pass `lat`/`lon` for a specific place; with no coordinates it uses a saved location if one is configured, otherwise a default location. Uses the free Open-Meteo service (no API key).',
     parameters: {
       type: 'object',
       properties: {
