@@ -166,7 +166,8 @@ const DEFAULT_SYNC_CATEGORIES = {
   meatspace: false,
   universe: false,
   pipeline: false,
-  mediaCollections: false
+  mediaCollections: false,
+  videoHistory: false
 };
 
 export { DEFAULT_SYNC_CATEGORIES };

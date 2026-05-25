@@ -49,6 +49,7 @@ const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
 // down a sub WITHOUT touching the other records). Added to those categories'
 // CHECKSUM_PATHS below.
 const PEER_SUBSCRIPTIONS_FILE = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
+const VIDEO_HISTORY_FILE = join(PATHS.data, 'video-history.json');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -573,6 +574,88 @@ async function applyMediaCollectionsRemote(remoteData) {
   return result;
 }
 
+// --- Category: Video History ---
+
+// `data/video-history.json` is a FLAT array of video-generation rows
+// (`{ id, prompt, filename, createdAt, thumbnail, ... }`). MediaCollectionDetail's
+// `hydrate()` looks every `{ kind:'video', ref }` collection item up in a
+// `videosById` map built from this list — so a synced collection's video items
+// are silently filtered out as "missing" on the receiver until the matching row
+// arrives. This category rides the same 60s snapshot loop as mediaCollections
+// so the rows propagate alongside the collection JSON.
+//
+// **No exclude-set / `{forPeerId}` filtering applies.** Unlike mediaCollections
+// (whose getter drops rows linked to an ephemeral universe/series), video rows
+// carry no ephemeral linkage — a video is identified by its bare id, with no
+// parent record to opt out of sync. The whole flat list is union-merged.
+// (The `.mp4` bytes themselves still flow via the per-record asset-pull worker
+// in peerSync.js — this category carries only the JSON metadata row.)
+
+// Read/write the flat history array directly (matching the goals/character
+// categories' `readJSONFile`+`atomicWrite` pattern) rather than importing
+// videoGen/local.js — that module drags in ffmpeg/spawn machinery we don't
+// need on the sync read path, and the on-disk shape is a plain array.
+async function getVideoHistorySnapshot() {
+  const raw = await readJSONFile(VIDEO_HISTORY_FILE, []);
+  const rows = Array.isArray(raw) ? raw : [];
+  // Canonicalize ordering for the wire so two peers holding identical sets
+  // produce identical checksums regardless of insertion (newest-first) order.
+  // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale. Rows without a
+  // string id sort last (and won't merge — see applyVideoHistoryRemote's guard).
+  const data = {
+    videos: [...rows].sort((a, b) =>
+      String(a?.id ?? '').localeCompare(String(b?.id ?? ''))),
+  };
+  return { data, checksum: computeChecksum(data) };
+}
+
+async function applyVideoHistoryRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+  const incoming = Array.isArray(remoteData.videos) ? remoteData.videos : [];
+  if (incoming.length === 0) return { applied: false, count: 0 };
+
+  const localRaw = await readJSONFile(VIDEO_HISTORY_FILE, []);
+  const local = Array.isArray(localRaw) ? localRaw : [];
+
+  // Union by `id`, LWW on `createdAt` when both sides know the same row.
+  // Video-history rows are append-mostly and immutable once written, so
+  // `createdAt` is a sufficient (and the only) freshness signal — there's no
+  // `updatedAt`. A row with no string id can't be keyed and is skipped (a
+  // hand-edited or corrupt entry shouldn't clobber a real row at key
+  // `undefined`).
+  const hasId = (r) => typeof r?.id === 'string' && r.id;
+  const keyed = local.filter(hasId);
+  const before = new Map(keyed.map((r) => [r.id, r]));
+  const { merged, changed } = mergeArraysByKey(
+    keyed,
+    incoming.filter(hasId),
+    'id',
+    'createdAt',
+  );
+  if (!changed) return { applied: false, count: 0 };
+
+  // `count` reports rows actually added/updated by this merge (not total
+  // post-merge size — that would over-report when callers sum across
+  // categories or compare cycle deltas). Matches the pipeline category's
+  // `count` contract.
+  let changedCount = 0;
+  for (const row of merged) {
+    const prev = before.get(row.id);
+    if (!prev || prev !== row) changedCount++;
+  }
+
+  // Preserve any local rows that lacked an id (the merge dropped them from its
+  // keyed map) — don't let a sync silently delete un-keyable local history.
+  const idless = local.filter((r) => !hasId(r));
+  // Newest-first to match how generateVideo unshifts new rows + how the
+  // Media History grid expects them.
+  const next = [...merged, ...idless].sort((a, b) =>
+    String(b?.createdAt ?? '').localeCompare(String(a?.createdAt ?? '')));
+  await atomicWrite(VIDEO_HISTORY_FILE, next);
+  console.log(`🔄 VideoHistory sync: merged ${changedCount} video row(s)`);
+  return { applied: true, count: changedCount };
+}
+
 // --- Public API ---
 
 // Files each category reads, used to keep the in-process checksum cache
@@ -601,6 +684,9 @@ const CHECKSUM_PATHS = {
   // must re-checksum the collections snapshot even though
   // media-collections.json itself didn't move. Same goes for un-ephemeral.
   mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
+  // videoHistory is a flat history file with no parent-record dependency —
+  // its checksum invalidates only when video-history.json itself moves.
+  videoHistory: [VIDEO_HISTORY_FILE],
 };
 
 const CATEGORIES = {
@@ -610,7 +696,8 @@ const CATEGORIES = {
   meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote },
   universe: { getSnapshot: getUniverseSnapshot, applyRemote: applyUniverseRemote },
   pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote },
-  mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote }
+  mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote },
+  videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote }
 };
 
 // Per-category `{ fingerprints, checksum }` cache. The orchestrator hits

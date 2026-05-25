@@ -13,7 +13,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections']);
+const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory']);
 
 // Tombstone GC manual trigger. Declared BEFORE `/:category/*` so the literal
 // "tombstones" segment wins Express's first-match lookup (categoryParam's

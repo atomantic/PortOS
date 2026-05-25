@@ -53,7 +53,8 @@ const syncCategoriesSchema = z.object({
   // here — otherwise PATCH/PUT updates from the Instances UI silently
   // no-op for the missing category. Same regression class as the
   // universe + pipeline omission tracked in .changelog/NEXT.md.
-  mediaCollections: z.boolean().optional()
+  mediaCollections: z.boolean().optional(),
+  videoHistory: z.boolean().optional()
 }).optional();
 
 const updatePeerSchema = z.object({

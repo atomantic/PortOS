@@ -36,6 +36,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   pipelineIssues: 1,
   pipelineSeries: 1,
   mediaCollections: 1,
+  // v1 = the flat `data/video-history.json` array of generation rows synced
+  // by the `videoHistory` sync category (rows ride the snapshot loop so a
+  // synced collection's video items aren't filtered out as "missing" on the
+  // receiver). The shape has been stable since video gen shipped.
+  videoHistory: 1,
 });
 
 /**

@@ -44,6 +44,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
+import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
@@ -1711,6 +1712,20 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   // a missing sidecar just means the image lands in Unsorted without a prompt.
   if (entry.kind === 'image') {
     await pullSidecarForImage(peer, base, safeName).catch(() => {});
+  }
+  // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it
+  // as a sibling asset. Cheaper end-to-end: no new asset kind / URL-prefix /
+  // manifest-diff plumbing, and the thumbnail filename is deterministic
+  // (`<jobId>.jpg`, where jobId === the video filename minus `.mp4`). The
+  // synced video-history row already carries `thumbnail: '<jobId>.jpg'`, so
+  // once this file exists on disk `normalizeVideo` renders the collection
+  // tile. Best-effort: if ffmpeg is missing the row still syncs (the item
+  // stops being filtered as "missing"); the tile just falls back to no
+  // preview. Mirrors generateThumbnail's null-on-failure contract.
+  if (entry.kind === 'video') {
+    const jobId = safeName.replace(/\.[a-z0-9]+$/i, '');
+    const videoPath = join(localDir, safeName);
+    await generateThumbnail(videoPath, jobId).catch(() => null);
   }
 }
 
