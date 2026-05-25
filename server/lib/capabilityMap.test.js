@@ -165,6 +165,18 @@ describe('appsRow', () => {
     expect(r.summary).toContain('3 not started');
     expect(r.detail.notStarted).toBe(3);
   });
+
+  it('reports native-only (unmanaged) apps as present, not "No apps"', () => {
+    // getAppStatusSummary().total excludes unmanaged native/Xcode apps.
+    const r = appsRow({ total: 0, online: 0, unmanaged: 2 });
+    expect(r.status).toBe(OK);
+    expect(r.configured).toBe(true);
+    expect(r.summary).toContain('2 native');
+  });
+
+  it('unconfigured only when there are no apps at all', () => {
+    expect(appsRow({ total: 0, unmanaged: 0 }).status).toBe(UNCONFIGURED);
+  });
 });
 
 describe('buildCapabilityRows', () => {
@@ -203,5 +215,10 @@ describe('summarizeCapabilities', () => {
     expect(summarizeCapabilities([]).overall).toBe(UNCONFIGURED);
     expect(summarizeCapabilities(null).overall).toBe(UNCONFIGURED);
     expect(summarizeCapabilities(null).total).toBe(0);
+  });
+
+  it('does not default to ok when a non-empty list has only unknown statuses', () => {
+    const s = summarizeCapabilities([{ status: 'bogus' }, {}]);
+    expect(s).toMatchObject({ ok: 0, warn: 0, error: 0, unconfigured: 0, total: 2, overall: UNCONFIGURED });
   });
 });
