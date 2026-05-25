@@ -129,10 +129,20 @@ const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resol
 // endpoint and return the description text. Reuses visionTest's provider-aware
 // OpenAI-compatible /chat/completions call so we don't reimplement the request
 // shape. Lazy import keeps tools.js / the pipeline free of a hard vision dep.
+//
+// Vision model selection is DECOUPLED from the voice text model: reusing
+// `cfg.llm.model` here meant that pinning a text-only voice model silently broke
+// ui_describe_visually even when the provider had a working vision-capable
+// default. Prefer an explicit `cfg.llm.visionModel` when set; otherwise pass
+// undefined so describeImageDataUrl falls back to the provider's defaultModel
+// (which is vision-capable for vision-capable providers).
 const describeScreenshot = async (dataUrl, prompt, cfg) => {
   const { describeImageDataUrl } = await import('../visionTest.js');
   const providerId = cfg?.llm?.provider || 'lmstudio';
-  const model = cfg?.llm?.model && cfg.llm.model !== 'auto' ? cfg.llm.model : undefined;
+  const visionModel = cfg?.llm?.visionModel;
+  const model = typeof visionModel === 'string' && visionModel && visionModel !== 'auto'
+    ? visionModel
+    : undefined;
   return describeImageDataUrl({ dataUrl, prompt, providerId, model });
 };
 

@@ -48,11 +48,14 @@ router.post('/tombstones/sweep', asyncHandler(async (req, res) => {
 // for torn-down subs. Absent (older peers, non-peer callers) → full snapshot,
 // applied idempotently by the receiver. Express returns an array for repeated
 // query keys; the `typeof === 'string'` guard drops those so only a single
-// scalar instanceId scopes the request.
-const forPeerOf = (req) =>
-  typeof req.query.forPeer === 'string' && req.query.forPeer.length > 0
-    ? req.query.forPeer
-    : undefined;
+// scalar instanceId scopes the request. Trim + length-cap the value (matching
+// the defensive id handling in the peerSync routes) so stray whitespace or a
+// malformed/oversized client value can't become a junk cache key.
+const forPeerOf = (req) => {
+  if (typeof req.query.forPeer !== 'string') return undefined;
+  const trimmed = req.query.forPeer.trim().slice(0, 128);
+  return trimmed.length > 0 ? trimmed : undefined;
+};
 
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {
