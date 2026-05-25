@@ -18,8 +18,8 @@ export const WRITING_LENGTH_TARGETS = [
     id: 'microfiction',
     label: 'Microfiction',
     core: true,
-    words: { min: null, max: 500, label: 'under 500 words' },
-    chars: { min: null, max: 3000, label: 'under 2,500–3,000 chars' },
+    words: { min: null, max: 500, label: '≤500 words' },
+    chars: { min: null, max: 3000, label: '≤2,500–3,000 chars' },
     note: 'A single sharp image or turn. Every word load-bearing; no room for sub-plots.',
   },
   {

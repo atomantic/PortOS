@@ -29,11 +29,14 @@ describe('writingGuide data shape', () => {
     for (let i = 1; i < maxes.length; i++) {
       const prev = maxes[i - 1];
       const cur = maxes[i];
-      // null max only allowed as the final, open-ended band.
+      // A null max is only allowed on the final, open-ended band — and any prior
+      // band must therefore have a finite max (a null `prev` here means an
+      // open-ended band was misplaced earlier in the ladder).
+      expect(prev).not.toBeNull();
       if (cur == null) {
         expect(i).toBe(maxes.length - 1);
       } else {
-        expect(cur).toBeGreaterThan(prev ?? 0);
+        expect(cur).toBeGreaterThan(prev);
       }
     }
   });
