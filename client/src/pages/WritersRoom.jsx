@@ -148,6 +148,7 @@ export default function WritersRoom() {
             to="/writers-room/guide"
             className="ml-auto flex items-center gap-1 text-xs text-gray-400 hover:text-port-accent transition-colors"
             title="Writing guide: length targets & craft rules"
+            aria-label="Writing guide"
           >
             <BookOpen size={14} />
             <span className="hidden sm:inline">Guide</span>
