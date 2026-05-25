@@ -16,6 +16,8 @@ TBD
 
 - **Universes table** — each row now shows a 48×48 thumbnail of the latest image from the universe's auto-managed media collection (the `Universe: <name>` bucket linked by `collection.universeId`). Rows without media fall back to a Globe placeholder; a broken file ref also degrades to the placeholder via `<img onError>`. Applies to both the desktop table and the mobile card layout.
 
+- **Writers Room auto-collapses the header + library when you open a work.** Tapping a library item now collapses both the page header and the library so the editor gets the full screen — most useful on mobile, where the library is an inline block stacked above the editor. The header shrinks to a slim bar that hosts the "show library" control (reachable on mobile, where there was previously no expand affordance), and the library always re-appears whenever no work is selected so you're never stranded.
+
 ## Fixed
 
 - **Tabbed sub-nav strips no longer drift vertically on mobile.** The horizontally-scrolling sub-nav tabs (Media Gen and every other page that uses the shared `TabPills` primitive) could be dragged diagonally/vertically on iOS, producing an uneven, wonky scroll. Both `TabPills` scroll containers now set `touch-action: pan-x` so touch gestures pan the strip horizontally while vertical drags pass through to normal page scrolling.

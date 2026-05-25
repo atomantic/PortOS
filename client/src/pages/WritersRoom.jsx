@@ -21,8 +21,11 @@ export default function WritersRoom() {
   const [activeWork, setActiveWork] = useState(null);
   const [loadingWork, setLoadingWork] = useState(false);
   const [showExercise, setShowExercise] = useState(false);
-  // Library collapsed state — desktop only; mobile keeps the library inline
-  // because there's no editor-vs-library tradeoff to make on a small screen.
+  // Header + library collapse state. Opening a work auto-collapses both (see
+  // selectWork) so the editor gets maximum room — this now applies on mobile
+  // too, where the library is an inline block stacked above the editor. The
+  // full header shrinks to a slim bar that hosts the "show library" control.
+  // Persisted so a manual collapse survives reloads.
   const [libraryCollapsed, setLibraryCollapsed] = useLocalStorageBool(LIBRARY_COLLAPSED_KEY, false);
   const toggleLibrary = useCallback(() => {
     setLibraryCollapsed((prev) => !prev);
@@ -69,8 +72,19 @@ export default function WritersRoom() {
       navigate('/writers-room');
       return;
     }
+    // Tapping a work auto-collapses the header + library so the editor gets the
+    // full screen. The slim header's button re-expands when the user wants to
+    // pick another work.
+    setLibraryCollapsed(true);
     navigate(`/writers-room/works/${id}`);
   };
+
+  // Whenever no work is open (initial load, after deselect, or after the active
+  // work is deleted) show the library — never strand the user on a hidden
+  // library with nothing to edit.
+  useEffect(() => {
+    if (!workId) setLibraryCollapsed(false);
+  }, [workId, setLibraryCollapsed]);
 
   const handleWorkChange = (updated) => {
     // Caller (WorkEditor) hands us the freshest manifest + activeDraftBody —
@@ -107,34 +121,42 @@ export default function WritersRoom() {
 
   // Inline gridTemplateColumns is a no-op while the container is `display: flex`
   // (mobile) and takes effect once `md:grid` flips display at the breakpoint.
-  // Collapsed track is 0px (not a thin rail) — matches CoS pattern where a
-  // floating expand button stands in for the rail.
+  // Collapsed track is 0px (not a thin rail) — the slim header's "show library"
+  // button stands in for the rail.
   const libraryTrack = libraryCollapsed ? '0px' : '260px';
   const exerciseSuffix = showExercise ? ' 320px' : '';
   const desktopGridCols = `${libraryTrack} minmax(0, 1fr)${exerciseSuffix}`;
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card">
-        <NotebookPen className="w-5 h-5 text-port-accent" />
-        <h1 className="text-xl font-bold text-white">Writers Room</h1>
-        <span className="text-xs text-gray-500 hidden md:inline ml-auto">Folders, works, drafts, storyboard, and write-for-10 sprints</span>
-      </div>
-
-      <div
-        className="relative flex-1 flex flex-col md:grid min-h-0 transition-[grid-template-columns] duration-200"
-        style={{ gridTemplateColumns: desktopGridCols }}
-      >
-        {libraryCollapsed && (
+      {libraryCollapsed ? (
+        // Slim header while editing — frees vertical room and hosts the "show
+        // library" control. This replaces the old desktop-only floating expand
+        // button so it's reachable on mobile, where there's no side rail.
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-port-border bg-port-card">
           <button
             onClick={toggleLibrary}
-            className="hidden md:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-card bg-port-card/60 border border-l-0 border-port-border"
+            className="p-1 text-gray-400 hover:text-white transition-colors"
             title="Show library"
             aria-label="Show library"
           >
             <PanelLeftOpen size={16} />
           </button>
-        )}
+          <NotebookPen className="w-4 h-4 text-port-accent" />
+          <span className="text-sm font-semibold text-white">Writers Room</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card">
+          <NotebookPen className="w-5 h-5 text-port-accent" />
+          <h1 className="text-xl font-bold text-white">Writers Room</h1>
+          <span className="text-xs text-gray-500 hidden md:inline ml-auto">Folders, works, drafts, storyboard, and write-for-10 sprints</span>
+        </div>
+      )}
+
+      <div
+        className="flex-1 flex flex-col md:grid min-h-0 transition-[grid-template-columns] duration-200"
+        style={{ gridTemplateColumns: desktopGridCols }}
+      >
         {libraryCollapsed ? (
           <div className="hidden md:block overflow-hidden min-w-0" />
         ) : (
