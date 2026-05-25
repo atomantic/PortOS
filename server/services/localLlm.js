@@ -252,9 +252,7 @@ export async function getStatus() {
     commandExists('ollama', ['--version']),
     lmStudioManager.getStatus(),
     commandExists('lms', ['version']),
-    // forceRefresh: status/refresh path bypasses the list cache. "Couldn't
-    // reach LM Studio" is carried by the `available` field below (the model
-    // list is [] in that case), so we don't double-report it here.
+    // forceRefresh: status/refresh path bypasses the list cache.
     listModels('lmstudio', true).catch(() => [])
   ])
 
@@ -278,6 +276,9 @@ export async function getStatus() {
       baseUrl: lmStudioStatus.baseUrl,
       modelCount: lmStudioModels.length,
       models: lmStudioModels,
+      // Non-null when LM Studio answered the availability probe but the model
+      // list call failed — lets the UI tell "0 models" from "couldn't list".
+      modelsError: lmStudioManager.getLastListError(),
       canAutoInstall: canAutoInstall('lmstudio'),
       downloadUrl: DOWNLOAD_URL.lmstudio
     }

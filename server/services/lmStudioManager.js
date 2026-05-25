@@ -36,6 +36,10 @@ let loadedModels = []
 // catalog-overlay path (queried per keystroke) reuse the list instead of
 // re-hitting /api/v0/models each time. Busted to null by resetCache().
 let availableModels = null
+// Last error from the model-LIST call (/api/v0/models), distinct from the
+// availability probe (/v1/models): LM Studio can answer the probe yet fail the
+// list, so this lets callers tell "0 models" from "couldn't list models".
+let lastListError = null
 let lastCheckAt = null
 
 // Status tracking
@@ -155,11 +159,14 @@ async function getAvailableModels(forceRefresh = false) {
   if (!forceRefresh && availableModels !== null) return availableModels
   const available = await checkLMStudioAvailable()
   if (!available) {
+    // Unreachable is surfaced by the availability probe (`available`), not here.
+    lastListError = null
     return []
   }
 
-  const response = await lmStudioRequest('/api/v0/models').catch(() => null)
+  const response = await lmStudioRequest('/api/v0/models').catch((err) => ({ _err: err.message }))
   if (response?.data) {
+    lastListError = null
     availableModels = response.data.map(model => ({
       id: model.id,
       type: model.type,
@@ -172,8 +179,16 @@ async function getAvailableModels(forceRefresh = false) {
     return availableModels
   }
 
-  // Fallback to loaded models only
+  // Reachable (the /v1/models probe passed) but the native model-list call
+  // failed or returned no data — record it so callers can distinguish this from
+  // a genuinely empty list. Fall back to loaded models for a best-effort list.
+  lastListError = response?._err || 'LM Studio model list (/api/v0/models) returned no data'
   return getLoadedModels(true)
+}
+
+/** Last `/api/v0/models` list error (null if the most recent list succeeded). */
+function getLastListError() {
+  return lastListError
 }
 
 /**
@@ -445,6 +460,7 @@ function resetCache() {
   isAvailable = null
   loadedModels = []
   availableModels = null
+  lastListError = null
   lastCheckAt = null
 }
 
@@ -541,6 +557,7 @@ export {
   updateConfig,
   resetCache,
   isAppInstalled,
+  getLastListError,
   resolveLocalModel,
   importModelFromGguf,
   DEFAULT_CONFIG

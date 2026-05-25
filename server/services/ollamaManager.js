@@ -98,7 +98,13 @@ async function getInstalledModels(forceRefresh = false) {
   if (!(await checkOllamaAvailable())) return []
 
   const data = await ollamaRequest('/api/tags').catch(() => null)
-  if (!data?.models) return []
+  if (!data?.models) {
+    // Cache the empty result so a /api/tags failure while Ollama stays up for
+    // /api/version (the availability probe) doesn't re-hit on every catalog
+    // keystroke; a forceRefresh (status refresh / pull / delete) recovers it.
+    installedModels = []
+    return installedModels
+  }
 
   installedModels = data.models.map((m) => ({
     id: m.name || m.model,

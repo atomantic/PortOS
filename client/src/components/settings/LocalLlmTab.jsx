@@ -268,6 +268,11 @@ export function LocalLlmTab() {
               : 'install it first (Settings → Local LLMs prompts at setup, or run `npm run setup:llm`).'}
           </p>
         )}
+        {selectedData?.available && selectedData?.modelsError && (
+          <p className="text-xs text-port-warning">
+            Couldn't list {labelFor(selected)} models (showing what's available): {selectedData.modelsError}
+          </p>
+        )}
 
         {/* Free-text install + search */}
         <div className="flex flex-col sm:flex-row gap-2">
