@@ -112,15 +112,20 @@ export default function StoryboardPanel({
   const [stylePresets, setStylePresets] = useState([]);
   const [sysSettings, setSysSettings] = useState(null);
   const mountedRef = useMounted();
-  // External SD-API doesn't emit the SSE progress that SceneCard's socket bus
-  // consumes — restrict storyboard renders to Local + Codex.
+  // All three backends emit started/progress/completed via imageGenEvents →
+  // socket.io, so the storyboard supports Local, Codex, and External SD-API.
   const availableBackends = useMemo(
-    () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),
+    () => deriveAvailableBackends(sysSettings),
     [sysSettings],
   );
 
   const imageStyle = work.imageStyle || EMPTY_IMAGE_STYLE;
   const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
+
+  const applyFreshSettings = useCallback((s) => {
+    setSysSettings(s);
+    setImageCfg(readWrImageSettings(s, deriveAvailableBackends(s)));
+  }, []);
 
   // Re-runnable so the Settings drawer can refresh availableBackends/imageCfg
   // when it closes — without this, enabling Codex in the drawer wouldn't
@@ -128,9 +133,8 @@ export default function StoryboardPanel({
   const reloadSysSettings = useCallback(async () => {
     const s = await getSettings().catch(() => ({}));
     if (!mountedRef.current) return;
-    setSysSettings(s);
-    setImageCfg(readWrImageSettings(s));
-  }, [mountedRef]);
+    applyFreshSettings(s);
+  }, [mountedRef, applyFreshSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,13 +144,12 @@ export default function StoryboardPanel({
       listImageStylePresets().catch(() => []),
     ]).then(([s, modelList, presets]) => {
       if (cancelled) return;
-      setSysSettings(s);
-      setImageCfg(readWrImageSettings(s));
+      applyFreshSettings(s);
       setModels(Array.isArray(modelList) ? modelList : []);
       setStylePresets(Array.isArray(presets) ? presets : []);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [applyFreshSettings]);
 
   // When the user closes the Image Gen settings drawer, settings may have
   // changed (e.g. they enabled Codex) — reload so the chip strip reflects
@@ -669,7 +672,7 @@ function ConfigTab({ imageCfg, models, availableBackends, onCfgChange, stylePres
         </div>
         {availableBackends.length === 0 && (
           <div className="text-[10px] text-port-warning bg-port-warning/10 border border-port-warning/40 rounded px-2 py-1.5">
-            No image gen backend configured. Click <span className="font-medium">Backends</span> to enable Local mflux or Codex <code className="text-gray-400">$imagegen</code>.
+            No image gen backend configured. Click <span className="font-medium">Backends</span> to enable Local mflux, Codex <code className="text-gray-400">$imagegen</code>, or an External SD-API endpoint.
           </div>
         )}
         <ImageGenSettingsRow cfg={imageCfg} models={models} availableBackends={availableBackends} onChange={onCfgChange} />
@@ -1039,17 +1042,25 @@ const RES_PRESETS = [
   { label: '1024×1024 (1:1)', width: 1024, height: 1024 },
 ];
 
+// Per-mode form layout — Codex picks model/steps/seed internally, External
+// SD-API loads its model server-side. Showing fields the active backend
+// can't act on misleads the user about what's actually controlling renders.
+const MODE_HINT = {
+  [IMAGE_GEN_MODE.LOCAL]: 'Renders locally via mflux/diffusers on this machine.',
+  [IMAGE_GEN_MODE.CODEX]: "Codex's $imagegen skill renders via your logged-in Codex session. Model, steps, and seed are picked by Codex itself.",
+  [IMAGE_GEN_MODE.EXTERNAL]: 'External SD-API renders against your configured A1111/Forge endpoint. The active model is set by the SD-API server.',
+};
+
 function ImageGenSettingsRow({ cfg, models, availableBackends = [], onChange }) {
   const presetMatch = RES_PRESETS.find((p) => p.width === cfg.width && p.height === cfg.height);
   const currentModel = models.find((m) => m.id === cfg.modelId);
   const inputCls = 'w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none';
   const labelCls = 'text-[9px] uppercase tracking-wider text-gray-500';
-  // Codex's built-in image_gen tool picks model/steps/seed internally — hide
-  // those knobs in codex mode so the user doesn't tune values that won't apply.
+  const isLocalMode = cfg.mode === IMAGE_GEN_MODE.LOCAL;
   const isCodexMode = cfg.mode === IMAGE_GEN_MODE.CODEX;
   return (
     <div className="space-y-1.5">
-      {availableBackends.length > 1 && (
+      {availableBackends.length > 0 && (
         <div>
           <span className={labelCls}>Backend</span>
           <div className="mt-0.5">
@@ -1062,15 +1073,11 @@ function ImageGenSettingsRow({ cfg, models, availableBackends = [], onChange }) 
               titlePrefix="Render storyboard scenes via"
             />
           </div>
-          {isCodexMode && (
-            <p className="text-[9px] text-gray-500 mt-1">
-              Codex's <code className="text-gray-400">$imagegen</code> skill renders via your logged-in Codex session. Model, steps, and seed are picked by Codex itself.
-            </p>
-          )}
+          <p className="text-[9px] text-gray-500 mt-1">{MODE_HINT[cfg.mode]}</p>
         </div>
       )}
       <div className="grid grid-cols-2 gap-1.5">
-        {!isCodexMode && (
+        {isLocalMode && (
           <label className="block">
             <span className={labelCls}>Image model</span>
             <select
@@ -1107,13 +1114,13 @@ function ImageGenSettingsRow({ cfg, models, availableBackends = [], onChange }) 
         <div className="grid grid-cols-2 gap-1.5">
           <label className="block">
             <span className={labelCls}>
-              Steps {currentModel?.steps && <span className="normal-case text-gray-600">(default {currentModel.steps})</span>}
+              Steps {isLocalMode && currentModel?.steps && <span className="normal-case text-gray-600">(default {currentModel.steps})</span>}
             </span>
             <input
               type="number" min={1} max={150}
               value={cfg.steps}
               onChange={(e) => onChange({ ...cfg, steps: e.target.value })}
-              placeholder={String(currentModel?.steps || 'auto')}
+              placeholder={isLocalMode ? String(currentModel?.steps || 'auto') : 'server default'}
               className={inputCls}
             />
           </label>
