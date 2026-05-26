@@ -11,8 +11,8 @@ import { getGoals, updateGoalProgress, addProgressEntry } from '../identity.js';
 import { listProcesses, restartApp } from '../pm2.js';
 import { getItems, getFeeds, markItemRead, markAllRead } from '../feeds.js';
 import { getEvents as getCalendarEvents } from '../calendarSync.js';
-import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { scheduleTimer } from './timers.js';
 import { getUserTimezone, todayInTimezone, getLocalParts, getUtcOffsetMs } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
@@ -1721,23 +1721,15 @@ const TOOLS = [
         return { ok: false, summary: 'Timers are capped at 24 hours. For longer reminders, add a calendar event.' };
       }
       const trimmedLabel = typeof label === 'string' && label.trim() ? label.trim().slice(0, 200) : 'Timer';
-      // setTimeout runs OUTSIDE the request lifecycle — guard the async body so
-      // a thrown notification write can't crash the process (per CLAUDE.md).
-      setTimeout(() => {
-        addNotification({
-          type: NOTIFICATION_TYPES.AGENT_WARNING,
-          title: `⏰ ${trimmedLabel}`,
-          description: `Timer you set is up.`,
-          priority: PRIORITY_LEVELS.HIGH,
-        }).catch((err) => {
-          console.error(`❌ timer_set notification failed: ${err.message}`);
-        });
-      }, totalMs);
+      // Delegate to the persistent scheduler — it survives a restart (re-armed
+      // at boot, overdue ones fired once) and dedups an LLM re-issuing the same
+      // timer inside one reasoning loop.
+      const scheduled = scheduleTimer({ totalMs, label: trimmedLabel });
       const totalSecs = Math.round(totalMs / 1000);
       const human = totalSecs >= 60
         ? `${Math.round(totalSecs / 60)} minute${Math.round(totalSecs / 60) === 1 ? '' : 's'}`
         : `${totalSecs} second${totalSecs === 1 ? '' : 's'}`;
-      console.log(`⏰ Timer set for ${human}: "${trimmedLabel}"`);
+      console.log(`⏰ Timer set for ${human}: "${trimmedLabel}"${scheduled?.deduped ? ' (deduped — already armed)' : ''}`);
       return {
         ok: true,
         durationMs: totalMs,

@@ -36,6 +36,13 @@ vi.mock('../notifications.js', () => ({
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
+// timer_set delegates scheduling/persistence to ./timers.js — stub it so this
+// unit test stays pure dispatch/validation (timers.test.js covers firing,
+// persistence, and dedup).
+const scheduleTimerMock = vi.fn(() => ({ id: 'timer-1', fireAt: Date.now() + 600000, deduped: false }));
+vi.mock('./timers.js', () => ({
+  scheduleTimer: (...args) => scheduleTimerMock(...args),
+}));
 // Open-Meteo fetch — controllable per-test via weatherFetchRef.
 const weatherFetchRef = { value: { ok: true, json: async () => ({ current: { temperature_2m: 64, weather_code: 3 } }) } };
 vi.mock('../../lib/fetchWithTimeout.js', () => ({
@@ -1097,16 +1104,13 @@ describe('timer_set', () => {
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/capped at 24 hours/);
   });
-  it('sets a timer and schedules a notification', async () => {
-    vi.useFakeTimers();
-    addNotificationMock.mockClear();
+  it('delegates a valid timer to the persistent scheduler', async () => {
+    scheduleTimerMock.mockClear();
     const r = await dispatchTool('timer_set', { minutes: 10, label: 'call mom' });
     expect(r.ok).toBe(true);
     expect(r.durationMs).toBe(600000);
     expect(r.summary).toMatch(/Timer set for 10 minutes/);
-    await vi.advanceTimersByTimeAsync(600000);
-    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/call mom/) }));
-    vi.useRealTimers();
+    expect(scheduleTimerMock).toHaveBeenCalledWith({ totalMs: 600000, label: 'call mom' });
   });
 });
 
