@@ -51,6 +51,8 @@ export * from './writersRoomStylePresets.js';
 export * from './aiProvider.js';
 export * from './aiToolkitState.js';
 export * from './ansiStrip.js';
+export * from './cliProviderArgs.js';
+export * from './cliProviderRun.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './hfToken.js';

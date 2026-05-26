@@ -10,6 +10,7 @@ import TabPills from '../ui/TabPills';
 // Pass `activeTab` matching one of the TABS ids below. Internal Settings
 // pages use the `<tab>` slug; the standalone pages use `providers` / `prompts`.
 const TABS = [
+  { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'general', label: 'General', to: '/settings/general' },

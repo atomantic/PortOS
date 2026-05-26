@@ -70,6 +70,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `promptPartials.js` | Mustache-style partial expansion. |
 | `mediaModels.js` | Single source of truth for image/video model metadata. |
 | `providerModels.js` | Provider model resolution sentinel + helpers. |
+| `cliProviderArgs.js` | Per-CLI argv conventions (`buildCliArgs`) for stdin prompt delivery — dependency-light extraction from runner.js so out-of-process callers (autofixer) can import it. |
+| `cliProviderRun.js` | One-shot CLI provider invocation (`pickCliProvider` + `runCliProviderPrompt`) — lightweight path for the autofixer + calendar MCP sync to honor the configured provider/model. |
 | `runners.js` | Image-runner family constants. |
 | `codexAssistantExtract.js` | Strip Codex CLI banner + echoed metadata from session transcript. |
 | `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |
