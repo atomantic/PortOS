@@ -72,7 +72,7 @@ export const WRITING_LENGTH_TARGETS = [
     core: false,
     words: { min: 17500, max: 40000, label: '17,500–40,000 words' },
     chars: { min: 87500, max: 240000, label: '87,500–240,000 chars' },
-    pages: { min: 60, max: 160, label: '60–160 pages' },
+    pages: { min: 59, max: 160, label: '59–160 pages' },
     chapters: { min: 4, max: 14, label: '4–14 chapters' },
     note: 'A single dominant throughline with depth — too long for a magazine, too short for a typical print novel.',
   },
