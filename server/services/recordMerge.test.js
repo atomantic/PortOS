@@ -47,6 +47,16 @@ describe('recordMerge — pure union helpers', () => {
     expect(out).toHaveLength(1); // same label-key → not duplicated
   });
 
+  it('unionEntryList folds same-label entries even when ids differ (cross-install dupes)', () => {
+    const out = merge.unionEntryList(
+      [{ id: 'local-1', label: 'Crystal Canyon', imageRefs: ['a.png'] }],
+      [{ id: 'remote-9', label: ' crystal canyon ', imageRefs: ['b.png'] }],
+    );
+    expect(out).toHaveLength(1); // different ids, same label → one entry
+    expect(out[0].id).toBe('local-1'); // survivor entry kept
+    expect(out[0].imageRefs).toEqual(['a.png', 'b.png']); // refs unioned
+  });
+
   it('unionCategories merges keyed map, unioning shared keys and adding loser-only keys', () => {
     const out = merge.unionCategories(
       { landscapes: { kind: 'places', variations: [{ id: 'a', label: 'A' }] } },

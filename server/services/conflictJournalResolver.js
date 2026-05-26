@@ -2,8 +2,9 @@
  * Resolve entries in the non-blocking conflict journal (server/lib/conflictJournal.js).
  *
  * Each entry archives a local version that LWW overwrote. Resolution:
- *   - restore-all  — re-apply the archived local snapshot as a fresh edit (bumped
- *                    updatedAt) so it wins LWW and re-propagates to peers.
+ *   - restore-all  — re-apply the archived local snapshot's restorable fields as
+ *                    a fresh edit (bumped updatedAt) so it wins LWW and
+ *                    re-propagates to peers.
  *   - merge-fields — overlay only the chosen fields from the snapshot onto the
  *                    CURRENT live record (it may have moved since detection).
  *   - discard      — keep the current record; just mark the entry resolved.
@@ -11,6 +12,16 @@
  * Writes ALWAYS go through the normal `update*` service path (never the record
  * file directly) so updatedAt bumps and the change propagates via the existing
  * push pipeline.
+ *
+ * NOTE — restore-all is an ADDITIVE overlay, not a byte-for-byte rollback.
+ * updateUniverse merges some fields per-key rather than replacing them wholesale
+ * (notably `categories`: a partial patch unions keys so an unrelated category
+ * isn't wiped — see universeBuilder.js mergedCategories). So restoring a snapshot
+ * re-applies the archived values for every restorable field, but a category the
+ * snapshot lacked that the live record gained since detection is preserved, not
+ * removed. This is intentional: union-on-restore can't silently destroy data the
+ * journal never captured. The UI labels it "restore" (re-apply mine), not a
+ * destructive "revert to exact snapshot."
  */
 
 import { conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';

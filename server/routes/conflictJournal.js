@@ -21,8 +21,12 @@ const mapServiceError = (err) => {
   return err;
 };
 
+// Entries are only ever 'pending' (on archive) or 'resolved' (after the user
+// restores/merges/discards); there is no 'dismissed' state — discard resolves
+// the entry and DELETE hard-removes it. Don't advertise a status the resolver
+// never produces.
 const listQuerySchema = z.object({
-  status: z.enum(['pending', 'resolved', 'dismissed']).optional(),
+  status: z.enum(['pending', 'resolved']).optional(),
 });
 
 const resolveSchema = z.object({

@@ -8,8 +8,8 @@
  * the deletion propagates to peers via the existing LWW + tombstone machinery.
  *
  * List-shaped fields are UNIONED (no data loss):
- *   - universe.categories  — variations deduped by id else normalizeLabelKey(label)
- *   - universe.compositeSheets — by id else label
+ *   - universe.categories  — variations deduped by id OR normalizeLabelKey(label)
+ *   - universe.compositeSheets — by id OR label
  *   - universe.characters/places/objects — via storyBible.mergeExtractedBible
  *     (dedupes by name + aliases, the same identity the importer uses)
  *   - universe.influences.{embrace,avoid} — case-insensitive dedupe
@@ -30,6 +30,7 @@ import {
   VARIATIONS_PER_CATEGORY_MAX, COMPOSITE_SHEETS_MAX, INFLUENCES_PER_LIST_MAX, IMAGE_REFS_PER_ENTRY_MAX,
 } from './universeBuilder.js';
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
+import { canonicalStringify } from '../lib/objects.js';
 import { getSeries, updateSeries, deleteSeries, listSeries } from './pipeline/series.js';
 import { reassignIssuesToSeries, listIssues } from './pipeline/issues.js';
 import {
@@ -62,31 +63,48 @@ const unionImageRefs = (a = [], b = []) => {
   return out.length > IMAGE_REFS_PER_ENTRY_MAX ? out.slice(-IMAGE_REFS_PER_ENTRY_MAX) : out;
 };
 
-// Identity for a variation/sheet: stable `id` if present, else the
-// label-key (matches the sanitizer's ensureEntryId/normalizeLabelKey scheme).
-const entryIdentity = (e) => (e?.id ? `id:${e.id}` : `label:${normalizeLabelKey(e?.label)}`);
+// Identity keys for a variation/sheet. Cross-install duplicates routinely
+// carry DIFFERENT ids for the same conceptual entry (each install minted its
+// own id), so id-only matching would leave obvious same-label dupes side by
+// side after a merge. Match by id first, then fall back to normalized label
+// (mirrors universeBuilderRefine.js's label-keyed merge). Returns both keys so
+// the loser can match a survivor by either.
+const entryIdKey = (e) => (e?.id ? `id:${e.id}` : null);
+const entryLabelKey = (e) => {
+  const norm = normalizeLabelKey(e?.label);
+  return norm ? `label:${norm}` : null;
+};
 
 /**
  * Union two variation (or composite-sheet) arrays: survivor entries first,
  * loser-uniques appended; on identity match keep the survivor entry but union
- * its imageRefs. Caps to `max`.
+ * its imageRefs. A loser entry matches a survivor by id OR by normalized label
+ * (so cross-install entries with different ids but the same label still fold).
+ * Caps to `max`.
  */
 export const unionEntryList = (survivor = [], loser = [], max = VARIATIONS_PER_CATEGORY_MAX) => {
   const out = [];
-  const byIdentity = new Map();
+  const byId = new Map();
+  const byLabel = new Map();
   for (const e of Array.isArray(survivor) ? survivor : []) {
-    const id = entryIdentity(e);
     const copy = { ...e };
-    byIdentity.set(id, copy);
+    const idKey = entryIdKey(copy);
+    const labelKey = entryLabelKey(copy);
+    if (idKey) byId.set(idKey, copy);
+    if (labelKey && !byLabel.has(labelKey)) byLabel.set(labelKey, copy);
     out.push(copy);
   }
   for (const e of Array.isArray(loser) ? loser : []) {
-    const id = entryIdentity(e);
-    const match = byIdentity.get(id);
+    const idKey = entryIdKey(e);
+    const labelKey = entryLabelKey(e);
+    const match = (idKey && byId.get(idKey)) || (labelKey && byLabel.get(labelKey));
     if (match) {
       match.imageRefs = unionImageRefs(match.imageRefs, e.imageRefs);
     } else if (out.length < max) {
-      out.push({ ...e });
+      const copy = { ...e };
+      out.push(copy);
+      if (idKey) byId.set(idKey, copy);
+      if (labelKey && !byLabel.has(labelKey)) byLabel.set(labelKey, copy);
     }
   }
   return out.slice(0, max);
@@ -171,8 +189,10 @@ const resolveScalars = (fields, survivor, loser, fieldChoices = {}) => {
       if (sEmpty) autoResolved.push({ field, from: 'loser' });
       continue;
     }
-    // Both non-empty.
-    if (JSON.stringify(sv) === JSON.stringify(lv)) { values[field] = sv; continue; }
+    // Both non-empty. Compare with canonicalStringify (sorted-key) so an
+    // object-valued scalar like `series.arc` doesn't surface a false conflict
+    // when both sides are semantically identical but key-ordered differently.
+    if (canonicalStringify(sv) === canonicalStringify(lv)) { values[field] = sv; continue; }
     const choice = fieldChoices[field];
     if (choice === 'loser') values[field] = lv;
     else if (choice === 'survivor') values[field] = sv;
