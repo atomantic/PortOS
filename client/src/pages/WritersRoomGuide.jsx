@@ -13,7 +13,26 @@ import {
 // <main> is full-width/overflow-hidden (see Layout.jsx isFullWidth), so this
 // page owns its own vertical scroll.
 
+const PILL_TONES = {
+  accent: 'text-port-accent bg-port-accent/10 border-port-accent/20',
+  muted: 'text-gray-300 bg-port-bg border-port-border',
+  note: 'text-gray-500 bg-port-bg border-port-border italic',
+};
+
+function Pill({ tone = 'muted', children }) {
+  return (
+    <span className={`text-xs border rounded px-2 py-0.5 ${PILL_TONES[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
 function LengthCard({ target }) {
+  // A chapter band with null bounds means the form is read in one sitting; render
+  // it muted/italic to keep it visually distinct from real numeric targets.
+  const chapterTone = target.chapters.min == null && target.chapters.max == null
+    ? 'note'
+    : 'muted';
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
@@ -25,12 +44,10 @@ function LengthCard({ target }) {
         )}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <span className="text-xs text-port-accent bg-port-accent/10 border border-port-accent/20 rounded px-2 py-0.5">
-          {target.words.label}
-        </span>
-        <span className="text-xs text-gray-300 bg-port-bg border border-port-border rounded px-2 py-0.5">
-          {target.chars.label}
-        </span>
+        <Pill tone="accent">{target.words.label}</Pill>
+        <Pill>{target.chars.label}</Pill>
+        <Pill>{target.pages.label}</Pill>
+        <Pill tone={chapterTone}>{target.chapters.label}</Pill>
       </div>
       <p className="text-xs text-gray-400 leading-relaxed">{target.note}</p>
     </div>
@@ -90,8 +107,11 @@ export default function WritersRoomGuide() {
             </div>
             <p className="text-xs text-gray-500 max-w-3xl">
               Word counts are the primary signal; character counts assume the conventional English
-              estimate of ~5–6 characters per word (≈5 letters + a space). Bands have small gaps
-              between named forms — a draft that lands in a gap rounds up to the next form.
+              estimate of ~5–6 characters per word (≈5 letters + a space). Page counts assume the
+              conventional ~250–300 words per printed page, and chapter counts assume ~3,000–5,000
+              words per chapter (forms read in one sitting list no chapter target). Bands have
+              small gaps between named forms — a draft that lands in a gap rounds up to the next
+              form.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {WRITING_LENGTH_TARGETS.map((target) => (

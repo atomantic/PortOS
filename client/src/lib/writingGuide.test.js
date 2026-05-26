@@ -8,14 +8,33 @@ import {
 } from './writingGuide.js';
 
 describe('writingGuide data shape', () => {
-  it('every length target carries id, label, and word/char bands with labels', () => {
+  it('every length target carries id, label, and word/char/page/chapter bands with labels', () => {
     for (const t of WRITING_LENGTH_TARGETS) {
       expect(typeof t.id).toBe('string');
       expect(t.id.length).toBeGreaterThan(0);
       expect(typeof t.label).toBe('string');
       expect(typeof t.words.label).toBe('string');
       expect(typeof t.chars.label).toBe('string');
+      expect(typeof t.pages.label).toBe('string');
+      expect(typeof t.chapters.label).toBe('string');
       expect(typeof t.core).toBe('boolean');
+    }
+  });
+
+  it('marks single-sitting forms with null chapter bounds and chapter-bearing forms with numeric ones', () => {
+    const chapters = Object.fromEntries(
+      WRITING_LENGTH_TARGETS.map((t) => [t.id, t.chapters]),
+    );
+    // Forms typically read in one sitting carry null min/max bounds; the label
+    // still renders so the card has a uniform shape.
+    for (const id of ['microfiction', 'flash-fiction', 'short-story']) {
+      expect(chapters[id].min).toBeNull();
+      expect(chapters[id].max).toBeNull();
+    }
+    // Longer forms have numeric bounds.
+    for (const id of ['novelette', 'novella', 'novel']) {
+      expect(typeof chapters[id].min).toBe('number');
+      expect(typeof chapters[id].max).toBe('number');
     }
   });
 
