@@ -54,7 +54,6 @@ import {
   buildRenderSlot,
 } from '../services/pipeline/visualStages.js';
 import { extractCanonFromProse } from '../services/universeCanon.js';
-import { IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
@@ -476,11 +475,14 @@ const extractCanonFromScriptSchema = z.object({
   providerOverride: z.string().trim().max(80).optional(),
 });
 
-// Reuses the importer's source-size ceiling — both feed the same
-// `extractBible` machinery, so a single constant keeps the safe-corpus
-// budget in sync. `STAGE_OUTPUT_MAX` (400KB) is large enough that long
-// scripts can exceed most provider context windows; clamp before forwarding.
-const EXTRACT_CANON_CORPUS_MAX = IMPORTER_SOURCE_CHAR_LIMIT;
+// Per-issue truncation budget for canon extraction. Decoupled from the
+// importer's source ceiling (which ingests a *whole book* — millions of
+// chars): a pipeline issue's stage output is already hard-bounded at
+// `STAGE_OUTPUT_MAX` (400KB), so this path operates at a fundamentally
+// smaller scale. 200K clamps a long single-issue script before forwarding
+// to the same `extractBible` machinery the importer uses, keeping the
+// per-call corpus comfortably inside provider context windows.
+const EXTRACT_CANON_CORPUS_MAX = 200_000;
 
 // Collapses the `extractCanonFromProse` result-shape trio used by both the
 // season-episodes continuity extract and the manual script-stage extract.

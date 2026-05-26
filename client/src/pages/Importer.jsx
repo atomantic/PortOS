@@ -374,7 +374,7 @@ function IntakeForm({ intake, setIntake, sourceCharLimit, analyzing, onAnalyze, 
         {sourceOver && (
           <p className="text-xs text-port-error mt-1 flex items-center gap-1">
             <AlertTriangle className="w-3 h-3" />
-            Source exceeds the v1 limit. Trim it or wait for chunked-extraction support.
+            Source exceeds the {sourceCharLimit.toLocaleString()}-char ceiling. Trim it or wait for chunked-extraction support.
           </p>
         )}
       </div>
