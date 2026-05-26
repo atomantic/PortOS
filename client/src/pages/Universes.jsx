@@ -8,17 +8,20 @@
  * `/universes/new`.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon } from 'lucide-react';
+import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
+import DuplicateGroup from '../components/sharing/DuplicateGroup';
+import MergeModal from '../components/sharing/MergeModal';
 import { timeAgo } from '../utils/formatters';
-import { listUniverses, deleteUniverse, listPipelineSeries, listMediaCollections } from '../services/api';
+import { listUniverses, deleteUniverse, listPipelineSeries, listMediaCollections, listUniverseDuplicates } from '../services/api';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
+import { useRecordMerge } from '../hooks/useRecordMerge';
 
 // Named canon entities across all trunks — the "Canon" column reflects the
 // characters/places/objects the user has registered, not the looser variation
@@ -98,8 +101,21 @@ export default function Universes() {
   const [series, setSeries] = useState([]);
   const [latestImageByUniverse, setLatestImageByUniverse] = useState(() => new Map());
   const [loading, setLoading] = useState(true);
+  // Same-named-but-different-id universes (e.g. cross-install sync produced two
+  // "Clandestiny"s). Surfaced as a banner so the user can merge them here even
+  // when it wasn't caught at sync time. Mirrors Sharing → Duplicates, scoped to
+  // universes. `dismissedDupes` hides a group for the session ("Keep both").
+  const [duplicateGroups, setDuplicateGroups] = useState([]);
+  const [dismissedDupes, setDismissedDupes] = useState(() => new Set());
 
   const sync = useSyncIntegrity('universe');
+
+  const loadDuplicates = useCallback(
+    () => listUniverseDuplicates({ silent: true })
+      .then((d) => setDuplicateGroups(Array.isArray(d?.groups) ? d.groups : []))
+      .catch(() => {}),
+    [],
+  );
 
   useEffect(() => {
     // Guard setState against a navigate-away before the fetch resolves —
@@ -137,8 +153,35 @@ export default function Universes() {
         if (cancelled) return;
         setLatestImageByUniverse(buildLatestImageByUniverse(cols));
       });
+    // Duplicate detection is on-demand (computed server-side from the live
+    // universe set), independent of the list/joins above.
+    loadDuplicates();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadDuplicates]);
+
+  // Re-fetch after a merge or rename: the loser is tombstoned (so it drops from
+  // the list), its child series are re-pointed (series counts shift), and its
+  // media folds into the survivor (thumbnails shift). Re-scan duplicates last so
+  // a folded group disappears from the banner.
+  const refresh = useCallback(() => {
+    listUniverses({ silent: true })
+      .then((u) => setUniverses(Array.isArray(u) ? u : []))
+      .catch((err) => toast.error(err.message || 'Failed to reload universes'));
+    listPipelineSeries({ silent: true })
+      .then((s) => setSeries(Array.isArray(s) ? s : []))
+      .catch(() => {});
+    listMediaCollections({ silent: true })
+      .then((cols) => setLatestImageByUniverse(buildLatestImageByUniverse(cols)))
+      .catch(() => {});
+    return loadDuplicates();
+  }, [loadDuplicates]);
+
+  const { merge, setMerge, openMerge, runPreview, executeMerge } = useRecordMerge({ onMerged: refresh });
+
+  // "Keep both" hides a group for the session; the records are legitimately
+  // distinct. Filtered against the live group list so a newly-merged group that
+  // re-fetches away is simply gone (no stale dismissal lingering).
+  const visibleDupes = duplicateGroups.filter((g) => !dismissedDupes.has(g.normalizedName));
 
   // universeId → linked-series count. Reverse of the join Pipeline.jsx does
   // (series carry universeId; here we tally per universe).
@@ -196,6 +239,25 @@ export default function Universes() {
         A universe holds the shared style, influences, and canon (characters, places, objects) that every
         pipeline series and batch render inherits. Build one here, then link series to it from the Series Pipeline.
       </p>
+
+      {visibleDupes.length > 0 && (
+        <div className="mb-6 border border-port-warning/40 bg-port-warning/10 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm text-port-warning font-medium">
+            <Copy size={16} aria-hidden="true" />
+            <span>
+              {visibleDupes.length} duplicate-named {visibleDupes.length === 1 ? 'universe' : 'universes'} detected.
+              Merge folds one copy into the other — unioning canon, re-pointing series, and tombstoning the duplicate.
+            </span>
+          </div>
+          {visibleDupes.map((g) => (
+            <DuplicateGroup
+              key={g.normalizedName} kind="universe" label="Universe" group={g}
+              onMerge={openMerge} onRenamed={refresh}
+              onKeepBoth={() => setDismissedDupes((s) => new Set(s).add(g.normalizedName))}
+            />
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-gray-500 text-sm">Loading universes…</div>
@@ -292,6 +354,13 @@ export default function Universes() {
             ))}
           </ul>
         </>
+      )}
+
+      {merge && (
+        <MergeModal
+          merge={merge} setMerge={setMerge} onExecute={executeMerge}
+          onRepreview={(survivorId, loserId) => runPreview(merge.kind, survivorId, loserId, merge.records)}
+        />
       )}
     </div>
   );
