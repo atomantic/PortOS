@@ -148,7 +148,7 @@ After fetching ALL calendars, output ONLY a single JSON object (no markdown fenc
 
 Include the full events arrays as returned by gcal_list_events. Output NOTHING else — just the JSON.`;
 
-  const result = await runClaudeMcp(prompt, io, accountId);
+  const result = await runConfiguredMcp(prompt, io, accountId);
 
   mcpSyncLock.delete(accountId);
 
@@ -224,7 +224,7 @@ For each calendar, use:
 
 Output NOTHING else — just the JSON array.`;
 
-  const result = await runClaudeMcp(prompt, io, accountId);
+  const result = await runConfiguredMcp(prompt, io, accountId);
 
   if (result.error) {
     console.error(`❌ Calendar discovery failed: ${result.error}`);
@@ -247,7 +247,7 @@ Output NOTHING else — just the JSON array.`;
   return { calendars: merged, status: 'success' };
 }
 
-async function runClaudeMcp(prompt, io, accountId) {
+async function runConfiguredMcp(prompt, io, accountId) {
   // Resolve the user's configured calendar-sync provider/model (falls back to
   // claude-code — the historical default — when unset). Restricted to CLI
   // providers since the sync relies on MCP tool calling.

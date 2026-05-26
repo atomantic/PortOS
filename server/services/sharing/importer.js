@@ -300,9 +300,19 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
   return { copied, available, missing };
 }
 
+// Peer-supplied record ids index into `join(bucketPath, …, `${id}.json`)`. A
+// `../`-bearing id from a buggy/malicious federation peer would turn those reads
+// into a path-traversal existence/parse oracle on the host. Reject anything that
+// isn't a bare filename segment before it reaches a join. (Write-side idPattern
+// already blocks persistence; this closes the read side.)
+const isSafeRecordId = (id) =>
+  typeof id === 'string' && id.length > 0 && basename(id) === id
+  && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
+
 async function processAnnotationManifest(bucket, manifest) {
   const recordId = (manifest.recordIds || [])[0] || manifest.senderInstanceId;
   if (!recordId) return { applied: 0, missing: true, reason: 'no-record-id' };
+  if (!isSafeRecordId(recordId)) return { applied: 0, missing: true, reason: 'bad-record-id' };
   const recordPath = join(bucket.path, 'records', 'media-annotations', `${recordId}.json`);
   const record = await readJSONFile(recordPath, null, { logError: false });
   if (!record) return { applied: 0, missing: true, reason: 'record-not-synced' };
@@ -328,6 +338,7 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
   const [persisted, incoming] = await Promise.all([
     readJSONFile(persistedPath, { jobs: [] }, { logError: false }),
     Promise.all((recordIds || []).map(async (id) => {
+      if (!isSafeRecordId(id)) return null;
       const recordPath = join(mediaDir, `${id}.json`);
       if (!existsSync(recordPath)) return null;
       return readJSONFile(recordPath, null, { logError: false });
@@ -357,6 +368,7 @@ async function readReferencedRecords(bucketPath, manifest) {
   const records = { series: [], issues: [], universes: [], media: [] };
   const missing = [];
   const resolveOne = async (id) => {
+    if (!isSafeRecordId(id)) return { kind: 'missing', id };
     if (id.startsWith('ser-')) {
       const r = await readJSONFile(join(bucketPath, 'records', 'series', `${id}.json`), null, { logError: false });
       return r ? { kind: 'series', record: r } : { kind: 'missing', id };

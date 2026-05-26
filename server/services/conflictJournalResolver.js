@@ -24,6 +24,7 @@
  * destructive "revert to exact snapshot."
  */
 
+import { existsSync } from 'fs';
 import { conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';
 import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeBuilder.js';
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
@@ -113,7 +114,10 @@ export async function resolveConflict(id, { action, fields = [] } = {}) {
 
 /** Permanently remove a journal entry (the "dismiss / clear" action). */
 export async function deleteConflict(id) {
-  await getConflict(id); // 404 if missing
+  // Don't gate on getConflict() — it requires a successful parse, so a corrupt
+  // journal entry would 404 here and become permanently undeletable. Check raw
+  // directory existence instead, then hard-delete (deleteOne is idempotent).
+  if (!existsSync(store().recordDir(id))) throw makeErr(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
   await store().deleteOne(id);
   return { id, deleted: true };
 }

@@ -110,7 +110,14 @@ export async function pauseAgent(agentId, reason = null) {
       pausedAgents.delete(agentId);
       return result;
     }
-    await markAgentPaused(agentId, agentInfo, pausedAt, reason);
+    // Persist failure must roll back the in-memory flag too, or the maps drift
+    // (pausedAgents set, runnerAgents never deleted) until the next restart.
+    const persistedRunner = await markAgentPaused(agentId, agentInfo, pausedAt, reason).then(() => true, (err) => {
+      pausedAgents.delete(agentId);
+      emitLog('error', `❌ Failed to persist pause for runner agent ${agentId}: ${err.message}`, { agentId });
+      return false;
+    });
+    if (!persistedRunner) return { success: false, error: 'Failed to persist paused state' };
     runnerAgents.delete(agentId);
     emitLog('info', `⏸️ Paused runner agent ${agentId}${reason ? `: ${reason}` : ''}`, { agentId, reason });
     return { success: true, agentId, pausedAt, mode: 'runner' };
@@ -122,7 +129,15 @@ export async function pauseAgent(agentId, reason = null) {
   }
 
   pausedAgents.set(agentId, { pausedAt, reason });
-  await markAgentPaused(agentId, agent, pausedAt, reason);
+  // Persist BEFORE killing the process, and roll back the in-memory flag on a
+  // persist failure — otherwise a throw here leaves the agent flagged paused
+  // in-memory while its process keeps running (the kill below never executes).
+  const persisted = await markAgentPaused(agentId, agent, pausedAt, reason).then(() => true, (err) => {
+    pausedAgents.delete(agentId);
+    emitLog('error', `❌ Failed to persist pause for agent ${agentId}: ${err.message}`, { agentId });
+    return false;
+  });
+  if (!persisted) return { success: false, error: 'Failed to persist paused state' };
 
   if (agent.tuiSessionId) {
     shellService.writeToSession(agent.tuiSessionId, '\x1b');
