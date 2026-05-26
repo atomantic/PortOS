@@ -11,10 +11,12 @@
 //
 // Page counts assume the conventional ~250–300 words per printed page; min
 // pages use 300 wpp (denser), max pages use 250 wpp (looser). Chapter ranges
-// assume the conventional ~3,000–5,000 words per chapter; forms read in one
-// sitting (microfiction, flash, short story) carry `min`/`max` of `null` on
-// `chapters` along with a "single sitting" label so consumers render a single
-// uniform shape without a special-case branch.
+// derive from the conventional ~3,000–5,000 words per chapter: min chapters use
+// 5,000 wpc (longer chapters, fewer of them), max chapters use 3,000 wpc
+// (shorter chapters, more of them), each rounded up to a whole chapter. Forms
+// read in one sitting (microfiction, flash, short story) carry `min`/`max` of
+// `null` on `chapters` along with a "single sitting" label so consumers render
+// a single uniform shape without a special-case branch.
 
 // Literary length ladder — microfiction through novel. `words`/`chars`/`pages`/
 // `chapters` all carry `{ min, max, label }` with a human label for display;
@@ -60,7 +62,7 @@ export const WRITING_LENGTH_TARGETS = [
     words: { min: 7500, max: 17500, label: '7,500–17,500 words' },
     chars: { min: 37500, max: 105000, label: '37,500–105,000 chars' },
     pages: { min: 25, max: 70, label: '25–70 pages' },
-    chapters: { min: 1, max: 6, label: '1–6 chapters (often unchaptered)' },
+    chapters: { min: 2, max: 6, label: '2–6 chapters' },
     note: 'Subplots and a fuller secondary cast become viable. Longer than most magazines buy.',
   },
   {
@@ -70,7 +72,7 @@ export const WRITING_LENGTH_TARGETS = [
     words: { min: 17500, max: 40000, label: '17,500–40,000 words' },
     chars: { min: 87500, max: 240000, label: '87,500–240,000 chars' },
     pages: { min: 60, max: 160, label: '60–160 pages' },
-    chapters: { min: 5, max: 15, label: '5–15 chapters' },
+    chapters: { min: 4, max: 14, label: '4–14 chapters' },
     note: 'A single dominant throughline with depth — too long for a magazine, too short for a typical print novel.',
   },
   {
@@ -80,7 +82,7 @@ export const WRITING_LENGTH_TARGETS = [
     words: { min: 40000, max: 120000, label: '40,000–120,000 words' },
     chars: { min: 200000, max: 720000, label: '200,000–720,000 chars' },
     pages: { min: 135, max: 480, label: '135–480 pages' },
-    chapters: { min: 15, max: 40, label: '15–40 chapters' },
+    chapters: { min: 8, max: 40, label: '8–40 chapters' },
     note: 'Multiple arcs and a full cast. Genre sets the sweet spot (≈70k YA, ≈100k+ epic fantasy).',
   },
 ];
