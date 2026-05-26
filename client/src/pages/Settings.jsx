@@ -1,4 +1,5 @@
 import { useParams, Navigate } from 'react-router-dom';
+import { AutofixerTab } from '../components/settings/AutofixerTab';
 import { BackupTab } from '../components/settings/BackupTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
 import { LocalLlmTab } from '../components/settings/LocalLlmTab';
@@ -27,6 +28,7 @@ export default function Settings() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'general': return <GeneralTab />;
+      case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
       case 'database': return <DatabaseTab />;
       case 'local-llm': return <LocalLlmTab />;

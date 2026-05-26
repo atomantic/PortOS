@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, ChevronRight, Search, Key, ExternalLink, Wand2, Monitor } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import FeatureProviderPicker from '../FeatureProviderPicker';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
 const TYPE_LABELS = { 'outlook-calendar': 'Outlook Calendar (API)', 'google-calendar': 'Google Calendar' };
@@ -164,8 +165,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
       : await api.mcpDiscoverCalendars(account.id).catch(() => null);
     setDiscovering(null);
     if (!result || result.error) {
-      if (result?.error?.includes('spawn Claude')) {
-        return toast.error('Claude CLI not found. Ensure Claude Code is installed and in your PATH.');
+      if (result?.error?.includes('Failed to spawn') || result?.error?.includes('No enabled CLI provider')) {
+        return toast.error(`${result.error}. Check the provider configured for calendar sync above.`);
       }
       if (result?.error?.includes('OAuth')) {
         return toast.error('Google OAuth not configured. Set up credentials below.');
@@ -334,9 +335,16 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       </div>
 
                       {(account.syncMethod || 'claude-mcp') === 'claude-mcp' && (
-                        <div className="text-xs text-gray-600 px-2 py-1.5 bg-port-bg/50 rounded">
-                          Uses your Claude Code CLI with Google Calendar MCP integration.
-                          Requires <span className="text-gray-400">claude</span> CLI installed and Google Calendar connected in Claude &gt; Settings &gt; Integrations.
+                        <div className="space-y-2">
+                          <div className="text-xs text-gray-600 px-2 py-1.5 bg-port-bg/50 rounded">
+                            Runs the selected agentic CLI provider with the Google Calendar MCP integration.
+                            Requires the chosen CLI installed and Google Calendar connected in its MCP settings
+                            (e.g. Claude &gt; Settings &gt; Integrations).
+                          </div>
+                          <FeatureProviderPicker
+                            featureKey="calendarSync"
+                            hint="Shared across all Google (MCP) calendar accounts. Defaults to Claude Code when unset."
+                          />
                         </div>
                       )}
 

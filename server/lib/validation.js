@@ -738,6 +738,18 @@ export const restoreRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+// Per-feature AI provider assignment: which configured CLI provider/model a
+// feature runs through (e.g. `settings.autofixer`, `settings.calendarSync`).
+// Empty string (UI "unset" sentinel) is coerced to undefined so it round-trips
+// as "use the default" rather than a bogus id. Both the autofixer (file edits
+// + pm2) and Google Calendar MCP sync require an agentic CLI provider; the
+// picker resolution layer (`pickCliProvider`) enforces type 'cli'.
+const emptyToUndefined = (v) => (v === '' ? undefined : v);
+export const featureProviderConfigSchema = z.object({
+  providerId: z.preprocess(emptyToUndefined, z.string().optional()),
+  model: z.preprocess(emptyToUndefined, z.string().optional()),
+});
+
 // =============================================================================
 // WRITERS ROOM SCHEMAS
 // =============================================================================

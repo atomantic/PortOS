@@ -6,7 +6,8 @@ import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
-import { resolveCliModel, hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
+import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
+import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import {
   setAIToolkitInstance,
   getAIToolkitInstance,
@@ -18,6 +19,12 @@ import {
 // `server/lib/providerModels.js` — that's where `server/lib/tuiHandshake.js`
 // imports from directly (lib→lib, no service layer violation).
 export { hasModelFlag, extractBakedModel };
+
+// `buildCliArgs` was extracted to `server/lib/cliProviderArgs.js` (a
+// dependency-light module the standalone autofixer + calendar MCP sync can
+// import). Re-exported here so its existing importers — and runner.test.js —
+// keep resolving it from runner.js unchanged.
+export { buildCliArgs };
 
 // Runner-only state. The toolkit singleton itself lives in
 // `lib/aiToolkitState.js` and is shared with providers / promptService;
@@ -34,91 +41,6 @@ export async function createRun(options) {
   // The toolkit's runner emits its own "🤖 AI run [source]: provider/model"
   // line — don't duplicate it here.
   return requireToolkit().services.runner.createRun(options);
-}
-
-/**
- * Build CLI args based on provider type.
- * Each CLI provider has different conventions for stdin input and model
- * selection. `provider.defaultModel` is honored for all three (codex /
- * claude-code / gemini-cli) so a per-call clone with an overridden
- * defaultModel (e.g. modal-selected "thinking" tier in Refine Prompt)
- * actually picks the modal-selected model instead of falling back to
- * whatever's baked into `provider.args`.
- *
- * Model-flag injection is GATED on `provider.args` not already containing
- * a model flag — users who hard-coded e.g. `--model gemini-2.5-pro` in
- * their saved provider config keep that override and don't get a
- * duplicate flag from us.
- */
-export function buildCliArgs(provider) {
-  const providerId = provider?.id || '';
-  // Sanitize: drop any broken/dangling `--model` / `-m` tokens before
-  // appending. hasModelFlag treats those as "not a real pin" so the
-  // injection path fires — but if we kept the bogus token in baseArgs the
-  // CLI would still see two `--model` occurrences and reject the argv.
-  const baseArgs = stripBrokenModelFlags(Array.isArray(provider?.args) ? provider.args : []);
-  const effectiveDefaultModel = providerId === 'codex'
-    ? resolveCliModel(provider.defaultModel)
-    : provider.defaultModel;
-
-  // Codex CLI: `codex exec -` reads prompt from stdin, --model for model.
-  // Detect an existing leading `exec` in user/legacy args so we don't end up
-  // running `codex exec --full-auto exec -` after migration of legacy
-  // configs that already pinned an `exec` subcommand.
-  if (providerId === 'codex') {
-    const hasExec = baseArgs.includes('exec');
-    const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
-    if (effectiveDefaultModel) {
-      args.push('--model', effectiveDefaultModel);
-    }
-    args.push('-'); // stdin marker
-    return args;
-  }
-
-  // Gemini CLI: prompt is piped via stdin directly. `-m <model>` is gemini-
-  // cli's documented short flag for model selection (long form: `--model`).
-  // Skip injection when the user's saved args already pin a model (either
-  // form) so we don't duplicate the flag.
-  if (providerId === 'gemini-cli') {
-    const args = [...baseArgs];
-    if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
-      args.push('-m', effectiveDefaultModel);
-    }
-    return args;
-  }
-
-  // Default (Claude Code CLI): `-p -` means "read prompt from stdin".
-  // `--model <id>` is claude-code's model flag; it parses flags
-  // positionally so appending after `-p -` is fine. Same gate as gemini-
-  // cli — respect user-baked model flags.
-  const args = [...baseArgs, '-p', '-'];
-  if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
-    args.push('--model', effectiveDefaultModel);
-  }
-  return args;
-}
-
-// Strip dangling/empty `--model` / `-m` tokens (no value follows, or the
-// joined form has an empty value). Those would survive into the spawned
-// argv unchanged and cause the CLI to reject the invocation — see the
-// comment on hasModelFlag for the full reasoning. Pinned-with-value tokens
-// are preserved untouched so user-baked model selections still win.
-function stripBrokenModelFlags(args) {
-  if (!Array.isArray(args) || args.length === 0) return [];
-  const out = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (typeof a === 'string' && (a === '--model=' || a === '-m=')) {
-      continue; // empty joined form
-    }
-    if (a === '--model' || a === '-m') {
-      const next = args[i + 1];
-      const hasValue = typeof next === 'string' && next.length > 0 && !next.startsWith('-');
-      if (!hasValue) continue; // dangling separated form
-    }
-    out.push(a);
-  }
-  return out;
 }
 
 /**

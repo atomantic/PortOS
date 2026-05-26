@@ -1,9 +1,18 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
-import { spawn } from 'child_process';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { loadCache, saveCache } from './calendarSync.js';
+import { getAllProviders } from './providers.js';
+import { getSettings } from './settings.js';
+import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+
+// Google Calendar sync is driven through an MCP-capable CLI provider — the
+// prompt asks the model to call the `mcp__claude_ai_Google_Calendar__*` tools.
+// Only CLI providers wired to that MCP can satisfy it (API chat providers
+// can't invoke MCP tools), so the picker is restricted to CLI providers and
+// the allowedTools flag is passed through as a per-call extra arg.
+const CALENDAR_MCP_ALLOWED_TOOLS = 'mcp__claude_ai_Google_Calendar__*';
 
 function md5(str) {
   return createHash('md5').update(str).digest('hex').slice(0, 12);
@@ -139,14 +148,12 @@ After fetching ALL calendars, output ONLY a single JSON object (no markdown fenc
 
 Include the full events arrays as returned by gcal_list_events. Output NOTHING else — just the JSON.`;
 
-  const result = await runClaudeMcp(prompt, io, accountId).catch(err => {
-    console.error(`❌ MCP sync failed for ${account.name}: ${err.message}`);
-    return { error: err.message };
-  });
+  const result = await runClaudeMcp(prompt, io, accountId);
 
   mcpSyncLock.delete(accountId);
 
   if (result.error) {
+    console.error(`❌ MCP sync failed for ${account.name}: ${result.error}`);
     io?.emit('calendar:sync:failed', { accountId, error: result.error, method: 'mcp' });
     await updateSyncStatus(accountId, 'error');
     return { error: result.error, status: 502 };
@@ -217,12 +224,10 @@ For each calendar, use:
 
 Output NOTHING else — just the JSON array.`;
 
-  const result = await runClaudeMcp(prompt, io, accountId).catch(err => {
-    console.error(`❌ Calendar discovery failed: ${err.message}`);
-    return { error: err.message };
-  });
+  const result = await runClaudeMcp(prompt, io, accountId);
 
   if (result.error) {
+    console.error(`❌ Calendar discovery failed: ${result.error}`);
     return { error: result.error, status: 502 };
   }
 
@@ -242,50 +247,43 @@ Output NOTHING else — just the JSON array.`;
   return { calendars: merged, status: 'success' };
 }
 
-function runClaudeMcp(prompt, io, accountId) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p', '-', '--allowedTools', 'mcp__claude_ai_Google_Calendar__*'];
-    const claudeProcess = spawn(process.env.CLAUDE_PATH || 'claude', args, {
-      cwd: process.cwd(),
-      shell: false,
-      env: (() => { const e = { ...process.env }; delete e.CLAUDECODE; return e; })()
-    });
+async function runClaudeMcp(prompt, io, accountId) {
+  // Resolve the user's configured calendar-sync provider/model (falls back to
+  // claude-code — the historical default — when unset). Restricted to CLI
+  // providers since the sync relies on MCP tool calling.
+  const all = await getAllProviders().catch(() => null);
+  const settings = await getSettings().catch(() => ({}));
+  const picked = pickCliProvider(all?.providers, settings?.calendarSync || {});
+  if (picked.error) {
+    return { error: picked.error };
+  }
 
-    let output = '';
-    let stderr = '';
-    const timeout = setTimeout(() => {
-      claudeProcess.kill('SIGTERM');
-      reject(new Error('MCP sync timed out after 5 minutes'));
-    }, 300000);
+  // `--allowedTools mcp__…` is Claude-Code-specific argv. Other CLIs grant MCP
+  // access through their own config (codex/gemini have no such flag), so pass
+  // it only to Claude-family providers — appending it to another CLI would
+  // make it reject the invocation on an unknown flag.
+  const isClaudeFamily = /claude/i.test(picked.provider.command || '') || /claude/i.test(picked.provider.id || '');
+  const extraArgs = isClaudeFamily ? ['--allowedTools', CALENDAR_MCP_ALLOWED_TOOLS] : [];
 
-    claudeProcess.stdin.write(prompt);
-    claudeProcess.stdin.end();
+  console.log(`📅 Calendar MCP sync via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''}`);
 
-    claudeProcess.stdout?.on('data', (data) => {
-      output += data.toString();
-    });
-
-    claudeProcess.stderr?.on('data', (data) => {
-      const text = data.toString();
-      stderr += text;
-      // Emit progress for UI feedback
-      if (text.includes('gcal_list_events')) {
+  const result = await runCliProviderPrompt({
+    provider: picked.provider,
+    model: picked.model,
+    prompt,
+    cwd: process.cwd(),
+    extraArgs,
+    timeoutMs: 300000,
+    onData: (chunk, stream) => {
+      // Emit progress for UI feedback when the model starts listing events.
+      if (stream === 'stderr' && chunk.includes('gcal_list_events')) {
         io?.emit('calendar:sync:progress', { accountId, message: 'Fetching calendar events...' });
       }
-    });
-
-    claudeProcess.on('close', (code) => {
-      clearTimeout(timeout);
-      if (code !== 0 && !output) {
-        reject(new Error(stderr.slice(0, 500) || `Claude exited with code ${code}`));
-      } else {
-        resolve({ output: output.trim(), exitCode: code });
-      }
-    });
-
-    claudeProcess.on('error', (err) => {
-      clearTimeout(timeout);
-      reject(new Error(`Failed to spawn Claude CLI: ${err.message}`));
-    });
+    },
   });
+
+  if (result.error) {
+    return { error: result.error };
+  }
+  return { output: result.text, exitCode: result.exitCode };
 }

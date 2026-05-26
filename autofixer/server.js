@@ -3,6 +3,11 @@ import { readFile, writeFile, mkdir, access } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+// Dependency-light shared module (node builtins + pure arg builder only), so
+// importing it from this standalone process doesn't pull in the AI toolkit.
+// Lets the autofixer honor the user's configured CLI provider/model instead
+// of hardcoding `claude -p`.
+import { pickCliProvider, runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,6 +35,8 @@ function execPm2(pm2Args) {
 // Paths
 const DATA_DIR = join(__dirname, '../data');
 const APPS_FILE = join(DATA_DIR, 'apps.json');
+const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
+const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const AUTOFIXER_DIR = join(DATA_DIR, 'autofixer');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
 const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
@@ -44,6 +51,35 @@ async function loadApps() {
   const data = await readFile(APPS_FILE, 'utf8').catch(() => '{"apps":{}}');
   const parsed = JSON.parse(data);
   return Object.entries(parsed.apps || {}).map(([id, app]) => ({ id, ...app }));
+}
+
+// Parse JSON, returning `fallback` on read OR parse failure. A corrupt config
+// file (partial write, hand-edit) must not throw inside fixProcess — this runs
+// in the autofixer's interval loop, outside any request lifecycle, where an
+// uncaught throw would take the process down.
+async function readJsonSafe(file, fallback) {
+  const data = await readFile(file, 'utf8').catch(() => null);
+  if (data == null) return fallback;
+  try {
+    return JSON.parse(data);
+  } catch (err) {
+    console.error(`❌ [Autofixer] Corrupt JSON in ${file}: ${err.message}`);
+    return fallback;
+  }
+}
+
+// Load PortOS's AI provider registry (shared data file) so the autofixer runs
+// through whichever CLI provider the user configured rather than hardcoding
+// claude. Returns the on-disk provider map keyed by id.
+async function loadProviders() {
+  const parsed = await readJsonSafe(PROVIDERS_FILE, { providers: {} });
+  return parsed.providers || {};
+}
+
+// Load PortOS settings — `settings.autofixer = { providerId, model }` selects
+// which CLI provider/model fixes crashed processes.
+async function loadSettings() {
+  return readJsonSafe(SETTINGS_FILE, {});
 }
 
 // Get all monitored process names from registered apps
@@ -187,84 +223,76 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
 
   const outputBuffer = [];
 
-  return new Promise((resolve) => {
-    const child = spawn('claude', ['-p', prompt], {
-      cwd: app.repoPath,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false,
-      windowsHide: true
-    });
+  // Resolve the configured CLI provider/model (settings.autofixer), falling
+  // back to claude-code — the historical default — when unset. The autofixer
+  // edits files and runs pm2, so it needs an agentic CLI provider; pickCliProvider
+  // restricts to type 'cli' (API chat providers can't do file edits).
+  const providers = await loadProviders();
+  const settings = await loadSettings();
+  const picked = pickCliProvider(providers, settings.autofixer || {});
 
-    child.stdout.on('data', (data) => {
-      const output = data.toString();
-      outputBuffer.push(output);
-      process.stdout.write(output);
-    });
+  // Single completion path — write the session record + return the result.
+  const finalize = async ({ success, exitCode, error }) => {
+    const endTime = new Date().toISOString();
+    const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
+    const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
 
-    child.stderr.on('data', (data) => {
-      const output = data.toString();
-      outputBuffer.push(`[STDERR] ${output}`);
-      process.stderr.write(output);
-    });
+    console.log(`${success ? '✅ [Autofixer] Fix successful' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${exitCode})`);
 
-    child.on('close', async (code) => {
-      const endTime = new Date().toISOString();
-      const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
-      const output = outputBuffer.join('');
-      const success = code === 0;
+    const metadata = {
+      sessionId,
+      startTime,
+      endTime,
+      duration,
+      exitCode,
+      success,
+      processName,
+      appName: app.name,
+      appId: app.id,
+      repoPath: app.repoPath,
+      type: 'autofixer',
+      provider: picked.provider?.id || null,
+      model: picked.model || null,
+      ...(error ? { error } : {}),
+    };
 
-      console.log(`${success ? '✅ [Autofixer] Fix successful' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${code})`);
+    await saveSession(sessionId, prompt, output, metadata);
+    console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
 
-      const metadata = {
-        sessionId,
-        startTime,
-        endTime,
-        duration,
-        exitCode: code,
-        success,
-        processName,
-        appName: app.name,
-        appId: app.id,
-        repoPath: app.repoPath,
-        type: 'autofixer'
-      };
+    if (success) markAsFixed(processName);
+    return { success, sessionId, output, ...(error ? { error } : {}) };
+  };
 
-      await saveSession(sessionId, prompt, output, metadata);
-      console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
+  if (picked.error) {
+    outputBuffer.push(`[ERROR] ${picked.error}`);
+    console.error(`❌ [Autofixer] ${picked.error}`);
+    return finalize({ success: false, exitCode: -1, error: picked.error });
+  }
 
-      if (success) {
-        markAsFixed(processName);
+  console.log(`🤖 [Autofixer] Fixing ${processName} via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''}`);
+
+  const result = await runCliProviderPrompt({
+    provider: picked.provider,
+    model: picked.model,
+    prompt,
+    cwd: app.repoPath,
+    timeoutMs: 600000, // 10 min — a fix may need several read/edit/restart cycles
+    onData: (chunk, stream) => {
+      if (stream === 'stderr') {
+        outputBuffer.push(`[STDERR] ${chunk}`);
+        process.stderr.write(chunk);
+      } else {
+        outputBuffer.push(chunk);
+        process.stdout.write(chunk);
       }
-
-      resolve({ success, sessionId, output });
-    });
-
-    child.on('error', async (error) => {
-      const endTime = new Date().toISOString();
-      const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
-      const output = outputBuffer.join('') + `\n[ERROR] ${error.message}`;
-
-      console.error(`❌ [Autofixer] Error fixing ${processName}: ${error.message}`);
-
-      const metadata = {
-        sessionId,
-        startTime,
-        endTime,
-        duration,
-        exitCode: -1,
-        success: false,
-        processName,
-        appName: app.name,
-        appId: app.id,
-        repoPath: app.repoPath,
-        type: 'autofixer',
-        error: error.message
-      };
-
-      await saveSession(sessionId, prompt, output, metadata);
-      resolve({ success: false, sessionId, output, error: error.message });
-    });
+    },
   });
+
+  if (result.error) {
+    console.error(`❌ [Autofixer] Error fixing ${processName}: ${result.error}`);
+    return finalize({ success: false, exitCode: result.exitCode ?? -1, error: result.error });
+  }
+  return finalize({ success: result.exitCode === 0, exitCode: result.exitCode });
 }
 
 // Main check function

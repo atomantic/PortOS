@@ -7,7 +7,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -51,6 +51,14 @@ router.put('/', asyncHandler(async (req, res) => {
       sharingDisplayName: req.body.sharingDisplayName,
       sharingBio: req.body.sharingBio,
     });
+  }
+  // Per-feature AI provider assignments — validate each slice when present so
+  // a malformed picker save can't write a non-string providerId/model to disk.
+  if (req.body?.autofixer !== undefined) {
+    validateRequest(featureProviderConfigSchema.partial(), req.body.autofixer);
+  }
+  if (req.body?.calendarSync !== undefined) {
+    validateRequest(featureProviderConfigSchema.partial(), req.body.calendarSync);
   }
   const merged = await updateSettings(req.body);
   // The queue caches codex.parallelLimit in-process; sync it from the
