@@ -7,10 +7,12 @@ import { getSettings, updateSettings } from '../../services/api';
 
 // Coordinate inputs are free text so a partially-typed "-" or "37." isn't
 // clobbered mid-edit; parse + range-check only on save. Both blank = clear.
-const isBlank = (v) => v === '' || v === null || v === undefined;
+// Trim first so a whitespace-only field counts as blank (and never coerces to
+// Number('  ') === 0, which would pin the same 0,0 this feature guards against).
+const isBlank = (v) => v == null || String(v).trim() === '';
 const parseCoord = (v) => {
   if (isBlank(v)) return null;
-  const n = Number(v);
+  const n = Number(String(v).trim());
   return Number.isFinite(n) ? n : NaN; // NaN signals "non-empty but not a number"
 };
 
@@ -25,7 +27,7 @@ export function GeneralTab() {
   const allTimezones = useMemo(() => Intl.supportedValuesOf?.('timeZone') ?? [], []);
 
   useEffect(() => {
-    getSettings()
+    getSettings({ silent: true })
       .then(settings => {
         setTimezone(settings?.timezone || '');
         setLat(settings?.location?.lat != null ? String(settings.location.lat) : '');
@@ -58,7 +60,7 @@ export function GeneralTab() {
     }
     setSavingLocation(true);
     try {
-      await updateSettings({ location: { lat: parsedLat, lon: parsedLon } });
+      await updateSettings({ location: { lat: parsedLat, lon: parsedLon } }, { silent: true });
       toast.success(parsedLat === null ? 'Location cleared' : `Location set to ${parsedLat}, ${parsedLon}`);
     } catch (err) {
       toast.error(err.message || 'Failed to save location');
@@ -91,7 +93,7 @@ export function GeneralTab() {
 
     setSaving(true);
     try {
-      await updateSettings({ timezone: tzToSave });
+      await updateSettings({ timezone: tzToSave }, { silent: true });
       setTimezone(tzToSave);
       toast.success(`Timezone set to ${tzToSave}`);
     } catch (err) {
@@ -115,8 +117,10 @@ export function GeneralTab() {
         <p className="text-sm text-gray-400 mb-4">
           Used for job scheduling (cron expressions & scheduled times) and briefing dates.
         </p>
+        <label htmlFor="timezone-input" className="sr-only">Timezone (IANA)</label>
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
           <input
+            id="timezone-input"
             type="text"
             value={timezone}
             onChange={e => setTimezone(e.target.value)}

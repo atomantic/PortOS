@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // Stub every external side-effect before importing tools.js so the unit test
 // exercises pure validation/dispatch logic without hitting the filesystem.
@@ -1036,6 +1036,9 @@ describe('meatspace_log_workout', () => {
 });
 
 describe('weather_now', () => {
+  // Reset in afterEach (not inline) so a thrown assertion can't leak a stale
+  // configured location into the next test.
+  afterEach(() => { settingsLocationRef.value = null; });
   it('returns temperature + mapped conditions', async () => {
     weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 71.4, weather_code: 3 } }) };
     const r = await dispatchTool('weather_now', { lat: 40, lon: -74 });
@@ -1062,7 +1065,6 @@ describe('weather_now', () => {
     expect(r.ok).toBe(true);
     expect(r.lat).toBe(51.5074);
     expect(r.lon).toBe(-0.1278);
-    settingsLocationRef.value = null;
   });
   it('lets explicit coordinates override the configured location', async () => {
     weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 55, weather_code: 0 } }) };
@@ -1071,7 +1073,6 @@ describe('weather_now', () => {
     expect(r.ok).toBe(true);
     expect(r.lat).toBe(40);
     expect(r.lon).toBe(-74);
-    settingsLocationRef.value = null;
   });
   it('falls back to the default location when settings.location is null-cleared', async () => {
     weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 55, weather_code: 0 } }) };
@@ -1082,7 +1083,6 @@ describe('weather_now', () => {
     expect(r.ok).toBe(true);
     expect(r.lat).toBe(37.7749);
     expect(r.lon).toBe(-122.4194);
-    settingsLocationRef.value = null;
   });
 });
 
