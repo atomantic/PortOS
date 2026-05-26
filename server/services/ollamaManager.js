@@ -460,7 +460,7 @@ async function attemptOllamaPull(modelId, onProgress) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: modelId, stream: true })
-  }, 0).catch((err) => ({ _err: err.message }))
+  }, 0).catch((err) => ({ _err: describeFetchError(err) }))
 
   if (response._err || !response.ok || !response.body) {
     return { success: false, error: response._err || `pull failed: ${response.status} ${response.statusText}` }
@@ -476,6 +476,32 @@ async function attemptOllamaPull(modelId, onProgress) {
   }).catch((err) => err?.message || String(err))
 
   return lastError ? { success: false, error: lastError } : { success: true }
+}
+
+/**
+ * Flatten a thrown fetch error into a single descriptive string, walking the
+ * `cause` chain. Node/undici reports network failures as `TypeError: fetch
+ * failed` with the real reason (ECONNRESET, ETIMEDOUT, ...) tucked into
+ * `err.cause` (and sometimes nested deeper). Without this, the transient
+ * classifier only sees "fetch failed" and misclassifies retryable failures as
+ * fatal. Includes each level's `.code` so `isTransientPullError()` can match.
+ * @param {unknown} err
+ * @returns {string}
+ */
+function describeFetchError(err) {
+  const parts = []
+  let node = err
+  const seen = new Set()
+  // Bound the walk in case of a self-referential cause chain.
+  for (let depth = 0; node && typeof node === 'object' && depth < 5; depth++) {
+    if (seen.has(node)) break
+    seen.add(node)
+    if (node.code) parts.push(String(node.code))
+    if (node.message) parts.push(String(node.message))
+    node = node.cause
+  }
+  if (typeof node === 'string') parts.push(node)
+  return parts.join(': ') || String(err)
 }
 
 /**
@@ -646,7 +672,7 @@ async function importModelFromGguf({ name, ggufPath, mode = 'copy' }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, modelfile: buildModelfile(ggufPath), stream: true })
-  }, 0).catch((err) => ({ _err: err.message }))
+  }, 0).catch((err) => ({ _err: describeFetchError(err) }))
 
   if (response._err || !response.ok || !response.body) {
     const error = response._err || `create failed: ${response.status} ${response.statusText}`

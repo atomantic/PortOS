@@ -43,6 +43,9 @@ function stubFetch(pullResponses) {
       pullUrls.push(url)
       const next = queue.shift()
       if (!next) throw new Error('pull called more times than scripted')
+      // A queued Error simulates fetch itself rejecting (request-level failure,
+      // e.g. undici `TypeError: fetch failed` with the real reason in .cause).
+      if (next instanceof Error) throw next
       return next
     }
     throw new Error(`unexpected fetch: ${url}`)
@@ -94,6 +97,23 @@ describe('ollamaManager.pullModel transient-error retry', () => {
 
     expect(result.success).toBe(true)
     expect(pullUrls).toHaveLength(2)
+  })
+
+  it('retries a request-level "fetch failed" whose real reason lives in err.cause (ECONNRESET)', async () => {
+    const pullModel = await loadPullModel()
+    // undici surfaces a dropped connection as `TypeError: fetch failed` with the
+    // actual ECONNRESET buried in `.cause` — the classifier must see the cause.
+    const fetchFailed = new TypeError('fetch failed')
+    fetchFailed.cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    const { pullUrls } = stubFetch([
+      fetchFailed,
+      makeStreamResponse([{ status: 'success' }])
+    ])
+
+    const { result } = await runPull(pullModel, 'smollm:135m')
+
+    expect(result.success).toBe(true)
+    expect(pullUrls).toHaveLength(2) // classified transient via cause, retried
   })
 
   it('does NOT retry a non-transient error (bad model / missing manifest)', async () => {
