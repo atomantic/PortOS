@@ -26,6 +26,7 @@ import { copyFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { isSafeRecordId } from '../../lib/validation.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
@@ -299,15 +300,6 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
   }));
   return { copied, available, missing };
 }
-
-// Peer-supplied record ids index into `join(bucketPath, …, `${id}.json`)`. A
-// `../`-bearing id from a buggy/malicious federation peer would turn those reads
-// into a path-traversal existence/parse oracle on the host. Reject anything that
-// isn't a bare filename segment before it reaches a join. (Write-side idPattern
-// already blocks persistence; this closes the read side.)
-const isSafeRecordId = (id) =>
-  typeof id === 'string' && id.length > 0 && basename(id) === id
-  && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
 
 async function processAnnotationManifest(bucket, manifest) {
   const recordId = (manifest.recordIds || [])[0] || manifest.senderInstanceId;

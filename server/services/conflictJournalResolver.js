@@ -25,6 +25,7 @@
  */
 
 import { existsSync } from 'fs';
+import { isSafeRecordId } from '../lib/validation.js';
 import { conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';
 import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeBuilder.js';
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
@@ -114,6 +115,10 @@ export async function resolveConflict(id, { action, fields = [] } = {}) {
 
 /** Permanently remove a journal entry (the "dismiss / clear" action). */
 export async function deleteConflict(id) {
+  // Validate the id BEFORE interpolating it into recordDir(id) — getConflict()
+  // (which we no longer call) used to enforce this via the store's isValidId;
+  // an unguarded id would make recordDir a path-traversal existence oracle.
+  if (!isSafeRecordId(id)) throw makeErr(`Conflict entry not found: ${id}`, ERR_NOT_FOUND);
   // Don't gate on getConflict() — it requires a successful parse, so a corrupt
   // journal entry would 404 here and become permanently undeletable. Check raw
   // directory existence instead, then hard-delete (deleteOne is idempotent).

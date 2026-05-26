@@ -106,4 +106,9 @@ describe('conflictJournalResolver', () => {
     expect(await resolver.listConflicts()).toHaveLength(0);
     await expect(resolver.getConflict(e1)).rejects.toMatchObject({ code: resolver.ERR_NOT_FOUND });
   });
+
+  it('deleteConflict rejects a path-traversal id without probing the filesystem', async () => {
+    await expect(resolver.deleteConflict('../../etc/passwd')).rejects.toMatchObject({ code: resolver.ERR_NOT_FOUND });
+    await expect(resolver.deleteConflict('..')).rejects.toMatchObject({ code: resolver.ERR_NOT_FOUND });
+  });
 });

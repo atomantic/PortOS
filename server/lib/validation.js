@@ -20,6 +20,18 @@ export const refineImagePixelCap = (d) =>
   !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
 export const PIXEL_CAP_MESSAGE = `Total pixels (width × height) must be ≤ ${MAX_IMAGE_PIXELS.toLocaleString()}`;
 
+// Reject a record id that isn't a bare filename segment. Use before a
+// peer-supplied / externally-sourced id is interpolated into a filesystem path
+// (e.g. the sharing importer's raw `join(bucket, …, `${id}.json`)` reads, or
+// the conflict journal's `recordDir(id)`), so a `../`-bearing id can't turn the
+// read/delete into a path-traversal oracle. Records persisted through a
+// collectionStore are already gated by its `idPattern`; this guards the raw
+// path sites that don't go through a store.
+export const isSafeRecordId = (id) =>
+  typeof id === 'string' && id.length > 0
+  && id !== '.' && id !== '..'
+  && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
+
 // Build a sparse-map Zod shape from a string array of boolean-typed keys.
 // Returns the raw record so callers can either spread it (...optionalBooleanMap(KEYS))
 // into a larger object schema or wrap it directly (z.object(optionalBooleanMap(KEYS))).
