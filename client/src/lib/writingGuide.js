@@ -82,7 +82,7 @@ export const WRITING_LENGTH_TARGETS = [
     core: false,
     words: { min: 40000, max: 120000, label: '40,000–120,000 words' },
     chars: { min: 200000, max: 720000, label: '200,000–720,000 chars' },
-    pages: { min: 135, max: 480, label: '135–480 pages' },
+    pages: { min: 134, max: 480, label: '134–480 pages' },
     chapters: { min: 8, max: 40, label: '8–40 chapters' },
     note: 'Multiple arcs and a full cast. Genre sets the sweet spot (≈70k YA, ≈100k+ epic fantasy).',
   },
