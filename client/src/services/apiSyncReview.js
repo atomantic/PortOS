@@ -23,6 +23,16 @@ export const previewSeriesMerge = (body, options) =>
 export const mergeSeries = (body, options) =>
   request('/pipeline/series/merge', { method: 'POST', body: JSON.stringify(body), ...options });
 
+// AI-assisted merge: asks the configured AI provider to synthesize a single
+// unified text per conflict field, returning { merged: { [field]: string },
+// skipped, llm, runId }. The caller applies `merged` as `fieldOverrides` on
+// the subsequent merge/preview + merge calls.
+export const aiResolveUniverseMerge = (body, options) =>
+  request('/universe-builder/merge/ai-resolve', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const aiResolveSeriesMerge = (body, options) =>
+  request('/pipeline/series/merge/ai-resolve', { method: 'POST', body: JSON.stringify(body), ...options });
+
 // ---- Conflict journal ----
 // Versions a cross-install LWW overwrite preserved instead of silently losing.
 // See server/services/conflictJournalResolver.js.

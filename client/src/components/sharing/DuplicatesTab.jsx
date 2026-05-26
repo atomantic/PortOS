@@ -37,7 +37,7 @@ export default function DuplicatesTab() {
 
   useEffect(() => { load(); }, [load]);
 
-  const { merge, setMerge, openMerge, runPreview, executeMerge } = useRecordMerge({ onMerged: load });
+  const { merge, setMerge, openMerge, runPreview, executeMerge, runAIMerge, updateOverride } = useRecordMerge({ onMerged: load });
 
   const groupKey = (kind, normalizedName, scope = '') => `${kind}:${scope}:${normalizedName}`;
 
@@ -83,6 +83,7 @@ export default function DuplicatesTab() {
         <MergeModal
           merge={merge} setMerge={setMerge} onExecute={executeMerge}
           onRepreview={(survivorId, loserId) => runPreview(merge.kind, survivorId, loserId, merge.records)}
+          onAIMerge={runAIMerge} onUpdateOverride={updateOverride}
         />
       )}
     </div>

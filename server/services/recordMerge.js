@@ -173,14 +173,28 @@ const isEmptyScalar = (v) => v === null || v === undefined || (typeof v === 'str
  *   - autoResolved: only one side non-empty → take it (no prompt needed).
  *   - equal / both-empty → survivor value, silently.
  * `fieldChoices` is `{ [field]: 'survivor' | 'loser' }`.
+ * `fieldOverrides` is `{ [field]: any }` — if a field appears here, the value
+ * is taken verbatim and the survivor/loser binary is ignored (used by the
+ * AI-merge flow which produces a unified third option, editable by the user).
+ * Overrides skip the conflict gate even when both sides differ, so an explicit
+ * AI/user-edited value flows through without a redundant 'survivor'|'loser'
+ * choice.
  */
-const resolveScalars = (fields, survivor, loser, fieldChoices = {}) => {
+const resolveScalars = (fields, survivor, loser, fieldChoices = {}, fieldOverrides = {}) => {
   const values = {};
   const conflicts = [];
   const autoResolved = [];
   for (const field of fields) {
     const sv = survivor[field];
     const lv = loser[field];
+    // Explicit override wins outright. Use Object.prototype.hasOwnProperty so
+    // an empty-string override (user cleared the AI-merged value to mean
+    // "blank this field") is honored instead of falling through to the
+    // survivor/loser picker.
+    if (Object.prototype.hasOwnProperty.call(fieldOverrides, field)) {
+      values[field] = fieldOverrides[field];
+      continue;
+    }
     const sEmpty = isEmptyScalar(sv);
     const lEmpty = isEmptyScalar(lv);
     if (sEmpty && lEmpty) { values[field] = sv ?? lv ?? ''; continue; }
@@ -208,8 +222,8 @@ const SERIES_SCALARS = [
 ];
 
 /** Build the unioned universe patch + conflict report from survivor + loser. */
-export const buildUniverseUnion = (survivor, loser, fieldChoices = {}) => {
-  const { values, conflicts, autoResolved } = resolveScalars(UNIVERSE_SCALARS, survivor, loser, fieldChoices);
+export const buildUniverseUnion = (survivor, loser, fieldChoices = {}, fieldOverrides = {}) => {
+  const { values, conflicts, autoResolved } = resolveScalars(UNIVERSE_SCALARS, survivor, loser, fieldChoices, fieldOverrides);
   const record = {
     ...values,
     categories: unionCategories(survivor.categories, loser.categories),
@@ -223,8 +237,8 @@ export const buildUniverseUnion = (survivor, loser, fieldChoices = {}) => {
 };
 
 /** Build the unioned series patch + conflict report from survivor + loser. */
-export const buildSeriesUnion = (survivor, loser, fieldChoices = {}) => {
-  const { values, conflicts, autoResolved } = resolveScalars(SERIES_SCALARS, survivor, loser, fieldChoices);
+export const buildSeriesUnion = (survivor, loser, fieldChoices = {}, fieldOverrides = {}) => {
+  const { values, conflicts, autoResolved } = resolveScalars(SERIES_SCALARS, survivor, loser, fieldChoices, fieldOverrides);
   const record = {
     ...values,
     seasons: unionSeasons(survivor.seasons, loser.seasons),
@@ -248,14 +262,14 @@ const requireResolved = (conflicts) => {
  * On execute: writes the unioned survivor, re-points the loser's child series
  * + media collection, then tombstones the loser.
  */
-export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { dryRun = false } = {}) {
+export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { dryRun = false, fieldOverrides = {} } = {}) {
   if (!survivorId || !loserId || survivorId === loserId) {
     throw makeErr('survivorId and loserId must be distinct', ERR_VALIDATION);
   }
   const survivor = await getUniverse(survivorId);
   const loser = await getUniverse(loserId);
 
-  const { record, conflicts, autoResolved } = buildUniverseUnion(survivor, loser, fieldChoices);
+  const { record, conflicts, autoResolved } = buildUniverseUnion(survivor, loser, fieldChoices, fieldOverrides);
 
   // Cascade preview: which series re-point, how many collection items fold.
   const childSeries = (await listSeries()).filter((s) => s.universeId === loserId);
@@ -311,7 +325,7 @@ export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { d
  * writes the unioned survivor, re-points the loser's issues + media collection,
  * then tombstones the loser.
  */
-export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryRun = false } = {}) {
+export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryRun = false, fieldOverrides = {} } = {}) {
   if (!survivorId || !loserId || survivorId === loserId) {
     throw makeErr('survivorId and loserId must be distinct', ERR_VALIDATION);
   }
@@ -329,7 +343,7 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
     throw makeErr('Series can only be merged within the same universe', ERR_VALIDATION);
   }
 
-  const { record, conflicts, autoResolved } = buildSeriesUnion(survivor, loser, fieldChoices);
+  const { record, conflicts, autoResolved } = buildSeriesUnion(survivor, loser, fieldChoices, fieldOverrides);
 
   const loserCollection = await findCollectionBySeriesId(loserId);
   // Issues are reassigned to the survivor un-grouped; count for the preview.

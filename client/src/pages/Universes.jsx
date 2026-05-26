@@ -176,7 +176,7 @@ export default function Universes() {
     return loadDuplicates();
   }, [loadDuplicates]);
 
-  const { merge, setMerge, openMerge, runPreview, executeMerge } = useRecordMerge({ onMerged: refresh });
+  const { merge, setMerge, openMerge, runPreview, executeMerge, runAIMerge, updateOverride } = useRecordMerge({ onMerged: refresh });
 
   // "Keep both" hides a group for the session; the records are legitimately
   // distinct. Filtered against the live group list so a newly-merged group that
@@ -360,6 +360,7 @@ export default function Universes() {
         <MergeModal
           merge={merge} setMerge={setMerge} onExecute={executeMerge}
           onRepreview={(survivorId, loserId) => runPreview(merge.kind, survivorId, loserId, merge.records)}
+          onAIMerge={runAIMerge} onUpdateOverride={updateOverride}
         />
       )}
     </div>

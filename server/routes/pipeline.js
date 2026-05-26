@@ -57,6 +57,7 @@ import { extractCanonFromProse } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
 import { mergeSeries } from '../services/recordMerge.js';
+import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
@@ -869,6 +870,18 @@ const seriesMergeSchema = z.object({
   survivorId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
   loserId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
   fieldChoices: z.record(z.enum(['survivor', 'loser'])).optional().default({}),
+  // Free-form per-field values that win over the survivor/loser binary —
+  // populated by the AI-merge flow (a third unified option) and optionally
+  // tweaked by the user before submit.
+  fieldOverrides: z.record(z.string()).optional().default({}),
+}).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
+
+const seriesMergeAIResolveSchema = z.object({
+  survivorId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  loserId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  fields: z.array(z.string().trim().min(1).max(64)).min(1).max(20),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
 }).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
 
 router.get('/series/duplicates', asyncHandler(async (_req, res) => {
@@ -877,15 +890,35 @@ router.get('/series/duplicates', asyncHandler(async (_req, res) => {
 
 router.post('/series/merge/preview', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesMergeSchema, req.body ?? {});
-  const preview = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices, { dryRun: true })
+  const preview = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices, { dryRun: true, fieldOverrides: body.fieldOverrides })
     .catch((err) => { throw mapServiceError(err); });
   res.json(preview);
 }));
 
 router.post('/series/merge', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesMergeSchema, req.body ?? {});
-  const result = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices)
+  const result = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices, { fieldOverrides: body.fieldOverrides })
     .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Ask the configured AI provider to merge specific conflicting text fields
+// into a single unified value per field. Same shape as the universe-side
+// /universe-builder/merge/ai-resolve route.
+router.post('/series/merge/ai-resolve', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesMergeAIResolveSchema, req.body ?? {});
+  const [survivor, loser] = await Promise.all([
+    seriesSvc.getSeries(body.survivorId).catch((err) => { throw mapServiceError(err); }),
+    seriesSvc.getSeries(body.loserId).catch((err) => { throw mapServiceError(err); }),
+  ]);
+  const result = await mergeFieldsWithAI({
+    kind: 'series',
+    survivor,
+    loser,
+    fields: body.fields,
+    providerId: body.providerId,
+    model: body.model,
+  });
   res.json(result);
 }));
 

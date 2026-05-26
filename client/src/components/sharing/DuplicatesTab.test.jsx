@@ -9,10 +9,12 @@ vi.mock('../../services/api', () => ({
   mergeUniverses: vi.fn(),
   previewSeriesMerge: vi.fn(),
   mergeSeries: vi.fn(),
+  aiResolveUniverseMerge: vi.fn(),
+  aiResolveSeriesMerge: vi.fn(),
   updateUniverse: vi.fn(),
   updatePipelineSeries: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('../ui/Modal', () => ({ default: ({ open, children }) => (open ? <div role="dialog">{children}</div> : null) }));
 vi.mock('../ui/InlineDiff', () => ({ default: ({ oldText, newText }) => <div data-testid="diff">{oldText}|{newText}</div> }));
 
@@ -60,6 +62,46 @@ describe('DuplicatesTab', () => {
     await user.click(screen.getByRole('button', { name: /^Merge$/ }));
     await waitFor(() => expect(api.mergeUniverses).toHaveBeenCalledWith(
       { survivorId: 'u-new', loserId: 'u-old', fieldChoices: { starterPrompt: 'survivor' } },
+      expect.anything(),
+    ));
+  });
+
+  it('Merge with AI populates an editable override and ships it as fieldOverrides on submit', async () => {
+    api.previewUniverseMerge.mockResolvedValue({
+      conflicts: [{ field: 'starterPrompt', survivorValue: 'A', loserValue: 'B' }],
+      cascade: { seriesToRepoint: [], loserCollectionItemCount: 0 },
+    });
+    api.aiResolveUniverseMerge.mockResolvedValue({
+      merged: { starterPrompt: 'Unified A+B' }, skipped: [], llm: { provider: 'codex', model: null }, runId: 'r1',
+    });
+    api.mergeUniverses.mockResolvedValue({ merged: true });
+
+    const user = userEvent.setup();
+    render(<DuplicatesTab />);
+    await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Merge…/ }));
+    await waitFor(() => expect(screen.getByText('starterPrompt')).toBeInTheDocument());
+
+    // Click Merge with AI — the AI-resolve API is called with the conflict field list.
+    await user.click(screen.getByRole('button', { name: /Merge with AI/ }));
+    await waitFor(() => expect(api.aiResolveUniverseMerge).toHaveBeenCalledWith(
+      { survivorId: 'u-new', loserId: 'u-old', fields: ['starterPrompt'] },
+      expect.anything(),
+    ));
+
+    // The AI-merged value is rendered in an editable textarea and the row
+    // automatically switches to the "AI merged" choice.
+    const ta = await screen.findByLabelText('AI-merged starterPrompt');
+    expect(ta.value).toBe('Unified A+B');
+    await user.clear(ta);
+    await user.type(ta, 'Hand-tweaked unified');
+
+    // Execute — survivor/loser choice is dropped (server's enum doesn't accept 'ai'),
+    // override is sent as fieldOverrides.
+    await user.click(screen.getByRole('button', { name: /^Merge$/ }));
+    await waitFor(() => expect(api.mergeUniverses).toHaveBeenCalledWith(
+      { survivorId: 'u-new', loserId: 'u-old', fieldChoices: {}, fieldOverrides: { starterPrompt: 'Hand-tweaked unified' } },
       expect.anything(),
     ));
   });

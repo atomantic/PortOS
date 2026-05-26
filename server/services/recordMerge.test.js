@@ -98,6 +98,28 @@ describe('recordMerge — pure union helpers', () => {
     expect(conflicts).toEqual([]);
     expect(record.starterPrompt).toBe('B');
   });
+
+  it('buildUniverseUnion fieldOverrides beat survivor/loser binary even when both differ', () => {
+    const { conflicts, record } = merge.buildUniverseUnion(
+      { name: 'Dup', starterPrompt: 'A', categories: {}, influences: {}, characters: [], places: [], objects: [] },
+      { name: 'Dup', starterPrompt: 'B', categories: {}, influences: {}, characters: [], places: [], objects: [] },
+      { starterPrompt: 'survivor' }, // ignored — override wins
+      { starterPrompt: 'A + B unified' },
+    );
+    expect(conflicts).toEqual([]);
+    expect(record.starterPrompt).toBe('A + B unified');
+  });
+
+  it('buildUniverseUnion fieldOverrides honor empty-string clears', () => {
+    const { conflicts, record } = merge.buildUniverseUnion(
+      { name: 'Dup', starterPrompt: 'A', categories: {}, influences: {}, characters: [], places: [], objects: [] },
+      { name: 'Dup', starterPrompt: 'B', categories: {}, influences: {}, characters: [], places: [], objects: [] },
+      {},
+      { starterPrompt: '' }, // explicit clear via override
+    );
+    expect(conflicts).toEqual([]);
+    expect(record.starterPrompt).toBe('');
+  });
 });
 
 describe('recordMerge — mergeUniverses (integration)', () => {
