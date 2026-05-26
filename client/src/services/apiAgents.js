@@ -81,6 +81,10 @@ export const getCosAgentDates = () => request('/cos/agents/history');
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
 export const getCosAgent = (id) => request(`/cos/agents/${id}`);
 export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
+export const pauseCosAgent = (id, reason) => request(`/cos/agents/${id}/pause`, {
+  method: 'POST',
+  body: JSON.stringify({ reason })
+});
 export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 'POST' });
 export const getCosAgentStats = (id, options) => request(`/cos/agents/${id}/stats`, options);
 export const getCosAgentPrompt = (id) => request(`/cos/agents/${id}/prompt`);

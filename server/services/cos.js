@@ -53,7 +53,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 export { cosEvents, emitLog };
 
 // Agent lifecycle (re-export for backward compat with `import * as cos`)
-export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, getAgentPrompt, terminateAgent, killAgent, sendBtwToAgent, getAgentProcessStats, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
+export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, getAgentPrompt, terminateAgent, pauseAgent, killAgent, sendBtwToAgent, getAgentProcessStats, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
 export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
@@ -201,6 +201,7 @@ export async function getStatus() {
 
   // Count active agents from state
   const activeAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const pausedAgents = Object.values(state.agents).filter(a => a.status === 'paused').length;
 
   // Derive tasksCompleted from union of index (disk) + state completed agents,
   // since state.stats.tasksCompleted can drift after state resets
@@ -216,6 +217,7 @@ export async function getStatus() {
     config: state.config,
     stats: { ...state.stats, tasksCompleted },
     activeAgents,
+    pausedAgents,
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
 }
@@ -3297,4 +3299,3 @@ export async function init() {
     await start();
   }
 }
-

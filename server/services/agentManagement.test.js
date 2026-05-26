@@ -44,26 +44,34 @@ vi.mock('./agentRunTracking.js', () => ({
 }));
 
 // Stub other transitive imports we don't exercise in handleOrphanedTask.
-vi.mock('./cosAgents.js', () => ({ completeAgent: vi.fn() }));
+vi.mock('./cosAgents.js', () => ({ completeAgent: vi.fn(), updateAgent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./cosRunnerClient.js', () => ({
   terminateAgentViaRunner: vi.fn(),
   killAgentViaRunner: vi.fn(),
+  pauseAgentViaRunner: vi.fn(),
   getAgentStatsFromRunner: vi.fn(),
   getActiveAgentsFromRunner: vi.fn().mockResolvedValue([])
 }));
 vi.mock('./agents.js', () => ({ unregisterSpawnedAgent: vi.fn() }));
+vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
+vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
+vi.mock('./shell.js', () => ({ writeToSession: vi.fn(), killSession: vi.fn() }));
 vi.mock('./agentLifecycle.js', () => ({
   cleanupAgentWorktree: vi.fn(),
   syncRunnerAgents: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn() }));
 
-import { handleOrphanedTask } from './agentManagement.js';
-import { updateTask, addTask } from './cos.js';
+import { handleOrphanedTask, pauseAgent } from './agentManagement.js';
+import { updateTask, addTask, getTaskById } from './cos.js';
+import { updateAgent } from './cosAgents.js';
+import { activeAgents, pausedAgents } from './agentState.js';
 
 describe('handleOrphanedTask — duplicate-investigation guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    activeAgents.clear();
+    pausedAgents.clear();
   });
 
   it('skips tasks already blocked with blockedCategory=max-retries (no new investigation task)', async () => {
@@ -148,6 +156,53 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
       'user'
     );
     expect(addTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('pauseAgent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    activeAgents.clear();
+    pausedAgents.clear();
+  });
+
+  it('marks a direct agent paused, blocks the task as agent-paused, and signals SIGTERM', async () => {
+    const kill = vi.fn();
+    activeAgents.set('agent-1', {
+      process: { kill },
+      taskId: 'task-1',
+      runId: 'run-1',
+      pid: 123,
+      workspacePath: '/repo/worktree',
+      executionId: 'exec-1',
+      laneName: 'standard'
+    });
+    getTaskById.mockResolvedValue({
+      id: 'task-1',
+      taskType: 'user',
+      description: 'Do work',
+      metadata: { openPR: true }
+    });
+
+    const result = await pauseAgent('agent-1', 'billing window');
+
+    expect(result).toMatchObject({ success: true, agentId: 'agent-1', mode: 'direct' });
+    expect(updateAgent).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      status: 'paused',
+      metadata: expect.objectContaining({ phase: 'paused', pauseReason: 'billing window' })
+    }));
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({
+      status: 'blocked',
+      metadata: expect.objectContaining({
+        blockedCategory: 'agent-paused',
+        pausedAgentId: 'agent-1',
+        resumeWorkspacePath: '/repo/worktree',
+        resumeRunId: 'run-1'
+      })
+    }), 'user');
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(pausedAgents.has('agent-1')).toBe(true);
+    clearTimeout(activeAgents.get('agent-1')?.killTimer);
   });
 });
 

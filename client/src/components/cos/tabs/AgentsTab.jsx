@@ -61,6 +61,13 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
     onRefresh();
   };
 
+  const handlePause = async (agentId) => {
+    const result = await api.pauseCosAgent(agentId, 'Paused from CoS agent list').catch(err => { toast.error(err.message); return null; });
+    if (!result) return;
+    toast.success('Agent paused');
+    onRefresh();
+  };
+
   const handleDelete = useCallback(async (agentId) => {
     const result = await api.deleteCosAgent(agentId).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
@@ -113,6 +120,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
 
   // Running agents come from props (real-time via parent socket updates)
   const runningAgents = agents.filter(a => a.status === 'running');
+  const pausedAgents = agents.filter(a => a.status === 'paused');
   // Completed agents still in state (recently completed, not yet archived)
   const recentCompleted = agents.filter(a => a.status === 'completed');
   // Merge recent completed (from state) with loaded (from disk), deduplicate
@@ -178,6 +186,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                onPause={handlePause}
                 onKill={handleKill}
                 liveOutput={liveOutputs[agent.id]}
                 durations={durations}
@@ -186,6 +195,28 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
           </div>
         )}
       </div>
+
+      {/* Paused Agents */}
+      {pausedAgents.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-white">Paused Agents</h3>
+            <span className="text-sm text-yellow-400">{pausedAgents.length} paused</span>
+          </div>
+          <div className="space-y-2">
+            {pausedAgents.map(agent => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                paused
+                onDelete={handleDelete}
+                onResume={handleResumeClick}
+                onFeedbackChange={onRefresh}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Completed Agents */}
       {(totalCount > 0 || recentCompleted.length > 0) && (

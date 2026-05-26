@@ -26,7 +26,7 @@ export { ERROR_PATTERNS, analyzeAgentFailure, createInvestigationTask, API_ACCES
 export { buildAgentPrompt, getAppWorkspace, getAppDataForTask, generateJiraTitle, createJiraTicketForTask, getClaudeMdContext, buildCompactionSection, detectSkillTemplate, loadSkillTemplate } from './agentPromptBuilder.js';
 export { spawnDirectly, createStreamJsonParser, summarizeToolInput, safeParse, buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
 export { syncRunnerAgents, spawnAgentForTask, waitForRunnerStability, spawnViaRunner, extractFinalSummary, extractPipelineOutputSummary, handlePipelineProgression, handleAgentCompletion, cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './agentLifecycle.js';
-export { terminateAgent, getActiveAgents, killAgent, getAgentProcessStats, killAllAgents, isPidAlive, cleanupOrphanedAgents, handleOrphanedTask } from './agentManagement.js';
+export { terminateAgent, pauseAgent, getActiveAgents, killAgent, getAgentProcessStats, killAllAgents, isPidAlive, cleanupOrphanedAgents, handleOrphanedTask } from './agentManagement.js';
 export { processAgentCompletion } from './agentCompletion.js';
 
 const ROOT_DIR = PATHS.root;

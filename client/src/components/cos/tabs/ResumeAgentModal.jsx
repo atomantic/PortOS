@@ -13,12 +13,22 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   const resultInfo = agent.result
     ? (agent.result.success ? 'Previous run: Completed successfully' : `Previous run: Failed - ${agent.result.error || 'Unknown error'}`)
     : '';
+  const pauseInfo = agent.status === 'paused'
+    ? `Previous run: Paused${agent.metadata?.pauseReason ? ` - ${agent.metadata.pauseReason}` : ''}`
+    : '';
+  const resumeWorkspace = agent.metadata?.resumeWorkspacePath || agent.metadata?.workspacePath;
+  const worktreeInfo = [
+    resumeWorkspace ? `Resume Workspace: ${resumeWorkspace}` : '',
+    agent.metadata?.worktreeBranch ? `Worktree Branch: ${agent.metadata.worktreeBranch}` : '',
+    agent.metadata?.isWorktree ? 'The previous worktree and any uncommitted changes were intentionally preserved. Continue from that workspace instead of starting over.' : ''
+  ].filter(Boolean).join('\n');
 
   const initialContext = [
     '## Previous Agent Context',
     `Agent ID: ${agent.id}`,
     `Original Task: ${taskDescription}`,
-    resultInfo,
+    pauseInfo || resultInfo,
+    worktreeInfo ? `\n## Preserved Workspace\n${worktreeInfo}` : '',
     outputSummary ? `\n## Last Output:\n\`\`\`\n${outputSummary}\n\`\`\`` : ''
   ].filter(Boolean).join('\n');
 

@@ -184,6 +184,22 @@ export async function killAgentViaRunner(agentId) {
 }
 
 /**
+ * Pause an agent via the runner without emitting normal completion cleanup.
+ */
+export async function pauseAgentViaRunner(agentId, reason = null) {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/pause/${agentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason })
+  }, 30000);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to pause agent');
+  }
+  return response.json();
+}
+
+/**
  * Get process stats for an agent
  */
 export async function getAgentStatsFromRunner(agentId) {

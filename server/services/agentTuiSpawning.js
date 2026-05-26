@@ -15,7 +15,7 @@ import { appendAgentOutputLines, updateAgent } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
@@ -399,6 +399,14 @@ export async function spawnTuiAgent({
     await flushPendingLines();
     if (rawFlushing) await rawFlushing.catch(() => {});
     await flushPendingRawChunks();
+
+    if (pausedAgents.has(agentId)) {
+      pausedAgents.delete(agentId);
+      const pausedAgentData = activeAgents.get(agentId);
+      if (pausedAgentData?.pid) unregisterSpawnedAgent(pausedAgentData.pid);
+      activeAgents.delete(agentId);
+      return;
+    }
 
     const duration = Date.now() - (agentData?.startedAt || Date.now());
     const terminatedByUser = userTerminatedAgents.has(agentId);

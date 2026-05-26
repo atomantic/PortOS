@@ -68,6 +68,15 @@ router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// POST /api/cos/agents/:id/pause - Stop process, preserve task/worktree for later resume
+router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
+  const result = await cos.pauseAgent(req.params.id, req.body?.reason || null);
+  if (result?.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
 // POST /api/cos/agents/:id/kill - Force kill agent (immediate SIGKILL)
 router.post('/agents/:id/kill', asyncHandler(async (req, res) => {
   const result = await cos.killAgent(req.params.id);

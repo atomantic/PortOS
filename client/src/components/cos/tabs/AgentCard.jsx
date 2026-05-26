@@ -9,6 +9,7 @@ import {
   RotateCcw,
   Loader2,
   Skull,
+  Pause,
   Activity,
   Clock,
   Brain,
@@ -99,7 +100,7 @@ function TaskDescription({ text }) {
   );
 }
 
-export default function AgentCard({ agent, onKill, onDelete, onResume, completed, liveOutput, durations, onFeedbackChange, remote, peerName }) {
+export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
@@ -109,6 +110,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   const [stageOutputs, setStageOutputs] = useState({});
   const [loadingStageId, setLoadingStageId] = useState(null);
   const [processStats, setProcessStats] = useState(null);
+  const [pausing, setPausing] = useState(false);
   const [killing, setKilling] = useState(false);
   const [feedbackState, setFeedbackState] = useState(agent.feedback?.rating || null);
   const [btwInput, setBtwInput] = useState('');
@@ -134,6 +136,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
   // Determine if this is a system agent (health check, etc.)
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
+  const inactive = completed || paused;
 
   // Handle feedback submission
   const submitFeedback = useCallback(async (rating) => {
@@ -200,10 +203,10 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
   // Update duration display for running agents
   useEffect(() => {
-    if (completed) return;
+    if (inactive) return;
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [completed]);
+  }, [inactive]);
 
   // Fetch process stats for running agents (skip for remote peers).
   // Only overwrite prior stats on a successful response so a transient
@@ -217,7 +220,14 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     }
   }, [agent.id]);
 
-  useAutoRefetch(fetchStats, 5000, { enabled: !completed && !remote, pollOnly: true });
+  useAutoRefetch(fetchStats, 5000, { enabled: !inactive && !remote, pollOnly: true });
+
+  const handlePause = async () => {
+    if (!onPause) return;
+    setPausing(true);
+    await onPause(agent.id);
+    setPausing(false);
+  };
 
   const handleKill = async () => {
     if (!onKill) return;
@@ -228,7 +238,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
   // Fetch full output when expanded for completed agents (skip for remote)
   useEffect(() => {
-    if (expanded && completed && !fullOutput && !loadingOutput && !remote) {
+    if (expanded && inactive && !fullOutput && !loadingOutput && !remote) {
       setLoadingOutput(true);
       api.getCosAgent(agent.id)
         .then(data => {
@@ -240,7 +250,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         })
         .finally(() => setLoadingOutput(false));
     }
-  }, [expanded, completed, agent.id, fullOutput, loadingOutput, remote, agent.output]);
+  }, [expanded, inactive, agent.id, fullOutput, loadingOutput, remote, agent.output]);
 
   const duration = agent.completedAt
     ? new Date(agent.completedAt) - new Date(agent.startedAt)
@@ -256,7 +266,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   // Calculate duration estimate for running agents
   // Uses P80 (80th percentile approximation) for progress bars to prevent premature 100%
   const durationEstimate = useMemo(() => {
-    if (completed || !durations) return null;
+    if (inactive || !durations) return null;
 
     const taskType = extractTaskType(agent.metadata?.taskDescription);
     const typeData = durations[taskType];
@@ -283,7 +293,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     }
 
     return null;
-  }, [completed, durations, agent.metadata?.taskDescription]);
+  }, [inactive, durations, agent.metadata?.taskDescription]);
 
   // Calculate progress percentage using P80-based estimate
   // Cap at 99% for active tasks — only completion can land on 100%
@@ -295,23 +305,23 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
   // Calculate remaining time (ETA) based on P80 estimate
   const remainingTime = useMemo(() => {
-    if (!durationEstimate || completed) return null;
+    if (!durationEstimate || inactive) return null;
     const remaining = durationEstimate.estimatedMs - duration;
     if (remaining <= 0) return { remaining: 0, overBy: Math.abs(remaining), isOvertime: true };
     return { remaining, overBy: 0, isOvertime: false };
-  }, [duration, durationEstimate, completed]);
+  }, [duration, durationEstimate, inactive]);
 
   // For running agents, use live output; for completed, use fetched full output or stored
   const output = useMemo(() => (
-    completed
+    inactive
       ? (fullOutput || agent.output || [])
       : (liveOutput || agent.output || [])
-  ), [completed, fullOutput, liveOutput, agent.output]);
+  ), [inactive, fullOutput, liveOutput, agent.output]);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
   // Extract recent tool activity (last few tool lines) for live display
   const recentActivity = useMemo(() => {
-    if (completed || output.length === 0) return [];
+    if (inactive || output.length === 0) return [];
     const recent = [];
     // Walk backwards to find the last 3 tool actions (🔧 lines with their → details)
     for (let i = output.length - 1; i >= 0 && recent.length < 6; i--) {
@@ -321,7 +331,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
       }
     }
     return recent;
-  }, [completed, output]);
+  }, [inactive, output]);
 
   // Count total tool invocations
   const toolCount = useMemo(() => {
@@ -374,7 +384,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
   return (
     <div className={`bg-port-card border rounded-lg overflow-hidden ${
-      completed
+      inactive
         ? isSystemAgent ? 'border-port-border opacity-50' : 'border-port-border opacity-75'
         : 'border-port-accent/50'
     }`}>
@@ -382,7 +392,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         {/* Top row: Agent ID, badges, and actions */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
-            <Cpu size={16} aria-hidden="true" className={`shrink-0 ${completed ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
+            <Cpu size={16} aria-hidden="true" className={`shrink-0 ${inactive ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
             <span className="font-mono text-sm text-gray-400 truncate">{agent.id}</span>
             {remote && peerName && (
               <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded shrink-0" title={`Remote agent on ${peerName}`}>
@@ -411,12 +421,17 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 {agent.metadata.model.replace('claude-', '').replace(/-\d+$/, '')}
               </span>
             )}
-            {!completed && (
+            {!inactive && (
               <span className={`px-2 py-0.5 text-xs rounded animate-pulse shrink-0 ${
                 agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400' :
                 'bg-port-accent/20 text-port-accent'
               }`}>
                 {agent.metadata?.phase === 'initializing' ? 'Initializing' : 'Working'}
+              </span>
+            )}
+            {paused && (
+              <span className="px-2 py-0.5 text-xs rounded bg-yellow-500/20 text-yellow-400 shrink-0">
+                Paused
               </span>
             )}
             {agent.metadata?.executionMode === 'tui' && (
@@ -427,7 +442,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           </div>
           {/* Actions - right side */}
           <div className="flex items-center gap-2 shrink-0">
-            {(output.length > 0 || completed) && (
+            {(output.length > 0 || inactive) && (
               <button
                 onClick={() => setExpanded(!expanded)}
                 className="text-gray-500 hover:text-white transition-colors text-xs whitespace-nowrap"
@@ -436,8 +451,19 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 {expanded ? 'Hide' : 'Show'}
               </button>
             )}
+            {!inactive && onPause && (
+              <button
+                onClick={handlePause}
+                disabled={pausing}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+                aria-label="Pause agent and preserve worktree"
+              >
+                {pausing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Pause size={12} aria-hidden="true" />}
+                <span className="hidden sm:inline">Pause</span>
+              </button>
+            )}
             {/* Kill button (force SIGKILL) */}
-            {!completed && onKill && (
+            {!inactive && onKill && (
               <button
                 onClick={handleKill}
                 disabled={killing}
@@ -448,7 +474,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 <span className="hidden sm:inline">Kill</span>
               </button>
             )}
-            {completed && onResume && (
+            {(completed || paused) && onResume && (
               <button
                 onClick={() => onResume(agent)}
                 className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
@@ -458,7 +484,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 <span className="hidden sm:inline">Resume</span>
               </button>
             )}
-            {completed && onDelete && (
+            {(completed || paused) && onDelete && (
               <button
                 onClick={() => onDelete(agent.id)}
                 className="p-1 text-gray-500 hover:text-port-error transition-colors"
@@ -473,7 +499,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         {/* Second row: Runtime, ETA, and process stats - compact inline display */}
         <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
           {/* Duration with ETA for running agents */}
-          {!completed && durationEstimate ? (
+          {!inactive && durationEstimate ? (
             <span
               className="flex items-center gap-1.5 text-gray-500 whitespace-nowrap"
               title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (avg: ${formatDuration(durationEstimate.avgMs)}, est: ${formatDuration(durationEstimate.estimatedMs)})`}
@@ -510,7 +536,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             </>
           )}
           {/* Process stats for running agents - inline */}
-          {!completed && processStats?.active && (
+          {!inactive && processStats?.active && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-success/20 text-port-success whitespace-nowrap"
                   title={`PID: ${processStats.pid} | State: ${processStats.state}`}>
               <Activity size={10} aria-hidden="true" className="shrink-0" />
@@ -521,7 +547,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
               <span className="font-mono">{processStats.memoryMb}MB</span>
             </span>
           )}
-          {!completed && agent.metadata?.tuiSessionId && (
+          {!inactive && agent.metadata?.tuiSessionId && (
             <Link
               to={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
               className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap"
@@ -542,7 +568,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             </button>
           )}
           {/* Show zombie warning if PID exists but process is dead */}
-          {!completed && agent.pid && processStats && !processStats.active && (
+          {!inactive && agent.pid && processStats && !processStats.active && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-error/20 text-port-error whitespace-nowrap"
                   title="Process is not running - zombie agent">
               <Skull size={10} aria-hidden="true" className="shrink-0" />
@@ -624,7 +650,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         )}
 
         {/* Live activity feed for running agents */}
-        {!completed && recentActivity.length > 0 && (
+        {!inactive && recentActivity.length > 0 && (
           <div className="text-xs font-mono bg-port-bg/50 px-2 py-1.5 rounded space-y-0.5">
             {recentActivity.map((o, i) => {
               const line = o.line || '';
@@ -641,7 +667,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             )}
           </div>
         )}
-        {!completed && recentActivity.length === 0 && lastOutput && (
+        {!inactive && recentActivity.length === 0 && lastOutput && (
           <div className="text-xs text-gray-500 font-mono truncate bg-port-bg/50 px-2 py-1 rounded">
             {lastOutput.substring(0, 100)}
           </div>
@@ -663,7 +689,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           </div>
         )}
 
-        {!completed && !remote && agent.metadata?.executionMode === 'tui' && agent.metadata?.tuiKind === 'claude' && (
+        {!inactive && !remote && agent.metadata?.executionMode === 'tui' && agent.metadata?.tuiKind === 'claude' && (
           <div className="mt-2 flex gap-2">
             <input
               type="text"
@@ -688,7 +714,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         )}
 
         {/* Progress bar and ETA for running agents with estimates */}
-        {!completed && durationEstimate && progress !== null && (
+        {!inactive && durationEstimate && progress !== null && (
           <div className="mt-2">
             <div className="h-1.5 bg-port-border rounded-full overflow-hidden">
               <div

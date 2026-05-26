@@ -65,7 +65,8 @@ vi.mock('./agentLifecycle.js', () => ({
 
 vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
-  userTerminatedAgents: new Set()
+  userTerminatedAgents: new Set(),
+  pausedAgents: new Map()
 }));
 
 vi.mock('fs', () => ({

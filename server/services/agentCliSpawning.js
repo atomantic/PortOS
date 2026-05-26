@@ -18,7 +18,7 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { normalizeReviewers } from '../lib/validation.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -577,6 +577,13 @@ export async function spawnDirectly({
     }
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
+
+    if (pausedAgents.has(agentId)) {
+      pausedAgents.delete(agentId);
+      if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
+      activeAgents.delete(agentId);
+      return;
+    }
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;

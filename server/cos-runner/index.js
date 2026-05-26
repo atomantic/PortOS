@@ -568,8 +568,9 @@ app.post('/spawn', async (req, res) => {
     }
 
     const output = agent?.outputBuffer || '';
+    const paused = agent?.paused === true;
 
-    console.log(`${code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}`);
+    console.log(`${paused ? '⏸️' : code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}`);
 
     // Save output to agent directory
     const agentDir = join(AGENTS_DIR, agentId);
@@ -577,6 +578,11 @@ app.post('/spawn', async (req, res) => {
       await ensureDir(agentDir);
     }
     await writeFile(join(agentDir, 'output.txt'), output).catch(() => {});
+
+    if (paused) {
+      activeAgents.delete(agentId);
+      return;
+    }
 
     // Persist completion status to disk BEFORE emitting event
     // This ensures recovery is possible even if the socket event is lost
@@ -681,6 +687,37 @@ app.post('/kill/:agentId', async (req, res) => {
   await saveState(state);
 
   res.json({ success: true, agentId, pid: agent.pid, signal: 'SIGKILL' });
+});
+
+/**
+ * Pause an agent: stop the child process without reporting normal completion.
+ * PortOS server persists the paused agent/task state and preserves the
+ * worktree; the runner just ensures the process stops spending tokens.
+ */
+app.post('/pause/:agentId', async (req, res) => {
+  const { agentId } = req.params;
+  const { reason = null } = req.body || {};
+  const agent = activeAgents.get(agentId);
+
+  if (!agent) {
+    return res.status(404).json({ error: 'Agent not found or not running' });
+  }
+
+  const pausedAt = new Date().toISOString();
+  console.log(`⏸️ Pausing agent ${agentId} (PID: ${agent.pid})${reason ? `: ${reason}` : ''}`);
+
+  agent.paused = true;
+  agent.pausedAt = pausedAt;
+  agent.pauseReason = reason;
+
+  agent.process.kill('SIGTERM');
+  setTimeout(() => {
+    const current = activeAgents.get(agentId);
+    if (current?.paused) current.process.kill('SIGKILL');
+  }, 5000);
+
+  emitToServer('agent:paused', { agentId, taskId: agent.taskId, pid: agent.pid, pausedAt, reason });
+  res.json({ success: true, agentId, pid: agent.pid, pausedAt });
 });
 
 /**
