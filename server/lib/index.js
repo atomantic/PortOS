@@ -51,6 +51,8 @@ export * from './writersRoomStylePresets.js';
 export * from './aiProvider.js';
 export * from './aiToolkitState.js';
 export * from './ansiStrip.js';
+export * from './cliProviderArgs.js';
+export * from './cliProviderRun.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './hfToken.js';
@@ -69,6 +71,7 @@ export * from './tuiPromptRunner.js';
 
 // === File & I/O ===
 export * from './collectionStore.js';
+export * from './conflictJournal.js';
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';

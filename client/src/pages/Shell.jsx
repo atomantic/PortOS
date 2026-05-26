@@ -734,7 +734,7 @@ export default function Shell() {
         <div className="flex items-center gap-2 ml-auto">
           {connected && (
             <button
-              onClick={() => { stopSession(); setTimeout(startSession, 1000); }}
+              onClick={() => { stopSession(); setTimeout(() => { if (mountedRef.current) startSession(); }, 1000); }}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
               title="Restart session (kill + new)"
             >
@@ -765,7 +765,7 @@ export default function Shell() {
 
       {/* Session tabs */}
       {sessions.length > 0 && (
-        <div className="flex items-center gap-1.5 mb-3 overflow-x-auto pb-1">
+        <div className="flex flex-wrap items-center gap-1.5 mb-3 pb-1">
           {sessions.map((s) => {
             const isActive = s.sessionId === activeSessionId;
             const label = s.label || s.cwd?.split('/').pop() || shortId(s.sessionId);
@@ -781,7 +781,7 @@ export default function Shell() {
                 title={`${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
               >
                 <TerminalIcon size={12} className="shrink-0" />
-                <span className="truncate max-w-[140px]">{label}</span>
+                <span className="min-w-0 break-all">{label}</span>
                 <span className="text-[10px] opacity-60 shrink-0">{formatAge(s.createdAt)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}

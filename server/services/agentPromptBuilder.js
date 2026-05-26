@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
@@ -227,7 +227,8 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
   const reviewerApplies = metadata.reviewLoopReviewerApplies === true;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
-  const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER);
+  const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
+  const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(r));
   const multi = reviewers.length > 1;
   // The system pre-requests the initial Copilot review only when copilot LEADS the
   // order; otherwise the agent must request it at copilot's turn (so Copilot reviews
@@ -240,17 +241,26 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
   // focused wording; for a list, dispatch each reviewer in order. Only emit the
   // per-reviewer-kind bullet that actually applies to the configured list.
+  // `lmstudio`/`ollama` don't have CLIs the agent can spawn — PortOS exposes
+  // `POST /api/code-review/local` which runs the configured local model against
+  // the diff and returns findings text. The agent always reaches it via
+  // `http://localhost:5555` (the canonical loopback API port).
+  const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint: \`gh pr diff ${prNumber || '<PR_NUMBER>'} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST http://localhost:5555/api/code-review/local -H 'Content-Type: application/json' -d @-\`. Substitute the active reviewer name for \`<lmstudio|ollama>\`. The response \`.findings\` field is the review text — treat it like any other reviewer's findings.`;
   const multiBullets = [
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
     hasCli ? `**codex / gemini / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).` : null,
+    hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
   ].filter(Boolean).join(' ');
-  const waitOrInvokeStep = multi
-    ? `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. ${multiBullets}`
-    : (hasCopilot
-        ? 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.'
-        : `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.`);
+  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.`;
+  // Resolved sequentially so a future reviewer kind only adds one branch
+  // instead of deepening the nested ternary.
+  let waitOrInvokeStep;
+  if (multi) waitOrInvokeStep = `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. ${multiBullets}`;
+  else if (hasCopilot) waitOrInvokeStep = 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.';
+  else if (hasLocalLlm) waitOrInvokeStep = localLlmInvocation;
+  else waitOrInvokeStep = singleCliInvocation;
 
   const stopModeNote = stopMode === 'on-findings'
     ? '**Stop mode (on-findings):** stop after the FIRST reviewer whose findings you actually fixed and committed; skip the remaining reviewers.'
@@ -267,8 +277,8 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const initialReviewState = (hasCopilot && copilotIsFirst)
     ? 'The system has already requested the initial Copilot code review (Copilot leads the order).'
     : hasCopilot
-      ? 'Copilot is configured after a CLI reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the CLI reviewers yourself.'
-      : 'The system did NOT pre-request a reviewer because the configured reviewers are CLI-based — you must invoke them yourself against the PR diff.';
+      ? 'Copilot is configured after another reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the other reviewers yourself.'
+      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must invoke each configured reviewer yourself against the PR diff.';
   const repeatedCommentsNote = '**Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.';
   const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
@@ -284,11 +294,11 @@ ${extraNotes.length ? '\n' + extraNotes.join('\n') + '\n' : ''}
 1. ${waitOrInvokeStep}
 2. If there are unresolved review findings, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and (for Copilot) resolve the addressed threads.
 3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
-4. When the reviewer list is exhausted (or the stop mode triggers), merge the PR **immediately** with this exact command (flags: \`--squash --delete-branch\`, nothing else):
+4. When the reviewer list is exhausted (or the stop mode triggers), merge the PR **immediately** with this exact command (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged):
    \`\`\`bash
-   gh pr merge "${prUrl}" --squash --delete-branch
+   gh pr merge "${prUrl}" --merge --delete-branch
    \`\`\`
-   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : ''}
+   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --merge --delete-branch\`.)` : ''}
    You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.
 5. Confirm the PR is actually merged before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (a check is failing, a thread is still unresolved, or branch protection is blocking) — fix and retry the merge. Do NOT exit until state is \`MERGED\`.
 6. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit.
@@ -318,11 +328,11 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
     `1. ${waitOrInvokeStep}`,
     '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push' + (hasCopilot ? ', and (for Copilot) resolve the addressed threads.' : '.'),
     '3. Re-review with the same reviewer until clean, then advance to the next reviewer in the list.',
-    '4. When the list is exhausted (or the stop mode triggers), merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
+    '4. When the list is exhausted (or the stop mode triggers), merge **immediately** with this exact command (flags: `--merge --delete-branch`, nothing else — a true merge commit keeps the branch tip in main\'s history so automated worktree cleanup can prove the branch is merged):',
     '   ```bash',
-    `   gh pr merge "${prUrl}" --squash --delete-branch`,
+    `   gh pr merge "${prUrl}" --merge --delete-branch`,
     '   ```',
-    prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : null,
+    prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --merge --delete-branch\`.)` : null,
     '   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.',
     `5. Confirm the merge happened before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection) — fix and retry. Do NOT exit until state is \`MERGED\`.`,
     '6. Exit — do NOT run `/do:push` or open a new PR.',
@@ -359,7 +369,7 @@ export function buildCompletionGuidelineBullet({
     return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
   }
   if (isTui) {
-    return `On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, write the sentinel, \`/quit\`).`;
+    return `On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`).`;
   }
   if (worktreeInfo && willOpenPR) {
     const reviewSuffix = willReviewLoop
@@ -483,9 +493,11 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
 
   // TUI completion section — delegate to the shared light-path builder so
   // both prompt paths emit byte-identical workflows. (Background: TUI owns
-  // its own `/simplify` → `/do:pr|/do:push` → sentinel → `/quit` sequence
-  // because the slashdo submodule mounts those commands at project level —
-  // see `buildTuiCompletionSection` below for the full contract.)
+  // its own `/simplify` → `/do:pr|/do:push` → sentinel sequence because the
+  // slashdo submodule mounts those commands at project level. Writing the
+  // sentinel is the done signal — PortOS finalizes via the 2s poll and kills
+  // the session, so the prompt does NOT ask the agent to `/quit` (it's a UI
+  // command the agent can't invoke). See `buildTuiCompletionSection` below.)
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
   const tuiCompletionSection = isTui
     ? buildTuiCompletionSection({
@@ -823,9 +835,9 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
     ? '`clean`, `partial` (a stop-mode short-circuit you opted into), or `too-large`'
     : '`clean` (or `too-large`)';
   const lines = [
-    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, or \`guardrail\`; leave the PR open for human follow-up.`,
+    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged; any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, or \`guardrail\`; leave the PR open for human follow-up.`,
     '   ```bash',
-    '   gh pr merge "<PR_URL>" --squash --delete-branch',
+    '   gh pr merge "<PR_URL>" --merge --delete-branch',
     '   ```',
     `${startStep + 1}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection), fix, and retry. Do NOT exit until state is \`MERGED\` (or you have explicitly decided not to merge per the rule above).`
   ];
@@ -856,7 +868,6 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode }) : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
-  const quitStep = sentinelStep + 1;
 
   return [
     '## Completion Workflow',
@@ -865,7 +876,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     simplifyStep,
     `2. \`${cmd}${reviewerArg}\`${reviewSuffix}`,
     ...merge.lines,
-    `${sentinelStep}. Write a short markdown summary (~5–15 lines) to the completion sentinel — PortOS polls this every 2s; without it the agent sits idle until a 3-minute fallback fires.`,
+    `${sentinelStep}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS polls it every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
     '',
     '   ```bash',
     `   cat > "${sentinelPath}" <<'EOF'`,
@@ -877,8 +888,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     '',
     sentinelTail,
     '   EOF',
-    '   ```',
-    `${quitStep}. \`/quit\`.`
+    '   ```'
   ].join('\n');
 }
 

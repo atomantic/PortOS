@@ -91,6 +91,27 @@ export default function MediaLightbox({
   const starred = !!annotation?.starred;
   const refs = useRef({ onClose, onPrevious, onNext, onAnnotationChange, starred });
   useEffect(() => { refs.current = { onClose, onPrevious, onNext, onAnnotationChange, starred }; });
+  const videoRef = useRef(null);
+  // Play videos with SOUND on open. The declarative `muted autoPlay` baseline
+  // (on the <video> below) is what lets the clip start at all on mobile —
+  // iOS/Android block *unmuted* autoplay that isn't tied to a user gesture. But
+  // the lightbox is opened by a tap (history thumbnail / grid item), so the
+  // tap's transient user activation is usually still live when this effect runs.
+  // So we unmute and re-play here to upgrade the muted baseline to audible.
+  // If the browser rejects the unmuted play (activation expired / low
+  // media-engagement index), we fall back to muted playback so the clip still
+  // runs and the on-screen controls can unmute it manually.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || item?.kind !== 'video') return;
+    // Promise.resolve() normalizes both a real play() promise and the
+    // undefined some environments return, so the .catch chain is uniform.
+    v.muted = false;
+    Promise.resolve(v.play()).catch(() => {
+      v.muted = true;
+      Promise.resolve(v.play()).catch(() => {});
+    });
+  }, [item?.key, item?.kind]);
   useEffect(() => {
     if (!item) return;
     const onKey = (e) => {
@@ -226,10 +247,31 @@ export default function MediaLightbox({
           onTouchEnd={onTouchEnd}
         >
           {isVideo ? (
-            /* playsInline keeps iOS Safari from auto-promoting autoplay video
-               to a native fullscreen player — exiting that leaves the modal
-               laid out as a tiny strip with no reachable close button. */
-            <video src={item.downloadUrl} controls autoPlay loop playsInline className={imgMax} />
+            /* Mobile playback contract:
+               - playsInline keeps iOS Safari from auto-promoting autoplay video
+                 to a native fullscreen player — exiting that leaves the modal
+                 laid out as a tiny strip with no reachable close button.
+               - muted is the autoplay BASELINE under the mobile media-engagement
+                 policy: iOS/Android block unmuted autoplay that isn't fired from
+                 a direct user gesture, so without it the clip never starts and the
+                 area just shows black ("not loading"). The effect above upgrades
+                 this to audible playback when the opening tap's user activation
+                 allows it; otherwise the controls let the user unmute manually.
+               - poster paints the thumbnail immediately so there's no blank box
+                 while the clip buffers (and a visible frame even if playback is
+                 deferred). previewUrl is the video's thumbnail; omit when absent. */
+            <video
+              ref={videoRef}
+              src={item.downloadUrl}
+              poster={item.previewUrl || undefined}
+              controls
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="metadata"
+              className={imgMax}
+            />
           ) : (
             <MediaImage src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} placeholderClassName="w-full h-full" />
           )}

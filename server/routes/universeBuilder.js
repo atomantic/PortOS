@@ -33,6 +33,9 @@ import { autoSortOtherBuckets } from '../services/universeBuilderAutoSort.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
+import { findDuplicateUniverseGroups, findSameNameUniverses } from '../services/duplicateDetection.js';
+import { mergeUniverses } from '../services/recordMerge.js';
+import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 import { IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/modes.js';
@@ -44,11 +47,22 @@ const router = Router();
 const SERVICE_ERROR_STATUS = {
   [svc.ERR_NOT_FOUND]: 404,
   [svc.ERR_VALIDATION]: 400,
+  // Block-until-empty: deleting a universe with live series → 409 (the
+  // lock-conflict idiom) so the client can show "move these N series first".
+  [svc.ERR_HAS_LIVE_SERIES]: 409,
+  // recordMerge validation (unresolved conflicts, bad ids).
+  MERGE_VALIDATION: 400,
 };
 
 const mapServiceError = (err) => {
   const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
+  if (status) {
+    // Propagate the blocking-series list (if any) so the UI can list which
+    // series block the delete — rides in `context`, which the error handler
+    // serializes onto the response body.
+    const context = err?.blockingSeries ? { blockingSeries: err.blockingSeries } : undefined;
+    return new ServerError(err.message, { status, code: err.code, context });
+  }
   return err;
 };
 
@@ -354,7 +368,12 @@ router.get('/', asyncHandler(async (_req, res) => {
 
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(createSchema, req.body ?? {});
-  res.status(201).json(await svc.createUniverse(body));
+  const created = await svc.createUniverse(body);
+  // Non-blocking same-name warning (computed at the route layer so the importer,
+  // which calls the service directly, never pays for the scan). The UI surfaces
+  // it but may proceed — duplicates are resolved later via Sharing → Duplicates.
+  const duplicateName = await findSameNameUniverses(created.name, { excludeId: created.id });
+  res.status(201).json(duplicateName.length ? { ...created, _warnings: { duplicateName } } : created);
 }));
 
 // `expand` is a sub-resource — keep it ahead of `/:id` so the wildcard
@@ -386,6 +405,65 @@ router.get('/reference-sheet-variants', asyncHandler(async (_req, res) => {
   res.json({ variants: listSheetVariants() });
 }));
 
+// ---- Duplicate resolution (static paths — keep BEFORE `/:id`) ----
+
+const mergeSchema = z.object({
+  survivorId: z.string().trim().min(1).max(128),
+  loserId: z.string().trim().min(1).max(128),
+  fieldChoices: z.record(z.enum(['survivor', 'loser'])).optional().default({}),
+  // Free-form per-field values that win over the survivor/loser binary —
+  // populated by the AI-merge flow (a third unified option) and optionally
+  // tweaked by the user before submit.
+  fieldOverrides: z.record(z.string()).optional().default({}),
+}).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
+
+const mergeAIResolveSchema = z.object({
+  survivorId: z.string().trim().min(1).max(128),
+  loserId: z.string().trim().min(1).max(128),
+  fields: z.array(z.string().trim().min(1).max(64)).min(1).max(20),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
+
+router.get('/duplicates', asyncHandler(async (_req, res) => {
+  res.json({ groups: await findDuplicateUniverseGroups() });
+}));
+
+router.post('/merge/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(mergeSchema, req.body ?? {});
+  const preview = await mergeUniverses(body.survivorId, body.loserId, body.fieldChoices, { dryRun: true, fieldOverrides: body.fieldOverrides })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(preview);
+}));
+
+router.post('/merge', asyncHandler(async (req, res) => {
+  const body = validateRequest(mergeSchema, req.body ?? {});
+  const result = await mergeUniverses(body.survivorId, body.loserId, body.fieldChoices, { fieldOverrides: body.fieldOverrides })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Ask the configured AI provider to merge specific conflicting text fields
+// into a single unified value per field. Returns `{ merged, skipped, llm, runId }`
+// — the client applies `merged` as `fieldOverrides` on the subsequent
+// /merge or /merge/preview call. No record state is mutated here.
+router.post('/merge/ai-resolve', asyncHandler(async (req, res) => {
+  const body = validateRequest(mergeAIResolveSchema, req.body ?? {});
+  const [survivor, loser] = await Promise.all([
+    svc.getUniverse(body.survivorId).catch((err) => { throw mapServiceError(err); }),
+    svc.getUniverse(body.loserId).catch((err) => { throw mapServiceError(err); }),
+  ]);
+  const result = await mergeFieldsWithAI({
+    kind: 'universe',
+    survivor,
+    loser,
+    fields: body.fields,
+    providerId: body.providerId,
+    model: body.model,
+  });
+  res.json(result);
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const w = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
   // Lazy stale-reference-sheet collapse: nulls out any character.referenceSheetImageRef
@@ -402,6 +480,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(patchSchema, req.body ?? {});
   const w = await svc.updateUniverse(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  // Re-check the same-name warning when the rename actually changed the name.
+  if ('name' in body) {
+    const duplicateName = await findSameNameUniverses(w.name, { excludeId: req.params.id });
+    if (duplicateName.length) { res.json({ ...w, _warnings: { duplicateName } }); return; }
+  }
   res.json(w);
 }));
 

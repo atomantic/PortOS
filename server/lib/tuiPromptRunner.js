@@ -30,6 +30,7 @@ import { spawn as ptySpawn } from 'node-pty';
 import { join, resolve } from 'path';
 import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
+import { createImmediateFallbackSignalDetector } from './aiToolkit/errorDetection.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
@@ -177,6 +178,7 @@ ${prompt}`;
   let lastOutputAt = startTime;
   let firstResponseAt = null;
   let finalized = false;
+  const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
   // True once outputBuffer overflowed OUTPUT_BUFFER_HEADROOM and the head was
   // dropped. We warn once and surface it in the run record so /runs can flag
   // responses where the fallback path may have lost the start.
@@ -249,6 +251,17 @@ ${prompt}`;
           }
         }
         onData?.(stripped);
+
+        const fallbackSignal = detectImmediateFallbackSignal(stripped);
+        if (fallbackSignal) {
+          finish({
+            success: false,
+            exitCode: 1,
+            error: fallbackSignal.message || 'Provider requires fallback',
+            reason: 'fallback-signal'
+          });
+          return;
+        }
       }
 
       const now = Date.now();

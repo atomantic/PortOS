@@ -60,15 +60,21 @@ export const AGENT_OPTIONS = [
 ];
 
 // Reviewer choices for the Review Loop. `copilot` requests a GitHub Copilot
-// review via the native reviewer API; the others instruct the follow-up agent
-// to invoke the named CLI to critique the PR diff (via `/do:rpr --review-with`).
-// Keep in sync with the `reviewer` enum in `server/lib/validation.js`.
+// review via the native reviewer API; CLI reviewers (claude/gemini/codex)
+// instruct the follow-up agent to invoke the named CLI; local-LLM reviewers
+// (lmstudio/ollama) route the diff through PortOS's `POST /api/code-review/local`
+// endpoint, which runs the model configured on the AI Providers → Code Review
+// Defaults panel. Keep in sync with the `REVIEWER_VALUES` enum in
+// `server/lib/validation.js`.
 export const REVIEWER_OPTIONS = [
-  { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (default, GitHub-only)' },
+  { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
   { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff' },
   { value: 'gemini', label: 'Gemini', description: 'Gemini CLI reviews the PR diff' },
-  { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff' }
+  { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff' },
+  { value: 'lmstudio', label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
+  { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
 ];
+export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 

@@ -4,7 +4,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
-  execSync: vi.fn()
+  execSync: vi.fn(),
+  // `execFile` is pulled in transitively by codeReview.js → lmStudioManager
+  // (via `resolveReviewLoopOptions`'s dependency graph), even though this
+  // test never exercises it directly.
+  execFile: vi.fn()
 }));
 
 vi.mock('fs/promises', () => ({

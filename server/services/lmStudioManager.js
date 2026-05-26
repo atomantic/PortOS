@@ -439,6 +439,16 @@ async function getStatus() {
 }
 
 /**
+ * Live base URL — reflects runtime `updateConfig()` patches, not just startup
+ * env. Used by sibling services (e.g. the local code-review endpoint) so a
+ * relocated LM Studio install doesn't desync between the catalog UI and the
+ * code path that actually talks to the server.
+ */
+function getBaseUrl() {
+  return config.baseUrl
+}
+
+/**
  * Update configuration
  * @param {Object} newConfig - New configuration
  * @returns {Object} - Updated configuration
@@ -683,6 +693,7 @@ export {
   quickCompletion,
   getEmbeddings,
   getStatus,
+  getBaseUrl,
   updateConfig,
   resetCache,
   isAppInstalled,

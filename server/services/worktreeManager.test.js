@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { shouldRefuseDefaultBranchMerge, isHumanClaimWorktree } from './worktreeManager.js';
+import { shouldRefuseDefaultBranchMerge, isHumanClaimWorktree, classifyWorktreeDirt } from './worktreeManager.js';
 
 /**
  * Tests for the worktree manager service.
@@ -241,6 +241,40 @@ describe('Auto-generated Lockfile Detection', () => {
 
   it('should extract path from untracked file', () => {
     expect(extractPath('?? package-lock.json')).toBe('package-lock.json');
+  });
+});
+
+describe('classifyWorktreeDirt (real exported helper)', () => {
+  it('reports clean for empty / whitespace-only porcelain', () => {
+    expect(classifyWorktreeDirt('')).toEqual({ clean: true, lockfileOnly: false, lockfilePaths: [], hasRealChanges: false });
+    expect(classifyWorktreeDirt('  \n  ').clean).toBe(true);
+    expect(classifyWorktreeDirt(null).clean).toBe(true);
+  });
+
+  it('flags real (non-lockfile) changes', () => {
+    const r = classifyWorktreeDirt(' M src/index.js');
+    expect(r.clean).toBe(false);
+    expect(r.hasRealChanges).toBe(true);
+    expect(r.lockfileOnly).toBe(false);
+  });
+
+  it('recognizes a lockfile-only working tree and extracts paths', () => {
+    const r = classifyWorktreeDirt(' M package-lock.json\n M client/package-lock.json');
+    expect(r.lockfileOnly).toBe(true);
+    expect(r.hasRealChanges).toBe(false);
+    expect(r.lockfilePaths).toEqual(['package-lock.json', 'client/package-lock.json']);
+  });
+
+  it('treats mixed lockfile + real changes as real changes', () => {
+    const r = classifyWorktreeDirt(' M package-lock.json\n M src/app.js');
+    expect(r.lockfileOnly).toBe(false);
+    expect(r.hasRealChanges).toBe(true);
+  });
+
+  it('handles a trimmed first line (no leading status space)', () => {
+    const r = classifyWorktreeDirt('M yarn.lock');
+    expect(r.lockfileOnly).toBe(true);
+    expect(r.lockfilePaths).toEqual(['yarn.lock']);
   });
 });
 

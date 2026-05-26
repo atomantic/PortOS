@@ -38,11 +38,18 @@ import {
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
+import {
+  maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
+} from '../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
 import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './mediaCollections.js';
 import {
   clearPendingSheetSlot, clearPendingSheetSlotsForUniverse,
 } from './universeCharacterSheetSlot.js';
+// Hierarchy guard: a universe can't be deleted while live series reference it.
+// series.js does NOT import universeBuilder (one-directional), so this static
+// import is cycle-safe — unlike canonUsage.js, which back-imports this module.
+import { listSeries } from './pipeline/series.js';
 
 // RECORD-shape schema version, stamped INSIDE each universe record. Distinct
 // from the type-level (storage layout) schemaVersion carried by
@@ -92,6 +99,10 @@ export const universeStore = () => store();
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
 export const ERR_DUPLICATE = 'DUPLICATE';
+// Raised by deleteUniverse when live series still reference the universe. The
+// thrown error carries `blockingSeries: [{id,name}]` so the route can tell the
+// user which series to move or delete first. Maps to HTTP 409.
+export const ERR_HAS_LIVE_SERIES = 'UNIVERSE_HAS_LIVE_SERIES';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 // Universe ids are bare UUIDs (no prefix). Accept any reasonable alphanumeric
@@ -1254,6 +1265,21 @@ export async function deleteUniverse(id) {
   // the receiving peer when a soft-delete arrives via mergeUniversesFromSync
   // so a synced delete doesn't leave orphan media-collection locks.
   const s = store();
+  // Hierarchy invariant (block-until-empty): refuse to delete a universe that
+  // still has live (non-deleted) series — the user must move or delete those
+  // series first. Filter listSeries() inline rather than calling
+  // canonUsage.listLinkedSeriesNames (canonUsage back-imports this module → a
+  // require cycle). This runs OUTSIDE the record queue: a read-only pre-check,
+  // and the queued write below re-validates existence anyway.
+  const blockingSeries = (await listSeries())
+    .filter((ser) => ser.universeId === id)
+    .map((ser) => ({ id: ser.id, name: ser.name }));
+  if (blockingSeries.length > 0) {
+    throw Object.assign(
+      makeErr(`Universe has ${blockingSeries.length} live series — move or delete them first`, ERR_HAS_LIVE_SERIES),
+      { blockingSeries },
+    );
+  }
   await s.queueRecordWrite(id, async () => {
     const cur = await s.loadOne(id);
     if (!cur) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
@@ -1329,7 +1355,7 @@ async function cascadeDeleteSideEffects(id) {
  * number of universes actually changed/added by this merge — NOT the total
  * post-merge count — so callers summing across categories don't over-report.
  */
-export async function mergeUniversesFromSync(remoteUniverses) {
+export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 'sync', peerId: null } } = {}) {
   if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
   // Records that transitioned to deleted via this merge get their orphan
   // cascade fired after the write queue releases — matches the side-effect
@@ -1370,6 +1396,9 @@ export async function mergeUniversesFromSync(remoteUniverses) {
         // spuriously tear down share-bucket subscriptions.
         await ensureDir(s.recordDir(sanitized.id));
         await atomicWrite(s.recordPath(sanitized.id), sanitized);
+        // No local counterpart to lose — nothing to journal, but seed the base
+        // hash so a FUTURE divergence on this record is detected.
+        await setSyncBaseHash('universe', sanitized.id, contentHashForRecord('universe', sanitized));
         changed += 1;
         return;
       }
@@ -1384,6 +1413,11 @@ export async function mergeUniversesFromSync(remoteUniverses) {
       const localTs = local.updatedAt || '';
       const remoteTs = sanitized.updatedAt || '';
       if (remoteTs > localTs) {
+        // Non-blocking conflict journal: archive the about-to-be-lost local
+        // version when BOTH sides diverged from the last synced base. Always
+        // advances the base hash (clean or conflict) so the next snapshot
+        // cycle doesn't re-journal the same divergence. Never throws.
+        await maybeJournalBeforeOverwrite({ kind: 'universe', id: sanitized.id, local, remote: sanitized, source });
         await ensureDir(s.recordDir(sanitized.id));
         await atomicWrite(s.recordPath(sanitized.id), sanitized);
         if (sanitized.deleted && !local.deleted) transitionedToDeleted.push(sanitized.id);
@@ -1392,6 +1426,8 @@ export async function mergeUniversesFromSync(remoteUniverses) {
     }));
   }
   await Promise.all(writeTasks);
+  // Persist the batched base-hash updates accumulated above in one write.
+  await flushBaseHashes();
   if (changed === 0) return { applied: false, count: 0 };
   // Drop runs for any record that just transitioned to deleted — matches
   // the local-delete contract that ditches now-orphan runs. Same critical-

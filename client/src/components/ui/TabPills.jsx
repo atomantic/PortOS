@@ -59,7 +59,7 @@ export default function TabPills({
         <div
           ref={listRef}
           onScroll={onScroll}
-          className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto ${className}`}
+          className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto touch-pan-x ${className}`}
           role="tablist"
           aria-label={ariaLabel}
         >
@@ -106,7 +106,7 @@ export default function TabPills({
     <div
       ref={listRef}
       onScroll={onScroll}
-      className={`flex border-b border-port-border ${stretch ? 'items-stretch bg-port-bg/40 shrink-0' : 'gap-1'} overflow-x-auto scrollbar-hide ${className}`}
+      className={`flex border-b border-port-border ${stretch ? 'items-stretch bg-port-bg/40 shrink-0' : 'gap-1'} overflow-x-auto scrollbar-hide touch-pan-x ${className}`}
       role="tablist"
       aria-label={ariaLabel}
     >

@@ -565,6 +565,25 @@ describe("universeBuilder service", () => {
     expect(await svc.listRuns(w.id)).toEqual([]);
   });
 
+  it("deleteUniverse is BLOCKED while live series reference it (hierarchy invariant)", async () => {
+    const seriesSvc = await import("./pipeline/series.js");
+    const w = await seedWorld();
+    const ser = await seriesSvc.createSeries({ name: "Child Arc", universeId: w.id });
+
+    // Block: the universe still has a live child series.
+    await expect(svc.deleteUniverse(w.id)).rejects.toMatchObject({
+      code: svc.ERR_HAS_LIVE_SERIES,
+      blockingSeries: [{ id: ser.id, name: "Child Arc" }],
+    });
+    // Universe is untouched.
+    expect(await svc.listUniverses()).toHaveLength(1);
+
+    // Once the child is gone, the delete succeeds.
+    await seriesSvc.deleteSeries(ser.id);
+    await expect(svc.deleteUniverse(w.id)).resolves.toMatchObject({ id: w.id });
+    expect(await svc.listUniverses()).toEqual([]);
+  });
+
   it("deleteUniverse unlinks linked media collections (releases the rename-lock)", async () => {
     const collections = await import("./mediaCollections.js");
     const w = await seedWorld();

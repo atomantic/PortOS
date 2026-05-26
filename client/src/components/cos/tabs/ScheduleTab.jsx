@@ -5,8 +5,9 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
 import CronInput from '../../CronInput';
-import { AGENT_OPTIONS, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
 import ReviewerPicker from '../ReviewerPicker';
+import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../../hooks/useCodeReviewDefaults';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import ToggleSwitch from '../../ToggleSwitch';
 import { filterSelectableModels } from '../../../utils/providers';
@@ -253,6 +254,7 @@ function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, 
 }
 
 function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes, improvementDisabled }) {
+  const reviewDefaults = useCodeReviewDefaults();
   const [selectedType, setSelectedType] = useState(config.type);
   const [selectedProviderId, setSelectedProviderId] = useState(config.providerId || '');
   const [selectedModel, setSelectedModel] = useState(config.model || '');
@@ -501,9 +503,11 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         {(config.taskMetadata?.reviewLoop || config.taskMetadata?.openPR) && (
           <div className="mt-3 pl-2">
             <ReviewerPicker
-              reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : DEFAULT_REVIEWERS)}
-              stopMode={config.taskMetadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE}
-              reviewerApplies={config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true'}
+              reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : reviewDefaults.reviewers)}
+              stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
+              reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
+                ? (config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true')
+                : reviewDefaults.reviewerApplies}
               disabled={updating}
               onChange={({ reviewers, stopMode, reviewerApplies }) => {
                 // Drop the legacy single `reviewer` key so storage converges on `reviewers`.
@@ -1093,6 +1097,7 @@ export default function ScheduleTab({ apps }) {
   const improvementDisabled = schedule.improvementEnabled === false;
 
   return (
+    <CodeReviewDefaultsProvider>
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -1157,5 +1162,6 @@ export default function ScheduleTab({ apps }) {
         </div>
       )}
     </div>
+    </CodeReviewDefaultsProvider>
   );
 }

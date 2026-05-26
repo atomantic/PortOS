@@ -233,6 +233,37 @@ export default function BrowserPage() {
               />
               <label htmlFor="autoConnect" className="text-sm text-gray-400">Auto-connect on startup</label>
             </div>
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label htmlFor="chromePath" className="block text-sm text-gray-400 mb-1">
+                Chrome binary path
+                <span className="ml-2 text-xs text-gray-600">(leave empty to use system default)</span>
+              </label>
+              <input
+                id="chromePath"
+                type="text"
+                value={configDraft.chromePath || ''}
+                onChange={e => setConfigDraft(d => ({ ...d, chromePath: e.target.value }))}
+                placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Point at Chrome Canary, Chromium, Brave, or any Chromium-based browser to differentiate the PortOS-managed browser from your daily-driver Chrome.
+              </p>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label htmlFor="macAppBundle" className="block text-sm text-gray-400 mb-1">
+                macOS app bundle
+                <span className="ml-2 text-xs text-gray-600">(headed mode only; leave empty for system default)</span>
+              </label>
+              <input
+                id="macAppBundle"
+                type="text"
+                value={configDraft.macAppBundle || ''}
+                onChange={e => setConfigDraft(d => ({ ...d, macAppBundle: e.target.value }))}
+                placeholder="/Applications/Google Chrome Canary.app"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+              />
+            </div>
           </div>
           <div className="mt-4 flex justify-end">
             <button

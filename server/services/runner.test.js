@@ -18,14 +18,15 @@ vi.mock('fs/promises', () => ({
 
 const { spawn } = await import('child_process');
 const runner = await import('./runner.js');
+const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel, emitRunStarted } = runner;
 
 // Minimal toolkit stub that satisfies executeCliRun's expectations
-function fakeToolkit() {
+function fakeToolkit(errorDetection = null) {
   return {
     services: {
       runner: { _portosActiveRuns: new Map() },
-      errorDetection: null,
+      errorDetection,
     },
   };
 }
@@ -96,6 +97,68 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     const modelIdx = capturedArgs.indexOf('--model');
     expect(modelIdx).toBeGreaterThanOrEqual(0);
     expect(capturedArgs[modelIdx + 1]).toBe('o4-mini');
+  });
+
+  it('stops the CLI immediately when Claude switches to extra usage', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+
+    const provider = {
+      id: 'claude-code',
+      name: 'Claude Code',
+      command: 'claude',
+      args: [],
+      defaultModel: 'claude-opus-4-7',
+      timeout: 60000,
+    };
+
+    const completed = new Promise((resolve) => {
+      executeCliRun('run-extra-usage', provider, 'test prompt', '/workspace', undefined, resolve, 60000);
+    });
+
+    await Promise.resolve();
+    child.stderr.emit('data', Buffer.from('Now using extra '));
+    expect(child.kill).not.toHaveBeenCalled();
+    child.stderr.emit('data', Buffer.from('usage\n'));
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+    child.emit('close', null);
+    const metadata = await completed;
+    expect(metadata).toMatchObject({
+      success: false,
+      errorCategory: ERROR_CATEGORIES.USAGE_LIMIT,
+      errorAnalysis: expect.objectContaining({
+        category: ERROR_CATEGORIES.USAGE_LIMIT,
+        requiresFallback: true,
+      }),
+    });
+  });
+
+  it('records failure (not success) when the fallback-killed child exits 0 in the race', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+
+    const provider = {
+      id: 'claude-code', name: 'Claude Code', command: 'claude', args: [],
+      defaultModel: 'claude-opus-4-7', timeout: 60000,
+    };
+
+    const completed = new Promise((resolve) => {
+      executeCliRun('run-fallback-exit0', provider, 'test prompt', '/workspace', undefined, resolve, 60000);
+    });
+
+    await Promise.resolve();
+    child.stderr.emit('data', Buffer.from('Now using extra usage\n'));
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+    // SIGTERM races and the child happens to exit 0 — must NOT be recorded as
+    // success, or the usage-limit fallback (onRunFailed) silently never fires.
+    child.emit('close', 0);
+    const metadata = await completed;
+    expect(metadata.success).toBe(false);
+    expect(metadata.errorAnalysis).toMatchObject({ requiresFallback: true });
   });
 });
 

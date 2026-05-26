@@ -62,7 +62,7 @@ export const ERROR_PATTERNS = [
   },
   {
     // Catches both "hit your usage limit" and session limits like "hit your limit · resets 6am"
-    pattern: /(?:hit your (?:usage )?limit|usage.?limit|quota exceeded|Upgrade to Pro|plan.?limit|daily.?limit|session.?limit)/i,
+    pattern: /(?:hit your (?:usage )?limit|usage.?limit|quota exceeded|Upgrade to Pro|plan.?limit|daily.?limit|session.?limit|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: 'usage-limit',
     actionable: true, // Need to switch provider
     extract: (match, output) => {

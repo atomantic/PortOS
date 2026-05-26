@@ -7,6 +7,7 @@ import {
   isCliProvider,
   isApiProvider,
   isProcessProvider,
+  isClaudeCodePlanCli,
   enabledApiProviderFilter,
   providerTypeClass,
   getProviderTimeout,
@@ -82,6 +83,32 @@ describe('provider type predicates', () => {
     expect(isApiProvider(null)).toBe(false);
     expect(isApiProvider(undefined)).toBe(false);
     expect(isProcessProvider(null)).toBe(false);
+  });
+});
+
+describe('isClaudeCodePlanCli', () => {
+  it('matches a headless claude CLI provider on the plan', () => {
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: {} })).toBe(true);
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude' })).toBe(true);
+  });
+
+  it('does not match the interactive Claude Code TUI provider', () => {
+    expect(isClaudeCodePlanCli({ type: 'tui', command: 'claude' })).toBe(false);
+  });
+
+  it('does not match non-claude CLI providers', () => {
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'gemini' })).toBe(false);
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'codex' })).toBe(false);
+  });
+
+  it('excludes Bedrock/Vertex-routed claude CLIs (billed via cloud, not the plan)', () => {
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_BEDROCK: '1' } })).toBe(false);
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_VERTEX: '1' } })).toBe(false);
+  });
+
+  it('safely returns false for nullish input', () => {
+    expect(isClaudeCodePlanCli(null)).toBe(false);
+    expect(isClaudeCodePlanCli(undefined)).toBe(false);
   });
 });
 

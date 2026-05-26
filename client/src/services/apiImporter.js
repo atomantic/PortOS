@@ -10,7 +10,7 @@ export const IMPORTER_CONTENT_TYPES = ['short-story', 'novel', 'screenplay', 'co
 // silently drifted from `server/lib/storyArc.js#ARC_ROLES`). Char limit
 // stays because the intake form's real-time counter needs a value before
 // the GET resolves.
-export const IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK = 200_000;
+export const IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK = 5_000_000;
 // Mirrors `CLASSIFY_SOURCE_HEAD_CHARS` in server/services/importer.js — the
 // classifier only reads the head; the client trims to match so we don't
 // ship up to 200K of body that gets discarded.

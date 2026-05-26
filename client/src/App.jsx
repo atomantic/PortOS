@@ -73,6 +73,7 @@ const CharacterSheet = lazyWithReload(() => import('./pages/CharacterSheet'));
 const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
 const WritersRoom = lazyWithReload(() => import('./pages/WritersRoom'));
+const WritersRoomGuide = lazyWithReload(() => import('./pages/WritersRoomGuide'));
 const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
 const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const Importer = lazyWithReload(() => import('./pages/Importer'));
@@ -260,7 +261,9 @@ export default function App() {
           <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} />} />
           <Route path="universe-builder/new" element={<RedirectWithSearch to="/universes/new" />} />
           <Route path="writers-room" element={<WritersRoom />} />
+          <Route path="writers-room/guide" element={<WritersRoomGuide />} />
           <Route path="sharing" element={<Sharing />} />
+          <Route path="sharing/:section" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />

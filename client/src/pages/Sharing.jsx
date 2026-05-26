@@ -7,12 +7,15 @@
  * that get stamped as the source on every outgoing share.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import {
-  Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw,
+  Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FolderPicker from '../components/FolderPicker';
+import DuplicatesTab from '../components/sharing/DuplicatesTab';
+import ConflictsTab from '../components/sharing/ConflictsTab';
 import socket from '../services/socket';
 import {
   listShareBuckets, createShareBucket, updateShareBucket, deleteShareBucket,
@@ -35,7 +38,54 @@ export function isLiveSubscription(item, now = Date.now()) {
   return (now - receivedMs) < SUBSCRIPTION_LIVE_WINDOW_MS;
 }
 
+// Top-level deep-linkable sections. Buckets is the bucket-management view;
+// Duplicates + Conflicts are the sync-hygiene review surfaces.
+const SECTIONS = [
+  { id: 'buckets', label: 'Buckets', icon: Folder, path: '/sharing' },
+  { id: 'duplicates', label: 'Duplicates', icon: Copy, path: '/sharing/duplicates' },
+  { id: 'conflicts', label: 'Conflicts', icon: GitMerge, path: '/sharing/conflicts' },
+];
+
+function SharingHeader({ active }) {
+  return (
+    <>
+      <div className="flex items-center gap-3 mb-4">
+        <Share2 className="w-6 h-6 text-port-accent" />
+        <h1 className="text-2xl font-bold text-white">Sharing</h1>
+      </div>
+      <nav className="flex items-center gap-1 mb-6 border-b border-port-border">
+        {SECTIONS.map(({ id, label, icon: Icon, path }) => (
+          <Link
+            key={id}
+            to={path}
+            className={`inline-flex items-center gap-2 px-3 py-2 text-sm border-b-2 -mb-px ${
+              active === id
+                ? 'border-port-accent text-white'
+                : 'border-transparent text-gray-400 hover:text-white'
+            }`}
+          >
+            <Icon size={14} /> {label}
+          </Link>
+        ))}
+      </nav>
+    </>
+  );
+}
+
 export default function Sharing() {
+  const { section = 'buckets' } = useParams();
+  if (section === 'duplicates' || section === 'conflicts') {
+    return (
+      <div>
+        <SharingHeader active={section} />
+        {section === 'duplicates' ? <DuplicatesTab /> : <ConflictsTab />}
+      </div>
+    );
+  }
+  return <SharingBuckets />;
+}
+
+function SharingBuckets() {
   const [buckets, setBuckets] = useState([]);
   const [localSchemaVersion, setLocalSchemaVersion] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -213,11 +263,8 @@ export default function Sharing() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <Share2 className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Sharing</h1>
-        </div>
+      <SharingHeader active="buckets" />
+      <div className="flex justify-end mb-4">
         <button
           type="button"
           onClick={() => setShowAdd((v) => !v)}

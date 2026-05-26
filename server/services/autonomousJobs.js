@@ -28,7 +28,7 @@ import { runGoalCheckIn } from './goalCheckIn.js'
 import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../lib/commandSecurity.js'
 import { getUserTimezone, getLocalParts, nextLocalTime } from '../lib/timezone.js'
 import { parseCronToNextRun } from './eventScheduler.js'
-import { cleanupOrphanedWorktrees } from './worktreeManager.js'
+import { cleanupOrphanedWorktrees, reapMergedWorktrees } from './worktreeManager.js'
 import { getActiveAgentIds } from './agentState.js'
 
 /**
@@ -91,6 +91,20 @@ async function agentDataCleanup() {
   // `initSpawner()` + scheduled orphan cleanup) just to read the maps.
   const activeIds = new Set(getActiveAgentIds())
 
+  // Also protect PAUSED agents. Pausing intentionally preserves the agent's
+  // worktree + data dir as resume context, but a paused agent is removed from
+  // the in-memory active/runner maps (so `getActiveAgentIds()` omits it) and —
+  // critically — those maps are empty after a server restart while the agent's
+  // `status: 'paused'` survives in state.json. Read the persisted status so a
+  // paused agent's worktree/transcript is never reaped or rm'd out from under a
+  // later resume. (readJSONFile keeps this off the subAgentSpawner import path.)
+  const cosState = await readJSONFile(join(PATHS.cos, 'state.json'), null)
+  if (cosState?.agents && typeof cosState.agents === 'object') {
+    for (const [id, agent] of Object.entries(cosState.agents)) {
+      if (agent?.status === 'paused') activeIds.add(id)
+    }
+  }
+
   const agentsDir = join(PATHS.cos, 'agents')
   let cleaned = 0
   if (existsSync(agentsDir)) {
@@ -112,16 +126,27 @@ async function agentDataCleanup() {
     }
   }
 
-  // Reap orphaned agent worktrees not tracked by any live agent (moved off the
-  // CoS hot path). The helper guards `claim-*` worktrees, so this can't touch a
-  // human's in-flight claim.
+  // First pass — SAFE reap: remove any worktree (CoS or `.claude/worktrees/`) whose
+  // branch is fully merged into the default branch AND whose working tree is clean.
+  // This is the bulk of the cleanup and cannot lose work (merged+clean ⇒ nothing
+  // pending). It guards active agents and human `claim-*` worktrees.
+  const merged = await reapMergedWorktrees(PATHS.root, { activeAgentIds: activeIds }).catch((err) => {
+    console.warn(`⚠️ Merged-worktree reap failed: ${err.message}`)
+    return { reaped: [] }
+  })
+
+  // Second pass — orphan integration: for inactive CoS worktrees that were NOT
+  // merged (e.g. an agent died after committing but before its PR landed), attempt
+  // to merge their commits back so the work isn't stranded. The helper guards
+  // `claim-*` worktrees, so this can't touch a human's in-flight claim.
   const worktreesReaped = await cleanupOrphanedWorktrees(PATHS.root, activeIds).catch((err) => {
     console.warn(`⚠️ Orphaned worktree cleanup failed: ${err.message}`)
     return 0
   })
 
-  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, reaped ${worktreesReaped} orphaned worktree(s)`)
-  return { cleaned, worktreesReaped }
+  const mergedCount = merged?.reaped?.length || 0
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)`)
+  return { cleaned, mergedReaped: mergedCount, worktreesReaped }
 }
 
 const SCRIPT_HANDLERS = {
@@ -383,7 +408,7 @@ Phase 4 — Report:
   {
     id: 'job-agent-data-cleanup',
     name: 'Agent Data Cleanup',
-    description: 'Remove completed agent data older than 7 days and reap orphaned agent worktrees.',
+    description: 'Remove completed agent data older than 7 days, reap worktrees/branches fully merged into main (clean working tree only), and integrate orphaned agent worktrees.',
     category: 'agent-data-cleanup',
     interval: 'daily',
     intervalMs: DAY,

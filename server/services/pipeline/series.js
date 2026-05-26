@@ -19,6 +19,9 @@ import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import {
+  maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
+} from '../../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 
@@ -275,6 +278,15 @@ export async function updateSeries(id, patch = {}) {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    // Hierarchy invariant: a series lives in exactly one universe. Reject
+    // clearing the link once it's set — moving to a *different* non-empty
+    // universe is fine, and a legacy orphan (cur.universeId === null) is still
+    // allowed to receive its first link. The importer / mergeSeriesFromSync
+    // land legacy orphans via the service directly (not this guard), so peer
+    // fidelity is preserved.
+    if ('universeId' in patch && cur.universeId && !trimTo(patch.universeId, UNIVERSE_ID_MAX)) {
+      throw makeErr('Cannot unlink a series from its universe — move it to another universe instead.', ERR_VALIDATION);
+    }
     // Per-field merge so `{ provider: 'codex' }` doesn't clobber an existing `model`.
     const mergedLlm = 'llm' in patch
       ? { ...(cur.llm || {}), ...(patch.llm || {}) }
@@ -469,7 +481,7 @@ async function cascadeDeleteSideEffects(id) {
  * returns `{ applied, count }` where `count` is the number of series actually
  * changed/added.
  */
-export async function mergeSeriesFromSync(remoteSeries) {
+export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync', peerId: null } } = {}) {
   if (!Array.isArray(remoteSeries)) return { applied: false, count: 0 };
   // Series IDs that transitioned to deleted via this merge — cascade fires
   // after the write queue releases (mirrors local-delete contract).
@@ -492,6 +504,8 @@ export async function mergeSeriesFromSync(remoteSeries) {
         // See universeBuilder.mergeUniversesFromSync — no local means no
         // cascade work, regardless of inbound tombstone state.
         await store().saveOneNow(sanitized.id, sanitized);
+        // Seed the base hash so a FUTURE divergence on this record is detected.
+        await setSyncBaseHash('series', sanitized.id, contentHashForRecord('series', sanitized));
         changed++;
       } else if (local.ephemeral === true) {
         // Local-ephemeral series are immune to inbound merges. See
@@ -501,6 +515,19 @@ export async function mergeSeriesFromSync(remoteSeries) {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
+          // Hierarchy invariant on the sync path: an older peer (or a peer that
+          // cleared the link before the rule shipped) can push a newer series
+          // payload with universeId:null. updateSeries refuses to unlink, but
+          // this merge writes directly — so preserve the local link here too,
+          // or LWW would silently orphan a linked series. A *move* to a
+          // different non-empty universe still applies. Mirrors the importer's
+          // mergeOne guard.
+          if (!sanitized.deleted && !sanitized.universeId && local.universeId) {
+            sanitized.universeId = local.universeId;
+          }
+          // Non-blocking conflict journal — archive the losing local version on
+          // a true 3-way divergence; always advances the base hash. Never throws.
+          await maybeJournalBeforeOverwrite({ kind: 'series', id: sanitized.id, local, remote: sanitized, source });
           await store().saveOneNow(sanitized.id, sanitized);
           if (sanitized.deleted && !local.deleted) transitionedToDeleted.push(sanitized.id);
           changed++;
@@ -508,6 +535,7 @@ export async function mergeSeriesFromSync(remoteSeries) {
       }
     });
   }
+  await flushBaseHashes();
   const result = changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
   for (const id of transitionedToDeleted) {
     await cascadeDeleteSideEffects(id);

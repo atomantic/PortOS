@@ -51,6 +51,23 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       .catch(() => setTemplates([]));
   }, []);
 
+  // Seed reviewer state from the global Code Review Defaults (AI Providers →
+  // Code Review Defaults panel). One-shot on mount: if the user later toggles
+  // the picker, their per-task choice wins over the global seed. Silent so a
+  // missing settings file doesn't toast on every task form mount.
+  useEffect(() => {
+    let cancelled = false;
+    api.getCodeReviewDefaults({ silent: true })
+      .then((d) => {
+        if (cancelled || !d) return;
+        if (Array.isArray(d.reviewers) && d.reviewers.length) setReviewers(d.reviewers);
+        if (d.stopMode) setReviewStopMode(d.stopMode);
+        if (d.reviewerApplies === true) setReviewerApplies(true);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   // Memoize enabled providers for dropdown
   const enabledProviders = useMemo(() =>
     providers?.filter(p => p.enabled) || [],

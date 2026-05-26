@@ -173,10 +173,14 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/simplify`/);
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).toMatch(/\.agent-done/);
-      expect(prompt).toMatch(/\/quit/);
+      // The sentinel is the done signal — the agent must NOT be told to RUN
+      // /quit (it's a UI command it can't invoke; PortOS closes the session on
+      // poll). The prompt only mentions /quit to tell the agent NOT to run it.
+      expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
+      expect(prompt).toMatch(/NOT run `\/quit`/);
       // After /do:pr drives the Copilot review loop clean, the agent must
       // merge and verify — otherwise the PR sits open after the agent exits.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toMatch(/MERGED/);
@@ -249,7 +253,7 @@ describe('buildLightContextPrompt', () => {
       // After /do:pr drives the Copilot review loop clean, the agent must
       // merge and verify — without these steps the PR sits open after the
       // agent exits (the original "agent abandoned the PR" bug).
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toMatch(/MERGED/);
@@ -265,7 +269,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/simplify`/);
       // Merge guidance still applies when /simplify is skipped.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
     });
 
     it('uses /do:push (not /do:pr) for Claude Code CLI when openPR is false', () => {
@@ -305,7 +309,7 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       expect(prompt).toMatch(/task-src-1/);
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
       // --auto must NOT appear inside any `gh pr merge` invocation — it defers
       // the merge and the PR sits open after the agent exits.
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
@@ -335,8 +339,9 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta);
       expect(prompt).toMatch(/--review-with claude/);
-      // The Copilot-specific pre-request wording must be replaced for CLI reviewers.
-      expect(prompt).toMatch(/CLI-based/);
+      // The Copilot-specific pre-request wording must be replaced when no
+      // Copilot reviewer leads the order (the agent invokes the reviewers itself).
+      expect(prompt).toMatch(/invoke each configured reviewer yourself/);
     });
 
     it('threads an ordered multi-reviewer list + flags into the follow-up block', () => {
@@ -359,6 +364,27 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--reviewer-applies/);
       // Ordered run instruction.
       expect(prompt).toMatch(/For EACH reviewer in order/);
+    });
+
+    it('emits the local-LLM POST instruction when a local-LLM reviewer is configured', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['lmstudio'],
+          sourceTaskId: 'task-src-llm',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      // The agent gets a copy-pasteable curl pipeline pointing at PortOS's
+      // loopback API — without it the lmstudio/ollama reviewer kinds have no
+      // way to actually run a review.
+      expect(prompt).toMatch(/POST the diff to PortOS's local reviewer endpoint/);
+      expect(prompt).toMatch(/http:\/\/localhost:5555\/api\/code-review\/local/);
+      expect(prompt).toMatch(/gh pr diff 9 \| jq/);
     });
 
     it('threads reviewer into the TUI Completion Workflow as `/do:pr --review-with <reviewer>`', () => {
@@ -512,8 +538,8 @@ describe('buildAgentPrompt — provider type routing', () => {
       isTruthyMeta,
       { providerType: 'api' });
     expect(prompt).toMatch(/## Review-Loop Follow-up/);
-    // Merge command must be present, exactly with --squash --delete-branch.
-    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+    // Merge command must be present, exactly with --merge --delete-branch.
+    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
     // --auto must NOT appear inside any `gh pr merge` invocation — it defers
     // the merge and the PR sits open after the agent exits.
     expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);

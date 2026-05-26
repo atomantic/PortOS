@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   analyzeError,
   analyzeHttpError,
+  createImmediateFallbackSignalDetector,
+  detectImmediateFallbackSignal,
   extractWaitTime,
   ERROR_CATEGORIES
 } from './errorDetection.js';
@@ -26,6 +28,19 @@ describe('Error Detection', () => {
       expect(result.hasError).toBe(true);
       expect(result.category).toBe(ERROR_CATEGORIES.USAGE_LIMIT);
       expect(result.requiresFallback).toBe(true);
+    });
+
+    it('should detect Claude extra-usage status as a usage limit', () => {
+      const result = analyzeError('Now using extra usage');
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.USAGE_LIMIT);
+      expect(result.requiresFallback).toBe(true);
+    });
+
+    it('should not detect ordinary prose about extra usage as a usage limit', () => {
+      const result = analyzeError('The report mentions extra usage in the appendix.', 1);
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.UNKNOWN);
     });
 
     it('should extract wait time from usage limit errors', () => {
@@ -82,6 +97,37 @@ describe('Error Detection', () => {
     it('should handle null/undefined input', () => {
       const result = analyzeError(null, 0);
       expect(result.hasError).toBe(false);
+    });
+  });
+
+  describe('detectImmediateFallbackSignal', () => {
+    it('detects the Claude extra-usage status line', () => {
+      const result = detectImmediateFallbackSignal('Now using extra usage');
+      expect(result).toMatchObject({
+        hasError: true,
+        category: ERROR_CATEGORIES.USAGE_LIMIT,
+        requiresFallback: true
+      });
+    });
+
+    it('does not match quoted prompt text in the middle of a line', () => {
+      const result = detectImmediateFallbackSignal('The failure condition is "Now using extra usage".');
+      expect(result).toBeNull();
+    });
+
+    it('does not match a line that only starts with the status text', () => {
+      const result = detectImmediateFallbackSignal('Now using extra usage examples in docs\n');
+      expect(result).toBeNull();
+    });
+
+    it('buffers the status line across stream chunks', () => {
+      const detect = createImmediateFallbackSignalDetector();
+      expect(detect('Now using extra ')).toBeNull();
+      const result = detect('usage\n');
+      expect(result).toMatchObject({
+        category: ERROR_CATEGORIES.USAGE_LIMIT,
+        requiresFallback: true
+      });
     });
   });
 

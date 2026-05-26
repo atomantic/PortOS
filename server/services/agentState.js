@@ -12,6 +12,10 @@ export const runnerAgents = new Map();
 // userTerminatedAgents: agents the user explicitly killed (Set<agentId>)
 export const userTerminatedAgents = new Set();
 
+// pausedAgents: agents whose process is being stopped without finalizing the
+// task or cleaning up the worktree (Map<agentId, { pausedAt, reason }>)
+export const pausedAgents = new Map();
+
 // spawningTasks: tasks currently being spawned (Set<taskId>) — deduplication guard
 export const spawningTasks = new Set();
 

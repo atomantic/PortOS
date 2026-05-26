@@ -65,7 +65,8 @@ vi.mock('./agentLifecycle.js', () => ({
 
 vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
-  userTerminatedAgents: new Set()
+  userTerminatedAgents: new Set(),
+  pausedAgents: new Map()
 }));
 
 vi.mock('fs', () => ({
@@ -640,15 +641,16 @@ describe('spawnTuiAgent runtime', () => {
     expect(openCalls).toHaveLength(0);
   });
 
-  // ── 10. Completion-sentinel ingestion on the shell-exit (/quit) race ─────────
-  // The completion workflow has the agent write `.agent-done` and then run
-  // `/quit`, which exits the TUI process within milliseconds — long before the
-  // 2s doneSentinelTimer poll fires. The shell-exit path therefore wins the
-  // race and finalizes the agent. finish() MUST still ingest the sentinel so
-  // its markdown resolution lands in outputBuffer / output.txt and shows up in
-  // the completed-agent details view. Regression guard for the lost-resolution
-  // bug where the summary only got ingested by the (slower) poll path.
-  it('shell-exit after sentinel write: ingests .agent-done summary into the persisted output (process /quit beats the 2s poll)', async () => {
+  // ── 10. Completion-sentinel ingestion on the shell-exit path ─────────────────
+  // The completion workflow has the agent write `.agent-done` and then stop
+  // (it does NOT `/quit`). Normally the 2s doneSentinelTimer poll finalizes the
+  // agent, but the TUI process can also exit on its own (or be killed) before
+  // the poll ticks — when that shell-exit path wins the race, finish() MUST
+  // still ingest the sentinel so its markdown resolution lands in outputBuffer /
+  // output.txt and shows up in the completed-agent details view. Regression
+  // guard for the lost-resolution bug where the summary only got ingested by
+  // the poll path.
+  it('shell-exit after sentinel write: ingests .agent-done summary into the persisted output (process exit beats the 2s poll)', async () => {
     const { appendFile } = await import('fs/promises');
     const sentinel = '## Summary\nImplemented the fix.\n\n## PR\nhttps://example.com/pr/42';
     vi.mocked(existsSync).mockReturnValue(true);

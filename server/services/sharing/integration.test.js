@@ -202,6 +202,49 @@ describe('sharing round-trip', () => {
     expect(afterOverride.name).toBe('Test Series (renamed)');
   });
 
+  it('a remote orphan series (universeId null) preserves the local universe link instead of aborting the import', async () => {
+    const bucket = await buckets.createBucket({ name: 'OrphanLinkBucket', path: tempBucket, mode: 'auto-merge' });
+    const u = await universeSvc.createUniverse({ name: 'Linked Universe' });
+    const s = await series.createSeries({ name: 'Linked Series', universeId: u.id });
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+
+    // Rewrite the exported series record to look like an ORPHAN (no universeId)
+    // with a newer updatedAt — mimics an older/cleared peer. Before the fix this
+    // tripped updateSeries's "cannot unlink" guard and threw, aborting the whole
+    // manifest import; now the importer preserves the local link.
+    const seriesRecPath = join(tempBucket, 'records', 'series', `${s.id}.json`);
+    const rec = JSON.parse(readFileSync(seriesRecPath, 'utf-8'));
+    rec.universeId = null;
+    rec.updatedAt = '2999-01-01T00:00:00.000Z';
+    writeFileSync(seriesRecPath, JSON.stringify(rec, null, 2));
+
+    simulateRemoteSender(tempBucket, exp.filename);
+    const r = await importer.processManifest(bucket.id, exp.filename);
+    expect(r.processed).toBe(true);
+    expect(r.outcome.recordImportFailures).toBeFalsy();
+
+    // Link preserved (not unlinked), and the series survived the import.
+    const after = await series.getSeries(s.id);
+    expect(after.universeId).toBe(u.id);
+  });
+
+  it('seeds a conflict-journal base hash when a series is first imported (so its first divergence is journaled)', async () => {
+    const bucket = await buckets.createBucket({ name: 'BaseSeedBucket', path: tempBucket, mode: 'auto-merge' });
+    const u = await universeSvc.createUniverse({ name: 'Seed Universe' });
+    const s = await series.createSeries({ name: 'Seed Series', universeId: u.id });
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+
+    // Drop the local copy so the import is a fresh INSERT (the branch that
+    // previously skipped base-hash seeding).
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const baseHashPath = join(tempData, 'sharing', 'sync_base_hashes.json');
+    const baseHashes = JSON.parse(readFileSync(baseHashPath, 'utf-8'));
+    expect(baseHashes[`series:${s.id}`]).toBeTruthy();
+  });
+
   it('re-importing the same manifest is a no-op (cursor dedup)', async () => {
     const bucket = await buckets.createBucket({ name: 'D', path: tempBucket, mode: 'auto-merge' });
     const s = await series.createSeries({ name: 'X' });
@@ -1693,10 +1736,17 @@ describe('sharing round-trip', () => {
     const { hasBeenProcessed, readCursor } = await import('./manifest.js');
     const bucket = await buckets.createBucket({ name: 'TombstonedUniViaSeriesBucket', path: tempBucket, mode: 'auto-merge' });
 
-    // Create universe + linked series, then delete the universe.
+    // Create universe + linked series, then tombstone the universe. Local
+    // deleteUniverse is blocked while a live series references it (the
+    // hierarchy invariant), but this orphan-link-to-tombstone state still
+    // arises in production: a PEER deletes the universe (it had no series
+    // there) and the delete-tombstone arrives via sync while we hold an
+    // independently-created linked series. Reproduce that via the merge path.
     const uni = await universeSvc.createUniverse({ name: 'Gone Universe' });
     const s = await series.createSeries({ name: 'Linked Series', logline: 'x', universeId: uni.id });
-    await universeSvc.deleteUniverse(uni.id);
+    await universeSvc.mergeUniversesFromSync([
+      { ...uni, deleted: true, deletedAt: new Date().toISOString(), updatedAt: new Date(Date.now() + 60_000).toISOString() },
+    ]);
 
     // Hand-write a collection manifest referencing the series id (the exporter
     // normally resolves series→universe, but a legacy peer may emit seriesId).

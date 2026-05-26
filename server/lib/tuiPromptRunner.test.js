@@ -433,6 +433,32 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('early-fails with reason "fallback-signal" when Claude switches to extra usage', async () => {
+      const provider = { id: 'claude', type: 'tui', command: 'claude' };
+      const onComplete = vi.fn();
+      const promise = executeTuiRun('run-extra-usage', provider, 'a prompt long enough', '/cwd', undefined, onComplete, 60000);
+      await flushAsync();
+
+      ptyInstances[0].emitData('Now using extra ');
+      expect(ptyInstances[0].kill).not.toHaveBeenCalled();
+      ptyInstances[0].emitData('usage\n');
+
+      await promise;
+      expect(ptyInstances[0].kill).toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-extra-usage',
+        success: false,
+        exitCode: 1,
+        error: expect.stringContaining('Now using extra usage'),
+        extras: expect.objectContaining({ completionReason: 'fallback-signal' }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('Now using extra usage'),
+        completionReason: 'fallback-signal',
+      }));
+    });
+
     it('finishes with reason "exit" + exitCode 0 when the PTY closes cleanly', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const promise = executeTuiRun('run-exit', provider, 'a prompt long enough', '/cwd', undefined, undefined, 60000);

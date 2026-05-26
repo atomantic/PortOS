@@ -46,6 +46,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
+import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
@@ -933,6 +934,19 @@ export async function pushRecordToPeer(sub, options = {}) {
   await persistPushSuccess(sub.id, missingCount > 0 ? null : hash, { confirmedAtMs: Date.now() });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
+  }
+  // Conflict-journal base hash: this record's content now lives on the peer too
+  // (the record always lands even when assets are still pulling), so stamp the
+  // shared-state base for the two journaled kinds. This is the symmetric
+  // convergence point to the receiver advancing its base in mergeXxxFromSync —
+  // it keeps a peer's echo (reverse-subscription push-back) from later looking
+  // like a divergence. Best-effort; never block the push result on it — the
+  // stamp + filesystem flush run fire-and-forget so a slow disk can't delay the
+  // push loop. The `.catch()` keeps the rejection from escaping as unhandled.
+  if ((sub.recordKind === 'universe' || sub.recordKind === 'series') && payload.record) {
+    setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))
+      .then(() => flushBaseHashes())
+      .catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
   }
   return {
     pushed: true,

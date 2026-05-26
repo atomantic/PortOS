@@ -187,14 +187,14 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
       )}
 
       {/* Event logs as terminal output - desktop only */}
-      <div className="hidden lg:flex flex-1 mb-4 flex-col min-h-0">
+      <div className="hidden lg:flex flex-1 min-w-0 mb-4 flex-col min-h-0">
         <div className="text-gray-500 text-xs mb-1">// event_log</div>
-        <div className="flex-1 bg-black/30 rounded p-2 overflow-y-auto scrollbar-hide">
+        <div className="flex-1 min-w-0 bg-black/30 rounded p-2 overflow-y-auto scrollbar-hide">
           {(!eventLogs || eventLogs.length === 0) ? (
             <div className="text-gray-600 text-xs">waiting for events...</div>
           ) : (
             eventLogs.slice(-20).reverse().map((log, i) => (
-              <div key={i} className={`text-xs ${levelColors[log.level] || 'text-gray-400'} leading-relaxed`}>
+              <div key={i} className={`text-xs break-all ${levelColors[log.level] || 'text-gray-400'} leading-relaxed`}>
                 <span className="text-gray-600">{new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false })}</span>
                 {' '}
                 <span className={levelColors[log.level]}>{levelPrefixes[log.level] || '[LOG]'}</span>

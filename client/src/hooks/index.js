@@ -51,6 +51,9 @@ export * from './useMediaAnnotations.js';
 export * from './useMediaCompletionRefresh.js';
 export * from './useOpenClawAttachments.js';
 
+// === Settings-derived shared state ===
+export * from './useCodeReviewDefaults.jsx';
+
 // === Sockets & lifecycle ===
 export * from './useSocket.js';
 export * from './useTimeTick.js';
@@ -76,6 +79,7 @@ export * from './useAppOperation.js';
 export * from './useCityData.js';
 export * from './useDeathClock.js';
 export * from './usePostSession.js';
+export * from './useRecordMerge.js';
 export * from './useSyncIntegrity.js';
 export * from './useUniverseNav.js';
 export * from './useVoiceUiSync.js';

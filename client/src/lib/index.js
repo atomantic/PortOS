@@ -42,3 +42,4 @@ export * from './voiceLabel.js';
 
 // === Page-scoped pure helpers ===
 export * from './universeBuilderExpand.js';
+export * from './writingGuide.js';

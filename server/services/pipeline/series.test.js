@@ -79,6 +79,48 @@ describe('pipeline series service', () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it('updateSeries rejects clearing universeId once a series is linked (hierarchy invariant)', async () => {
+    const s = await svc.createSeries({ name: 'Linked', universeId: 'u-1' });
+    await expect(svc.updateSeries(s.id, { universeId: '' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    await expect(svc.updateSeries(s.id, { universeId: null })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    await expect(svc.updateSeries(s.id, { universeId: '   ' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    // Link survived the rejected clears.
+    expect((await svc.getSeries(s.id)).universeId).toBe('u-1');
+  });
+
+  it('updateSeries allows MOVING a linked series to a different universe', async () => {
+    const s = await svc.createSeries({ name: 'Mover', universeId: 'u-1' });
+    const moved = await svc.updateSeries(s.id, { universeId: 'u-2' });
+    expect(moved.universeId).toBe('u-2');
+  });
+
+  it('mergeSeriesFromSync preserves the local universe link when an older peer pushes an orphan payload', async () => {
+    const s = await svc.createSeries({ name: 'Linked', universeId: 'uni-A' });
+    // Older peer pushes a NEWER series record that lost its universe link.
+    const orphanPayload = { ...s, universeId: null, name: 'Linked (peer edit)', updatedAt: '2999-01-01T00:00:00.000Z' };
+    const res = await svc.mergeSeriesFromSync([orphanPayload]);
+    expect(res.applied).toBe(true);
+    const after = await svc.getSeries(s.id);
+    expect(after.name).toBe('Linked (peer edit)'); // remote edit applied
+    expect(after.universeId).toBe('uni-A');         // …but the link was preserved
+  });
+
+  it('mergeSeriesFromSync still applies a MOVE to a different non-empty universe', async () => {
+    const s = await svc.createSeries({ name: 'Mover', universeId: 'uni-A' });
+    const movePayload = { ...s, universeId: 'uni-B', updatedAt: '2999-01-01T00:00:00.000Z' };
+    await svc.mergeSeriesFromSync([movePayload]);
+    expect((await svc.getSeries(s.id)).universeId).toBe('uni-B');
+  });
+
+  it('updateSeries allows first-linking a legacy orphan (universeId null → set)', async () => {
+    // createSeries via the service is permissive (importer path); simulate a
+    // legacy orphan, then assign its first universe.
+    const s = await svc.createSeries({ name: 'Orphan', universeId: null });
+    expect(s.universeId).toBe(null);
+    const linked = await svc.updateSeries(s.id, { universeId: 'u-3' });
+    expect(linked.universeId).toBe('u-3');
+  });
+
   it('deleteSeries drops the record and is idempotent only on second call', async () => {
     const s = await svc.createSeries({ name: 'Salt Run' });
     await svc.deleteSeries(s.id);

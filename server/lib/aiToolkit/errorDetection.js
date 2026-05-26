@@ -33,7 +33,7 @@ const ERROR_PATTERNS = [
     suggestedFix: 'Wait and retry - temporary rate limiting'
   },
   {
-    pattern: /(?:hit your usage limit|You've hit your limit|usage limit|Upgrade to Pro)/i,
+    pattern: /(?:hit your usage limit|You've hit your limit|usage limit|Upgrade to Pro|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: ERROR_CATEGORIES.USAGE_LIMIT,
     requiresFallback: true,
     actionable: true,
@@ -76,6 +76,15 @@ const WAIT_TIME_PATTERNS = [
   /wait\s+((?:\d+\s*(?:day|hour|minute|second)s?\s*)+)/i,
   /in\s+(\d+)\s*(day|hour|minute|second)s?/i,
   /(\d+\s*day(?:s)?)?[,\s]*(\d+\s*hour(?:s)?)?[,\s]*(\d+\s*min(?:ute)?(?:s)?)?/i
+];
+
+const IMMEDIATE_FALLBACK_SIGNALS = [
+  {
+    pattern: /^\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$)/im,
+    category: ERROR_CATEGORIES.USAGE_LIMIT,
+    message: 'Provider switched to extra usage',
+    suggestedFix: 'Provider usage limit reached. Using fallback provider or wait for limit reset.'
+  }
 ];
 
 export function extractWaitTime(text) {
@@ -148,6 +157,40 @@ export function analyzeError(errorText, exitCode = null) {
     requiresFallback: false,
     actionable: false,
     suggestedFix: null
+  };
+}
+
+export function detectImmediateFallbackSignal(text) {
+  if (!text) return null;
+  const value = String(text);
+
+  for (const signal of IMMEDIATE_FALLBACK_SIGNALS) {
+    const match = value.match(signal.pattern);
+    if (!match) continue;
+
+    const line = match[0].trim();
+    return {
+      hasError: true,
+      category: signal.category,
+      message: line || signal.message,
+      waitTime: extractWaitTime(value),
+      requiresFallback: true,
+      actionable: true,
+      suggestedFix: signal.suggestedFix
+    };
+  }
+
+  return null;
+}
+
+export function createImmediateFallbackSignalDetector({ maxBuffer = 512 } = {}) {
+  let buffer = '';
+  const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
+
+  return (chunk) => {
+    if (!chunk) return null;
+    buffer = `${buffer}${String(chunk)}`.slice(-cap);
+    return detectImmediateFallbackSignal(buffer);
   };
 }
 

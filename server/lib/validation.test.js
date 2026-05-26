@@ -12,10 +12,34 @@ import {
   stageConfigUpdateSchema,
   normalizeReviewers,
   buildReviewWithArgs,
-  createCosTaskSchema
+  createCosTaskSchema,
+  featureProviderConfigSchema
 } from './validation.js';
 
 describe('validation.js', () => {
+  describe('featureProviderConfigSchema', () => {
+    it('accepts a providerId + model', () => {
+      const result = featureProviderConfigSchema.safeParse({ providerId: 'codex', model: 'gpt-5' });
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ providerId: 'codex', model: 'gpt-5' });
+    });
+
+    it('coerces the empty-string "unset" sentinel to undefined', () => {
+      const result = featureProviderConfigSchema.safeParse({ providerId: '', model: '' });
+      expect(result.success).toBe(true);
+      expect(result.data.providerId).toBeUndefined();
+      expect(result.data.model).toBeUndefined();
+    });
+
+    it('accepts an empty object (use defaults)', () => {
+      expect(featureProviderConfigSchema.safeParse({}).success).toBe(true);
+    });
+
+    it('rejects a non-string providerId', () => {
+      expect(featureProviderConfigSchema.safeParse({ providerId: 42 }).success).toBe(false);
+    });
+  });
+
   describe('processSchema', () => {
     it('should validate a complete process object', () => {
       const process = {
@@ -543,6 +567,20 @@ describe('validation.js', () => {
       expect(normalizeReviewers({ reviewers: ['gemini', 'codex', 'gemini'] })).toEqual(['gemini', 'codex']);
       // `reviewers` wins over legacy `reviewer`.
       expect(normalizeReviewers({ reviewers: ['claude'], reviewer: 'codex' })).toEqual(['claude']);
+    });
+
+    it('accepts local-LLM reviewer kinds (lmstudio / ollama)', () => {
+      expect(normalizeReviewers({ reviewers: ['lmstudio', 'ollama'] })).toEqual(['lmstudio', 'ollama']);
+      expect(normalizeReviewers({ reviewer: 'lmstudio' })).toEqual(['lmstudio']);
+    });
+
+    it('uses the fallback when metadata is empty and falls back to copilot when the fallback is invalid', () => {
+      // Settings-derived defaults flow through when the task didn't pin reviewers.
+      expect(normalizeReviewers({}, ['gemini', 'codex'])).toEqual(['gemini', 'codex']);
+      // An all-bogus fallback collapses to the hardcoded copilot, never an empty list.
+      expect(normalizeReviewers({}, ['bogus', null])).toEqual(['copilot']);
+      // Explicit task metadata still wins over the fallback.
+      expect(normalizeReviewers({ reviewers: ['claude'] }, ['gemini'])).toEqual(['claude']);
     });
   });
 

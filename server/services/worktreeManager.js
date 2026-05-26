@@ -20,6 +20,43 @@ const WORKTREES_DIR = PATHS.worktrees;
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
 /**
+ * Classify a `git status --porcelain` blob into real changes vs auto-generated
+ * lockfile churn. Pure (testable) — callers decide what to do with the result.
+ *
+ * @param {string} porcelain - raw `git status --porcelain` stdout
+ * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], hasRealChanges: boolean }}
+ *   - clean: no changes at all
+ *   - lockfileOnly: every change is an auto-generated lockfile (safe to discard)
+ *   - lockfilePaths: paths of those lockfiles (strip the porcelain `XY ` status prefix)
+ *   - hasRealChanges: at least one non-lockfile change (worktree must be preserved)
+ */
+export function classifyWorktreeDirt(porcelain) {
+  const lines = (porcelain || '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) {
+    return { clean: true, lockfileOnly: false, lockfilePaths: [], hasRealChanges: false };
+  }
+  const lockfileLines = lines.filter(line => AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f)));
+  const lockfileOnly = lockfileLines.length === lines.length;
+  return {
+    clean: false,
+    lockfileOnly,
+    lockfilePaths: lockfileLines.map(line => line.replace(/^\s*\S+\s+/, '')),
+    hasRealChanges: !lockfileOnly
+  };
+}
+
+/**
+ * Compare two filesystem paths for equality, resolving symlinks (e.g. macOS
+ * /var → /private/var) so normalization differences don't false-negative.
+ */
+function pathsEqual(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const resolved = (p) => { try { return realpathSync(p); } catch { return p; } };
+  return resolved(a) === resolved(b);
+}
+
+/**
  * True when a worktree directory belongs to a human-driven `/claim` TUI
  * session, not a CoS agent.
  *
@@ -182,14 +219,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     .catch(() => null);
   // Compare realpath-resolved forms so symlinks (e.g. macOS /var → /private/var)
   // or normalization differences don't false-positive as a broken worktree.
-  const sameTopLevel = (a, b) => {
-    if (!a || !b) return false;
-    if (a === b) return true;
-    const ra = (() => { try { return realpathSync(a); } catch { return a; } })();
-    const rb = (() => { try { return realpathSync(b); } catch { return b; } })();
-    return ra === rb;
-  };
-  if (detectedToplevel && !sameTopLevel(detectedToplevel, worktreePath)) {
+  if (detectedToplevel && !pathsEqual(detectedToplevel, worktreePath)) {
     console.log(`🌳 Worktree ${agentId} resolves to ${detectedToplevel} instead of ${worktreePath} — broken worktree, removing`);
     await rm(worktreePath, { recursive: true, force: true }).catch(rmErr => {
       console.log(`⚠️ Failed to remove broken worktree ${agentId}: ${rmErr.message}`);
@@ -211,15 +241,10 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   if (dirtyFiles) {
     // Discard auto-generated lockfile changes that agents don't intend to commit
     // (e.g., npm install resolving ^version to exact version in package-lock.json)
-    const dirtyList = dirtyFiles.split('\n').filter(l => l.trim());
-    const lockfileChanges = dirtyList.filter(line =>
-      AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f))
-    );
-    if (lockfileChanges.length > 0 && lockfileChanges.length === dirtyList.length) {
-      // Extract filepath from porcelain output (XY<space>path), handling trimmed first-line
-      const lockfilePaths = lockfileChanges.map(line => line.replace(/^\s*\S+\s+/, ''));
-      console.log(`🧹 Discarding ${lockfileChanges.length} auto-generated lockfile change(s) in worktree ${agentId}`);
-      await execGit(['checkout', '--', ...lockfilePaths], worktreePath);
+    const dirt = classifyWorktreeDirt(dirtyFiles);
+    if (dirt.lockfileOnly) {
+      console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in worktree ${agentId}`);
+      await execGit(['checkout', '--', ...dirt.lockfilePaths], worktreePath);
     } else {
       console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected, aborting cleanup to avoid data loss`);
       warnings.push(`Worktree preserved — uncommitted changes detected in ${worktreePath}`);
@@ -453,6 +478,9 @@ export async function listWorktrees(sourceWorkspace) {
       current.bare = true;
     } else if (line === 'detached') {
       current.detached = true;
+    } else if (line === 'locked' || line.startsWith('locked ')) {
+      // `git worktree list --porcelain` emits a bare `locked` line, or `locked <reason>`.
+      current.locked = true;
     }
   }
   if (current.path) worktrees.push(current);
@@ -506,6 +534,116 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
   }
 
   return cleaned;
+}
+
+/**
+ * Reap worktrees whose branch is fully merged into the default branch AND whose
+ * working tree is clean. This is the SAFE counterpart to cleanupOrphanedWorktrees:
+ * it never integrates unmerged work, never deletes anything with pending
+ * changes, and honors worktree locks. A worktree is reaped only when BOTH hold:
+ *   1. the working tree is completely clean, and
+ *   2. every commit on the branch is already in the default branch — detected via
+ *      `isBranchMergedInto`, which covers normal AND squash/rebase merges.
+ *
+ * Because of gate (2) this works regardless of merge strategy, but a true merge
+ * commit (see the `--merge`-preferring agent prompts) makes detection bulletproof.
+ *
+ * Covers both PortOS-managed CoS worktrees (`data/cos/worktrees/`) and the
+ * `.claude/worktrees/` trees created by `/work`, `/claim`, and the superpowers
+ * git-worktree skill (these share the PortOS repo, so they appear in
+ * `git worktree list`). Active CoS agents and locked worktrees are never touched.
+ * Human `/claim` worktrees (`claim-*`) are skipped by default (they self-clean in
+ * the claim flow's Phase 7).
+ *
+ * @param {string} sourceWorkspace - repo root
+ * @param {object} [options]
+ * @param {Set<string>} [options.activeAgentIds] - CoS agents currently running (never reaped)
+ * @param {boolean} [options.includeClaudeTrees=true] - also reap `.claude/worktrees/`
+ * @param {boolean} [options.dryRun=false] - report candidates without deleting
+ * @returns {Promise<{reaped: Array<{path,branch,locked}>, skipped: Array<{path,reason}>, defaultBranch: string, target: string, dryRun: boolean}>}
+ */
+export async function reapMergedWorktrees(sourceWorkspace, {
+  activeAgentIds = new Set(),
+  includeClaudeTrees = true,
+  dryRun = false
+} = {}) {
+  const { getDefaultBranch, isBranchMergedInto } = await import('./git.js');
+
+  // Refresh remote refs so "merged into origin/main" reflects the canonical state
+  // after a `gh pr merge`. Best-effort — fall back to local refs on failure.
+  await execGit(['fetch', 'origin', '--prune'], sourceWorkspace, { ignoreExitCode: true }).catch(() => {});
+
+  const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+  // Prefer the remote-tracking ref (post-merge truth); fall back to the local branch.
+  const remoteTarget = await execGit(['rev-parse', '--verify', `origin/${defaultBranch}^{commit}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? `origin/${defaultBranch}` : null))
+    .catch(() => null);
+  const target = remoteTarget || defaultBranch;
+
+  const currentBranch = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => r.stdout.trim())
+    .catch(() => '');
+
+  const protectedBranches = new Set(['main', 'master', 'dev', 'develop', 'release', defaultBranch]);
+  const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
+
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  const reaped = [];
+  const skipped = [];
+
+  for (const wt of worktrees) {
+    // Never touch the primary worktree (the main repo checkout).
+    if (pathsEqual(wt.path, sourceWorkspace)) continue;
+    if (wt.bare || wt.detached || !wt.branch) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
+
+    const branchName = wt.branch.replace(/^refs\/heads\//, '');
+    if (!branchName) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
+    if (protectedBranches.has(branchName) || branchName === currentBranch) { skipped.push({ path: wt.path, reason: 'protected' }); continue; }
+
+    const agentId = wt.path.split('/').pop();
+    // Human `/claim` worktrees self-clean in the claim flow's Phase 7 — never reap them here.
+    if (isHumanClaimWorktree(agentId)) { skipped.push({ path: wt.path, reason: 'human-claim' }); continue; }
+    if (activeAgentIds.has(agentId)) { skipped.push({ path: wt.path, reason: 'active-agent' }); continue; }
+
+    const isCosTree = wt.path.startsWith(WORKTREES_DIR);
+    const isClaudeTree = wt.path.startsWith(claudeTreesRoot);
+    if (!isCosTree && !isClaudeTree) { skipped.push({ path: wt.path, reason: 'unmanaged-location' }); continue; }
+    if (isClaudeTree && !includeClaudeTrees) { skipped.push({ path: wt.path, reason: 'claude-tree-excluded' }); continue; }
+    if (wt.locked) { skipped.push({ path: wt.path, reason: 'locked' }); continue; }
+
+    // Gate 1: working tree must be completely clean. Unlike removeWorktree(),
+    // the background reaper does not discard even lockfile-only edits: an
+    // uncommitted fresh-from-main worktree may be an active agent that has not
+    // made its first commit yet.
+    const status = await execGit(['status', '--porcelain'], wt.path).then(r => r.stdout).catch(() => null);
+    if (status === null) { skipped.push({ path: wt.path, reason: 'status-failed' }); continue; }
+    if (!classifyWorktreeDirt(status).clean) { skipped.push({ path: wt.path, reason: 'uncommitted' }); continue; }
+
+    // Gate 2: branch fully merged into the default branch (regular, squash, or rebase).
+    const merged = await isBranchMergedInto(sourceWorkspace, branchName, target).catch(() => false);
+    if (!merged) { skipped.push({ path: wt.path, reason: 'unmerged' }); continue; }
+
+    if (dryRun) { reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked }); continue; }
+
+    // Remove the worktree, then force-delete the branch (-D because squash-merged
+    // branches aren't recognized by -d, and we've proven the work is in default).
+    await execGit(['worktree', 'remove', wt.path, '--force'], sourceWorkspace)
+      .catch(async (err) => {
+        console.log(`⚠️ worktree remove failed for ${wt.path}, manual cleanup: ${err.message}`);
+        await rm(wt.path, { recursive: true, force: true }).catch(() => {});
+        await execGit(['worktree', 'prune'], sourceWorkspace).catch(() => {});
+      });
+    await execGit(['branch', '-D', branchName], sourceWorkspace).catch(err => {
+      console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
+    });
+    reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked });
+  }
+
+  if (reaped.length > 0) {
+    console.log(`🌳 ${dryRun ? 'Would reap' : 'Reaped'} ${reaped.length} merged worktree(s): ${reaped.map(r => r.branch).join(', ')}`);
+  }
+
+  return { reaped, skipped, defaultBranch, target, dryRun };
 }
 
 /**

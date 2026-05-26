@@ -28,6 +28,13 @@ import {
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+// A pull streams progress as NDJSON; a transient network failure between Ollama
+// and the registry/CDN surfaces mid-stream as an `{"error":"EOF"}` frame (or the
+// response read rejecting outright). The `ollama` CLI silently retries these and
+// the pull is resumable — partial blobs are kept — so a retry continues rather
+// than restarts. Total attempts (1 initial + retries) and a linear backoff base.
+const PULL_MAX_ATTEMPTS = 3
+const PULL_RETRY_BASE_DELAY_MS = 1_000
 // Short probe — degrade to "no Ollama" fast rather than block on a cold check.
 const AVAILABILITY_PROBE_TIMEOUT_MS = 5_000
 const START_TIMEOUT_MS = 12_000
@@ -406,8 +413,10 @@ async function getVersion() {
 
 /**
  * Pull a model, streaming progress. Resolves once the pull finishes.
+ * During a transient-error backoff the callback fires with `retrying: true`
+ * (and `percent: null`) so the UI can show a "retrying" banner instead of stalling.
  * @param {string} modelId
- * @param {(p: { status: string, percent: number|null, completed?: number, total?: number }) => void} [onProgress]
+ * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, retrying?: boolean }) => void} [onProgress]
  * @returns {Promise<{ success: boolean, modelId: string, error?: string }>}
  */
 async function pullModel(modelId, onProgress) {
@@ -416,17 +425,47 @@ async function pullModel(modelId, onProgress) {
   }
   console.log(`📥 Ollama pull: ${modelId}`)
 
+  let lastError = null
+  for (let attempt = 1; attempt <= PULL_MAX_ATTEMPTS; attempt++) {
+    const result = await attemptOllamaPull(modelId, onProgress)
+    if (result.success) {
+      installedModels = null  // bust cache so the new model shows on next list
+      console.log(`✅ Ollama pull complete: ${modelId}${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`)
+      return { success: true, modelId }
+    }
+    lastError = result.error
+    // Bad model name / missing manifest etc. won't fix themselves — only retry
+    // the transient network class, and only while attempts remain.
+    if (attempt >= PULL_MAX_ATTEMPTS || !isTransientPullError(lastError)) break
+    const delayMs = PULL_RETRY_BASE_DELAY_MS * attempt
+    console.warn(`🔁 Ollama pull ${modelId} hit transient error "${lastError}" (attempt ${attempt}/${PULL_MAX_ATTEMPTS}); retrying in ${delayMs}ms`)
+    if (typeof onProgress === 'function') onProgress({ status: 'retrying after network error', percent: null, retrying: true })
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+
+  console.error(`⚠️ Ollama pull failed for ${modelId}: ${lastError}`)
+  return { success: false, error: lastError, modelId }
+}
+
+/**
+ * A single pull attempt. Returns `{ success }` or `{ success: false, error }`.
+ * A read that rejects mid-stream (dropped connection) is caught and returned as
+ * an error string so the caller's retry loop can classify it like an `{error}`
+ * frame rather than letting it throw out of the request lifecycle.
+ * @param {string} modelId
+ * @param {(p: object) => void} [onProgress]
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+async function attemptOllamaPull(modelId, onProgress) {
   // No timeout — multi-GB pulls take minutes; the stream is the lifecycle.
   const response = await fetchWithTimeout(`${config.baseUrl}/api/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: modelId, stream: true })
-  }, 0).catch((err) => ({ _err: err.message }))
+  }, 0).catch((err) => ({ _err: describeFetchError(err) }))
 
   if (response._err || !response.ok || !response.body) {
-    const error = response._err || `pull failed: ${response.status} ${response.statusText}`
-    console.error(`⚠️ Ollama pull failed for ${modelId}: ${error}`)
-    return { success: false, error, modelId }
+    return { success: false, error: response._err || `pull failed: ${response.status} ${response.statusText}` }
   }
 
   const lastError = await streamNdjson(response, (frame) => {
@@ -436,14 +475,48 @@ async function pullModel(modelId, onProgress) {
         : null
       onProgress({ status: frame.status || '', percent, completed: frame.completed, total: frame.total })
     }
-  })
+  }).catch((err) => err?.message || String(err))
 
-  if (lastError) {
-    return { success: false, error: lastError, modelId }
+  return lastError ? { success: false, error: lastError } : { success: true }
+}
+
+/**
+ * Flatten a thrown fetch error into a single descriptive string, walking the
+ * `cause` chain. Node/undici reports network failures as `TypeError: fetch
+ * failed` with the real reason (ECONNRESET, ETIMEDOUT, ...) tucked into
+ * `err.cause` (and sometimes nested deeper). Without this, the transient
+ * classifier only sees "fetch failed" and misclassifies retryable failures as
+ * fatal. Includes each level's `.code` so `isTransientPullError()` can match.
+ * @param {unknown} err
+ * @returns {string}
+ */
+function describeFetchError(err) {
+  const parts = []
+  let node = err
+  const seen = new Set()
+  // Bound the walk in case of a self-referential cause chain.
+  for (let depth = 0; node && typeof node === 'object' && depth < 5; depth++) {
+    if (seen.has(node)) break
+    seen.add(node)
+    if (node.code) parts.push(String(node.code))
+    if (node.message) parts.push(String(node.message))
+    node = node.cause
   }
-  installedModels = null  // bust cache so the new model shows on next list
-  console.log(`✅ Ollama pull complete: ${modelId}`)
-  return { success: true, modelId }
+  if (typeof node === 'string') parts.push(node)
+  return parts.join(': ') || String(err)
+}
+
+/**
+ * Classify a pull/stream error string as a transient network failure worth
+ * retrying (Ollama↔registry EOF, connection reset, undici "terminated", etc.).
+ * Non-transient errors — invalid model name, "file does not exist" — return
+ * false so the retry loop gives up immediately.
+ * @param {string|null|undefined} error
+ * @returns {boolean}
+ */
+function isTransientPullError(error) {
+  if (!error) return false
+  return /\beof\b|connection reset|reset by peer|broken pipe|socket hang up|other side closed|terminated|i\/o timeout|\btimeout\b|tls handshake|temporary failure|network is unreachable|connection refused|econnreset|etimedout|epipe/i.test(String(error))
 }
 
 /**
@@ -601,7 +674,7 @@ async function importModelFromGguf({ name, ggufPath, mode = 'copy' }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, modelfile: buildModelfile(ggufPath), stream: true })
-  }, 0).catch((err) => ({ _err: err.message }))
+  }, 0).catch((err) => ({ _err: describeFetchError(err) }))
 
   if (response._err || !response.ok || !response.body) {
     const error = response._err || `create failed: ${response.status} ${response.statusText}`
@@ -612,6 +685,15 @@ async function importModelFromGguf({ name, ggufPath, mode = 'copy' }) {
   installedModels = null
   console.log(`✅ Ollama import complete: ${name}${linked ? ' (hardlinked blob — no extra disk)' : ''}`)
   return { success: true, modelId: name, linked }
+}
+
+/**
+ * Live base URL — reflects runtime config patches, not just startup env.
+ * Used by sibling services (e.g. the local code-review endpoint) so the
+ * catalog UI and the code-review path can't desync.
+ */
+function getBaseUrl() {
+  return config.baseUrl
 }
 
 /**
@@ -638,6 +720,7 @@ export {
   pullModel,
   deleteModel,
   getStatus,
+  getBaseUrl,
   resolveLocalModel,
   importModelFromGguf,
   startServer,

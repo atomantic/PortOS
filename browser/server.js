@@ -26,18 +26,42 @@ let downloadWsReconnectTimer = null;
 let downloadDirCurrent = null;
 let shuttingDown = false;
 
-function getChromePath() {
+const DEFAULT_MAC_CHROME_APP = '/Applications/Google Chrome.app';
+
+function defaultChromeBinary() {
   const os = platform();
   if (os === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   if (os === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
   return 'google-chrome';
 }
 
-const MAC_CHROME_APP = '/Applications/Google Chrome.app';
+function getChromePath(config) {
+  if (typeof config?.chromePath === 'string' && config.chromePath.trim()) {
+    return config.chromePath;
+  }
+  return defaultChromeBinary();
+}
+
+function getMacAppBundle(config) {
+  if (typeof config?.macAppBundle === 'string' && config.macAppBundle.trim()) {
+    return config.macAppBundle;
+  }
+  return DEFAULT_MAC_CHROME_APP;
+}
 
 async function loadConfig() {
   const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) return {};
+  // Guard against a partially-written / corrupt config (now user-editable via
+  // the Browser settings UI). An unguarded JSON.parse here throws on boot —
+  // loadConfig is awaited from launchBrowser()→main() with no catch, so a bad
+  // file would crash the PM2 child into a restart-loop. Fall back to defaults.
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error(`⚠️ Corrupt browser-config.json, using defaults: ${err.message}`);
+    return {};
+  }
 }
 
 async function checkCdp() {
@@ -155,7 +179,8 @@ async function launchBrowser() {
 
   headlessMode = config.headless === true;
   const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
-  const chromePath = getChromePath();
+  const chromePath = getChromePath(config);
+  const macAppBundle = getMacAppBundle(config);
 
   await mkdir(profileDir, { recursive: true });
   await mkdir(downloadDir, { recursive: true });
@@ -176,7 +201,7 @@ async function launchBrowser() {
     args.push('--headless=new');
   }
 
-  console.log(`🌐 Launching Chrome (headless=${headlessMode}, profile=${profileDir}) CDP on ${CDP_HOST}:${CDP_PORT}`);
+  console.log(`🌐 Launching Chrome (headless=${headlessMode}, profile=${profileDir}, binary=${platform() === 'darwin' && !headlessMode ? macAppBundle : chromePath}) CDP on ${CDP_HOST}:${CDP_PORT}`);
 
   // macOS headed mode: launch via LaunchServices (`open -na`) so Chrome owns
   // its own TCC identity. As a direct subprocess of node/PM2, Chrome inherits
@@ -190,17 +215,35 @@ async function launchBrowser() {
   // Headless mode skips this (no UI to click) and non-darwin platforms don't
   // have the TCC-responsibility problem at all.
   if (platform() === 'darwin' && !headlessMode) {
-    chromeProcess = spawn('/usr/bin/open', ['-na', MAC_CHROME_APP, '--args', ...args], { stdio: 'ignore' });
+    chromeProcess = spawn('/usr/bin/open', ['-na', macAppBundle, '--args', ...args], { stdio: 'ignore' });
     chromeProcess.on('exit', () => {
       // `open` returns ~immediately once Chrome is handed off to launchd; that
       // exit is not Chrome's death. Chrome-exit detection happens via the
       // download keep-alive WS close event + reconnect loop instead.
       chromeProcess = null;
     });
+    // A bad macAppBundle (user-editable via the Browser settings UI) emits
+    // 'error'; with no listener that becomes an uncaughtException → PM2
+    // restart-loop. Log and null out so the CDP-wait loop reports unreachable.
+    chromeProcess.on('error', (err) => {
+      console.error(`❌ Failed to spawn Chrome via open: ${err.message}`);
+      chromeProcess = null;
+    });
   } else {
     chromeProcess = spawn(chromePath, args, { stdio: 'ignore', windowsHide: true });
     chromeProcess.on('exit', (code) => {
       console.log(`⚠️ Chrome exited with code ${code}`);
+      chromeProcess = null;
+      if (downloadWs) {
+        try { downloadWs.close(); } catch {}
+        downloadWs = null;
+      }
+    });
+    // A bad chromePath (user-editable via the Browser settings UI) emits
+    // 'error'; with no listener that becomes an uncaughtException → PM2
+    // restart-loop. Log and null out so the CDP-wait loop reports unreachable.
+    chromeProcess.on('error', (err) => {
+      console.error(`❌ Failed to spawn Chrome (${chromePath}): ${err.message}`);
       chromeProcess = null;
       if (downloadWs) {
         try { downloadWs.close(); } catch {}

@@ -466,9 +466,10 @@ export async function getAgent(agentId) {
   }
   if (!agent) return null;
 
-  // For completed agents, read full output from file
-  if (agent.status === 'completed') {
-    const dateStr = agent.completedAt?.slice(0, 10);
+  // Completed agents live in date buckets; paused agents remain in the flat
+  // agent dir but should still expose their preserved full transcript.
+  if (agent.status === 'completed' || agent.status === 'paused') {
+    const dateStr = agent.status === 'completed' ? agent.completedAt?.slice(0, 10) : null;
     const agentDir = dateStr ? getAgentDir(agentId, dateStr) : getAgentDir(agentId);
     const repaired = await repairCodexTaskSummary(agentDir, agent);
     if (repaired) agent = { ...agent, metadata: { ...agent.metadata, taskSummary: repaired } };
@@ -476,9 +477,10 @@ export async function getAgent(agentId) {
     if (existsSync(outputFile)) {
       const fullOutput = await readFile(outputFile, 'utf-8');
       const lines = fullOutput.split('\n').filter(line => line.trim());
+      const timestamp = agent.completedAt || agent.pausedAt;
       return {
         ...agent,
-        output: lines.map(line => ({ line, timestamp: agent.completedAt }))
+        output: lines.map(line => ({ line, timestamp }))
       };
     }
   }
@@ -506,6 +508,12 @@ export async function terminateAgent(agentId) {
   cosEvents.emit('agent:terminate', agentId);
   // The spawner will handle marking the agent as completed after termination
   return { success: true, agentId };
+}
+
+// Pause an agent without completing its task or cleaning up its worktree.
+export async function pauseAgent(agentId, reason = null) {
+  const { pauseAgent: pauseAgentFromSpawner } = await import('./subAgentSpawner.js');
+  return pauseAgentFromSpawner(agentId, reason);
 }
 
 // Force kill an agent with SIGKILL (immediate, no graceful shutdown)

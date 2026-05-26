@@ -3,10 +3,16 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import * as cos from '../services/cos.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
+
+// `reason` is persisted into task metadata + interpolated into logs; guard the
+// shape so a non-string body can't store `[object Object]`.
+const pauseBodySchema = z.object({ reason: z.string().max(500).optional() });
 
 // GET /api/cos/health - Get health status
 router.get('/health', asyncHandler(async (req, res) => {
@@ -65,6 +71,16 @@ router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
 // POST /api/cos/agents/:id/terminate - Terminate agent (graceful SIGTERM, then SIGKILL)
 router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
   const result = await cos.terminateAgent(req.params.id);
+  res.json(result);
+}));
+
+// POST /api/cos/agents/:id/pause - Stop process, preserve task/worktree for later resume
+router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
+  const { reason } = validateRequest(pauseBodySchema, req.body ?? {});
+  const result = await cos.pauseAgent(req.params.id, reason || null);
+  if (result?.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
   res.json(result);
 }));
 

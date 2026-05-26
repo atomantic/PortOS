@@ -40,10 +40,16 @@ export const ERR_PARTIAL_COMMIT_ISSUES = 'IMPORTER_PARTIAL_COMMIT_ISSUES';
 
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
-// v1 hard cap on the source corpus. Big novels run ~500K chars; this keeps
-// us under most providers' single-call context limit until the chunked
-// fallback follow-up lands (PLAN.md / "Create Suite — Importer page").
-export const IMPORTER_SOURCE_CHAR_LIMIT = 200_000;
+// Sanity ceiling on the source corpus — matches the schema-layer abuse guard
+// (`importerSourceField`, 5MB) so the importer doesn't impose an *artificial*
+// product cap below it. A 5M-char source (~3,000 pages) is far beyond any real
+// book — even War & Peace is ~3.2M. The real operational limit is dynamic: the
+// active provider's context window, since the whole corpus still goes into one
+// extraction call. Sources that fit the ceiling but overflow the chosen model's
+// window will fail at the provider until the chunked-extraction follow-up lands
+// (PLAN.md / "Create Suite — Importer page") — pick a large-context provider or
+// trim the source in the meantime.
+export const IMPORTER_SOURCE_CHAR_LIMIT = 5_000_000;
 
 // Per-content-type defaults when the user doesn't pass `targetIssueCount`.
 // `null` means "let the LLM decide" — short stories collapse to one; novels
@@ -344,7 +350,7 @@ export async function classifyImportContent({ source, providerOverride } = {}) {
   }
   if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
     throw makeErr(
-      `Source is ${source.length.toLocaleString()} chars — v1 limit is ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}. Trim the source or wait for chunked-extraction support.`,
+      `Source is ${source.length.toLocaleString()} chars — exceeds the ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}-char ceiling. Trim the source or wait for chunked-extraction support.`,
       ERR_VALIDATION,
     );
   }
@@ -403,7 +409,7 @@ export async function analyzeImport({
   }
   if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
     throw makeErr(
-      `Source is ${source.length.toLocaleString()} chars — v1 limit is ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}. Trim the source or wait for chunked-extraction support.`,
+      `Source is ${source.length.toLocaleString()} chars — exceeds the ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}-char ceiling. Trim the source or wait for chunked-extraction support.`,
       ERR_VALIDATION,
     );
   }

@@ -7,16 +7,19 @@
 
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
-import { completeAgent } from './cosAgents.js';
+import { completeAgent, updateAgent } from './cosAgents.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
-import { terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { unregisterSpawnedAgent } from './agents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, userTerminatedAgents, useRunner } from './agentState.js';
+import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunner } from './agentState.js';
 import { cleanupAgentWorktree, syncRunnerAgents } from './agentLifecycle.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { release } from './executionLanes.js';
+import { completeExecution, errorExecution } from './toolStateMachine.js';
+import * as shellService from './shell.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -50,6 +53,110 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
     runnerAgents.delete(agentId);
   }
   return result;
+}
+
+async function markPausedTask(agentInfo, agentId, pausedAt, reason) {
+  const task = agentInfo?.task || (agentInfo?.taskId ? await getTaskById(agentInfo.taskId).catch(() => null) : null);
+  if (!task) return;
+  const metadata = {
+    ...task.metadata,
+    blockedReason: reason ? `Paused by user: ${reason}` : 'Paused by user',
+    blockedCategory: 'agent-paused',
+    blockedAt: pausedAt,
+    pausedAt,
+    pausedAgentId: agentId
+  };
+  if (agentInfo?.workspacePath) metadata.resumeWorkspacePath = agentInfo.workspacePath;
+  if (agentInfo?.runId) metadata.resumeRunId = agentInfo.runId;
+  await updateTask(task.id, {
+    status: 'blocked',
+    metadata
+  }, task.taskType || 'user');
+}
+
+async function markAgentPaused(agentId, agentInfo, pausedAt, reason) {
+  await updateAgent(agentId, {
+    status: 'paused',
+    pausedAt,
+    metadata: {
+      phase: 'paused',
+      pauseReason: reason || null,
+      pausedAt,
+      resumeWorkspacePath: agentInfo?.workspacePath || null
+    }
+  });
+  await markPausedTask(agentInfo, agentId, pausedAt, reason);
+  release(agentId);
+  if (agentInfo?.executionId) {
+    errorExecution(agentInfo.executionId, { message: reason ? `Agent paused by user: ${reason}` : 'Agent paused by user', code: 'agent-paused' });
+    completeExecution(agentInfo.executionId, { success: false, paused: true });
+  }
+}
+
+/**
+ * Pause an agent without finalizing its task or cleaning up its worktree.
+ * The underlying process is stopped, but the persisted agent remains paused
+ * so a later resume task can use the same workspace/change context.
+ */
+export async function pauseAgent(agentId, reason = null) {
+  const pausedAt = new Date().toISOString();
+
+  if (runnerAgents.has(agentId)) {
+    const agentInfo = runnerAgents.get(agentId);
+    if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
+    pausedAgents.set(agentId, { pausedAt, reason });
+    const result = await pauseAgentViaRunner(agentId, reason).catch(err => ({ success: false, error: err.message }));
+    if (!result.success) {
+      pausedAgents.delete(agentId);
+      return result;
+    }
+    // Persist failure must roll back the in-memory flag too, or the maps drift
+    // (pausedAgents set, runnerAgents never deleted) until the next restart.
+    const persistedRunner = await markAgentPaused(agentId, agentInfo, pausedAt, reason).then(() => true, (err) => {
+      pausedAgents.delete(agentId);
+      emitLog('error', `❌ Failed to persist pause for runner agent ${agentId}: ${err.message}`, { agentId });
+      return false;
+    });
+    if (!persistedRunner) return { success: false, error: 'Failed to persist paused state' };
+    runnerAgents.delete(agentId);
+    emitLog('info', `⏸️ Paused runner agent ${agentId}${reason ? `: ${reason}` : ''}`, { agentId, reason });
+    return { success: true, agentId, pausedAt, mode: 'runner' };
+  }
+
+  const agent = activeAgents.get(agentId);
+  if (!agent) {
+    return { success: false, error: 'Agent not found or not running' };
+  }
+
+  pausedAgents.set(agentId, { pausedAt, reason });
+  // Persist BEFORE killing the process, and roll back the in-memory flag on a
+  // persist failure — otherwise a throw here leaves the agent flagged paused
+  // in-memory while its process keeps running (the kill below never executes).
+  const persisted = await markAgentPaused(agentId, agent, pausedAt, reason).then(() => true, (err) => {
+    pausedAgents.delete(agentId);
+    emitLog('error', `❌ Failed to persist pause for agent ${agentId}: ${err.message}`, { agentId });
+    return false;
+  });
+  if (!persisted) return { success: false, error: 'Failed to persist paused state' };
+
+  if (agent.tuiSessionId) {
+    shellService.writeToSession(agent.tuiSessionId, '\x1b');
+    setTimeout(() => {
+      if (activeAgents.has(agentId)) shellService.killSession(agent.tuiSessionId);
+    }, 250);
+  } else {
+    agent.process.kill('SIGTERM');
+    const killTimer = setTimeout(() => {
+      if (activeAgents.has(agentId)) {
+        agent.process.kill('SIGKILL');
+      }
+    }, 5000);
+    const agentEntry = activeAgents.get(agentId);
+    if (agentEntry) agentEntry.killTimer = killTimer;
+  }
+
+  emitLog('info', `⏸️ Paused agent ${agentId}${reason ? `: ${reason}` : ''}`, { agentId, reason });
+  return { success: true, agentId, pausedAt, mode: agent.tuiSessionId ? 'tui' : 'direct' };
 }
 
 /**

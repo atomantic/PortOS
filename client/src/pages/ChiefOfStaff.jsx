@@ -740,8 +740,7 @@ export default function ChiefOfStaff() {
       )}
 
       {/* Content Panel */}
-      <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-        <div className="overflow-y-auto p-3 lg:p-4">
+      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
             ascii/terminal mode keeps it because TerminalCoSPanel doesn't host the cards. */}
         <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
@@ -905,7 +904,6 @@ export default function ChiefOfStaff() {
             <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
           </div>
         )}
-        </div>
       </div>
     </div>
   );

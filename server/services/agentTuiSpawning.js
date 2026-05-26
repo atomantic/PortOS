@@ -15,10 +15,11 @@ import { appendAgentOutputLines, updateAgent } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
+import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
@@ -183,15 +184,19 @@ export async function spawnTuiAgent({
   const rawFile = join(agentDir, 'raw.txt');
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : PATHS.root;
   // The agent writes `.agent-done` in its workspace to signal completion (see
-  // the sentinel watcher below). Computed up front so both the watcher AND
-  // finish() can read it — finish() ingests it directly to survive the
-  // /quit-exit-vs-poll race (see ingestDoneSentinel).
+  // the sentinel watcher below) and then stops — it does NOT run `/quit` (that
+  // is a UI command the agent can't invoke). The 2s poll is the primary
+  // finalize path; finish() also ingests the sentinel directly so the summary
+  // is captured even if some other path (idle/exit) finalizes first. Computed
+  // up front so both the watcher AND finish() can read it (see ingestDoneSentinel).
   const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
 
   let outputBuffer = '';
   let finalized = false;
+  let immediateFallbackAnalysis = null;
+  const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
   // Guards ingestDoneSentinel to a single read. finish() is its only caller and
   // is itself guarded by `finalized`, so this is defensive — it pins the
   // read-at-most-once invariant at the helper.
@@ -381,11 +386,11 @@ export async function spawnTuiAgent({
 
     // Ingest the .agent-done sentinel BEFORE draining, so its markdown summary
     // lands in outputBuffer/output.txt regardless of WHICH path finalized the
-    // agent. The completion workflow writes the sentinel and then runs /quit —
-    // the process exits within milliseconds, so handleExit almost always wins
-    // the race against the 2s doneSentinelTimer poll. Reading it here (not just
-    // in the poll) is what makes the resolution show up in the completed-agent
-    // details view. Idempotent via `sentinelIngested`.
+    // agent. The completion workflow writes the sentinel and stops; the 2s
+    // doneSentinelTimer poll is what normally calls finish(). Reading it here
+    // (not just in the poll) keeps the resolution captured even when a
+    // different path (idle-complete, shell-exit) finalizes first. Idempotent
+    // via `sentinelIngested`.
     await ingestDoneSentinel();
 
     // Drain pending parsed lines AND raw chunks before the final state
@@ -394,6 +399,14 @@ export async function spawnTuiAgent({
     await flushPendingLines();
     if (rawFlushing) await rawFlushing.catch(() => {});
     await flushPendingRawChunks();
+
+    if (pausedAgents.has(agentId)) {
+      pausedAgents.delete(agentId);
+      const pausedAgentData = activeAgents.get(agentId);
+      if (pausedAgentData?.pid) unregisterSpawnedAgent(pausedAgentData.pid);
+      activeAgents.delete(agentId);
+      return;
+    }
 
     const duration = Date.now() - (agentData?.startedAt || Date.now());
     const terminatedByUser = userTerminatedAgents.has(agentId);
@@ -437,7 +450,7 @@ export async function spawnTuiAgent({
     // fall back to outputBuffer (which has the spawn-startup notices).
     const errorAnalysis = finalSuccess
       ? null
-      : analyzeAgentFailure(rawAnalysisText ?? outputBuffer, task, model);
+      : (immediateFallbackAnalysis || analyzeAgentFailure(rawAnalysisText ?? outputBuffer, task, model));
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, worktree
@@ -501,6 +514,7 @@ export async function spawnTuiAgent({
       // The String(...) coerces defensively in case a future caller wires
       // a Buffer-emitting encoding.
       const text = typeof data === 'string' ? data : String(data);
+      const stripped = streamingStrip(text);
       pendingRawChunks.push(text);
       scheduleRawFlush();
       if (postPasteBuffer !== null) postPasteBuffer += text;
@@ -520,8 +534,21 @@ export async function spawnTuiAgent({
       // path. We still spool the raw stream to raw.txt for error analysis
       // on failure, and we detect early "command not found" so a missing
       // binary fails fast instead of idling.
+      const fallbackSignal = detectImmediateFallbackSignal(stripped);
+      if (fallbackSignal) {
+        immediateFallbackAnalysis = fallbackSignal;
+        appendLine(`⚡ Provider fallback signal: ${fallbackSignal.message}`);
+        await finish({
+          success: false,
+          exitCode: 1,
+          error: fallbackSignal.message || 'Provider requires fallback',
+          reason: 'fallback-signal'
+        });
+        return;
+      }
+
       if (!promptSentAt) {
-        const lowerStripped = streamingStrip(text).toLowerCase();
+        const lowerStripped = stripped.toLowerCase();
         if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
           // finish() uses try/finally internally: finalizeAgent errors re-throw after
           // cleanup, so finish() can reject. The outer try/catch in handleData already
@@ -665,15 +692,14 @@ export async function spawnTuiAgent({
   }, 5000);
 
   // Sentinel-file watcher. The agent's prompt instructs it to write
-  // .agent-done in the workspace after running /simplify + /do:pr. This poll
-  // exists only to finalize PROMPTLY when the agent signals done WITHOUT
-  // exiting its TUI (e.g. it forgot /quit, or stays alive) — otherwise we'd
-  // wait out the much longer idle timeout. The actual sentinel READ happens in
-  // finish() (via ingestDoneSentinel) so the resolution is captured no matter
-  // which path finalizes: the far more common case is the agent writing the
-  // sentinel and then running /quit, whose process exit fires finish() long
-  // before this 2s poll ticks. Idle-complete is the fallback for a
-  // non-complying agent.
+  // .agent-done in the workspace after running /simplify + /do:pr and then
+  // stop (it does NOT `/quit` — that is a UI command it can't invoke). This
+  // poll is the PRIMARY finalize path: it fires finish() within DONE_POLL_
+  // INTERVAL_MS of the sentinel appearing, and finish()'s own cleanup kills
+  // the still-running TUI session. The actual sentinel READ happens in finish()
+  // (via ingestDoneSentinel) so the resolution is captured no matter which path
+  // finalizes. Idle-complete is the fallback for a non-complying agent that
+  // never writes the sentinel.
   const doneSentinelTimer = doneSentinelPath ? setInterval(() => {
     try {
       if (finalized) return;

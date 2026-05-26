@@ -10,6 +10,16 @@ const navigateSchema = z.object({
   url: z.string().url()
 });
 
+// Empty string from a "clear" UI action → unset (undefined), so the launcher
+// falls back to the platform default Chrome instead of trying to spawn "".
+const optionalPath = z.preprocess(
+  v => (v === '' ? undefined : v),
+  z.string().max(1024).refine(
+    v => !v || !v.includes('..'),
+    { message: 'path must not contain path traversal' }
+  ).optional()
+);
+
 const updateConfigSchema = z.object({
   cdpPort: z.number().int().min(1024).max(65535).optional(),
   cdpHost: z.enum(['127.0.0.1', 'localhost', '::1']).optional(),
@@ -20,7 +30,15 @@ const updateConfigSchema = z.object({
   downloadDir: z.string().refine(
     v => !v || !v.includes('..'),
     { message: 'downloadDir must not contain path traversal' }
-  ).optional()
+  ).optional(),
+  // Custom Chrome binary (e.g. Chrome Canary). When unset, the launcher falls
+  // back to the platform default (`/Applications/Google Chrome.app/...` on
+  // macOS, `C:\Program Files\Google\Chrome\...` on Windows, `google-chrome`
+  // on Linux).
+  chromePath: optionalPath,
+  // macOS headed mode launches via `open -na <app-bundle>` for TCC reasons,
+  // so the bundle (`.app`) path is tracked separately from the executable.
+  macAppBundle: optionalPath
 });
 
 // GET /api/browser - Full browser status

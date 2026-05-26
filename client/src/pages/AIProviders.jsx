@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider } from '../utils/providers';
+import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli } from '../utils/providers';
 import {
   formatDurationMs,
   parseTimeoutMs,
@@ -11,6 +11,7 @@ import {
   TIMEOUT_INPUT_STEP_MS,
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -207,6 +208,7 @@ export default function AIProviders() {
       <SettingsTabsHeader activeTab="providers" />
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
+      <CodeReviewDefaultsPanel />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-white">AI Providers</h1>
         <div className="flex flex-wrap gap-2">
@@ -387,7 +389,11 @@ export default function AIProviders() {
 
       {/* Provider List */}
       <div className="grid gap-4">
-        {providers.map(provider => (
+        {(() => {
+          const idx = providers.findIndex(p => p.id === activeProviderId);
+          if (idx <= 0) return providers;
+          return [providers[idx], ...providers.slice(0, idx), ...providers.slice(idx + 1)];
+        })().map(provider => (
           <div
             key={provider.id}
             className={`bg-port-card border rounded-xl p-4 ${
@@ -462,6 +468,16 @@ export default function AIProviders() {
                     </div>
                   )}
                 </div>
+
+                {isClaudeCodePlanCli(provider) && (
+                  <div className="mt-2 text-xs rounded-md border border-port-warning/40 bg-port-warning/10 text-port-warning px-2.5 py-2 leading-relaxed">
+                    ⚠️ Starting <span className="font-semibold">June 15, 2026</span>, Anthropic clocks
+                    this headless Claude Code usage under <span className="font-semibold">API billing</span> —
+                    it will consume extra API credits instead of your Claude Code plan. Avoid this
+                    provider; use the interactive <span className="font-semibold">Claude Code TUI</span> provider,
+                    which stays on the plan.
+                  </div>
+                )}
 
                 {testResults[provider.id] && !testResults[provider.id].testing && (
                   <div className={`mt-2 text-sm ${testResults[provider.id].success ? 'text-port-success' : 'text-port-error'}`}>

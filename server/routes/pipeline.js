@@ -54,8 +54,10 @@ import {
   buildRenderSlot,
 } from '../services/pipeline/visualStages.js';
 import { extractCanonFromProse } from '../services/universeCanon.js';
-import { IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
+import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
+import { mergeSeries } from '../services/recordMerge.js';
+import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
@@ -113,6 +115,8 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NO_RENDERED_PAGES]: 409,
   [ERR_NO_VOLUME_COVER]: 409,
   [ERR_NO_RENDERED_ISSUES]: 409,
+  // recordMerge validation (unresolved conflicts, bad ids, cross-universe).
+  MERGE_VALIDATION: 400,
 };
 
 const mapServiceError = (err) => {
@@ -476,11 +480,14 @@ const extractCanonFromScriptSchema = z.object({
   providerOverride: z.string().trim().max(80).optional(),
 });
 
-// Reuses the importer's source-size ceiling — both feed the same
-// `extractBible` machinery, so a single constant keeps the safe-corpus
-// budget in sync. `STAGE_OUTPUT_MAX` (400KB) is large enough that long
-// scripts can exceed most provider context windows; clamp before forwarding.
-const EXTRACT_CANON_CORPUS_MAX = IMPORTER_SOURCE_CHAR_LIMIT;
+// Per-issue truncation budget for canon extraction. Decoupled from the
+// importer's source ceiling (which ingests a *whole book* — millions of
+// chars): a pipeline issue's stage output is already hard-bounded at
+// `STAGE_OUTPUT_MAX` (400KB), so this path operates at a fundamentally
+// smaller scale. 200K clamps a long single-issue script before forwarding
+// to the same `extractBible` machinery the importer uses, keeping the
+// per-call corpus comfortably inside provider context windows.
+const EXTRACT_CANON_CORPUS_MAX = 200_000;
 
 // Collapses the `extractCanonFromProse` result-shape trio used by both the
 // season-episodes continuity extract and the manual script-stage extract.
@@ -841,7 +848,78 @@ router.get('/series', asyncHandler(async (_req, res) => {
 
 router.post('/series', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesCreateSchema, req.body ?? {});
-  res.status(201).json(await seriesSvc.createSeries(body));
+  // Hierarchy invariant: every series belongs to exactly one universe. Enforce
+  // it for all HTTP callers here (the UI already enforces it client-side).
+  // The schema stays permissive (nullable) so the importer + mergeSeriesFromSync,
+  // which call createSeries directly, can still land legacy orphans from peers.
+  if (!body.universeId || !String(body.universeId).trim()) {
+    throw new ServerError('A universe is required — a series must belong to a universe.', {
+      status: 400, code: seriesSvc.ERR_VALIDATION,
+    });
+  }
+  const created = await seriesSvc.createSeries(body);
+  // Non-blocking same-name warning, scoped within the universe (route layer
+  // only, so the importer's direct createSeries never pays for the scan).
+  const duplicateName = await findSameNameSeries(created.name, created.universeId, { excludeId: created.id });
+  res.status(201).json(duplicateName.length ? { ...created, _warnings: { duplicateName } } : created);
+}));
+
+// ---- Series duplicate resolution (static paths — keep BEFORE `/series/:id`) ----
+
+const seriesMergeSchema = z.object({
+  survivorId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  loserId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  fieldChoices: z.record(z.enum(['survivor', 'loser'])).optional().default({}),
+  // Free-form per-field values that win over the survivor/loser binary —
+  // populated by the AI-merge flow (a third unified option) and optionally
+  // tweaked by the user before submit.
+  fieldOverrides: z.record(z.string()).optional().default({}),
+}).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
+
+const seriesMergeAIResolveSchema = z.object({
+  survivorId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  loserId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  fields: z.array(z.string().trim().min(1).max(64)).min(1).max(20),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
+
+router.get('/series/duplicates', asyncHandler(async (_req, res) => {
+  res.json(await findDuplicateSeriesGroups());
+}));
+
+router.post('/series/merge/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesMergeSchema, req.body ?? {});
+  const preview = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices, { dryRun: true, fieldOverrides: body.fieldOverrides })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(preview);
+}));
+
+router.post('/series/merge', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesMergeSchema, req.body ?? {});
+  const result = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices, { fieldOverrides: body.fieldOverrides })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Ask the configured AI provider to merge specific conflicting text fields
+// into a single unified value per field. Same shape as the universe-side
+// /universe-builder/merge/ai-resolve route.
+router.post('/series/merge/ai-resolve', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesMergeAIResolveSchema, req.body ?? {});
+  const [survivor, loser] = await Promise.all([
+    seriesSvc.getSeries(body.survivorId).catch((err) => { throw mapServiceError(err); }),
+    seriesSvc.getSeries(body.loserId).catch((err) => { throw mapServiceError(err); }),
+  ]);
+  const result = await mergeFieldsWithAI({
+    kind: 'series',
+    survivor,
+    loser,
+    fields: body.fields,
+    providerId: body.providerId,
+    model: body.model,
+  });
+  res.json(result);
 }));
 
 router.get('/series/:id', asyncHandler(async (req, res) => {
@@ -852,6 +930,10 @@ router.get('/series/:id', asyncHandler(async (req, res) => {
 router.patch('/series/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesPatchSchema, req.body ?? {});
   const s = await seriesSvc.updateSeries(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  if ('name' in body || 'universeId' in body) {
+    const duplicateName = await findSameNameSeries(s.name, s.universeId, { excludeId: req.params.id });
+    if (duplicateName.length) { res.json({ ...s, _warnings: { duplicateName } }); return; }
+  }
   res.json(s);
 }));
 

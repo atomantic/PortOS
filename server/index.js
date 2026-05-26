@@ -69,6 +69,7 @@ import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
+import codeReviewRoutes from './routes/codeReview.js';
 import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './services/localLlm.js';
 import { ensureRunning as ensureOllamaRunning } from './services/ollamaManager.js';
 import searchRoutes from './routes/search.js';
@@ -97,6 +98,7 @@ import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
+import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
@@ -144,6 +146,7 @@ import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { runMigrations } from '../scripts/run-migrations.js';
 import { verifyCollectionVersions } from './lib/collectionStore.js';
+import { conflictJournalStore } from './lib/conflictJournal.js';
 import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
 import { issueStore } from './services/pipeline/issues.js';
@@ -202,7 +205,7 @@ await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
@@ -419,6 +422,7 @@ app.use('/api/digital-twin/autobiography', autobiographyRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/local-llm', localLlmRoutes);
+app.use('/api/code-review', codeReviewRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/data', dataManagerRoutes);
@@ -446,6 +450,7 @@ app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/pipeline', pipelineRoutes);
+app.use('/api/conflict-journal', conflictJournalRoutes);
 app.use('/api/importer', importerRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);

@@ -18,11 +18,13 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
-import { normalizeReviewers, DEFAULT_REVIEW_STOP_MODE } from '../lib/validation.js';
+import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
+import { normalizeReviewers } from '../lib/validation.js';
+import { resolveReviewLoopOptions } from './codeReview.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
+import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -411,6 +413,22 @@ export async function spawnDirectly({
   const isStreamJson = cliConfig.streamFormat === 'stream-json';
   const streamParser = isStreamJson ? createStreamJsonParser() : null;
   const codexStderrFormatter = provider.id === 'codex' ? createCodexStderrFormatter(prompt) : null;
+  let immediateFallbackAnalysis = null;
+  const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+
+  const stopForImmediateFallbackSignal = (text) => {
+    if (immediateFallbackAnalysis || claudeProcess.killed) return;
+    const analysis = detectImmediateFallbackSignal(text);
+    if (!analysis) return;
+    immediateFallbackAnalysis = analysis;
+    emitLog('warn', `Agent ${agentId} detected provider fallback signal (${analysis.category}); stopping ${provider.name || provider.id}`, {
+      agentId,
+      taskId: task.id,
+      providerId: provider.id,
+      category: analysis.category
+    });
+    claudeProcess.kill('SIGTERM');
+  };
 
   // If no output after 3 seconds, transition from initializing to working to show progress
   const initializationTimeout = setTimeout(async () => {
@@ -424,6 +442,7 @@ export async function spawnDirectly({
   claudeProcess.stdout.on('data', async (data) => {
     try {
       const text = data.toString();
+      stopForImmediateFallbackSignal(text);
 
       if (!hasStartedWorking) {
         hasStartedWorking = true;
@@ -455,6 +474,7 @@ export async function spawnDirectly({
   claudeProcess.stderr.on('data', async (data) => {
     try {
       const text = data.toString();
+      stopForImmediateFallbackSignal(`[stderr] ${text}`);
       // Codex stderr: show thinking + tool names, skip config dump and command output
       if (codexStderrFormatter) {
         const lines = codexStderrFormatter.processChunk(text);
@@ -519,24 +539,15 @@ export async function spawnDirectly({
     // process happened to exit 0 in the race window — otherwise the run is
     // recorded as successful while the task remains blocked. Mirrors the TUI
     // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
-    const finalSuccess = terminatedByUser ? false : success;
+    // A mid-stream fallback signal (e.g. usage-limit hit) kills the CLI; if it
+    // races to exit 0, don't record success or the fallback/retry never fires.
+    // Mirrors the runner path (`runner.js`) and the TUI finish() handling.
+    const finalSuccess = terminatedByUser ? false : (success && !immediateFallbackAnalysis);
     const finalError = terminatedByUser ? 'Agent terminated by user' : null;
 
-    // Release lane + complete execution tracking BEFORE the writeFile +
-    // error-analysis + state-write chain — neither call blocks on I/O, but
-    // lanes serialize related work. Fall back to outer scope when
-    // activeAgents was cleared by killAgent before close fired.
-    releaseAgentLane({
-      agentId,
-      success: finalSuccess,
-      duration,
-      exitCode: code,
-      executionId: agentData?.executionId || executionId,
-      laneName: agentData?.laneName || laneName,
-      errorExecutionMessage: finalError || undefined,
-    });
-
-    // Flush remaining stream parser data
+    // Flush remaining stream parser data (persists the tail of the transcript
+    // before any early-return, so a paused agent's output.txt is complete for
+    // the resume modal).
     if (streamParser) {
       const remaining = streamParser.flush();
       for (const line of remaining) {
@@ -558,9 +569,34 @@ export async function spawnDirectly({
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
+    // Paused agents are finalized in `markAgentPaused` (which already released
+    // the lane + execution). Return BEFORE `releaseAgentLane` below — re-running
+    // it on the same executionId logs a spurious "Invalid state transition".
+    // Mirrors the TUI path's pause-check-before-releaseAgentLane ordering.
+    if (pausedAgents.has(agentId)) {
+      pausedAgents.delete(agentId);
+      if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
+      activeAgents.delete(agentId);
+      return;
+    }
+
+    // Release lane + complete execution tracking BEFORE the error-analysis +
+    // state-write chain — neither call blocks on I/O, but lanes serialize
+    // related work. Fall back to outer scope when activeAgents was cleared by
+    // killAgent before close fired.
+    releaseAgentLane({
+      agentId,
+      success: finalSuccess,
+      duration,
+      exitCode: code,
+      executionId: agentData?.executionId || executionId,
+      laneName: agentData?.laneName || laneName,
+      errorExecutionMessage: finalError || undefined,
+    });
+
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
-    const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
+    const errorAnalysis = finalSuccess ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
 
     // try/finally so a throw from finalizeAgent still runs the local
     // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
@@ -589,12 +625,11 @@ export async function spawnDirectly({
       const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
       const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
       const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
+      const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
         requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-        reviewers: normalizeReviewers(task.metadata),
-        reviewStopMode: task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE,
-        reviewerApplies: isTruthyMetaFn(task.metadata?.reviewerApplies),
+        ...reviewOptions,
         skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
         description: task.description,
         agentOutput: outputBuffer,

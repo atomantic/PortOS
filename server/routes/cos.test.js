@@ -29,6 +29,7 @@ vi.mock('../services/cos.js', () => ({
   getAgentsByDate: vi.fn(),
   getAgent: vi.fn(),
   terminateAgent: vi.fn(),
+  pauseAgent: vi.fn(),
   killAgent: vi.fn(),
   getAgentProcessStats: vi.fn(),
   deleteAgent: vi.fn(),
@@ -470,6 +471,27 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(cos.terminateAgent).toHaveBeenCalledWith('agent-001');
+    });
+  });
+
+  describe('POST /api/cos/agents/:id/pause', () => {
+    it('should pause agent with reason', async () => {
+      cos.pauseAgent.mockResolvedValue({ success: true, agentId: 'agent-001', pausedAt: '2026-05-25T12:00:00.000Z' });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/pause')
+        .send({ reason: 'billing window' });
+
+      expect(response.status).toBe(200);
+      expect(cos.pauseAgent).toHaveBeenCalledWith('agent-001', 'billing window');
+    });
+
+    it('should return 404 if agent not found', async () => {
+      cos.pauseAgent.mockResolvedValue({ error: 'Agent not found or not running' });
+
+      const response = await request(app).post('/api/cos/agents/agent-999/pause');
+
+      expect(response.status).toBe(404);
     });
   });
 
