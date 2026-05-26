@@ -24,11 +24,24 @@ export const WR_IMAGE_DEFAULTS = Object.freeze({
   seed: '',
 });
 
-export function readWrImageSettings(settings) {
+// Resolve the per-scene render config. When the user hasn't pinned a Writers
+// Room mode, prefer Codex if enabled — cloud models render storyboard scenes
+// more reliably than local diffusion when both are available. If the stored
+// mode points at a backend that's no longer available (codex disabled, local
+// pythonPath cleared), fall back to the first available backend so the form
+// always reflects something that will actually run.
+export function readWrImageSettings(settings, availableBackends = null) {
   const stored = settings?.writersRoom?.imageGen || {};
+  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
+  const defaultMode = codexEnabled ? IMAGE_GEN_MODE.CODEX : WR_IMAGE_DEFAULTS.mode;
+  let mode = stored.mode || defaultMode;
+  if (Array.isArray(availableBackends) && availableBackends.length > 0
+      && !availableBackends.some((b) => b.id === mode)) {
+    mode = availableBackends[0].id;
+  }
   return {
     modelId: stored.modelId || WR_IMAGE_DEFAULTS.modelId,
-    mode: stored.mode || WR_IMAGE_DEFAULTS.mode,
+    mode,
     width: Number.isFinite(stored.width) ? stored.width : WR_IMAGE_DEFAULTS.width,
     height: Number.isFinite(stored.height) ? stored.height : WR_IMAGE_DEFAULTS.height,
     steps: stored.steps != null && stored.steps !== '' ? String(stored.steps) : '',
