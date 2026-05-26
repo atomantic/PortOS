@@ -1078,6 +1078,87 @@ export async function mergeBranch(dir, branchName) {
 }
 
 /**
+ * Determine whether a branch's work is fully present in `target` (e.g. main),
+ * covering BOTH a normal/fast-forward/no-ff merge AND a squash (or rebase) merge.
+ *
+ * - Normal / ff / no-ff merge: the branch tip becomes reachable from target, so
+ *   `git merge-base --is-ancestor` settles it immediately.
+ * - Rebase-and-merge replays the branch commits as new SHAs; the original tip is
+ *   not an ancestor, so we ask `git cherry` whether each branch commit has a
+ *   patch-equivalent commit in target. `git cherry` prints "- <sha>" when an
+ *   equivalent exists upstream and "+ <sha>" when it does not, so an all-"-"
+ *   result means the branch was replayed.
+ * - Squash merge: the branch's commits are collapsed into a single NEW commit on
+ *   target, so individual commits usually are not patch-equivalent. We synthesize
+ *   a commit holding the branch's full tree on top of the merge-base and ask
+ *   `git cherry` whether target already contains that combined patch.
+ *
+ * Fails CLOSED: any git error (or unresolvable ref) returns false, so a detection
+ * failure can never authorize a delete. This is the gate the merged-worktree
+ * reaper relies on — see reapMergedWorktrees in worktreeManager.js.
+ *
+ * @param {string} dir - Repo working directory
+ * @param {string} branch - Branch whose work we're checking (local name or ref)
+ * @param {string} target - Branch it should be merged into (e.g. 'main')
+ * @returns {Promise<boolean>}
+ */
+export async function isBranchMergedInto(dir, branch, target) {
+  if (!branch || !target || branch === target) return false;
+
+  const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
+    .catch(() => null);
+
+  const [branchSha, targetSha] = await Promise.all([resolve(branch), resolve(target)]);
+  if (!branchSha || !targetSha) return false;
+
+  // Fast path: branch tip already reachable from target (normal / ff / no-ff merge,
+  // or the branch carries no unique commits).
+  const ancestor = await execGit(['merge-base', '--is-ancestor', branchSha, targetSha], dir, { ignoreExitCode: true })
+    .then(r => r.exitCode === 0)
+    .catch(() => false);
+  if (ancestor) return true;
+
+  // Rebase/cherry-pick path: does target contain every branch commit as an
+  // individual patch-equivalent commit?
+  const individualCherry = await execGit(['cherry', targetSha, branchSha], dir, { ignoreExitCode: true })
+    .then(r => r.stdout.trim())
+    .catch(() => null);
+  if (individualCherry === null) return false;
+  if (individualCherry !== '' && individualCherry.split('\n').every(line => line.startsWith('-'))) {
+    return true;
+  }
+
+  // Squash path: does target already contain the branch's combined patch?
+  const mergeBase = await execGit(['merge-base', targetSha, branchSha], dir, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
+    .catch(() => null);
+  if (!mergeBase) return false;
+  // No unique work beyond the merge base → nothing would be lost.
+  if (mergeBase === branchSha) return true;
+
+  const branchTree = await execGit(['rev-parse', `${branchSha}^{tree}`], dir, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
+    .catch(() => null);
+  if (!branchTree) return false;
+
+  // Synthesize a single commit with the branch's full tree atop the merge base.
+  // commit-tree uses the repo's configured identity; if that's unset it fails and
+  // we fall through to "not merged" (safe — the worktree is just preserved).
+  const synthesized = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
+    .catch(() => null);
+  if (!synthesized) return false;
+
+  const combinedCherry = await execGit(['cherry', targetSha, synthesized], dir, { ignoreExitCode: true })
+    .then(r => r.stdout.trim())
+    .catch(() => null);
+  if (combinedCherry === null) return false;
+  if (combinedCherry === '') return true; // empty patch (tree already matches) ⇒ merged
+  return combinedCherry.split('\n').every(line => line.startsWith('-'));
+}
+
+/**
  * Checkout a remote branch that doesn't exist locally.
  * Creates a local tracking branch from the remote ref.
  * @param {string} dir - Working directory

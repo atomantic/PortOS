@@ -1076,9 +1076,9 @@ Repository: {repoPath}
      - GitHub: \`gh pr checks <number>\` — wait for all checks to complete (poll every 30s, up to 10 minutes)
      - GitLab: \`glab mr view <iid> -F json\` — check pipeline status
    - Run the project's test suite locally: check for a test script in package.json, Makefile, or similar and run it
-   - If all CI checks pass AND local tests pass:
-     - GitHub: \`gh pr merge <number> --squash --delete-branch\`
-     - GitLab: \`glab mr merge <iid> --squash --remove-source-branch\`
+   - If all CI checks pass AND local tests pass (prefer a true merge commit so the branch tip stays in the default branch's history — if the repo disallows merge commits, fall back to \`--squash\`):
+     - GitHub: \`gh pr merge <number> --merge --delete-branch || gh pr merge <number> --squash --delete-branch\`
+     - GitLab: \`glab mr merge <iid> --remove-source-branch || glab mr merge <iid> --squash --remove-source-branch\`
    - If CI fails or tests fail, post a comment noting the failures and do NOT merge
    - After merge, switch back to the default branch: \`git checkout <default-branch> && git pull\`
 

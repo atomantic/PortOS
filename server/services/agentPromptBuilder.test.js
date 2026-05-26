@@ -180,7 +180,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/NOT run `\/quit`/);
       // After /do:pr drives the Copilot review loop clean, the agent must
       // merge and verify — otherwise the PR sits open after the agent exits.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toMatch(/MERGED/);
@@ -253,7 +253,7 @@ describe('buildLightContextPrompt', () => {
       // After /do:pr drives the Copilot review loop clean, the agent must
       // merge and verify — without these steps the PR sits open after the
       // agent exits (the original "agent abandoned the PR" bug).
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toMatch(/MERGED/);
@@ -269,7 +269,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/simplify`/);
       // Merge guidance still applies when /simplify is skipped.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
     });
 
     it('uses /do:push (not /do:pr) for Claude Code CLI when openPR is false', () => {
@@ -309,7 +309,7 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       expect(prompt).toMatch(/task-src-1/);
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
       // --auto must NOT appear inside any `gh pr merge` invocation — it defers
       // the merge and the PR sits open after the agent exits.
       expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
@@ -516,8 +516,8 @@ describe('buildAgentPrompt — provider type routing', () => {
       isTruthyMeta,
       { providerType: 'api' });
     expect(prompt).toMatch(/## Review-Loop Follow-up/);
-    // Merge command must be present, exactly with --squash --delete-branch.
-    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+    // Merge command must be present, exactly with --merge --delete-branch.
+    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
     // --auto must NOT appear inside any `gh pr merge` invocation — it defers
     // the merge and the PR sits open after the agent exits.
     expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
