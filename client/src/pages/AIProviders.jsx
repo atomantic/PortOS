@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider } from '../utils/providers';
+import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli } from '../utils/providers';
 import {
   formatDurationMs,
   parseTimeoutMs,
@@ -466,6 +466,16 @@ export default function AIProviders() {
                     </div>
                   )}
                 </div>
+
+                {isClaudeCodePlanCli(provider) && (
+                  <div className="mt-2 text-xs rounded-md border border-port-warning/40 bg-port-warning/10 text-port-warning px-2.5 py-2 leading-relaxed">
+                    ⚠️ Starting <span className="font-semibold">June 15, 2026</span>, Anthropic clocks
+                    this headless Claude Code usage under <span className="font-semibold">API billing</span> —
+                    it will consume extra API credits instead of your Claude Code plan. Avoid this
+                    provider; use the interactive <span className="font-semibold">Claude Code TUI</span> provider,
+                    which stays on the plan.
+                  </div>
+                )}
 
                 {testResults[provider.id] && !testResults[provider.id].testing && (
                   <div className={`mt-2 text-sm ${testResults[provider.id].success ? 'text-port-success' : 'text-port-error'}`}>
