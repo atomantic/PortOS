@@ -413,8 +413,10 @@ async function getVersion() {
 
 /**
  * Pull a model, streaming progress. Resolves once the pull finishes.
+ * During a transient-error backoff the callback fires with `retrying: true`
+ * (and `percent: null`) so the UI can show a "retrying" banner instead of stalling.
  * @param {string} modelId
- * @param {(p: { status: string, percent: number|null, completed?: number, total?: number }) => void} [onProgress]
+ * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, retrying?: boolean }) => void} [onProgress]
  * @returns {Promise<{ success: boolean, modelId: string, error?: string }>}
  */
 async function pullModel(modelId, onProgress) {
