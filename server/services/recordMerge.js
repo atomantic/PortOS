@@ -262,8 +262,11 @@ const summaryRow = (field, survivorCount, mergedCount) => ({
 });
 const listRow = (field, survivorList, mergedList) => summaryRow(field, listLen(survivorList), listLen(mergedList));
 
+// `record` is the already-unioned result, so the loser's net contribution is
+// derived as `merged - survivor` (post-dedupe) rather than from the raw loser —
+// that's why these take only (survivor, record).
 /** Per-list-field combine summary for a universe merge preview. */
-export const summarizeUniverseUnion = (survivor, loser, record) => [
+export const summarizeUniverseUnion = (survivor, record) => [
   listRow('Style prompt (embrace)', survivor.influences?.embrace, record.influences?.embrace),
   listRow('Negative prompt (avoid)', survivor.influences?.avoid, record.influences?.avoid),
   summaryRow('Categories', categoryVariationCount(survivor.categories), categoryVariationCount(record.categories)),
@@ -274,7 +277,7 @@ export const summarizeUniverseUnion = (survivor, loser, record) => [
 ].filter((r) => r.merged > 0);
 
 /** Per-list-field combine summary for a series merge preview. */
-export const summarizeSeriesUnion = (survivor, loser, record) =>
+export const summarizeSeriesUnion = (survivor, record) =>
   [listRow('Seasons', survivor.seasons, record.seasons)].filter((r) => r.merged > 0);
 
 /** Build the unioned universe patch + conflict report from survivor + loser. */
@@ -289,7 +292,7 @@ export const buildUniverseUnion = (survivor, loser, fieldChoices = {}, fieldOver
     places: mergeExtractedBible(survivor.places, loser.places, BIBLE_KIND.PLACE),
     objects: mergeExtractedBible(survivor.objects, loser.objects, BIBLE_KIND.OBJECT),
   };
-  return { record, conflicts, autoResolved, unionSummary: summarizeUniverseUnion(survivor, loser, record) };
+  return { record, conflicts, autoResolved, unionSummary: summarizeUniverseUnion(survivor, record) };
 };
 
 /** Build the unioned series patch + conflict report from survivor + loser. */
@@ -299,7 +302,7 @@ export const buildSeriesUnion = (survivor, loser, fieldChoices = {}, fieldOverri
     ...values,
     seasons: unionSeasons(survivor.seasons, loser.seasons),
   };
-  return { record, conflicts, autoResolved, unionSummary: summarizeSeriesUnion(survivor, loser, record) };
+  return { record, conflicts, autoResolved, unionSummary: summarizeSeriesUnion(survivor, record) };
 };
 
 const requireResolved = (conflicts) => {
