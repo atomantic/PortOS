@@ -28,6 +28,13 @@ import {
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
+// A pull streams progress as NDJSON; a transient network failure between Ollama
+// and the registry/CDN surfaces mid-stream as an `{"error":"EOF"}` frame (or the
+// response read rejecting outright). The `ollama` CLI silently retries these and
+// the pull is resumable — partial blobs are kept — so a retry continues rather
+// than restarts. Total attempts (1 initial + retries) and a linear backoff base.
+const PULL_MAX_ATTEMPTS = 3
+const PULL_RETRY_BASE_DELAY_MS = 1_000
 // Short probe — degrade to "no Ollama" fast rather than block on a cold check.
 const AVAILABILITY_PROBE_TIMEOUT_MS = 5_000
 const START_TIMEOUT_MS = 12_000
@@ -416,6 +423,38 @@ async function pullModel(modelId, onProgress) {
   }
   console.log(`📥 Ollama pull: ${modelId}`)
 
+  let lastError = null
+  for (let attempt = 1; attempt <= PULL_MAX_ATTEMPTS; attempt++) {
+    const result = await attemptOllamaPull(modelId, onProgress)
+    if (result.success) {
+      installedModels = null  // bust cache so the new model shows on next list
+      console.log(`✅ Ollama pull complete: ${modelId}${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`)
+      return { success: true, modelId }
+    }
+    lastError = result.error
+    // Bad model name / missing manifest etc. won't fix themselves — only retry
+    // the transient network class, and only while attempts remain.
+    if (attempt >= PULL_MAX_ATTEMPTS || !isTransientPullError(lastError)) break
+    const delayMs = PULL_RETRY_BASE_DELAY_MS * attempt
+    console.warn(`🔁 Ollama pull ${modelId} hit transient error "${lastError}" (attempt ${attempt}/${PULL_MAX_ATTEMPTS}); retrying in ${delayMs}ms`)
+    if (typeof onProgress === 'function') onProgress({ status: 'retrying after network error', percent: null, retrying: true })
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+
+  console.error(`⚠️ Ollama pull failed for ${modelId}: ${lastError}`)
+  return { success: false, error: lastError, modelId }
+}
+
+/**
+ * A single pull attempt. Returns `{ success }` or `{ success: false, error }`.
+ * A read that rejects mid-stream (dropped connection) is caught and returned as
+ * an error string so the caller's retry loop can classify it like an `{error}`
+ * frame rather than letting it throw out of the request lifecycle.
+ * @param {string} modelId
+ * @param {(p: object) => void} [onProgress]
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+async function attemptOllamaPull(modelId, onProgress) {
   // No timeout — multi-GB pulls take minutes; the stream is the lifecycle.
   const response = await fetchWithTimeout(`${config.baseUrl}/api/pull`, {
     method: 'POST',
@@ -424,9 +463,7 @@ async function pullModel(modelId, onProgress) {
   }, 0).catch((err) => ({ _err: err.message }))
 
   if (response._err || !response.ok || !response.body) {
-    const error = response._err || `pull failed: ${response.status} ${response.statusText}`
-    console.error(`⚠️ Ollama pull failed for ${modelId}: ${error}`)
-    return { success: false, error, modelId }
+    return { success: false, error: response._err || `pull failed: ${response.status} ${response.statusText}` }
   }
 
   const lastError = await streamNdjson(response, (frame) => {
@@ -436,14 +473,22 @@ async function pullModel(modelId, onProgress) {
         : null
       onProgress({ status: frame.status || '', percent, completed: frame.completed, total: frame.total })
     }
-  })
+  }).catch((err) => err?.message || String(err))
 
-  if (lastError) {
-    return { success: false, error: lastError, modelId }
-  }
-  installedModels = null  // bust cache so the new model shows on next list
-  console.log(`✅ Ollama pull complete: ${modelId}`)
-  return { success: true, modelId }
+  return lastError ? { success: false, error: lastError } : { success: true }
+}
+
+/**
+ * Classify a pull/stream error string as a transient network failure worth
+ * retrying (Ollama↔registry EOF, connection reset, undici "terminated", etc.).
+ * Non-transient errors — invalid model name, "file does not exist" — return
+ * false so the retry loop gives up immediately.
+ * @param {string|null|undefined} error
+ * @returns {boolean}
+ */
+function isTransientPullError(error) {
+  if (!error) return false
+  return /\beof\b|connection reset|reset by peer|broken pipe|socket hang up|other side closed|terminated|i\/o timeout|\btimeout\b|tls handshake|temporary failure|network is unreachable|connection refused|econnreset|etimedout|epipe/i.test(String(error))
 }
 
 /**

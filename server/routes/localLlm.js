@@ -113,6 +113,7 @@ router.post('/install', asyncHandler(async (req, res) => {
   // client's progress banner stuck on the last 'start'. Surface it as 'error'.
   const result = await installModel(backend, modelId, (p) => {
     if (p?.percent != null) emit('start', `${modelId}: ${p.status || 'downloading'} ${p.percent}%`)
+    else if (p?.retrying) emit('start', `${modelId}: ${p.status || 'retrying…'}`)
   }).catch((err) => {
     emit('error', `Install failed: ${err.message}`)
     throw err
