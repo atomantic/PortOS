@@ -27,6 +27,7 @@ vi.mock('./agentLifecycle.js', () => ({
 vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
+  pausedAgents: new Map(),
   metaStringOr: (value, fallback) => (typeof value === 'string' && value) ? value : fallback,
 }));
 vi.mock('../lib/fileUtils.js', () => ({
