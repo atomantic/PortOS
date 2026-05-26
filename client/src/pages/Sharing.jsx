@@ -7,7 +7,7 @@
  * that get stamped as the source on every outgoing share.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,

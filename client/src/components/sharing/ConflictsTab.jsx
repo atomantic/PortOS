@@ -61,7 +61,10 @@ function ConflictEntry({ entry, onResolved }) {
       .then(() => true).catch((err) => { toast.error(`Resolve failed: ${err.message}`); return false; });
     setBusy(false);
     if (ok) {
-      toast.success(action === 'discard' ? 'Discarded — kept the synced version.' : 'Restored.');
+      const msg = action === 'discard' ? 'Discarded — kept the synced version.'
+        : action === 'merge-fields' ? 'Merged selected fields.'
+          : 'Restored your version.';
+      toast.success(msg);
       onResolved();
     }
   };
