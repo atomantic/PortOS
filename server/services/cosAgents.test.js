@@ -3,7 +3,12 @@ import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 
 const mockCosState = vi.hoisted(() => ({
-  agentsDir: `/private/tmp/portos-cos-agents-test-${process.pid}`,
+  // Use $TMPDIR (falls back to /tmp) rather than a hardcoded /private/tmp — the
+  // latter exists on macOS (where /tmp symlinks to it) but not on Linux CI,
+  // where `mkdir(recursive)` then tries to create `/private` at the root and
+  // hits EACCES. process.env is safe to read inside a vi.hoisted factory
+  // (imported bindings like `os.tmpdir` are not yet initialized at hoist time).
+  agentsDir: `${process.env.TMPDIR || '/tmp'}/portos-cos-agents-test-${process.pid}`,
   state: null
 }));
 
