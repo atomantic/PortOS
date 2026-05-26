@@ -97,6 +97,7 @@ import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
+import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
@@ -144,6 +145,7 @@ import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { runMigrations } from '../scripts/run-migrations.js';
 import { verifyCollectionVersions } from './lib/collectionStore.js';
+import { conflictJournalStore } from './lib/conflictJournal.js';
 import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
 import { issueStore } from './services/pipeline/issues.js';
@@ -202,7 +204,7 @@ await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
@@ -446,6 +448,7 @@ app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/pipeline', pipelineRoutes);
+app.use('/api/conflict-journal', conflictJournalRoutes);
 app.use('/api/importer', importerRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);

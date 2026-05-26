@@ -149,6 +149,11 @@ vi.mock('../services/mediaCollections.js', () => ({
   // cascade pattern above (behavior is covered in mediaCollections.test.js).
   unlinkCollectionsForUniverse: vi.fn(async () => []),
   universeCollectionNameFor: (name) => `Universe: ${name || ''}`.slice(0, 80),
+  // Read by duplicateDetection (linked-collection item counts) + recordMerge.
+  listCollections: vi.fn(async () => []),
+  findCollectionByUniverseId: vi.fn(async () => null),
+  bulkUpdateCollectionItems: vi.fn(async () => ({})),
+  deleteCollection: vi.fn(async () => ({})),
   ERR_DUPLICATE: 'DUPLICATE',
   NAME_MAX_LENGTH: 80,
 }));
@@ -864,6 +869,21 @@ describe('universe-builder routes', () => {
       expect(res.body.variants).toHaveLength(2);
       expect(res.body.variants[0].id).toBe('standard');
       expect(res.body.variants[1].id).toBe('blueprint');
+    });
+  });
+
+  describe('duplicate resolution routes', () => {
+    it('GET /duplicates returns { groups: [] } (static path not swallowed by /:id)', async () => {
+      const res = await request(buildApp()).get('/api/universe-builder/duplicates');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ groups: [] });
+    });
+
+    it('POST /merge rejects identical survivor/loser ids with 400', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/merge')
+        .send({ survivorId: 'u-1', loserId: 'u-1' });
+      expect(res.status).toBe(400);
     });
   });
 });

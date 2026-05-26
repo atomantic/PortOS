@@ -650,6 +650,48 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
 }
 
 /**
+ * Reassign every live issue from `fromSeriesId` to `toSeriesId` — used by the
+ * series-merge engine (recordMerge.js) so a duplicate series' issues survive
+ * the merge instead of being orphaned under the tombstoned loser.
+ *
+ * Moved issues land UN-GROUPED (`seasonId: null`): seasons are series-scoped,
+ * so the loser's season ids don't exist on the survivor. The survivor's
+ * seasons were unioned by number separately; re-homing issues to specific
+ * survivor seasons is left to the user. A single renumber pass on the survivor
+ * sequences the combined set. Returns `{ reassigned }`.
+ *
+ * Serialized on the SURVIVOR's issues queue so the renumber can't race a
+ * concurrent survivor edit. Tombstoned issues are skipped (moving them would
+ * bump updatedAt and lose the originator's delete LWW race).
+ */
+export function reassignIssuesToSeries(fromSeriesId, toSeriesId) {
+  if (!isStr(fromSeriesId) || !isStr(toSeriesId) || fromSeriesId === toSeriesId) {
+    return Promise.reject(makeErr('reassignIssuesToSeries: fromSeriesId and toSeriesId must differ', ERR_VALIDATION));
+  }
+  return queueSeriesIssuesWrite(toSeriesId, async () => {
+    const state = await readState();
+    const now = new Date().toISOString();
+    const moved = [];
+    for (let i = 0; i < state.issues.length; i += 1) {
+      const iss = state.issues[i];
+      if (iss.seriesId !== fromSeriesId || iss.deleted) continue;
+      const merged = sanitizeIssue({ ...iss, seriesId: toSeriesId, seasonId: null, updatedAt: now });
+      if (!merged) continue;
+      state.issues[i] = merged;
+      moved.push(merged);
+    }
+    if (moved.length === 0) return { reassigned: 0 };
+    await renumberInline(state, toSeriesId, null);
+    // Persist every issue now tagged to the survivor (the moved ones + any the
+    // survivor already had, whose numbers may have shifted in the renumber).
+    await saveIssuesNow(state.issues.filter((i) => i.seriesId === toSeriesId));
+    emitRecordUpdated('series', toSeriesId);
+    emitRecordUpdated('series', fromSeriesId);
+    return { reassigned: moved.length };
+  });
+}
+
+/**
  * Insert an issue with a caller-supplied id (used by the share-bucket importer
  * so re-imports of the same issue LWW-merge onto the same local row).
  * Throws ERR_DUPLICATE / ERR_VALIDATION on contract violations.

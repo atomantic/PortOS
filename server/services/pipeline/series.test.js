@@ -79,6 +79,30 @@ describe('pipeline series service', () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it('updateSeries rejects clearing universeId once a series is linked (hierarchy invariant)', async () => {
+    const s = await svc.createSeries({ name: 'Linked', universeId: 'u-1' });
+    await expect(svc.updateSeries(s.id, { universeId: '' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    await expect(svc.updateSeries(s.id, { universeId: null })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    await expect(svc.updateSeries(s.id, { universeId: '   ' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    // Link survived the rejected clears.
+    expect((await svc.getSeries(s.id)).universeId).toBe('u-1');
+  });
+
+  it('updateSeries allows MOVING a linked series to a different universe', async () => {
+    const s = await svc.createSeries({ name: 'Mover', universeId: 'u-1' });
+    const moved = await svc.updateSeries(s.id, { universeId: 'u-2' });
+    expect(moved.universeId).toBe('u-2');
+  });
+
+  it('updateSeries allows first-linking a legacy orphan (universeId null → set)', async () => {
+    // createSeries via the service is permissive (importer path); simulate a
+    // legacy orphan, then assign its first universe.
+    const s = await svc.createSeries({ name: 'Orphan', universeId: null });
+    expect(s.universeId).toBe(null);
+    const linked = await svc.updateSeries(s.id, { universeId: 'u-3' });
+    expect(linked.universeId).toBe('u-3');
+  });
+
   it('deleteSeries drops the record and is idempotent only on second call', async () => {
     const s = await svc.createSeries({ name: 'Salt Run' });
     await svc.deleteSeries(s.id);

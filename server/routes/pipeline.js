@@ -55,6 +55,8 @@ import {
 } from '../services/pipeline/visualStages.js';
 import { extractCanonFromProse } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
+import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
+import { mergeSeries } from '../services/recordMerge.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
@@ -112,6 +114,8 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NO_RENDERED_PAGES]: 409,
   [ERR_NO_VOLUME_COVER]: 409,
   [ERR_NO_RENDERED_ISSUES]: 409,
+  // recordMerge validation (unresolved conflicts, bad ids, cross-universe).
+  MERGE_VALIDATION: 400,
 };
 
 const mapServiceError = (err) => {
@@ -843,7 +847,46 @@ router.get('/series', asyncHandler(async (_req, res) => {
 
 router.post('/series', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesCreateSchema, req.body ?? {});
-  res.status(201).json(await seriesSvc.createSeries(body));
+  // Hierarchy invariant: every series belongs to exactly one universe. Enforce
+  // it for all HTTP callers here (the UI already enforces it client-side).
+  // The schema stays permissive (nullable) so the importer + mergeSeriesFromSync,
+  // which call createSeries directly, can still land legacy orphans from peers.
+  if (!body.universeId || !String(body.universeId).trim()) {
+    throw new ServerError('A universe is required — a series must belong to a universe.', {
+      status: 400, code: seriesSvc.ERR_VALIDATION,
+    });
+  }
+  const created = await seriesSvc.createSeries(body);
+  // Non-blocking same-name warning, scoped within the universe (route layer
+  // only, so the importer's direct createSeries never pays for the scan).
+  const duplicateName = await findSameNameSeries(created.name, created.universeId, { excludeId: created.id });
+  res.status(201).json(duplicateName.length ? { ...created, _warnings: { duplicateName } } : created);
+}));
+
+// ---- Series duplicate resolution (static paths — keep BEFORE `/series/:id`) ----
+
+const seriesMergeSchema = z.object({
+  survivorId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  loserId: z.string().trim().regex(/^ser-/, 'must be a ser-<uuid> id').max(128),
+  fieldChoices: z.record(z.enum(['survivor', 'loser'])).optional().default({}),
+}).refine((b) => b.survivorId !== b.loserId, { message: 'survivor and loser must differ' });
+
+router.get('/series/duplicates', asyncHandler(async (_req, res) => {
+  res.json(await findDuplicateSeriesGroups());
+}));
+
+router.post('/series/merge/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesMergeSchema, req.body ?? {});
+  const preview = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices, { dryRun: true })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(preview);
+}));
+
+router.post('/series/merge', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesMergeSchema, req.body ?? {});
+  const result = await mergeSeries(body.survivorId, body.loserId, body.fieldChoices)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.get('/series/:id', asyncHandler(async (req, res) => {
@@ -854,6 +897,10 @@ router.get('/series/:id', asyncHandler(async (req, res) => {
 router.patch('/series/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesPatchSchema, req.body ?? {});
   const s = await seriesSvc.updateSeries(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  if ('name' in body || 'universeId' in body) {
+    const duplicateName = await findSameNameSeries(s.name, s.universeId, { excludeId: req.params.id });
+    if (duplicateName.length) { res.json({ ...s, _warnings: { duplicateName } }); return; }
+  }
   res.json(s);
 }));
 

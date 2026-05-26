@@ -85,6 +85,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts). |
 | `apiSharing.js` | Share buckets + federation sync. |
 | `apiPeerSync.js` | Per-record peer sync subscriptions (universe + series → other PortOS instances over Tailnet). |
+| `apiSyncReview.js` | Sync hygiene: duplicate-record detection + smart merge (universe/series) and the non-blocking edit-conflict journal (list/resolve). Surfaced in Sharing → Duplicates / Conflicts. |
 
 ## Tools / integrations
 

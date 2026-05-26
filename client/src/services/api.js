@@ -44,6 +44,7 @@ export * from './apiUniverseBuilder.js';
 export * from './apiPipeline.js';
 export * from './apiSharing.js';
 export * from './apiPeerSync.js';
+export * from './apiSyncReview.js';
 export * from './apiCreativeDirector.js';
 export * from './apiImporter.js';
 export * from './apiVoice.js';

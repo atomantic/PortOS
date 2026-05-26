@@ -294,6 +294,7 @@ describe('pipeline routes', () => {
     const app = makeApp();
     const r = await request(app).post('/api/pipeline/series').send({
       name: 'Salt Run',
+      universeId: 'u-test',
       logline: 'A foundry city goes silent.',
       premise: 'Long premise...',
       styleNotes: 'moebius linework',
@@ -309,6 +310,32 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(400);
   });
 
+  it('POST /series rejects a missing universe with 400 (hierarchy invariant)', async () => {
+    const app = makeApp();
+    const noUni = await request(app).post('/api/pipeline/series').send({ name: 'Orphan' });
+    expect(noUni.status).toBe(400);
+    const emptyUni = await request(app).post('/api/pipeline/series').send({ name: 'Orphan', universeId: '   ' });
+    expect(emptyUni.status).toBe(400);
+    const nullUni = await request(app).post('/api/pipeline/series').send({ name: 'Orphan', universeId: null });
+    expect(nullUni.status).toBe(400);
+  });
+
+  it('GET /series/duplicates returns grouped shape (static path not swallowed by /:id)', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/pipeline/series/duplicates');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('series');
+    expect(res.body).toHaveProperty('orphans');
+  });
+
+  it('POST /series/merge rejects identical survivor/loser ids with 400', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/pipeline/series/merge')
+      .send({ survivorId: 'ser-1', loserId: 'ser-1' });
+    expect(res.status).toBe(400);
+  });
+
   it('PATCH /series/:id 404s for unknown id', async () => {
     const app = makeApp();
     const r = await request(app).patch('/api/pipeline/series/ser-nope').send({ name: 'x' });
@@ -317,7 +344,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/issues creates an issue under the series', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Pilot' });
     expect(r.status).toBe(201);
     expect(r.body.id).toMatch(/^iss-/);
@@ -334,7 +361,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/:stageId/generate runs a text stage', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app).post(`/api/pipeline/issues/${iss.body.id}/stages/idea/generate`).send({ seedInput: 'foundry mystery' });
     expect(r.status).toBe(200);
@@ -344,7 +371,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/:stageId/generate rejects visual stages', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app).post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/generate`).send({});
     expect(r.status).toBe(400);
@@ -354,7 +381,7 @@ describe('pipeline routes', () => {
   describe('POST /issues/:id/stages/:stageId/restore', () => {
     it('restores a prior runHistory snapshot and snapshots the displaced current state', async () => {
       const app = makeApp();
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       const issueId = iss.body.id;
       // First run → no snapshot yet.
@@ -381,7 +408,7 @@ describe('pipeline routes', () => {
 
     it('rejects when the runId is not in the current snapshot list', async () => {
       const app = makeApp();
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       const r = await request(app)
         .post(`/api/pipeline/issues/${iss.body.id}/stages/idea/restore`)
@@ -391,7 +418,7 @@ describe('pipeline routes', () => {
 
     it('rejects non-text stages', async () => {
       const app = makeApp();
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       const r = await request(app)
         .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/restore`)
@@ -401,7 +428,7 @@ describe('pipeline routes', () => {
 
     it('rejects empty runId via Zod', async () => {
       const app = makeApp();
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       const r = await request(app)
         .post(`/api/pipeline/issues/${iss.body.id}/stages/idea/restore`)
@@ -412,7 +439,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/visual enqueues an image job', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/visual`)
@@ -424,7 +451,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/episodeVideo/visual hands off to Creative Director', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/episodeVideo/visual`)
@@ -440,7 +467,7 @@ describe('pipeline routes', () => {
       throw Object.assign(new Error('Storyboards stage has no scenes with descriptions.'), { code: 'PIPELINE_EPISODE_NO_STORYBOARDS' });
     });
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/episodeVideo/visual`)
@@ -450,7 +477,7 @@ describe('pipeline routes', () => {
 
   it('GET /issues/recent?limit=0 clamps to 1 (route forwards to service which owns coercion)', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'A' });
     await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'B' });
     const r = await request(app).get('/api/pipeline/issues/recent?limit=0');
@@ -462,8 +489,8 @@ describe('pipeline routes', () => {
 
   it('GET /issues/recent returns the most-recently-updated issues with denormalized seriesName', async () => {
     const app = makeApp();
-    const ser1 = await request(app).post('/api/pipeline/series').send({ name: 'Alpha' });
-    const ser2 = await request(app).post('/api/pipeline/series').send({ name: 'Beta' });
+    const ser1 = await request(app).post('/api/pipeline/series').send({ name: 'Alpha', universeId: 'u-test' });
+    const ser2 = await request(app).post('/api/pipeline/series').send({ name: 'Beta', universeId: 'u-test' });
     const iss1 = await request(app).post(`/api/pipeline/series/${ser1.body.id}/issues`).send({ title: 'Old' });
     // Bump iss1's updatedAt back so iss2 is unambiguously the most recent.
     await new Promise((r) => setTimeout(r, 10));
@@ -481,7 +508,7 @@ describe('pipeline routes', () => {
   // re-introduce stage runHistory on list payloads.
   describe('list endpoints strip runHistory at the HTTP boundary', () => {
     async function seedIssueWithHistory(app) {
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       await request(app).post(`/api/pipeline/issues/${iss.body.id}/stages/idea/generate`).send({ seedInput: 'v1' });
       const r = await request(app).post(`/api/pipeline/issues/${iss.body.id}/stages/idea/generate`).send({ seedInput: 'v2' });
@@ -512,7 +539,7 @@ describe('pipeline routes', () => {
       const app = makeApp();
       // Tiny seed so the response is non-empty and we can assert the
       // route's `stages`-dropping projection actually holds.
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'T' });
       const spy = vi.spyOn(issuesSvc, 'listRecentIssues');
       const r = await request(app).get('/api/pipeline/issues/recent?limit=5');
@@ -526,7 +553,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/scenes/:index/video returns the enqueued jobId', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/0/video`)
@@ -538,7 +565,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/scenes/:index/video rejects a non-integer index', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/nope/video`)
@@ -548,7 +575,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render returns the enqueued jobId', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/0/shots/2/render`)
@@ -561,7 +588,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render rejects bad indices', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/nope/shots/0/render`)
@@ -571,7 +598,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/pages/:p/panels/:n/refine-prompt returns the refined panel + changes', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/panels/0/refine-prompt`)
@@ -584,7 +611,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/scenes/:index/refine-prompt returns the refined scene', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/0/refine-prompt`)
@@ -596,7 +623,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/auto-run-text returns runId + sseUrl', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app).post(`/api/pipeline/issues/${iss.body.id}/auto-run-text`).send({});
     expect(r.status).toBe(200);
@@ -614,7 +641,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/extract-scenes 400s when the source stage is empty', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
@@ -625,7 +652,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/storyboards/extract-scenes 409s when scenes already exist (no force)', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
@@ -704,7 +731,7 @@ describe('pipeline routes', () => {
     });
 
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: { prose: { status: 'ready', output: 'Once upon a time, a paragraph happened.' } },
@@ -731,7 +758,7 @@ describe('pipeline routes', () => {
     });
 
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
@@ -753,7 +780,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/extract-pages 400s when comicScript is empty', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
@@ -764,7 +791,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/extract-pages 409s when comicPages already has pages (no force)', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
@@ -781,7 +808,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/extract-pages parses comicScript output and persists pages', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const script = [
       '## Page 1',
@@ -830,7 +857,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/extract-pages with force=true replaces existing pages', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
@@ -848,7 +875,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/extract-pages seeds blank cover.script from parsed coverConcept', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const script = [
       '## Cover concept',
@@ -879,7 +906,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/extract-pages does not clobber an existing cover.script', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const script = [
       '## Cover concept',
@@ -913,7 +940,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/:stageId/extract-canon 400s when stage is not comicScript or teleplay', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
@@ -924,7 +951,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/:stageId/extract-canon 400s when the script stage is empty', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicScript/extract-canon`)
@@ -935,8 +962,12 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/:stageId/extract-canon 400s when series has no linked universe', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // The POST /series route now requires a universe, but legacy/imported
+    // orphan series can still exist on disk — create one via the (permissive)
+    // service directly to exercise the extract-canon no-universe guard.
+    const seriesSvc = await import('../services/pipeline/series.js');
+    const ser = await seriesSvc.createSeries({ name: 'S', universeId: null });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: { comicScript: { status: 'ready', output: '## Page 1\n\n### Panel 1\n**Description:** A barkeep slides a glass.' } },
     });
@@ -1053,7 +1084,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render 400s for a non-integer pageIndex', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/abc/render`)
@@ -1064,7 +1095,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render persists imageJobId + prompt onto the target page', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
@@ -1099,7 +1130,7 @@ describe('pipeline routes', () => {
     // bubble a generic Error.
     const visualStages = await import('../services/pipeline/visualStages.js');
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: { comicPages: { pages: [] } },
@@ -1117,7 +1148,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/cover/render returns jobId + prompt and persists cover on the issue', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
@@ -1146,7 +1177,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/cover/render 400s when the body fails schema validation', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     // `width` must be an integer; sending a string triggers Zod validation failure.
     const r = await request(app)
@@ -1165,7 +1196,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/cover/render target=final + useProofAsBase=true persists onto finalImage with fromProof:true, leaving the prior proof slot untouched', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     // Seed a prior proof via the render route (the PATCH /issues schema strips
     // unknown cover fields, so proofImage can only land here via render).
@@ -1191,7 +1222,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render target=final + useProofAsBase=true persists onto pages[i].finalImage with fromProof:true, leaving the prior proof slot untouched', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
@@ -1220,7 +1251,7 @@ describe('pipeline routes', () => {
 
   it('POST page+cover render schemas reject invalid `target` enum values with 400', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     // Zod enum on comicPageRenderSchema rejects before the service dispatches,
     // so no pages-seeding is needed — validation happens on body parse.
@@ -1243,7 +1274,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/cover/render preserves persisted cover.script when body omits coverScript', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     // Seed the script via a first render carrying it.
     const first = await request(app)
@@ -1262,7 +1293,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/cover/render clears cover.script when body carries empty string', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
@@ -1277,7 +1308,7 @@ describe('pipeline routes', () => {
 
   it('POST /issues/:id/stages/comicPages/back-cover/render preserves persisted backCover.script when body omits backCoverScript', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const first = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/back-cover/render`)
@@ -1299,7 +1330,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons/:seasonId/cover/render preserves persisted cover.script when body omits coverScript', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Vol 1' });
     const first = await request(app)
       .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/cover/render`)
@@ -1320,7 +1351,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons/:seasonId/back-cover/render preserves persisted backCover.script when body omits backCoverScript', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Vol 1' });
     const first = await request(app)
       .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/back-cover/render`)
@@ -1345,7 +1376,7 @@ describe('pipeline routes', () => {
 
   it('GET /series/:id/seasons returns [] for a fresh series', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const r = await request(app).get(`/api/pipeline/series/${ser.body.id}/seasons`);
     expect(r.status).toBe(200);
     expect(r.body).toEqual([]);
@@ -1359,7 +1390,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons creates a season and auto-numbers it', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const r1 = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
     expect(r1.status).toBe(201);
     expect(r1.body.id).toMatch(/^sea-/);
@@ -1370,14 +1401,14 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons rejects entry with neither title nor number', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({});
     expect(r.status).toBe(400);
   });
 
   it('PATCH /series/:id/seasons/:seasonId updates fields', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
     const r = await request(app)
       .patch(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}`)
@@ -1390,7 +1421,7 @@ describe('pipeline routes', () => {
 
   it('PATCH /series/:id/seasons/:seasonId 404s for unknown season', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const r = await request(app)
       .patch(`/api/pipeline/series/${ser.body.id}/seasons/sea-nope`)
       .send({ title: 'x' });
@@ -1399,7 +1430,7 @@ describe('pipeline routes', () => {
 
   it('DELETE /series/:id/seasons/:seasonId un-groups child issues by default', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({ seasonId: sea.body.id, arcPosition: 1 });
@@ -1414,7 +1445,7 @@ describe('pipeline routes', () => {
 
   it('DELETE /series/:id/seasons/:seasonId reassigns child issues to reassignTo sibling', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const a = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
     const b = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Hiatus' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
@@ -1431,7 +1462,7 @@ describe('pipeline routes', () => {
 
   it('DELETE /series/:id/seasons/:seasonId 400s when reassignTo points at non-existent sibling', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
     const r = await request(app).delete(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}`)
       .send({ reassignTo: 'sea-ghost' });
@@ -1440,7 +1471,7 @@ describe('pipeline routes', () => {
 
   it('PATCH /issues/:id accepts seasonId + arcPosition', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
     const r = await request(app).patch(`/api/pipeline/issues/${iss.body.id}`)
@@ -1452,7 +1483,7 @@ describe('pipeline routes', () => {
 
   it('PATCH /issues/:id preserves per-stage locked flags through validation', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
     const r = await request(app).patch(`/api/pipeline/issues/${iss.body.id}`)
       .send({ stages: { idea: { locked: true } } });
@@ -1463,7 +1494,7 @@ describe('pipeline routes', () => {
 
   it('PATCH /series/:id accepts arc payload', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const r = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
       arc: { logline: 'Big-picture pitch', themes: ['legacy', 'betrayal'], status: 'draft' },
     });
@@ -1479,6 +1510,7 @@ describe('pipeline routes', () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({
       name: 'S',
+      universeId: 'u-test',
       locked: { arcFields: { logline: true } },
     });
     const r = await request(app)
@@ -1494,7 +1526,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/arc/generate returns preview without committing by default', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'Salt Run' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'Salt Run', universeId: 'u-test' });
     arcGenerateSpy = vi.fn(async () => ({
       arc: { logline: 'Whole-arc pitch', summary: 'sum', themes: ['legacy'], protagonistArc: 'P', status: 'draft' },
       seasons: [{ id: 'sea-1', number: 1, title: 'Pilot' }],
@@ -1517,7 +1549,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/arc/generate with commit:true persists arc + seasons', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'Salt Run' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'Salt Run', universeId: 'u-test' });
     arcGenerateSpy = vi.fn(async () => ({
       arc: { logline: 'Pitch', summary: 'sum', themes: [], protagonistArc: '', status: 'draft' },
       seasons: [
@@ -1539,7 +1571,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons/:seasonId/episodes/generate returns preview without committing', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({
       title: 'Pilot', synopsis: 'season synopsis',
     });
@@ -1566,7 +1598,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons/:seasonId/episodes/generate with commit:true creates one issue per episode', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({
       title: 'Pilot', synopsis: 'season synopsis',
     });
@@ -1599,7 +1631,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/arc/verify forwards to the planner and returns issues', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     arcVerifySpy = vi.fn(async () => ({
       issues: [
         { severity: 'high', location: 'season:2/episode:5', problem: 'character is dead in S1', suggestion: 'remove from S2' },
@@ -1614,7 +1646,7 @@ describe('pipeline routes', () => {
 
   it('POST /series/:id/seasons/:seasonId/verify forwards to the volume verifier', async () => {
     const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     volumeVerifySpy = vi.fn(async (_seriesId, seasonId) => ({
       issues: [
         { severity: 'medium', location: 'episode:3', problem: 'beats plateau', suggestion: 'escalate ep 3' },
@@ -1632,7 +1664,7 @@ describe('pipeline routes', () => {
 
   describe('audio stage routes', () => {
     async function seedIssueWithStoryboards(app) {
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
         stages: {
@@ -1726,7 +1758,7 @@ describe('pipeline routes', () => {
     });
 
     async function seedIssue(app) {
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
       const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
       return iss.body;
     }

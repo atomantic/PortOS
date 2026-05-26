@@ -263,6 +263,7 @@ export default function App() {
           <Route path="writers-room" element={<WritersRoom />} />
           <Route path="writers-room/guide" element={<WritersRoomGuide />} />
           <Route path="sharing" element={<Sharing />} />
+          <Route path="sharing/:section" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
