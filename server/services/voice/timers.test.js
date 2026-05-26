@@ -54,7 +54,7 @@ describe('scheduleTimer', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-26T12:00:00Z'));
     scheduleTimer({ totalMs: 600000, label: 'tea' });
-    await tick(); // let the schedule's persist() write run
+    await tick(); await tick(); // let the schedule's queued persist() write run
     const afterSchedule = atomicWriteMock.mock.calls.at(-1)[1];
     expect(afterSchedule.timers).toHaveLength(1);
     expect(afterSchedule.timers[0]).toMatchObject({ label: 'tea' });
@@ -105,7 +105,7 @@ describe('initVoiceTimers', () => {
         { id: 'bad', label: 42, fireAt: now + 1000 }, // malformed label → skipped
       ],
     };
-    const res = await initVoiceTimers({ force: true });
+    const res = await initVoiceTimers();
     expect(res).toEqual({ armed: 1, fired: 1 });
     expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ title: '⏰ overdue' }));
 
@@ -120,7 +120,7 @@ describe('initVoiceTimers', () => {
     vi.useRealTimers();
   });
 
-  it('is idempotent unless forced', async () => {
+  it('is idempotent — a second init is skipped', async () => {
     const first = await initVoiceTimers();
     expect(first).toEqual({ armed: 0, fired: 0 });
     const second = await initVoiceTimers();

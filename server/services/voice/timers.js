@@ -12,6 +12,7 @@
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 
 const STORE_PATH = join(PATHS.data, 'voice-timers.json');
@@ -31,16 +32,16 @@ const DEDUP_WINDOW_MS = 10_000;
 const active = new Map();
 
 // Serialize snapshot writes onto a single tail so a fire and a schedule can't
-// clobber each other's atomicWrite.
-let writeTail = Promise.resolve();
+// clobber each other's atomicWrite. The snapshot is taken synchronously at call
+// time; only the write is deferred onto the queue.
+const queueWrite = createFileWriteQueue();
 function persist() {
   const timers = [...active.values()].map(({ handle, ...rec }) => rec);
-  writeTail = writeTail.then(() =>
+  return queueWrite(() =>
     atomicWrite(STORE_PATH, { version: 1, timers }).catch((err) =>
       console.error(`❌ voice-timer persist failed: ${err.message}`)
     )
   );
-  return writeTail;
 }
 
 // Raise the reminder. Runs outside the request lifecycle, so the write is
@@ -112,8 +113,8 @@ let initialized = false;
  * fire immediately (once); the rest re-arm for their remaining delay. The store
  * is then rewritten with only the still-pending timers.
  */
-export async function initVoiceTimers({ force = false } = {}) {
-  if (initialized && !force) return { skipped: true };
+export async function initVoiceTimers() {
+  if (initialized) return { skipped: true };
   initialized = true;
   const stored = await readJSONFile(STORE_PATH, { version: 1, timers: [] });
   const list = Array.isArray(stored?.timers) ? stored.timers : [];
