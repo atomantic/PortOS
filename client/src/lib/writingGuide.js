@@ -9,14 +9,15 @@
 // the literary-category rows below preserve the exact figures from the editorial
 // brief and the book table preserves its 5.5–6× page-based estimate.
 //
-// Page counts assume the conventional ~250–300 words per printed page; min
-// pages use 300 wpp (denser), max pages use 250 wpp (looser). Chapter ranges
-// derive from the conventional ~3,000–5,000 words per chapter: min chapters use
-// 5,000 wpc (longer chapters, fewer of them), max chapters use 3,000 wpc
-// (shorter chapters, more of them), each rounded up to a whole chapter. Forms
-// read in one sitting (microfiction, flash, short story) carry `min`/`max` of
-// `null` on `chapters` along with a "single sitting" label so consumers render
-// a single uniform shape without a special-case branch.
+// Page counts assume the conventional ~250–300 words per printed page, but the
+// page bands below are rounded editorial planning estimates rather than strict
+// per-row calculations from the word bounds. Chapter ranges derive from the
+// conventional ~3,000–5,000 words per chapter: min chapters use 5,000 wpc
+// (longer chapters, fewer of them), max chapters use 3,000 wpc (shorter
+// chapters, more of them), each rounded up to a whole chapter. Forms read in
+// one sitting (microfiction, flash, short story) carry `min`/`max` of `null`
+// on `chapters` along with a "single sitting" label so consumers render a
+// single uniform shape without a special-case branch.
 
 // Literary length ladder — microfiction through novel. `words`/`chars`/`pages`/
 // `chapters` all carry `{ min, max, label }` with a human label for display;
