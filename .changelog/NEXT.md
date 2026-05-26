@@ -8,6 +8,8 @@ TBD
 
 ## Added
 
+- **Set your home location in Settings → General.** Enter a latitude and longitude and the voice assistant's weather command ("what's the weather?") reports conditions for where you are instead of a default city. Leave both fields blank to fall back to the default location.
+
 ## Changed
 
 ## Fixed
