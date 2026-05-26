@@ -668,7 +668,13 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId) {
   if (!isStr(fromSeriesId) || !isStr(toSeriesId) || fromSeriesId === toSeriesId) {
     return Promise.reject(makeErr('reassignIssuesToSeries: fromSeriesId and toSeriesId must differ', ERR_VALIDATION));
   }
-  return queueSeriesIssuesWrite(toSeriesId, async () => {
+  // This reads/mutates issues belonging to BOTH series (it moves source issues
+  // and renumbers the destination), so serialize on both per-series queues, not
+  // just the destination — otherwise a concurrent edit/renumber on the source
+  // (e.g. a peer-sync merge landing on the loser mid-merge) could interleave and
+  // be lost. Acquire in sorted order so a future two-series caller can't deadlock.
+  const [first, second] = [fromSeriesId, toSeriesId].sort();
+  const body = async () => {
     const state = await readState();
     const now = new Date().toISOString();
     const moved = [];
@@ -688,7 +694,8 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId) {
     emitRecordUpdated('series', toSeriesId);
     emitRecordUpdated('series', fromSeriesId);
     return { reassigned: moved.length };
-  });
+  };
+  return queueSeriesIssuesWrite(first, () => queueSeriesIssuesWrite(second, body));
 }
 
 /**
