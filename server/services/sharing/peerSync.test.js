@@ -2012,6 +2012,7 @@ describe('peerSync', () => {
       vi.mocked(mergeUniversesFromSync).mockClear();
       vi.mocked(mergeSeriesFromSync).mockClear();
       vi.mocked(mergeIssuesFromSync).mockClear();
+      vi.mocked(mergeMediaCollectionsFromSync).mockClear();
     });
 
     describe('receiver — applyIncomingPush', () => {
@@ -2079,6 +2080,71 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-a',
         });
         expect(mergeUniversesFromSync).toHaveBeenCalled();
+      });
+
+      // ---- per-category gate: cross-key isolation -------------------------
+      // The sender stamps its full schemaVersions map. A push must only be
+      // gated on the categories THIS record actually writes.
+      it('does NOT reject a universe push when the sender is ahead on mediaCollections only', async () => {
+        // universes is equal; the sender bumped an unrelated category. The old
+        // whole-payload gate would have rejected this universe push.
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1' }),
+        ]);
+      });
+
+      it('does NOT reject a series push with NO bundled issues when the sender is ahead on pipelineIssues only', async () => {
+        // No issues ride along, so pipelineIssues is not a transferred category.
+        await applyIncomingPush({
+          kind: 'series',
+          record: { id: 's1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+        });
+        expect(mergeSeriesFromSync).toHaveBeenCalled();
+        expect(mergeIssuesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('DOES reject a series push WITH bundled issues when the sender is ahead on pipelineIssues', async () => {
+        // Issues are being transferred, so a pipelineIssues ahead-mismatch must
+        // gate the push — otherwise the receiver merges issues it can't parse.
+        const rejection = await applyIncomingPush({
+          kind: 'series',
+          record: { id: 's1', name: 'Foo' },
+          issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 2, receiverV: 1 }]);
+        expect(mergeSeriesFromSync).not.toHaveBeenCalled();
+        expect(mergeIssuesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('DOES reject a universe push WITH a bundled linkedCollection when the sender is ahead on mediaCollections', async () => {
+        // The linked collection is a transferred category, so a mediaCollections
+        // ahead-mismatch must gate even though universes is equal.
+        const rejection = await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          linkedCollection: { id: 'col-1', name: 'Universe: U', items: [] },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
+        expect(mergeUniversesFromSync).not.toHaveBeenCalled();
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
       });
     });
 

@@ -2039,16 +2039,16 @@ describe('sharing round-trip', () => {
       expect(manifest.portosSchemaVersions.universes).toBe(5);
     });
 
-    it('importer rejects a manifest whose portosSchemaVersions.universes is AHEAD of local', async () => {
+    it('importer rejects a manifest when the sender is AHEAD on a category the manifest CARRIES', async () => {
       const bucket = await buckets.createBucket({ name: 'AheadBucket', path: tempBucket, mode: 'auto-merge' });
       const s = await series.createSeries({ name: 'Future', logline: 'x' });
       const exp = await exporter.exportSeries(s.id, bucket.id);
-      // Mutate the written manifest to stamp a future portos schema. This
-      // simulates a manifest exported by a NEWER PortOS instance landing in
-      // an OLDER instance's bucket.
+      // Stamp a future schema for pipelineSeries — the category this series
+      // manifest actually carries — simulating a manifest exported by a NEWER
+      // PortOS instance landing in an OLDER instance's bucket.
       const manifestPath = join(tempBucket, 'manifests', exp.filename);
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      manifest.portosSchemaVersions = { universes: 99 };
+      manifest.portosSchemaVersions = { universes: 5, pipelineSeries: 99, pipelineIssues: 1, mediaCollections: 1 };
       manifest.producedByVersion = '99.0.0';
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       // Delete the local series so the auto-merge would normally re-create it.
@@ -2057,10 +2057,31 @@ describe('sharing round-trip', () => {
       const result = await importer.processManifest(bucket.id, exp.filename);
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe('portos-schema-ahead');
-      expect(result.ahead).toEqual([{ category: 'universes', senderV: 99, receiverV: 5 }]);
+      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 1 }]);
       expect(result.producedByVersion).toBe('99.0.0');
       // Series stayed tombstoned (or absent) — apply was refused.
       await expect(series.getSeries(s.id)).rejects.toThrow();
+    });
+
+    it('importer IMPORTS a manifest when the sender is ahead only on a category the manifest does NOT carry', async () => {
+      // Per-category gate: a universeless series manifest carries only
+      // pipelineSeries (+ pipelineIssues for bundled issues). A sender ahead on
+      // `universes` must NOT block it — the old whole-payload gate did, severing
+      // sync across a federation upgrading on independent schedules.
+      const bucket = await buckets.createBucket({ name: 'UnrelatedBucket', path: tempBucket, mode: 'auto-merge' });
+      const s = await series.createSeries({ name: 'Unaffected', logline: 'x' });
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      const manifestPath = join(tempBucket, 'manifests', exp.filename);
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      manifest.portosSchemaVersions = { universes: 99, pipelineSeries: 1, pipelineIssues: 1, mediaCollections: 99 };
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      await series.deleteSeries(s.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+      const result = await importer.processManifest(bucket.id, exp.filename);
+      expect(result.reason).not.toBe('portos-schema-ahead');
+      expect(result.processed).toBe(true);
+      const restored = await series.getSeries(s.id);
+      expect(restored.id).toBe(s.id);
     });
 
     it('importer falls through for manifests with no portosSchemaVersions (legacy peer)', async () => {

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   PORTOS_SCHEMA_VERSIONS,
+  RECORD_KIND_SCHEMA_CATEGORIES,
   compareSchemaVersions,
+  scopeVersionDiff,
   formatVersionGap,
   buildPortosMeta,
 } from './schemaVersions.js';
@@ -117,6 +119,83 @@ describe('compareSchemaVersions', () => {
     expect(compareSchemaVersions(undefined, { universes: 5 }).behind).toHaveLength(1);
     // Default receiver is PORTOS_SCHEMA_VERSIONS (live).
     expect(compareSchemaVersions(null).behind).toHaveLength(Object.keys(PORTOS_SCHEMA_VERSIONS).length);
+  });
+});
+
+describe('RECORD_KIND_SCHEMA_CATEGORIES', () => {
+  it('maps each federated record kind to its versioned storage categories', () => {
+    expect(RECORD_KIND_SCHEMA_CATEGORIES.universe).toEqual(['universes']);
+    expect(RECORD_KIND_SCHEMA_CATEGORIES.series).toEqual(['pipelineSeries']);
+    expect(RECORD_KIND_SCHEMA_CATEGORIES.issue).toEqual(['pipelineIssues']);
+    expect(RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection).toEqual(['mediaCollections']);
+  });
+
+  it('only references keys that exist in PORTOS_SCHEMA_VERSIONS', () => {
+    for (const keys of Object.values(RECORD_KIND_SCHEMA_CATEGORIES)) {
+      for (const k of keys) {
+        expect(PORTOS_SCHEMA_VERSIONS[k]).toBeDefined();
+      }
+    }
+  });
+
+  it('is frozen so a kind→category mapping change is deliberate', () => {
+    expect(Object.isFrozen(RECORD_KIND_SCHEMA_CATEGORIES)).toBe(true);
+  });
+});
+
+describe('scopeVersionDiff', () => {
+  const diff = {
+    ahead: [
+      { category: 'universes', senderV: 6, receiverV: 5 },
+      { category: 'mediaCollections', senderV: 2, receiverV: 1 },
+    ],
+    behind: [{ category: 'pipelineSeries', senderV: 1, receiverV: 2 }],
+    compatible: false,
+  };
+
+  it('keeps only ahead/behind entries within the allowed categories', () => {
+    const scoped = scopeVersionDiff(diff, ['universes']);
+    expect(scoped.ahead).toEqual([{ category: 'universes', senderV: 6, receiverV: 5 }]);
+    expect(scoped.behind).toEqual([]);
+    expect(scoped.compatible).toBe(false);
+  });
+
+  it('drops an unrelated ahead category so it no longer blocks', () => {
+    // The crux of the per-category gate: a transfer that only touches
+    // `pipelineSeries` is NOT blocked by a sender that bumped `mediaCollections`.
+    const scoped = scopeVersionDiff(diff, ['pipelineSeries']);
+    expect(scoped.ahead).toEqual([]); // mediaCollections + universes filtered out
+    expect(scoped.behind).toEqual([{ category: 'pipelineSeries', senderV: 1, receiverV: 2 }]);
+    expect(scoped.compatible).toBe(false);
+  });
+
+  it('an empty allow-list makes the scoped diff compatible (no versioned category touched)', () => {
+    const scoped = scopeVersionDiff(diff, []);
+    expect(scoped.ahead).toEqual([]);
+    expect(scoped.behind).toEqual([]);
+    expect(scoped.compatible).toBe(true);
+  });
+
+  it('a non-array categories arg returns the diff unchanged (whole-payload gate)', () => {
+    expect(scopeVersionDiff(diff, null)).toBe(diff);
+    expect(scopeVersionDiff(diff, undefined)).toBe(diff);
+  });
+
+  it('tolerates a malformed diff (missing ahead/behind arrays)', () => {
+    const scoped = scopeVersionDiff({}, ['universes']);
+    expect(scoped).toEqual({ ahead: [], behind: [], compatible: true });
+  });
+
+  it('composes with compareSchemaVersions for a realistic cross-key scenario', () => {
+    // Sender is ahead on mediaCollections only; a universe transfer scopes to
+    // ['universes'] and stays compatible even though the union diff is not.
+    const union = compareSchemaVersions(
+      { universes: 5, pipelineSeries: 1, pipelineIssues: 1, mediaCollections: 2 },
+      PORTOS_SCHEMA_VERSIONS,
+    );
+    expect(union.compatible).toBe(false); // mediaCollections 2 > 1
+    expect(scopeVersionDiff(union, RECORD_KIND_SCHEMA_CATEGORIES.universe).compatible).toBe(true);
+    expect(scopeVersionDiff(union, RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection).compatible).toBe(false);
   });
 });
 

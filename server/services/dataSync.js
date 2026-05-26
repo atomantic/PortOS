@@ -13,8 +13,10 @@ import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
+  RECORD_KIND_SCHEMA_CATEGORIES,
   buildPortosMeta,
   compareSchemaVersions,
+  scopeVersionDiff,
   formatVersionGap,
 } from '../lib/schemaVersions.js';
 import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
@@ -719,6 +721,19 @@ const CATEGORIES = {
   videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote }
 };
 
+// Map a snapshot CATEGORY to the `PORTOS_SCHEMA_VERSIONS` keys whose storage
+// layout that category's `applyRemote` actually writes — derived from the
+// canonical record-kind map so it can't drift. `applyRemote` gates only on
+// these keys, so a sender that bumped/added an unrelated category (e.g. a new
+// `mediaCollections` version) no longer rejects an unrelated category's
+// snapshot. Categories absent here (goals/character/digitalTwin/meatspace/
+// videoHistory) have no versioned layout → no gate.
+const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
+  universe: RECORD_KIND_SCHEMA_CATEGORIES.universe,
+  pipeline: [...RECORD_KIND_SCHEMA_CATEGORIES.series, ...RECORD_KIND_SCHEMA_CATEGORIES.issue],
+  mediaCollections: RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection,
+};
+
 // Per-`(category, forPeerId)` `{ fingerprints, checksum }` cache. The
 // orchestrator hits getChecksum every cycle — by far the hottest sync-side I/O —
 // so caching keyed on underlying-file `(mtime, size)` lets it stat-and-return
@@ -904,7 +919,11 @@ export async function applyRemote(category, remoteData, options = {}) {
   const portosMeta = isPlainObject(options.portosMeta) ? options.portosMeta : null;
   const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
   const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
-  const versionDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  // Full union diff for diagnostics; gate (and report) only on the schema
+  // categories THIS snapshot category actually writes, so an ahead-mismatch on
+  // an unrelated category can't reject this category's snapshot.
+  const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  const versionDiff = scopeVersionDiff(fullDiff, SNAPSHOT_CATEGORY_SCHEMA_KEYS[category] || []);
   if (versionDiff.ahead.length > 0) {
     console.warn(
       `⚠️ dataSync: rejecting "${category}" snapshot — ${formatVersionGap(versionDiff)} ` +

@@ -53,8 +53,10 @@ import { pullSidecarForImage } from './sidecarSync.js';
 import { recordEvents } from './recordEvents.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
+  RECORD_KIND_SCHEMA_CATEGORIES,
   buildPortosMeta,
   compareSchemaVersions,
+  scopeVersionDiff,
   formatVersionGap,
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
@@ -1274,7 +1276,20 @@ export async function applyIncomingPush(payload) {
   // directions for that purpose.
   const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
   const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
-  const versionDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  // Per-category gate: scope the ahead-check to the categories THIS push
+  // actually writes — the record's own kind, plus pipelineIssues when issues
+  // ride along on a series push, plus mediaCollections when a linked
+  // collection is bundled. A sender ahead on an unrelated category no longer
+  // rejects this push. The full union diff stays available for diagnostics.
+  const relevantCategories = new Set(RECORD_KIND_SCHEMA_CATEGORIES[kind] || []);
+  if (kind === 'series' && Array.isArray(issues) && issues.length > 0) {
+    for (const c of RECORD_KIND_SCHEMA_CATEGORIES.issue) relevantCategories.add(c);
+  }
+  if (isPlainObject(linkedCollection)) {
+    for (const c of RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection) relevantCategories.add(c);
+  }
+  const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
   // Tombstone payloads carry only id+deleted+deletedAt+updatedAt — fields
   // that exist at EVERY schema version and cannot corrupt local state. Gating
   // them on the schema-version comparator would strand federated deletes
