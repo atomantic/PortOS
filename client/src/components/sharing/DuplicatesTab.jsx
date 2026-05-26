@@ -53,6 +53,12 @@ export default function DuplicatesTab() {
   };
 
   const runPreview = async (kind, survivorId, loserId, records) => {
+    // Commit the new survivor/loser ids and invalidate the current preview up
+    // front so a quick "Merge" click during the in-flight request can't run with
+    // stale ids/choices (the Merge button gates on `busy || !preview`).
+    setMerge((m) => (m ? {
+      ...m, kind, survivorId, loserId, records: records || m.records, preview: null, choices: {}, busy: true,
+    } : m));
     const preview = (kind === 'universe' ? previewUniverseMerge : previewSeriesMerge);
     const result = await preview({ survivorId, loserId }, { silent: true }).catch((err) => {
       toast.error(`Preview failed: ${err.message}`);
@@ -160,6 +166,13 @@ function RecordRow({ kind, record, onRenamed }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(record.name);
   const [busy, setBusy] = useState(false);
+
+  // Keep the editable name in sync with the prop after a rename + reload so
+  // reopening the inline editor never shows the stale initial value. Only when
+  // not actively editing, so we don't clobber the user's in-progress text.
+  useEffect(() => {
+    if (!editing) setName(record.name);
+  }, [record.name, editing]);
 
   const save = async () => {
     if (!name.trim() || name === record.name) { setEditing(false); return; }

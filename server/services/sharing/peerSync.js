@@ -940,9 +940,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   // shared-state base for the two journaled kinds. This is the symmetric
   // convergence point to the receiver advancing its base in mergeXxxFromSync —
   // it keeps a peer's echo (reverse-subscription push-back) from later looking
-  // like a divergence. Best-effort; never block the push result on it.
+  // like a divergence. Best-effort; never block the push result on it — the
+  // stamp + filesystem flush run fire-and-forget so a slow disk can't delay the
+  // push loop. The `.catch()` keeps the rejection from escaping as unhandled.
   if ((sub.recordKind === 'universe' || sub.recordKind === 'series') && payload.record) {
-    await setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))
+    setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))
       .then(() => flushBaseHashes())
       .catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
   }

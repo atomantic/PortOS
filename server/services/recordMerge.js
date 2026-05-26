@@ -297,7 +297,15 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
   }
   const survivor = await getSeries(survivorId);
   const loser = await getSeries(loserId);
-  if ((survivor.universeId || null) !== (loser.universeId || null)) {
+  const survivorUniverseId = survivor.universeId || null;
+  const loserUniverseId = loser.universeId || null;
+  if (!survivorUniverseId || !loserUniverseId) {
+    // Orphan series are surfaced separately as "never merged"; merging two
+    // unrelated orphans (both universeId null) would fold issues/collections
+    // across unrelated works. Require linking into a universe first.
+    throw makeErr('Orphan series (no universe) cannot be merged — link them into a universe first', ERR_VALIDATION);
+  }
+  if (survivorUniverseId !== loserUniverseId) {
     throw makeErr('Series can only be merged within the same universe', ERR_VALIDATION);
   }
 

@@ -195,4 +195,12 @@ describe('recordMerge — mergeSeries (integration)', () => {
     const b = await seriesSvc.createSeries({ name: 'S', universeId: u2.id });
     await expect(merge.mergeSeries(a.id, b.id, {})).rejects.toMatchObject({ code: 'MERGE_VALIDATION' });
   });
+
+  it('rejects merging two orphan series (null === null is not a valid scope)', async () => {
+    // Orphans are surfaced separately as "never merged"; merging two unrelated
+    // orphans would fold issues/collections across unrelated works.
+    const a = await seriesSvc.createSeries({ name: 'Orphan', universeId: null });
+    const b = await seriesSvc.createSeries({ name: 'Orphan', universeId: null });
+    await expect(merge.mergeSeries(a.id, b.id, {})).rejects.toMatchObject({ code: 'MERGE_VALIDATION' });
+  });
 });
