@@ -40,7 +40,7 @@ import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
-import { maybeJournalBeforeOverwrite, flushBaseHashes } from '../../lib/conflictJournal.js';
+import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
 
 function isSelfAuthored(senderInstanceId, localInstanceId) {
   return !!localInstanceId
@@ -441,7 +441,18 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
           failedInserts.push(`${kind}:${record.id}`);
           return false;
         });
-      if (insertOk) applied++;
+      if (insertOk) {
+        applied++;
+        // Seed the conflict-journal base hash for a freshly-imported record so
+        // its FIRST cross-install divergence is journaled (the sync merge paths
+        // seed on their insert branch too; without this a bucket-imported
+        // record has base==null and the first conflict would be missed). Hash
+        // the STORED record so the base matches a future `local` hash exactly.
+        if (kind === 'universe' || kind === 'series') {
+          const stored = await getFn(record.id).catch(() => null);
+          if (stored) await setSyncBaseHash(kind, record.id, contentHashForRecord(kind, stored));
+        }
+      }
       return;
     }
     if (remoteWins(existing.updatedAt, record.updatedAt)) {

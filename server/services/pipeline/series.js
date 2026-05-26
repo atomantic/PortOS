@@ -515,6 +515,16 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
+          // Hierarchy invariant on the sync path: an older peer (or a peer that
+          // cleared the link before the rule shipped) can push a newer series
+          // payload with universeId:null. updateSeries refuses to unlink, but
+          // this merge writes directly — so preserve the local link here too,
+          // or LWW would silently orphan a linked series. A *move* to a
+          // different non-empty universe still applies. Mirrors the importer's
+          // mergeOne guard.
+          if (!sanitized.deleted && !sanitized.universeId && local.universeId) {
+            sanitized.universeId = local.universeId;
+          }
           // Non-blocking conflict journal — archive the losing local version on
           // a true 3-way divergence; always advances the base hash. Never throws.
           await maybeJournalBeforeOverwrite({ kind: 'series', id: sanitized.id, local, remote: sanitized, source });

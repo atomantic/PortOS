@@ -228,6 +228,23 @@ describe('sharing round-trip', () => {
     expect(after.universeId).toBe(u.id);
   });
 
+  it('seeds a conflict-journal base hash when a series is first imported (so its first divergence is journaled)', async () => {
+    const bucket = await buckets.createBucket({ name: 'BaseSeedBucket', path: tempBucket, mode: 'auto-merge' });
+    const u = await universeSvc.createUniverse({ name: 'Seed Universe' });
+    const s = await series.createSeries({ name: 'Seed Series', universeId: u.id });
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+
+    // Drop the local copy so the import is a fresh INSERT (the branch that
+    // previously skipped base-hash seeding).
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const baseHashPath = join(tempData, 'sharing', 'sync_base_hashes.json');
+    const baseHashes = JSON.parse(readFileSync(baseHashPath, 'utf-8'));
+    expect(baseHashes[`series:${s.id}`]).toBeTruthy();
+  });
+
   it('re-importing the same manifest is a no-op (cursor dedup)', async () => {
     const bucket = await buckets.createBucket({ name: 'D', path: tempBucket, mode: 'auto-merge' });
     const s = await series.createSeries({ name: 'X' });
