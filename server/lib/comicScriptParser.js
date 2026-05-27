@@ -69,9 +69,10 @@ const isNoneValue = (s) => !s || NONE_RE.test(s.trim());
 // than rewrite the user's stored script, we detect the bare form and convert
 // it to the canonical shape IN MEMORY before the main parse, so the verbatim
 // text seeded into `stages.comicScript.output` is preserved while still
-// rendering into pages/panels. Markers are matched case-sensitively (real
-// headers are uppercase) so prose like "Page after page…" isn't mistaken
-// for a header.
+// rendering into pages/panels. Markers are matched case-INSENSITIVELY (so a
+// Title Case `Page 1` / `Panel 1` import still parses — see BARE_PAGE_LINE /
+// BARE_PANEL_LINE below), but guarded by a numeric token + standalone-header
+// tail so prose like "Page after page…" isn't mistaken for a header.
 // The number token that legitimately follows ISSUE/PAGE/PANEL in a header:
 // a digit run or a spelled-out number word — NOT an open word class, so prose
 // like "Page after page" / "Pages turned" isn't mistaken for a header. Shared
