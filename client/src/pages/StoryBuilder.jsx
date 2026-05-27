@@ -6,6 +6,7 @@ import { universeStylePreset } from '../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { pipelineImageCfgToRenderOpts, readPipelineImageSettings, PIPELINE_IMAGE_DEFAULTS } from '../lib/pipelineImageDefaults';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
+import StyleProbeImage from '../components/universe/StyleProbeImage';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
@@ -451,6 +452,9 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <FieldBlock label="Style notes" value={universe?.styleNotes} />
         <FieldBlock label="Influences — embrace" value={(universe?.influences?.embrace || []).join(', ')} />
         <FieldBlock label="Influences — avoid" value={(universe?.influences?.avoid || []).join(', ')} />
+        <div className="border-t border-port-border pt-3">
+          <StyleProbeImage universe={universe} onUniverseChange={() => onChanged()} canRender={!locked} />
+        </div>
         <div className="flex items-center gap-2">
           {!locked && genButton('Expand aesthetic', Boolean((universe?.premise || universe?.styleNotes || '').trim()))}
           {universe?.id && (

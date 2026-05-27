@@ -36,6 +36,7 @@ import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
+import StyleProbeImage from '../components/universe/StyleProbeImage';
 import EntryCard from '../components/universe/EntryCard';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
@@ -3130,6 +3131,14 @@ function BibleTab({
           locked={draft.locked}
           onToggleLock={toggleLock}
         />
+        <div className="mt-4 pt-4 border-t border-port-border">
+          {/* StyleProbeImage persists styleImageRefs server-side itself; merge
+              only that field into the draft so unsaved style edits aren't lost. */}
+          <StyleProbeImage
+            universe={draft}
+            onUniverseChange={(updated) => updateDraft({ styleImageRefs: updated?.styleImageRefs || [] })}
+          />
+        </div>
       </section>
     </>
   );

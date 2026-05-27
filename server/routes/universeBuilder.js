@@ -162,6 +162,8 @@ const createSchema = z.object({
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),
+  // Base "style probe" render filenames — sanitized + capped server-side.
+  styleImageRefs: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
   locked: lockedSchema.optional(),
   llm: llmSchema,
   // Canon registries on POST (Phase B.4): writers-room promote, share-bucket
@@ -190,6 +192,8 @@ const patchSchema = z.object({
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),
+  // Base "style probe" render filenames — sanitized + capped server-side.
+  styleImageRefs: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
   locked: lockedSchema.optional(),
   llm: llmSchema,
   // Canon writes — these flow through sanitizeBibleList server-side so

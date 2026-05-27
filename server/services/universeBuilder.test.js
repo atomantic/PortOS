@@ -277,6 +277,20 @@ describe("universeBuilder service", () => {
     expect(patched.influences.avoid).toEqual(w.influences.avoid);
   });
 
+  it("persists styleImageRefs (base style-probe renders); dedupes on create + patches wholesale", async () => {
+    const w = await svc.createUniverse({ name: "Probe", styleImageRefs: ["a.png", "a.png", "b.png"] });
+    expect(w.styleImageRefs).toEqual(["a.png", "b.png"]); // dedupe via sanitizeEntryImageRefs
+    const patched = await svc.updateUniverse(w.id, { styleImageRefs: ["a.png", "b.png", "c.png"] });
+    expect(patched.styleImageRefs).toEqual(["a.png", "b.png", "c.png"]);
+    const fresh = await svc.getUniverse(w.id);
+    expect(fresh.styleImageRefs).toEqual(["a.png", "b.png", "c.png"]);
+  });
+
+  it("defaults styleImageRefs to [] when absent", async () => {
+    const w = await svc.createUniverse({ name: "NoProbe" });
+    expect(w.styleImageRefs).toEqual([]);
+  });
+
   it("createUniverse trims bible fields to their max length", async () => {
     const w = await seedWorld({
       logline: "x".repeat(svc.LOGLINE_MAX + 50),
