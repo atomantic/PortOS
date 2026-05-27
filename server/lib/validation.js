@@ -1618,10 +1618,14 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
 const importerSourceField = z.string().min(1).max(5_000_000);
 
 // Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript).
-// Far below importerSourceField's 5MB so a single bundled comic issue can't
-// blow past it silently — analyze validates against this so the failure
-// surfaces at analyze, not as a commit-time 400.
-export const IMPORTER_PROSE_EXCERPT_MAX = 500_000;
+// MUST stay ≤ `STAGE_OUTPUT_MAX` in server/services/pipeline/issues.js (400_000)
+// — createIssue trims stage output to that, so a larger excerpt would be
+// SILENTLY TRUNCATED on commit despite the import being advertised as verbatim.
+// (lib can't import from services; importer.test.js pins the invariant.) Far
+// below importerSourceField's 5MB so a single bundled comic issue can't blow
+// past it silently — analyze validates against this so the failure surfaces at
+// analyze, not as a commit-time truncation/400.
+export const IMPORTER_PROSE_EXCERPT_MAX = 400_000;
 
 // Classify endpoint only sees the source — no universe/series context. The
 // LLM only consumes the head, so the schema is intentionally minimal.

@@ -134,8 +134,12 @@ describe('pipeline auto-runner', () => {
     });
     expect(generated).not.toContain('prose');      // skipped — script-first
     expect(generated).not.toContain('comicScript'); // already ready
+    // teleplay must NOT be generated from empty prose — it has no source to
+    // adapt, so generating it would burn an LLM call + persist a bogus stage.
+    expect(generated).not.toContain('teleplay');
     const final = await issuesSvc.getIssue(issue.id);
     expect(final.stages?.prose?.output || '').toBe('');
+    expect(final.stages?.teleplay?.output || '').toBe('');
   });
 
   it('DOES generate prose for a script-first issue when force=true', async () => {

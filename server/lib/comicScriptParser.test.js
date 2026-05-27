@@ -381,6 +381,21 @@ Thud!`;
     expect(pages[1].panels[1].caption).toBe('Woah. Slow down big fella...');
   });
 
+  it('parses Title Case bare headers (Page/Panel/Caption), matching the case-insensitive splitter', () => {
+    // The mechanical splitter accepts `Page 1` / `Panel 1` case-insensitively
+    // and seeds them verbatim into stages.comicScript; the parser MUST match
+    // the same case variants or the import renders zero panels.
+    const { pages } = parseComicScript('Page 1\nPanel 1\nA scene.\nCaption\nHello there.\nPage 2\nPanel 1\nAnother.');
+    expect(pages).toHaveLength(2);
+    expect(pages[0].panels[0].description).toBe('A scene.');
+    expect(pages[0].panels[0].caption).toBe('Hello there.');
+    expect(pages[1].panels[0].description).toBe('Another.');
+  });
+
+  it('still rejects prose that opens with the keyword (number-token gate, any case)', () => {
+    expect(parseComicScript('Pages turned slowly through the long evening as she read.').pages).toHaveLength(0);
+  });
+
   it('leaves canonical Markdown scripts untouched (no false bare-detection)', () => {
     const { pages } = parseComicScript(SAMPLE);
     // Same result the canonical-format tests assert — normalization skipped.

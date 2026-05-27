@@ -32,6 +32,7 @@ import {
 } from './pipeline/series.js';
 import { createIssue, deleteIssue, listIssues } from './pipeline/issues.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
+import { COMIC_NUM } from '../lib/comicScriptParser.js';
 import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/validation.js';
 // Re-export the per-issue excerpt ceiling so callers/tests can reference the
 // same value the mechanical comic split validates against.
@@ -422,17 +423,12 @@ const COMIC_PAGES_PER_ISSUE = 22;
 // to open with "Page " or "Issue " from being mistaken for a structural
 // marker (the LLM fallback still covers genuinely header-less scripts).
 const COMIC_HEADER_MAX_LEN = 80;
-// The number token that legitimately follows ISSUE/PAGE in a header: a digit
-// run or a spelled-out number word. Crucially this is NOT `[a-z]+` — an open
-// word class matched ordinary prose like "Issue resolved." or "Pages turned
-// slowly" and (because the mechanical path wins whenever ≥1 header is found)
-// mis-split the script with no LLM fallback. Roman numerals are deliberately
-// excluded: under the case-insensitive flag `[IVXLCDM]+` matches common prose
-// words ("mild", "did", "civic"), so a rare "PAGE IV" header simply falls back
-// to the LLM split instead.
-const COMIC_NUM = '(?:\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)';
 // `ISSUE #3`, `ISSUE 3`, `ISSUE THREE`, `ISSUE 3: TITLE`, `ISSUE THREE - TITLE`.
-// The `\b` after the keyword also stops "ISSUES with the plan…" from matching.
+// `COMIC_NUM` (shared with the render-time parser via comicScriptParser.js)
+// restricts the number token to digits/spelled-numbers so prose like
+// "Issue resolved." / "Pages turned slowly" isn't mis-split; the `\b` after
+// the keyword also stops "ISSUES with the plan…" from matching. Sharing the
+// token keeps the import-time split and the render-time parse in agreement.
 const ISSUE_HEADER_RE = new RegExp(`^issue\\b\\s*#?\\s*(${COMIC_NUM})\\b\\s*[:.\\-–—]?\\s*(.*)$`, 'i');
 // `PAGE 1`, `PAGE ONE`, `PAGES 2-3`, `PAGE ONE (FIVE PANELS)`
 const PAGE_HEADER_RE = new RegExp(`^pages?\\b\\s*#?\\s*(${COMIC_NUM})\\b`, 'i');

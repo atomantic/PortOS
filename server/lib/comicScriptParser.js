@@ -72,10 +72,21 @@ const isNoneValue = (s) => !s || NONE_RE.test(s.trim());
 // rendering into pages/panels. Markers are matched case-sensitively (real
 // headers are uppercase) so prose like "Page after page…" isn't mistaken
 // for a header.
-const BARE_PAGE_LINE = /^\s*PAGES?\s+\S+/;     // PAGE 1 / PAGES 2-3
-const BARE_PANEL_LINE = /^\s*PANELS?\s+\S+/;   // PANEL 1
-const BARE_CAPTION_LINE = /^\s*CAPTION\b/;     // CAPTION / CAPTION 2:
-const BARE_SFX_LINE = /^\s*SFX\b/;             // SFX
+// The number token that legitimately follows ISSUE/PAGE/PANEL in a header:
+// a digit run or a spelled-out number word — NOT an open word class, so prose
+// like "Page after page" / "Pages turned" isn't mistaken for a header. Shared
+// with the importer's mechanical splitter (`server/services/importer.js`
+// imports this) so the import-time split and the render-time parse agree on
+// what a header looks like. Roman numerals are excluded: under `/i` the class
+// matches prose words ("mild", "civic").
+export const COMIC_NUM = '(?:\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)';
+// Case-INSENSITIVE so a Title Case `Page 1` / `Panel 1` script (which the
+// splitter already accepts and seeds into stages.comicScript) also parses into
+// pages/panels here — otherwise the import succeeds but renders zero panels.
+const BARE_PAGE_LINE = new RegExp(`^\\s*pages?\\b\\s*#?\\s*${COMIC_NUM}\\b`, 'i');   // PAGE 1 / Page 1 / PAGES 2
+const BARE_PANEL_LINE = new RegExp(`^\\s*panels?\\b\\s*#?\\s*${COMIC_NUM}\\b`, 'i'); // PANEL 1 / Panel 1
+const BARE_CAPTION_LINE = /^\s*caption\b/i;    // CAPTION / Caption / CAPTION 2:
+const BARE_SFX_LINE = /^\s*sfx\b/i;            // SFX / Sfx
 // A standalone dialogue speaker cue: a short, NAME-like all-caps token,
 // optionally with a parenthetical (`GIANT`, `KESSA (WHISPERED)`). It must NOT
 // contain sentence punctuation (`. , ! ? :`) so a terse all-caps panel

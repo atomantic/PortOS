@@ -83,23 +83,36 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       // generated prose instead of the user's verbatim script. A backport
       // (Create → Importer) is the deliberate way to fill prose from the
       // script. `force` still regenerates.
+      let scriptFirstSkip = false;
       if (!record.cancelRequested) {
         const proseIssue = await getIssue(issueId);
         const proseEmpty = !isStageReady(proseIssue.stages?.prose);
         const scriptAuthored = isStageReady(proseIssue.stages?.comicScript)
           || isStageReady(proseIssue.stages?.teleplay);
         if (proseEmpty && scriptAuthored && !options.force) {
+          scriptFirstSkip = true;
           broadcast(issueId, { type: 'skip', stage: 'prose', reason: 'script already authored (imported script-first) — not back-filling prose' });
         } else {
           await runStageIfNeeded(issueId, 'prose', options);
         }
       }
-      // Stage 3: comicScript + teleplay in parallel — both depend only on prose
+      // Stage 3: comicScript + teleplay in parallel — both derive from prose.
+      // When prose was skipped (script-first import), a script stage that ISN'T
+      // already authored has no source to adapt — generating it would burn an
+      // LLM call on empty prose and persist a bogus 'ready' stage. Skip those;
+      // the authored script runs through runStageIfNeeded and is skipped as
+      // already-ready. `force` still regenerates everything.
       if (!record.cancelRequested) {
-        await Promise.all([
-          runStageIfNeeded(issueId, 'comicScript', options),
-          runStageIfNeeded(issueId, 'teleplay', options),
-        ]);
+        await Promise.all(['comicScript', 'teleplay'].map(async (stageId) => {
+          if (scriptFirstSkip && !options.force) {
+            const iss = await getIssue(issueId);
+            if (!isStageReady(iss.stages?.[stageId])) {
+              broadcast(issueId, { type: 'skip', stage: stageId, reason: 'no prose to adapt (imported script-first)' });
+              return;
+            }
+          }
+          return runStageIfNeeded(issueId, stageId, options);
+        }));
       }
 
       // Optional Stage 4: episode video. Gated behind `includeVideo: true` so

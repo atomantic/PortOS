@@ -284,6 +284,16 @@ describe('splitComicScriptIssues (mechanical comic split)', () => {
   });
 });
 
+describe('importer cap invariants', () => {
+  it('IMPORTER_PROSE_EXCERPT_MAX stays ≤ STAGE_OUTPUT_MAX (no silent truncation on commit)', () => {
+    // createIssue trims stage output to STAGE_OUTPUT_MAX; if the importer's
+    // per-issue ceiling were larger, a verbatim excerpt between the two would
+    // pass analyze then be silently truncated on commit. lib/validation can't
+    // import the services-side constant, so pin the invariant here.
+    expect(importerSvc.IMPORTER_PROSE_EXCERPT_MAX).toBeLessThanOrEqual(issuesSvc.STAGE_OUTPUT_MAX);
+  });
+});
+
 describe('analyzeImport', () => {
   it('creates universe + series on first run and returns preview shape', async () => {
     wireDefaultLLMResponses();
