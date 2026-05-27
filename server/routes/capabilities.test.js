@@ -6,7 +6,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // Stub every integration the aggregator reads. Defaults describe a fully
 // configured, healthy install; individual tests override a single source.
 vi.mock('../services/providers.js', () => ({
-  getAllProviders: vi.fn(async () => [{ id: 'p1', enabled: true }]),
+  getAllProviders: vi.fn(async () => ({ activeProvider: 'p1', providers: [{ id: 'p1', enabled: true }] })),
   getProviderById: vi.fn(async () => ({ id: 'lmstudio', endpoint: 'http://x/v1', enabled: true })),
 }));
 vi.mock('../services/providerStatus.js', () => ({

@@ -27,6 +27,11 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
   const { kind, records, survivorId, loserId, preview, choices, overrides = {}, busy, aiBusy } = merge;
   const conflicts = preview?.conflicts || [];
   const cascade = preview?.cascade || {};
+  // List-shaped fields (style/negative prompt chips, categories, canon, etc.)
+  // are unioned rather than conflict-resolved — show what's being combined so
+  // the no-data-loss fold isn't invisible. Only rows where the folded copy
+  // actually contributed new entries are worth calling out.
+  const unionSummary = (preview?.unionSummary || []).filter((r) => r.added > 0);
   const multi = records.length > 2; // 3+ copies fold one pair at a time
   const aiEligible = conflicts.some(isStringConflict);
 
@@ -129,8 +134,24 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
           </div>
         )}
 
-        {preview && conflicts.length === 0 && (
+        {preview && conflicts.length === 0 && unionSummary.length === 0 && (
           <div className="text-xs text-port-success">No conflicting fields — unique data from both will be unioned.</div>
+        )}
+
+        {preview && unionSummary.length > 0 && (
+          <div className="border border-port-border rounded p-3 bg-port-bg/40">
+            <p className="text-xs text-gray-400 mb-2">Combining list fields (no data loss — entries from both are kept):</p>
+            <ul className="space-y-1">
+              {unionSummary.map((r) => (
+                <li key={r.field} className="flex items-center justify-between text-xs text-gray-300">
+                  <span>{r.field}</span>
+                  <span className="font-mono text-[11px] text-gray-400">
+                    {r.merged} total <span className="text-port-success">+{r.added} folded in</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {preview && (

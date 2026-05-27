@@ -39,6 +39,8 @@ import * as seasonsSvc from '../services/pipeline/seasons.js';
 import * as arcPlanner from '../services/pipeline/arcPlanner.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
+import * as editorialAnalysis from '../services/pipeline/editorialAnalysis.js';
+import * as editorialRunner from '../services/pipeline/editorialAnalysisRunner.js';
 import * as volumeBeatsRunner from '../services/pipeline/volumeBeatsRunner.js';
 import {
   enqueueVisualImage,
@@ -547,6 +549,14 @@ const autoRunSchema = z.object({
   aspectRatio: z.enum(ASPECT_RATIOS).optional(),
   quality: z.enum(QUALITIES).optional(),
   modelId: z.string().trim().max(64).optional(),
+});
+
+// Editorial reader-emotion analysis — provider/model optional (falls through
+// to the active or stage-pinned provider); `force` re-analyzes unchanged issues.
+const editorialAnalyzeSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
 });
 
 // Merged voice list across every supported TTS engine (Kokoro + Piper today;
@@ -1881,6 +1891,58 @@ router.get('/issues/:id/auto-run-text/progress', (req, res) => {
 
 router.post('/issues/:id/auto-run-text/cancel', asyncHandler(async (req, res) => {
   const canceled = autoRunner.cancelAutoRun(req.params.id);
+  res.json({ canceled });
+}));
+
+// =====================
+// Editorial roadmap / reader-emotion analysis
+// =====================
+
+// Aggregate roadmap (Plot / Character / Reader curves + character arcs + coverage)
+router.get('/series/:id/editorial', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await editorialAnalysis.getSeriesEditorial(req.params.id));
+}));
+
+// Full per-issue snapshot (section-by-section emotion log + character arcs)
+router.get('/issues/:id/editorial', asyncHandler(async (req, res) => {
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const analysis = await editorialAnalysis.getIssueAnalysis(req.params.id);
+  res.json(analysis || { issueId: req.params.id, status: 'none' });
+}));
+
+// Analyze ONE issue (synchronous — returns the finished snapshot)
+router.post('/issues/:id/editorial/analyze', asyncHandler(async (req, res) => {
+  const body = validateRequest(editorialAnalyzeSchema, req.body ?? {});
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await editorialAnalysis.analyzeIssue(req.params.id, body));
+}));
+
+// Analyze the whole series (batch — progress via SSE)
+router.post('/series/:id/editorial/analyze', asyncHandler(async (req, res) => {
+  const body = validateRequest(editorialAnalyzeSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = await editorialRunner.startSeriesAnalysis(req.params.id, body);
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/editorial/analyze/progress`,
+  });
+}));
+
+router.get('/series/:id/editorial/analyze/progress', (req, res) => {
+  const attached = editorialRunner.attachClient(req.params.id, res);
+  if (!attached) {
+    res.status(404).json({ error: 'No active editorial analysis for this series' });
+  }
+});
+
+// Lightweight probe so a (re)mounting client can re-attach to an in-flight batch.
+router.get('/series/:id/editorial/analyze/status', (req, res) => {
+  res.json({ active: editorialRunner.isSeriesAnalysisActive(req.params.id) });
+});
+
+router.post('/series/:id/editorial/analyze/cancel', asyncHandler(async (req, res) => {
+  const canceled = editorialRunner.cancelSeriesAnalysis(req.params.id);
   res.json({ canceled });
 }));
 

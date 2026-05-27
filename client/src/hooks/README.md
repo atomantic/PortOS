@@ -34,7 +34,9 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineAutoRunProgress` | Auto-run-text SSE for a pipeline issue. | Pipeline auto-run UI surfaces only. |
+| `usePipelineEditorialProgress` | Series editorial reader-emotion batch SSE. | Editorial Roadmap analysis UI only. |
 | `usePipelineVolumeBeatsProgress` | Volume beat-sheet SSE. | Volume beat-sheet UI only. |
+| `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
 
 ## Media (annotations, completion, attachments)
 

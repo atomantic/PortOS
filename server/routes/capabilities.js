@@ -50,7 +50,7 @@ async function resolveTelegram() {
 // GET /api/capabilities — capability map of every connected system.
 router.get('/', asyncHandler(async (req, res) => {
   const [
-    providers,
+    providersData,
     providerStatuses,
     calendarAccounts,
     messageAccounts,
@@ -62,7 +62,7 @@ router.get('/', asyncHandler(async (req, res) => {
     appSummary,
     network,
   ] = await Promise.all([
-    getAllProviders().catch(() => []),
+    getAllProviders().catch(() => ({ providers: [] })),
     Promise.resolve().then(() => getAllProviderStatuses()).catch(() => ({})),
     listCalendarAccounts().catch(() => []),
     listMessageAccounts().catch(() => []),
@@ -78,7 +78,7 @@ router.get('/', asyncHandler(async (req, res) => {
   ]);
 
   const rows = buildCapabilityRows({
-    providers,
+    providers: providersData?.providers ?? [],
     providerStatuses,
     calendarAccounts,
     messageAccounts,

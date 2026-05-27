@@ -43,7 +43,9 @@ export * from './useSharingNotifications.js';
 export * from './useImageGenProgress.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineAutoRunProgress.js';
+export * from './usePipelineEditorialProgress.js';
 export * from './usePipelineVolumeBeatsProgress.js';
+export * from './useSeriesEditorial.js';
 export * from './useSseProgress.js';
 
 // === Media (annotations, completion, attachments) ===

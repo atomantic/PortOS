@@ -122,6 +122,20 @@ describe('shouldSpeak — decision matrix', () => {
     const cfg = { enabled: true, llm: { proactive: { enabled: true, quietHours: { enabled: true, start: '22:00', end: '07:00' } } } };
     expect(shouldSpeak(cfg, 14 * 60).ok).toBe(true);
   });
+
+  it('solicited bypasses the proactive-disabled gate but not voice-disabled', () => {
+    // proactive off + solicited → still speaks (user asked for it).
+    expect(shouldSpeak({ enabled: true, llm: { proactive: { enabled: false } } }, 0, { solicited: true }).ok).toBe(true);
+    // voice itself off → solicited can't override.
+    expect(shouldSpeak({ enabled: false }, 0, { solicited: true }).ok).toBe(false);
+  });
+
+  it('solicited still respects quiet hours', () => {
+    const cfg = { enabled: true, llm: { proactive: { enabled: false, quietHours: { enabled: true, start: '22:00', end: '07:00' } } } };
+    const d = shouldSpeak(cfg, 23 * 60, { solicited: true });
+    expect(d.ok).toBe(false);
+    expect(d.reason).toBe('quiet-hours');
+  });
 });
 
 describe('speakProactive', () => {

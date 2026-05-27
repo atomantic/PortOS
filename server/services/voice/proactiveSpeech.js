@@ -52,11 +52,16 @@ const getLocalMinutes = async () => {
 
 // Pure decision helper — given a config snapshot + current local minutes,
 // should this proactive speech go out? Tested directly without time mocking.
-export const shouldSpeak = (cfg, nowMinutes) => {
+//
+// `solicited` marks a line the user explicitly asked for (e.g. the completion
+// of a coding task they dispatched by voice). Such lines skip the
+// proactive-enabled gate — the user opted in by issuing the request — but
+// still honor voice-disabled and quiet hours (no piping up at 3am, PR or not).
+export const shouldSpeak = (cfg, nowMinutes, { solicited = false } = {}) => {
   if (!cfg?.enabled) return { ok: false, reason: 'voice-disabled' };
   const proactive = cfg.llm?.proactive;
-  if (!proactive?.enabled) return { ok: false, reason: 'proactive-disabled' };
-  if (proactive.quietHours?.enabled) {
+  if (!solicited && !proactive?.enabled) return { ok: false, reason: 'proactive-disabled' };
+  if (proactive?.quietHours?.enabled) {
     if (isWithinQuietHours({
       start: proactive.quietHours.start,
       end: proactive.quietHours.end,
@@ -77,7 +82,7 @@ export const shouldSpeak = (cfg, nowMinutes) => {
 //
 // Returns { ok, reason?, latencyMs? } so callers know whether the line
 // went out or was suppressed.
-export const speakProactive = async ({ io, text, priority = 'normal', source = 'cos' }) => {
+export const speakProactive = async ({ io, text, priority = 'normal', source = 'cos', solicited = false }) => {
   if (!io) return { ok: false, reason: 'no-io' };
   const trimmed = (text || '').trim();
   if (!trimmed) return { ok: false, reason: 'empty' };
@@ -95,7 +100,7 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   const nowMinutes = cfg?.llm?.proactive?.quietHours?.enabled
     ? await getLocalMinutes()
     : 0;
-  const decision = shouldSpeak(cfg, nowMinutes);
+  const decision = shouldSpeak(cfg, nowMinutes, { solicited });
   if (!decision.ok) {
     console.log(`🔕 voice: proactive suppressed (${decision.reason}) "${trimmed.slice(0, 60)}"`);
     return decision;

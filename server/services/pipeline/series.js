@@ -21,6 +21,7 @@ import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
+  deleteSyncBaseHash,
 } from '../../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
@@ -573,6 +574,7 @@ export async function pruneTombstonedSeries(beforeMs) {
       const t = Date.parse(fresh.deletedAt || '');
       if (!Number.isFinite(t) || t >= beforeMs) return false;
       await s.deleteOneNow(id);
+      await deleteSyncBaseHash('series', id);
       return true;
     })
   ));

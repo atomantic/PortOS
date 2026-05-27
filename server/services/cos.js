@@ -2392,6 +2392,9 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     if (taskData.model) metadata.model = taskData.model;
     if (taskData.provider) metadata.provider = taskData.provider;
     if (taskData.app) metadata.app = taskData.app;
+    // Tags a task dispatched by the voice code-agent tool so the proactive
+    // speech layer can announce its completion (see voice/proactiveTriggers.js).
+    if (taskData.voiceDispatch === true) metadata.voiceDispatch = true;
     if (taskData.isRecovery === true) metadata.isRecovery = true;
     if (taskData.createJiraTicket) metadata.createJiraTicket = true;
     // Boolean flags: persist both true and false so users can explicitly override defaults.

@@ -6,26 +6,13 @@ import {
   WRITING_PRINCIPLES,
   PLANNED_ANALYSES,
 } from '../lib/writingGuide';
+import Pill from '../components/ui/Pill';
 
 // Writers Room Guide — deep-linkable docs at /writers-room/guide. Renders from
 // the canonical reference data in lib/writingGuide.js so length targets stay in
 // sync with the editor features that will eventually enforce them. The parent
 // <main> is full-width/overflow-hidden (see Layout.jsx isFullWidth), so this
 // page owns its own vertical scroll.
-
-const PILL_TONES = {
-  accent: 'text-port-accent bg-port-accent/10 border-port-accent/20',
-  muted: 'text-gray-300 bg-port-bg border-port-border',
-  note: 'text-gray-500 bg-port-bg border-port-border italic',
-};
-
-function Pill({ tone = 'muted', children }) {
-  return (
-    <span className={`text-xs border rounded px-2 py-0.5 ${PILL_TONES[tone]}`}>
-      {children}
-    </span>
-  );
-}
 
 function LengthCard({ target }) {
   // A chapter band with null bounds means the form is read in one sitting; render
@@ -38,9 +25,7 @@ function LengthCard({ target }) {
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-semibold text-white">{target.label}</span>
         {!target.core && (
-          <span className="text-[10px] uppercase tracking-wide text-gray-500 border border-port-border rounded px-1.5 py-0.5">
-            context
-          </span>
+          <Pill tone="context" size="xs">context</Pill>
         )}
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -182,9 +167,9 @@ export default function WritersRoomGuide() {
                 <div key={item.id} className="bg-port-card border border-port-border rounded-lg p-4">
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <h3 className="text-sm font-semibold text-white">{item.title}</h3>
-                    <span className="text-[10px] uppercase tracking-wide text-port-warning border border-port-warning/30 bg-port-warning/10 rounded px-1.5 py-0.5">
+                    <Pill tone="bare" size="xs" className="uppercase tracking-wide text-port-warning border-port-warning/30 bg-port-warning/10">
                       {item.status}
-                    </span>
+                    </Pill>
                   </div>
                   <p className="text-xs text-gray-400 leading-relaxed">{item.summary}</p>
                 </div>

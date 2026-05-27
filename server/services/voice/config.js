@@ -75,6 +75,23 @@ export const VOICE_DEFAULTS = Object.freeze({
       enabled: false,
       maxIterations: 3,
     },
+    // Code-agent delegation — lets the voice CoS hand a coding task to a
+    // CLI/TUI agent (Claude Code, Codex, Gemini) via the CoS task system.
+    // The conversational brain (llm.provider above) stays the fast local
+    // router; this is the heavyweight agent that does the actual edits in an
+    // isolated worktree and opens a PR. OFF by default. Empty provider/model
+    // mean "use the system default AI provider → model" (providers.json
+    // activeProvider + selectModelForTask) — exactly what a CoS task does
+    // when no override is pinned. announceOnComplete speaks the result when
+    // the task finishes (solicited, so it bypasses the proactive-enabled gate
+    // but still respects quiet hours). Requires tools.enabled + a tool-use
+    // model, same as every other voice tool.
+    codeAgent: {
+      enabled: false,
+      provider: '',
+      model: '',
+      announceOnComplete: true,
+    },
     // Proactive speech — the CoS speaks first (alerts, briefings, reminders).
     // OFF by default so a fresh install doesn't blurt at the user; opt in via
     // Settings → Voice. Quiet hours suppress proactive lines; barge-in (a

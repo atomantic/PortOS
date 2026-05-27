@@ -1,15 +1,19 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
+import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2, Circle } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import EntryCard from '../components/universe/EntryCard';
 import { previewCanonFragments } from '../lib/canonPrompt';
+import { getProviders } from '../services/api';
+import { filterSelectableModels } from '../utils/providers';
 import {
   analyzeImport,
   classifyImport,
   commitImport,
+  retryImporterIssues,
   getImporterConfig,
   IMPORTER_CONTENT_TYPES,
   IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
@@ -53,6 +57,34 @@ export default function Importer() {
   const [intake, setIntake] = useState(emptyIntake);
   const [preview, setPreview] = useState(null);
 
+  // Live analyze-phase stage progress, driven by `importer:progress` socket
+  // frames. `null` = no run started yet (or reset before a fresh Analyze).
+  // The server broadcasts to all clients (single-user trust model), so each
+  // frame carries a `runId` and we ignore stage frames that don't match the
+  // run a `start` frame opened — guards against a straggler from a prior run.
+  const [analyzeStages, setAnalyzeStages] = useState(null);
+  const activeRunIdRef = useRef(null);
+  useEffect(() => {
+    const onProgress = (ev) => {
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'start') {
+        activeRunIdRef.current = ev.runId;
+        setAnalyzeStages(
+          (Array.isArray(ev.stages) ? ev.stages : []).map((s) => ({ ...s, status: 'pending' })),
+        );
+        return;
+      }
+      if (ev.type === 'stage') {
+        if (ev.runId !== activeRunIdRef.current) return;
+        setAnalyzeStages((prev) =>
+          Array.isArray(prev) ? prev.map((s) => (s.id === ev.id ? { ...s, status: ev.status } : s)) : prev,
+        );
+      }
+    };
+    socket.on('importer:progress', onProgress);
+    return () => socket.off('importer:progress', onProgress);
+  }, []);
+
   // Server is the source of truth for the enums — a prior client-side copy
   // (`IMPORTER_ARC_ROLES_FALLBACK`) silently drifted, so we wait on the GET
   // rather than shadow it. `arcShapeIds: null` means "config not loaded
@@ -82,6 +114,27 @@ export default function Importer() {
     return () => ac.abort();
   }, []);
 
+  // AI provider/model override for the extraction LLM calls (classify +
+  // analyze). Empty string = "use the stage/active provider default" — sent
+  // as `''` and coerced to undefined server-side (see importer*Schema).
+  const [providers, setProviders] = useState([]);
+  const [llmProvider, setLlmProvider] = useState('');
+  const [llmModel, setLlmModel] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    getProviders({ silent: true }).then((data) => {
+      if (cancelled) return;
+      setProviders((data?.providers || []).filter((p) => p.enabled));
+    }).catch((err) => {
+      console.warn(`⚠️ Importer provider list fetch failed: ${err?.message || err}`);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const llmModels = useMemo(() => {
+    const p = providers.find((x) => x.id === llmProvider);
+    return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
+  }, [providers, llmProvider]);
+
   const [canonSelections, setCanonSelections] = useState({ characters: [], places: [], objects: [] });
   const [selectedCanon, setSelectedCanon] = useState({ characters: new Set(), places: new Set(), objects: new Set() });
   const [arcDraft, setArcDraft] = useState(null);
@@ -94,13 +147,21 @@ export default function Importer() {
   // Destructive opt-in for existing series — wipes issues + overwrites arc.
   const [replaceMode, setReplaceMode] = useState(false);
   const [classifyHint, setClassifyHint] = useState(null);
+  // Set when analyze succeeded on canon+arc but the issue split failed — the
+  // Review panel shows a retry affordance instead of throwing the run away.
+  const [issueSplitFailed, setIssueSplitFailed] = useState(false);
+  const [issueSplitError, setIssueSplitError] = useState(null);
 
   // Stale hint after the source changes would mislead the user.
   useEffect(() => { setClassifyHint(null); }, [intake.source]);
 
   const [runClassify, classifying] = useAsyncAction(async () => {
     if (!intake.source.trim()) return null;
-    const result = await classifyImport({ source: intake.source.slice(0, CLASSIFY_SOURCE_HEAD_CHARS) }, { silent: true });
+    const result = await classifyImport({
+      source: intake.source.slice(0, CLASSIFY_SOURCE_HEAD_CHARS),
+      providerOverride: llmProvider,
+      modelOverride: llmModel,
+    }, { silent: true });
     if (!result) return null;
     if (result.contentType && IMPORTER_CONTENT_TYPES.includes(result.contentType)) {
       setIntake((prev) => ({ ...prev, contentType: result.contentType }));
@@ -117,13 +178,21 @@ export default function Importer() {
     // A late-resolving config GET would clobber the server-fresh values in
     // `result.limits` / `arcRoles` / `arcShapeIds` below.
     abortConfigRef.current?.abort();
+    // Clear any prior run's checklist; the server's `start` frame repopulates
+    // it once the first AI pass begins (a generic spinner shows until then).
+    activeRunIdRef.current = null;
+    setAnalyzeStages(null);
     const payload = {
       universeName: intake.universeName.trim(),
       seriesName: intake.seriesName.trim(),
       contentType: intake.contentType,
       source: intake.source,
+      providerOverride: llmProvider,
+      modelOverride: llmModel,
     };
-    const tic = intake.targetIssueCount === '' ? null : Number(intake.targetIssueCount);
+    // Round to an integer — the server schema is z.number().int(), so a
+    // pasted/typed decimal like 2.5 would otherwise 400 with a confusing error.
+    const tic = intake.targetIssueCount === '' ? null : Math.round(Number(intake.targetIssueCount));
     if (Number.isFinite(tic) && tic > 0) payload.targetIssueCount = tic;
     const result = await analyzeImport(payload, { silent: true });
     if (!result) return null;
@@ -142,6 +211,8 @@ export default function Importer() {
     setArcDraft(pickArcFields(result.arcPreview));
     setSeasonsDraft((result.seasonsPreview || []).map((s) => ({ ...s })));
     setIssuesDraft((result.issueProposals || []).map((i) => ({ ...i })));
+    setIssueSplitFailed(Boolean(result.issueSplitFailed));
+    setIssueSplitError(result.issueSplitError || null);
     setArcAlreadyPersisted(false);
     setReplaceMode(false);
     setConfig((c) => ({
@@ -162,6 +233,10 @@ export default function Importer() {
       universeId: preview.universe.id,
       seriesId: preview.series.id,
       issues: issuesDraft,
+      // Routes the verbatim excerpt to the right stage server-side — a
+      // comic-script import seeds stages.comicScript (ready) so the pipeline
+      // renders the user's script as-is instead of regenerating it.
+      contentType: intake.contentType,
     };
     const payload = arcAlreadyPersisted
       ? { ...base, canonSelections: { characters: [], places: [], objects: [] }, arc: null, seasons: [] }
@@ -205,6 +280,38 @@ export default function Importer() {
     return result;
   }, { errorMessage: 'Failed to commit import' });
 
+  // Recovery for a failed issue split — re-runs ONLY the split against the
+  // same source + the arc the user already has in the panel. Canon + arc are
+  // untouched; on success we populate the issues and clear the failed banner.
+  const [runRetryIssues, retryingIssues] = useAsyncAction(async () => {
+    if (!preview) return null;
+    const payload = {
+      contentType: intake.contentType,
+      source: intake.source,
+      seriesName: preview.series?.name || intake.seriesName,
+      providerOverride: llmProvider,
+      modelOverride: llmModel,
+    };
+    const arcSummary = arcDraft?.summary || arcDraft?.logline || '';
+    if (arcSummary.trim()) payload.arcSummary = arcSummary;
+    // Round to an integer — the server schema is z.number().int(), so a
+    // pasted/typed decimal like 2.5 would otherwise 400 with a confusing error.
+    const tic = intake.targetIssueCount === '' ? null : Math.round(Number(intake.targetIssueCount));
+    if (Number.isFinite(tic) && tic > 0) payload.targetIssueCount = tic;
+    const result = await retryImporterIssues(payload, { silent: true });
+    if (!result) return null;
+    const issues = Array.isArray(result.issueProposals) ? result.issueProposals : [];
+    setIssuesDraft(issues.map((i) => ({ ...i })));
+    if (issues.length === 0) {
+      toast.warning('Retry produced no issues — adjust the target issue count or the source and try again.');
+    } else {
+      setIssueSplitFailed(false);
+      setIssueSplitError(null);
+      toast.success(`Issue split succeeded — ${issues.length} issue${issues.length === 1 ? '' : 's'} proposed.`);
+    }
+    return result;
+  }, { errorMessage: 'Failed to retry issue split' });
+
   return (
     <div className="space-y-6">
       <header className="flex items-start gap-3">
@@ -225,16 +332,24 @@ export default function Importer() {
           setIntake={setIntake}
           sourceCharLimit={config.sourceCharLimit}
           analyzing={analyzing}
+          analyzeStages={analyzeStages}
           onAnalyze={runAnalyze}
           classifying={classifying}
           onClassify={runClassify}
           classifyHint={classifyHint}
+          providers={providers}
+          llmProvider={llmProvider}
+          llmModel={llmModel}
+          llmModels={llmModels}
+          onProviderChange={(id) => { setLlmProvider(id); setLlmModel(''); }}
+          onModelChange={setLlmModel}
         />
       )}
 
       {phase === 'review' && preview && (
         <ReviewPanel
           preview={preview}
+          contentType={intake.contentType}
           canonSelections={canonSelections}
           selectedCanon={selectedCanon}
           setSelectedCanon={setSelectedCanon}
@@ -251,13 +366,20 @@ export default function Importer() {
           committing={committing}
           onCommit={runCommit}
           onBack={() => setPhase('intake')}
+          issueSplitFailed={issueSplitFailed}
+          issueSplitError={issueSplitError}
+          onRetryIssues={runRetryIssues}
+          retryingIssues={retryingIssues}
         />
       )}
     </div>
   );
 }
 
-function IntakeForm({ intake, setIntake, sourceCharLimit, analyzing, onAnalyze, classifying, onClassify, classifyHint }) {
+function IntakeForm({
+  intake, setIntake, sourceCharLimit, analyzing, analyzeStages, onAnalyze, classifying, onClassify, classifyHint,
+  providers, llmProvider, llmModel, llmModels, onProviderChange, onModelChange,
+}) {
   const sourceLen = intake.source.length;
   const sourceOver = sourceLen > sourceCharLimit;
   const intakeValid = intake.universeName.trim() && intake.seriesName.trim() && intake.source.trim() && !sourceOver;
@@ -396,7 +518,42 @@ function IntakeForm({ intake, setIntake, sourceCharLimit, analyzing, onAnalyze, 
           />
           <p className="text-xs text-port-text-muted mt-1">Leave blank to let the LLM split based on natural chapter/issue/act boundaries.</p>
         </div>
+        <div>
+          <label htmlFor="importer-llm-provider" className="block text-sm font-medium mb-1">
+            AI Provider &amp; Model (optional)
+          </label>
+          <div className="flex items-center gap-2">
+            <select
+              id="importer-llm-provider"
+              value={llmProvider}
+              onChange={(e) => onProviderChange(e.target.value)}
+              className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
+            >
+              <option value="">Default (stage provider)</option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {llmModels.length > 0 && (
+              <select
+                id="importer-llm-model"
+                aria-label="Model"
+                value={llmModel}
+                onChange={(e) => onModelChange(e.target.value)}
+                className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
+              >
+                <option value="">Default model</option>
+                {llmModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <p className="text-xs text-port-text-muted mt-1">Model used to extract canon, arc, and the issue split. Defaults to each stage&apos;s configured provider.</p>
+        </div>
       </div>
+
+      {analyzing && <ImporterProgress stages={analyzeStages} />}
 
       <div className="flex items-center justify-end gap-2 pt-2">
         <button
@@ -413,14 +570,51 @@ function IntakeForm({ intake, setIntake, sourceCharLimit, analyzing, onAnalyze, 
   );
 }
 
+// Live checklist of the analyze phase's AI passes. `stages` is null until the
+// server's first `importer:progress` frame arrives — show a generic spinner in
+// that window so the panel never looks empty between click and first frame.
+function ImporterProgress({ stages }) {
+  return (
+    <div className="bg-port-bg border border-port-border rounded-lg p-4 space-y-2">
+      <p className="text-sm font-medium flex items-center gap-2">
+        <Loader2 className="w-4 h-4 animate-spin text-port-accent" />
+        Analyzing source — this runs several AI passes and can take a minute or two.
+      </p>
+      {Array.isArray(stages) && stages.length > 0 ? (
+        <ul className="space-y-1.5 mt-2">
+          {stages.map((s) => (
+            <li key={s.id} className="flex items-center gap-2 text-sm">
+              {s.status === 'done' ? (
+                <CheckCircle2 className="w-4 h-4 text-port-success flex-shrink-0" />
+              ) : s.status === 'error' ? (
+                <AlertTriangle className="w-4 h-4 text-port-warning flex-shrink-0" />
+              ) : s.status === 'running' ? (
+                <Loader2 className="w-4 h-4 text-port-accent animate-spin flex-shrink-0" />
+              ) : (
+                <Circle className="w-4 h-4 text-port-text-muted/40 flex-shrink-0" />
+              )}
+              <span className={s.status === 'running' ? 'text-port-text' : 'text-port-text-muted'}>
+                {s.label}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-port-text-muted">Starting…</p>
+      )}
+    </div>
+  );
+}
+
 function ReviewPanel({
-  preview, canonSelections,
+  preview, contentType, canonSelections,
   selectedCanon, setSelectedCanon,
   arcDraft, setArcDraft, seasonsDraft, setSeasonsDraft,
   issuesDraft, setIssuesDraft,
   arcRoles, arcShapeIds,
   replaceMode, setReplaceMode,
   committing, onCommit, onBack,
+  issueSplitFailed, issueSplitError, onRetryIssues, retryingIssues,
 }) {
   const toggleSelected = (kind, idx) => {
     setSelectedCanon((sc) => {
@@ -429,6 +623,11 @@ function ReviewPanel({
       return { ...sc, [kind]: next };
     });
   };
+
+  // A comic-script import seeds the verbatim excerpt into stages.comicScript
+  // (not stages.prose) — keep the Review copy + per-issue label accurate.
+  const isComic = contentType === 'comic-script';
+  const excerptLabel = isComic ? 'Comic script excerpt' : 'Prose excerpt';
 
   return (
     <div className="space-y-6">
@@ -444,7 +643,8 @@ function ReviewPanel({
           </div>
           <p className="text-xs text-port-text-muted mt-1">
             Review the canon below, edit any issue titles or synopses, then click Commit to seed
-            the pipeline. The verbatim prose excerpt for each issue lands in <code>stages.prose.output</code>.
+            the pipeline. The verbatim excerpt for each issue lands in{' '}
+            <code>{isComic ? 'stages.comicScript.output' : 'stages.prose.output'}</code>.
           </p>
           {preview.isExistingSeries && (
             <label className={`text-xs mt-2 flex items-center gap-2 cursor-pointer ${replaceMode ? 'text-port-error' : 'text-port-text-muted'}`}>
@@ -492,7 +692,30 @@ function ReviewPanel({
 
       <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} arcShapeIds={arcShapeIds} />
 
-      <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} arcRoles={arcRoles} />
+      {issueSplitFailed && (
+        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-port-warning mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-port-warning">Issue split didn&apos;t finish</div>
+            <p className="text-xs text-port-text-muted mt-1">
+              Canon and arc extracted successfully and are ready to review above. Only the issue
+              split failed{issueSplitError ? <> — <span className="font-mono">{issueSplitError}</span></> : null}.
+              Retry it below — this re-runs <strong>only</strong> the split, so the canon and arc work above is kept.
+            </p>
+            <button
+              type="button"
+              onClick={onRetryIssues}
+              disabled={retryingIssues}
+              className="mt-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1.5"
+            >
+              {retryingIssues ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileInput className="w-3.5 h-3.5" />}
+              {retryingIssues ? 'Retrying…' : 'Retry issue split'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} arcRoles={arcRoles} excerptLabel={excerptLabel} />
 
       <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-port-card border border-port-border rounded-lg p-3 shadow-lg">
         <button
@@ -694,7 +917,7 @@ const SeasonCard = memo(function SeasonCard({ idx, season, onPatch }) {
   );
 });
 
-const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seasonOptions }) {
+const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seasonOptions, excerptLabel }) {
   // Local state, not lifted — keeps the collapse toggle off the issues array
   // so a card-internal click doesn't broadcast to every memoized sibling.
   const [proseExpanded, setProseExpanded] = useState(false);
@@ -776,7 +999,7 @@ const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seaso
           aria-controls={`iss-${idx}-prose`}
         >
           {proseExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          Prose excerpt: {proseLen.toLocaleString()} chars
+          {excerptLabel}: {proseLen.toLocaleString()} chars
           <span className="text-port-text-muted/70">— {proseExpanded ? 'click to collapse' : 'click to edit (verbatim from source)'}</span>
         </button>
         {proseExpanded && (
@@ -799,7 +1022,7 @@ const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seaso
   );
 });
 
-function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
+function IssuesReviewSection({ issues, setIssues, seasons, arcRoles, excerptLabel }) {
   const patchIssueAt = useMemo(() => makePatcher(setIssues), [setIssues]);
   // Memo'd so `seasonOptions`'s identity is stable across issue-only edits
   // — otherwise every keystroke would break React.memo on every IssueCard.
@@ -838,6 +1061,7 @@ function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
             onPatch={patchIssueAt}
             arcRoles={arcRoles}
             seasonOptions={seasonOptions}
+            excerptLabel={excerptLabel}
           />
         ))}
       </div>

@@ -1315,6 +1315,20 @@ export const sharingSettingsPatchSchema = z.object({
   sharingBio: z.string().trim().max(2000).optional(),
 }).strict();
 
+// Geographic home location for location-aware features — the `weather_now`
+// voice tool today, any future location-dependent surface tomorrow. Stored on
+// `settings.location`. lat/lon are nullable so the user can clear a saved
+// location and fall the consuming tool back to its default. The refine enforces
+// both-or-neither so a half-set pair can't pin a nonsensical coordinate
+// (e.g. a custom latitude with a default longitude).
+export const locationSettingsSchema = z.object({
+  lat: z.number().min(-90).max(90).nullable().optional(),
+  lon: z.number().min(-180).max(180).nullable().optional(),
+}).strict().refine(
+  (d) => (d.lat == null) === (d.lon == null),
+  { message: 'Provide both lat and lon, or neither.' },
+);
+
 // Subscription creation: persistent (bucket, record) tuple. Series + universe
 // are the subscribable kinds (records that change over time and benefit from
 // auto-re-export). Media is one-shot via /buckets/:id/export.
@@ -1598,19 +1612,31 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
   'short-story', 'novel', 'screenplay', 'comic-script',
 ]);
 
-// Hard ceiling at the schema layer; the orchestrator enforces a tighter
-// 200K business-rule limit and returns a friendlier error. The 5MB ceiling
-// here mirrors writersRoomDraftSaveSchema.
+// Hard ceiling at the schema layer (mirrors writersRoomDraftSaveSchema). The
+// orchestrator's IMPORTER_SOURCE_CHAR_LIMIT matches this 5MB ceiling and
+// returns a friendlier error; the real operational limit is dynamic — the
+// active provider's context window.
 const importerSourceField = z.string().min(1).max(5_000_000);
+
+// Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript).
+// MUST stay ≤ `STAGE_OUTPUT_MAX` in server/services/pipeline/issues.js (400_000)
+// — createIssue trims stage output to that, so a larger excerpt would be
+// SILENTLY TRUNCATED on commit despite the import being advertised as verbatim.
+// (lib can't import from services; importer.test.js pins the invariant.) Far
+// below importerSourceField's 5MB so a single bundled comic issue can't blow
+// past it silently — analyze validates against this so the failure surfaces at
+// analyze, not as a commit-time truncation/400.
+export const IMPORTER_PROSE_EXCERPT_MAX = 400_000;
 
 // Classify endpoint only sees the source — no universe/series context. The
 // LLM only consumes the head, so the schema is intentionally minimal.
 export const importerClassifySchema = z.object({
   source: importerSourceField,
-  providerOverride: z.preprocess(
-    (v) => (v === '' ? undefined : v),
-    z.string().trim().max(120).optional(),
-  ),
+  providerOverride: z.preprocess(emptyToUndefined, z.string().trim().max(120).optional()),
+  // Pinned model id for the chosen provider; '' from the UI ("Default model")
+  // coerces to undefined so runStagedLLM falls back to the stage/provider
+  // default model.
+  modelOverride: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
 }).strict();
 
 export const importerAnalyzeSchema = z.object({
@@ -1620,10 +1646,26 @@ export const importerAnalyzeSchema = z.object({
   source: importerSourceField,
   // UI sends `''` for "no override picked"; coerce to undefined so the
   // server's `await getProviderById(undefined)` short-circuit kicks in.
-  providerOverride: z.preprocess(
-    (v) => (v === '' ? undefined : v),
-    z.string().trim().max(120).optional(),
-  ),
+  providerOverride: z.preprocess(emptyToUndefined, z.string().trim().max(120).optional()),
+  // Pinned model id for the chosen provider; '' from the UI ("Default model")
+  // coerces to undefined so runStagedLLM falls back to the stage/provider
+  // default model.
+  modelOverride: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
+  targetIssueCount: z.number().int().min(1).max(50).optional(),
+}).strict();
+
+// Retry-issues endpoint — re-runs ONLY the issue split after a failed analyze
+// (canon + arc are preserved client-side). No universe/series names needed;
+// `arcSummary` (optional) lets the LLM align issue boundaries to the arc the
+// user already has in the Review panel, and `seriesName` is purely cosmetic
+// prompt context.
+export const importerRetryIssuesSchema = z.object({
+  contentType: z.enum(IMPORTER_CONTENT_TYPES),
+  source: importerSourceField,
+  seriesName: z.string().trim().max(200).optional(),
+  arcSummary: z.string().max(8000).optional(),
+  providerOverride: z.preprocess(emptyToUndefined, z.string().trim().max(120).optional()),
+  modelOverride: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
   targetIssueCount: z.number().int().min(1).max(50).optional(),
 }).strict();
 
@@ -1681,8 +1723,10 @@ const importerIssueEntry = z.object({
   // novel chapter can land verbatim. Optional — the LLM may omit the
   // excerpt on some issues. When present, must be non-empty + non-whitespace
   // so it doesn't seed prose.output with whitespace and mark the stage
-  // `ready` misleadingly.
-  proseExcerpt: z.string().min(1).max(500_000).refine(
+  // `ready` misleadingly. Exported so the mechanical comic splitter can
+  // validate against the SAME ceiling at analyze time (a verbatim split could
+  // otherwise produce an excerpt commit would reject — a confusing dead-end).
+  proseExcerpt: z.string().min(1).max(IMPORTER_PROSE_EXCERPT_MAX).refine(
     (s) => s.trim().length > 0,
     { message: 'proseExcerpt must contain non-whitespace content' },
   ).optional(),
@@ -1699,6 +1743,12 @@ export const importerCommitSchema = z.object({
   arc: importerArcShape.nullable().optional(),
   seasons: z.array(importerSeasonEntry).max(50).default([]),
   issues: z.array(importerIssueEntry).min(1).max(50),
+  // Drives which stage each issue's verbatim excerpt seeds: a `comic-script`
+  // import is already script-form, so its excerpt seeds `stages.comicScript`
+  // (ready) and the pipeline never regenerates — every other type seeds
+  // `stages.prose`. Optional + defaulting to prose-seed keeps older clients
+  // (which don't send it) on the prior behavior.
+  contentType: z.enum(IMPORTER_CONTENT_TYPES).optional(),
   // Replace-mode flag — when true, every existing issue on the series is
   // deleted before the incoming `issues` are created, and `series.arc` +
   // `series.seasons[]` are written verbatim (not merged). Canon is still

@@ -716,7 +716,6 @@ app.post('/pause/:agentId', async (req, res) => {
     if (current?.paused) current.process.kill('SIGKILL');
   }, 5000);
 
-  emitToServer('agent:paused', { agentId, taskId: agent.taskId, pid: agent.pid, pausedAt, reason });
   res.json({ success: true, agentId, pid: agent.pid, pausedAt });
 });
 

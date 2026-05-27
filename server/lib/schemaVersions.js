@@ -45,9 +45,33 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // id with LWW-on-createdAt; the merge already tolerates unknown/extra rows,
   // so it does not need whole-payload gating. An older peer that lacks the
   // `videoHistory` route simply rejects that one category request and keeps
-  // syncing everything else. (Generalizing the gate to be per-category —
-  // which would also fix the same latent issue for mediaCollections — is a
-  // separate follow-up tracked in PLAN.md.)
+  // syncing everything else.
+  //
+  // The gate is now PER-CATEGORY (see `scopeVersionDiff` below + its three
+  // call sites: dataSync `applyRemote`, peerSync push, sharing importer), so
+  // adding a new key here or bumping one category only gates transfers of
+  // THAT category — unrelated categories keep flowing. videoHistory stays
+  // unlisted because it has no versioned storage layout at all, not because
+  // of the old whole-payload footgun.
+});
+
+/**
+ * Map a federated record KIND (the unit a peer push or share manifest moves)
+ * to the `PORTOS_SCHEMA_VERSIONS` categories its storage layout touches. The
+ * per-category gate uses this to block a transfer ONLY when the sender is
+ * ahead on a category that record actually writes.
+ *
+ * Kinds absent from this map carry no versioned storage layout and are never
+ * gated — media-job records (flat re-render metadata), media-annotations,
+ * goals/character/digitalTwin/meatspace, videoHistory, etc. A `series` push
+ * that bundles issues, or a universe/series push that bundles a linked media
+ * collection, unions the additional kinds' categories at the call site.
+ */
+export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
+  universe: Object.freeze(['universes']),
+  series: Object.freeze(['pipelineSeries']),
+  issue: Object.freeze(['pipelineIssues']),
+  mediaCollection: Object.freeze(['mediaCollections']),
 });
 
 /**
@@ -131,6 +155,31 @@ export function compareSchemaVersions(senderVersions = {}, receiverVersions = PO
     if (senderV > receiverV) ahead.push({ category: cat, senderV, receiverV });
     else behind.push({ category: cat, senderV, receiverV });
   }
+  return { ahead, behind, compatible: ahead.length === 0 && behind.length === 0 };
+}
+
+/**
+ * Restrict a comparator result to the categories actually being transferred.
+ *
+ * `compareSchemaVersions` walks the UNION of every known category so the full
+ * diff stays useful for diagnostics/UI. But the GATE decision must be
+ * per-category: a sender that bumped (or added) one category should only be
+ * blocked for transfers of THAT category — not for unrelated categories that
+ * happen to ride a federation upgrading on independent schedules. Pass the
+ * schema-version keys this transfer actually moves; categories outside the
+ * set are dropped from `ahead`/`behind` so they can't block (and the scoped
+ * `ahead` is what callers report, so a "pipeline" snapshot rejection never
+ * mis-attributes a `universes` gap).
+ *
+ * `categories` non-array (null/undefined) → returns the diff unchanged
+ * (whole-payload gate; the comparator's union result is used as-is). An empty
+ * array → nothing can block (the transfer touches no versioned category).
+ */
+export function scopeVersionDiff(diff = {}, categories) {
+  if (!Array.isArray(categories)) return diff;
+  const allow = new Set(categories);
+  const ahead = (Array.isArray(diff.ahead) ? diff.ahead : []).filter((g) => allow.has(g.category));
+  const behind = (Array.isArray(diff.behind) ? diff.behind : []).filter((g) => allow.has(g.category));
   return { ahead, behind, compatible: ahead.length === 0 && behind.length === 0 };
 }
 

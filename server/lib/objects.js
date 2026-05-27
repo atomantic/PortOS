@@ -33,6 +33,15 @@
 
 export const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
+/**
+ * `isEmptyScalar(v)` — `true` when `v` is null, undefined, a whitespace-only
+ * string, or an empty array. Used to gate one-way gap-fill logic in merge
+ * helpers: only overwrite a field on the survivor when the survivor's value is
+ * "empty" by this definition AND the loser's value is not.
+ */
+export const isEmptyScalar = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
+  || (Array.isArray(v) && v.length === 0);
+
 // Prototype-pollution guard: skip keys that would mutate Object.prototype
 // when assigned through normal property access. Every current call site
 // gates input through a Zod schema (which strips unknown keys), but the

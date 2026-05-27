@@ -59,7 +59,10 @@ const voiceConfigPatchSchema = z.object({
     }).partial().optional(),
   }).partial().optional(),
   llm: z.object({
-    provider: z.string().max(32).optional(),
+    // 80 matches the provider-registry id cap (providerSchema.id in
+    // aiToolkit/validation.js) — a shorter cap here would reject a valid
+    // custom provider the voice picker happily lets the user select.
+    provider: z.string().max(80).optional(),
     model: z.string().max(128).optional(),
     systemPrompt: z.string().max(4000).optional(),
     usePersonality: z.boolean().optional(),
@@ -73,6 +76,16 @@ const voiceConfigPatchSchema = z.object({
     tools: z.object({
       enabled: z.boolean().optional(),
       maxIterations: z.number().int().min(1).max(10).optional(),
+    }).partial().optional(),
+    // Code-agent delegation. provider/model default to '' (= system default);
+    // tolerate the UI's empty-string sentinel rather than forcing undefined.
+    // 80-char provider cap matches the provider-registry id cap (same as the
+    // llm.provider field above).
+    codeAgent: z.object({
+      enabled: z.boolean().optional(),
+      provider: z.string().max(80).optional(),
+      model: z.string().max(128).optional(),
+      announceOnComplete: z.boolean().optional(),
     }).partial().optional(),
     proactive: z.object({
       enabled: z.boolean().optional(),

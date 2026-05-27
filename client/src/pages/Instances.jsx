@@ -10,6 +10,7 @@ import {
   Lock, Globe, Info, Sparkles, Film, Images
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Pill from '../components/ui/Pill';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
@@ -133,9 +134,9 @@ function TailnetHelpBanner({ tailnetInfo }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-white">Tailnet DNS &amp; trusted HTTPS</span>
-            <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${toneClass} bg-port-bg`}>
-              <ToneIcon size={10} /> {status.label}
-            </span>
+            <Pill tone="bare" size="xs" bordered={false} icon={ToneIcon} className={`${toneClass} bg-port-bg`}>
+              {status.label}
+            </Pill>
           </div>
         </div>
         {collapsed ? <ChevronRight size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
@@ -354,23 +355,23 @@ function DirectionBadge({ directions = [] }) {
 
   if (hasInbound && hasOutbound) {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-port-success bg-port-success/10 rounded px-1.5 py-0.5" title="Bidirectional — we added them and they added us">
-        <ArrowLeftRight size={10} /> mutual
-      </span>
+      <Pill tone="success" size="xs" bordered={false} icon={ArrowLeftRight} title="Bidirectional — we added them and they added us">
+        mutual
+      </Pill>
     );
   }
   if (hasOutbound) {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 rounded px-1.5 py-0.5" title="Outbound — we added this peer">
-        <ArrowUpRight size={10} /> outbound
-      </span>
+      <Pill tone="accent" size="xs" bordered={false} icon={ArrowUpRight} title="Outbound — we added this peer">
+        outbound
+      </Pill>
     );
   }
   if (hasInbound) {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-port-warning bg-port-warning/10 rounded px-1.5 py-0.5" title="Inbound — this peer added us">
-        <ArrowDownLeft size={10} /> inbound
-      </span>
+      <Pill tone="warning" size="xs" bordered={false} icon={ArrowDownLeft} title="Inbound — this peer added us">
+        inbound
+      </Pill>
     );
   }
   return null;
@@ -722,13 +723,13 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
   return (
     <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
       {peer.host ? (
-        <span className="inline-flex items-center gap-1 text-[10px] text-port-success bg-port-success/10 rounded px-1.5 py-0.5 font-mono" title="Requests to this peer use https://<host>">
-          <Wifi size={10} /> https://{peer.host}
-        </span>
+        <Pill tone="success" size="xs" bordered={false} mono icon={Wifi} title="Requests to this peer use https://<host>">
+          https://{peer.host}
+        </Pill>
       ) : (
-        <span className="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-port-bg rounded px-1.5 py-0.5 font-mono" title="Requests use http://<ip> (no DNS set)">
+        <Pill tone="bare" size="xs" bordered={false} mono className="text-gray-500 bg-port-bg" title="Requests use http://<ip> (no DNS set)">
           http only
-        </span>
+        </Pill>
       )}
       <button
         onClick={startEdit}

@@ -209,6 +209,101 @@ function wireDefaultLLMResponses() {
   });
 }
 
+describe('splitComicScriptIssues (mechanical comic split)', () => {
+  it('splits on ISSUE headers — one verbatim issue each, sequential positions', () => {
+    const src = [
+      'ISSUE #1: THE FOUNDRY',
+      'PAGE 1',
+      'Panel 1. Aria forges a blade.',
+      'ISSUE #2: THE LOCKET',
+      'PAGE 1',
+      'Panel 1. The vault loomed.',
+    ].join('\n');
+    const out = importerSvc.splitComicScriptIssues(src);
+    expect(out).toHaveLength(2);
+    expect(out[0].arcPosition).toBe(1);
+    expect(out[1].arcPosition).toBe(2);
+    // Title preserved verbatim from the header; prose is verbatim + bounded.
+    expect(out[0].title).toBe('THE FOUNDRY');
+    expect(out[0].proseExcerpt).toContain('Aria forges a blade');
+    expect(out[0].proseExcerpt).toContain('ISSUE #1');
+    expect(out[0].proseExcerpt).not.toContain('The vault'); // boundary holds
+    expect(out[1].title).toBe('THE LOCKET');
+    expect(out[1].proseExcerpt).toContain('The vault loomed');
+    // No interpretation — mechanical split sets no logline/synopsis.
+    expect(out[0].logline).toBeUndefined();
+    expect(out[0].synopsis).toBeUndefined();
+  });
+
+  it('labels sequentially when an ISSUE header carries no title', () => {
+    const out = importerSvc.splitComicScriptIssues('ISSUE ONE\nstuff\nISSUE TWO\nmore');
+    expect(out.map((i) => i.title)).toEqual(['Issue 1', 'Issue 2']);
+  });
+
+  it('bundles PAGE markers into ~22-page issues when there are no ISSUE headers', () => {
+    const lines = [];
+    for (let p = 1; p <= 25; p++) { lines.push(`PAGE ${p}`); lines.push(`content ${p}`); }
+    const out = importerSvc.splitComicScriptIssues(lines.join('\n'));
+    expect(out).toHaveLength(2); // ceil(25 / 22)
+    expect(out[0].proseExcerpt).toContain('content 1');
+    expect(out[1].proseExcerpt).toContain('content 25');
+    // every page lands somewhere (no drops)
+    const joined = out.map((i) => i.proseExcerpt).join('\n');
+    for (let p = 1; p <= 25; p++) expect(joined).toContain(`content ${p}`);
+  });
+
+  it('honors an explicit targetIssueCount in the PAGE-bundle path', () => {
+    const lines = [];
+    for (let p = 1; p <= 6; p++) { lines.push(`PAGE ${p}`); lines.push(`c${p}`); }
+    const out = importerSvc.splitComicScriptIssues(lines.join('\n'), { targetIssueCount: 3 });
+    expect(out).toHaveLength(3);
+  });
+
+  it('returns null for a header-less script so the caller falls back to the LLM', () => {
+    expect(importerSvc.splitComicScriptIssues('Just prose, no markers anywhere here.')).toBeNull();
+  });
+
+  it('does not mistake a long prose sentence opening with "Page" for a header', () => {
+    const src = 'Page after page of the manuscript blurred together as she read on into the small hours.';
+    expect(importerSvc.splitComicScriptIssues(src)).toBeNull();
+  });
+
+  it('does not match a plural-keyword prose line ("ISSUES …") as an ISSUE header', () => {
+    // Word boundary after the keyword: "ISSUES" must not read as "ISSUE".
+    expect(importerSvc.splitComicScriptIssues('ISSUES with the forge piled up fast.')).toBeNull();
+  });
+
+  it('does not treat a prose line "Issue <word>" / "Pages <word>" as a header (number-token gate)', () => {
+    // The header number token is digits or spelled numbers — NOT any word —
+    // so ordinary prose that opens with the keyword no longer mis-splits.
+    expect(importerSvc.splitComicScriptIssues('Issue resolved by the council that night.')).toBeNull();
+    expect(importerSvc.splitComicScriptIssues('Pages turned slowly as the night wore on.')).toBeNull();
+    // A genuine spelled-number header still splits.
+    const out = importerSvc.splitComicScriptIssues('ISSUE ONE\nstuff\nISSUE TWO\nmore');
+    expect(out).toHaveLength(2);
+  });
+
+  it('does not mis-split a content line that starts with "Page N …" / "Issue N …" (standalone-header anchor)', () => {
+    // The number-token gate alone passed these (they DO contain a number); the
+    // standalone-header anchor (number then EOL/punct only) rejects the trailing
+    // prose so the mechanical path falls back to the LLM split.
+    expect(importerSvc.splitComicScriptIssues('Page 1 of the ancient book lies open and the dust settles.')).toBeNull();
+    expect(importerSvc.splitComicScriptIssues('Issue 1 of the saga had long been forgotten by the elders.')).toBeNull();
+    // Real standalone headers (incl. a parenthetical suffix) still split.
+    expect(importerSvc.splitComicScriptIssues('PAGE 1 (FIVE PANELS)\nart\nPAGE 2\nmore')).toHaveLength(1);
+  });
+});
+
+describe('importer cap invariants', () => {
+  it('IMPORTER_PROSE_EXCERPT_MAX stays ≤ STAGE_OUTPUT_MAX (no silent truncation on commit)', () => {
+    // createIssue trims stage output to STAGE_OUTPUT_MAX; if the importer's
+    // per-issue ceiling were larger, a verbatim excerpt between the two would
+    // pass analyze then be silently truncated on commit. lib/validation can't
+    // import the services-side constant, so pin the invariant here.
+    expect(importerSvc.IMPORTER_PROSE_EXCERPT_MAX).toBeLessThanOrEqual(issuesSvc.STAGE_OUTPUT_MAX);
+  });
+});
+
 describe('analyzeImport', () => {
   it('creates universe + series on first run and returns preview shape', async () => {
     wireDefaultLLMResponses();
@@ -289,6 +384,22 @@ describe('analyzeImport', () => {
     }
   });
 
+  it('forwards providerOverride + modelOverride to every analyze stage call', async () => {
+    // Regression-pin: the importer UI lets the user pin a specific provider +
+    // model for extraction (mirrors universe/series). Both must reach every
+    // staged LLM call (canon, arc, issues) — a one-sided drop would silently
+    // ignore the user's model choice on one of the three extractions.
+    wireDefaultLLMResponses();
+    await importerSvc.analyzeImport({
+      universeName: 'U', seriesName: 'S', contentType: 'short-story', source: 'x',
+      providerOverride: 'anthropic', modelOverride: 'claude-opus-4-7',
+    });
+    expect(mockRunStagedLLM).toHaveBeenCalled();
+    for (const call of mockRunStagedLLM.mock.calls) {
+      expect(call[2]).toMatchObject({ providerOverride: 'anthropic', modelOverride: 'claude-opus-4-7' });
+    }
+  });
+
   it('forwards Mustache section-guard flags so per-content-type prompt blocks render', async () => {
     // Regression-pin: PortOS's template engine is Mustache-only — the prompts
     // use `{{#isShortStory}}…{{/isShortStory}}` blocks, so the orchestrator
@@ -332,6 +443,138 @@ describe('analyzeImport', () => {
     expect(canonCall[1].existingCanonBlock).toContain('Aria Existing');
   });
 
+  it('emits ordered stage-progress frames with a stable runId', async () => {
+    // Regression-pin: the Importer page renders a live checklist from these
+    // `progress` frames. A `start` opens the run (carrying the stage list);
+    // each pass then flips `running`→`done`, and every frame shares one runId
+    // so the client can ignore stragglers from a prior run.
+    wireDefaultLLMResponses();
+    const frames = [];
+    const onProgress = (f) => frames.push(f);
+    importerSvc.importerEvents.on('progress', onProgress);
+    try {
+      await importerSvc.analyzeImport({
+        universeName: 'Progress U', seriesName: 'Progress S', contentType: 'short-story', source: 'x',
+      });
+    } finally {
+      importerSvc.importerEvents.off('progress', onProgress);
+    }
+
+    const start = frames.find((f) => f.type === 'start');
+    expect(start).toBeDefined();
+    expect(start.stages.map((s) => s.id)).toEqual(['canon', 'arc', 'issues']);
+
+    // Every frame shares the start frame's runId.
+    const runId = start.runId;
+    expect(runId).toBeTruthy();
+    expect(frames.every((f) => f.runId === runId)).toBe(true);
+
+    // Each stage reaches both running and done.
+    for (const id of ['canon', 'arc', 'issues']) {
+      const statuses = frames.filter((f) => f.type === 'stage' && f.id === id).map((f) => f.status);
+      expect(statuses).toContain('running');
+      expect(statuses).toContain('done');
+    }
+
+    // issues can't start until arc resolves — its `running` follows arc `done`.
+    const arcDoneIdx = frames.findIndex((f) => f.type === 'stage' && f.id === 'arc' && f.status === 'done');
+    const issuesRunningIdx = frames.findIndex((f) => f.type === 'stage' && f.id === 'issues' && f.status === 'running');
+    expect(issuesRunningIdx).toBeGreaterThan(arcDoneIdx);
+  });
+
+  it('passes the extended analyze timeout to every staged LLM call', async () => {
+    // Regression-pin: each analyze pass feeds the whole corpus to a heavy
+    // model, so the importer overrides the toolkit's 5-min default. A dropped
+    // override would reintroduce false timeouts + expensive fallback re-runs.
+    wireDefaultLLMResponses();
+    await importerSvc.analyzeImport({
+      universeName: 'Timeout U', seriesName: 'Timeout S', contentType: 'short-story', source: 'x',
+    });
+    expect(mockRunStagedLLM).toHaveBeenCalled();
+    for (const call of mockRunStagedLLM.mock.calls) {
+      expect(call[2]).toMatchObject({ timeoutOverride: importerSvc.ANALYZE_STAGE_TIMEOUT_MS });
+    }
+  });
+
+  it('mechanically splits a comic script and skips the LLM issue-proposal call', async () => {
+    wireDefaultLLMResponses();
+    const src = 'ISSUE #1: ONE\nPage stuff here.\nISSUE #2: TWO\nMore page stuff.';
+    const result = await importerSvc.analyzeImport({
+      universeName: 'Comic U', seriesName: 'Comic S', contentType: 'comic-script', source: src,
+    });
+    expect(result.issueSplitFailed).toBe(false);
+    expect(result.issueProposals).toHaveLength(2);
+    expect(result.issueProposals[0].proseExcerpt).toContain('Page stuff here');
+    // The LLM split was NOT invoked — canon + arc still were.
+    const issueCall = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'importer-issue-proposal');
+    expect(issueCall).toBeUndefined();
+    expect(mockRunStagedLLM.mock.calls.some((c) => c[0] === 'importer-canon-extract')).toBe(true);
+    // Mechanical path carries no run id.
+    expect(result.runIds.issues).toBeNull();
+  });
+
+  it('preserves canon+arc and flags issueSplitFailed when the issue split throws', async () => {
+    // canon + arc succeed; the issue-proposal pass throws (e.g. a timeout).
+    // The expensive passes must NOT be discarded — analyze returns the
+    // preview with issueSplitFailed=true and persisted universe/series shells.
+    mockRunStagedLLM.mockImplementation(async (stageName) => {
+      if (stageName === 'importer-canon-extract') return { content: canonRunResponse, model: 'mock', providerId: 'mock', runId: 'run-canon' };
+      if (stageName === 'importer-arc-extract') return { content: arcRunResponse, model: 'mock', providerId: 'mock', runId: 'run-arc' };
+      if (stageName === 'importer-issue-proposal') throw new Error('codex timed out after 1200000ms');
+      throw new Error(`Unexpected stage: ${stageName}`);
+    });
+    // Capture progress frames to assert the issues stage reaches 'error'.
+    const frames = [];
+    const onProgress = (f) => frames.push(f);
+    importerSvc.importerEvents.on('progress', onProgress);
+    let result;
+    try {
+      result = await importerSvc.analyzeImport({
+        universeName: 'Resilient U', seriesName: 'Resilient S', contentType: 'novel', source: 'x',
+      });
+    } finally {
+      importerSvc.importerEvents.off('progress', onProgress);
+    }
+    expect(result.issueSplitFailed).toBe(true);
+    expect(result.issueSplitError).toContain('codex timed out');
+    expect(result.issueProposals).toEqual([]);
+    // The checklist's issues stage must reach a terminal 'error' frame (drives
+    // the client's error icon + retry banner).
+    const issuesStatuses = frames.filter((f) => f.type === 'stage' && f.id === 'issues').map((f) => f.status);
+    expect(issuesStatuses).toContain('running');
+    expect(issuesStatuses).toContain('error');
+    // Canon + arc preserved.
+    expect(result.canonPreview.characters).toHaveLength(1);
+    expect(result.arcPreview.shape).toBe('man-in-hole');
+    // Universe + series are actually PERSISTED (not just in-memory shells) so
+    // the client has stable ids to retry/commit against — re-read from disk.
+    expect(result.universe.id).toBeDefined();
+    expect(result.series.id).toMatch(/^ser-/);
+    expect(await universeSvc.getUniverse(result.universe.id)).toBeTruthy();
+    expect(await seriesSvc.getSeries(result.series.id)).toBeTruthy();
+    expect(result.runIds.issues).toBeNull();
+  });
+
+  it('fails analyze with ERR_VALIDATION when a comic split would exceed the per-issue prose cap', async () => {
+    // One ISSUE header with a body over IMPORTER_PROSE_EXCERPT_MAX → the
+    // verbatim excerpt would be rejected at commit; surface it at analyze
+    // instead of letting it dead-end on a commit-time 400. The failure rides
+    // the non-fatal issue-split path, so canon+arc are still preserved.
+    mockRunStagedLLM.mockImplementation(async (stageName) => {
+      if (stageName === 'importer-canon-extract') return { content: canonRunResponse, model: 'mock', providerId: 'mock', runId: 'run-canon' };
+      if (stageName === 'importer-arc-extract') return { content: arcRunResponse, model: 'mock', providerId: 'mock', runId: 'run-arc' };
+      throw new Error(`Unexpected stage: ${stageName}`);
+    });
+    const huge = `ISSUE 1\n${'x'.repeat(importerSvc.IMPORTER_PROSE_EXCERPT_MAX + 10)}`;
+    const result = await importerSvc.analyzeImport({
+      universeName: 'Big Comic U', seriesName: 'Big Comic S', contentType: 'comic-script', source: huge,
+    });
+    expect(result.issueSplitFailed).toBe(true);
+    expect(result.issueSplitError).toMatch(/per-issue limit/);
+    // No LLM issue-proposal call happened (the cap check fired on the mechanical path).
+    expect(mockRunStagedLLM.mock.calls.some((c) => c[0] === 'importer-issue-proposal')).toBe(false);
+  });
+
   it('rejects a locked-arc series with ERR_LOCKED before calling the LLM', async () => {
     // Pre-seed a series with locked.arc, then re-analyze with its name.
     const uni = await universeSvc.createUniverse({ name: 'Locked U' });
@@ -367,6 +610,41 @@ describe('analyzeImport', () => {
 // guard branch directly against the service.
 // ---------------------------------------------------------------------------
 
+describe('retryIssueSplit', () => {
+  it('mechanically splits a comic script with no LLM call', async () => {
+    wireDefaultLLMResponses();
+    const out = await importerSvc.retryIssueSplit({
+      contentType: 'comic-script',
+      source: 'ISSUE #1: A\nstuff\nISSUE #2: B\nmore',
+    });
+    expect(out.method).toBe('mechanical');
+    expect(out.issueProposals).toHaveLength(2);
+    expect(out.runId).toBeNull();
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the LLM split for prose content types, with the extended timeout', async () => {
+    wireDefaultLLMResponses();
+    const out = await importerSvc.retryIssueSplit({
+      contentType: 'novel', source: 'a novel body', arcSummary: 'the arc summary',
+    });
+    expect(out.method).toBe('llm');
+    expect(out.issueProposals).toHaveLength(1);
+    const call = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'importer-issue-proposal');
+    expect(call).toBeDefined();
+    expect(call[2]).toMatchObject({ timeoutOverride: importerSvc.ANALYZE_STAGE_TIMEOUT_MS });
+  });
+
+  it('rejects an oversized source before calling the LLM', async () => {
+    wireDefaultLLMResponses();
+    await expect(importerSvc.retryIssueSplit({
+      contentType: 'novel',
+      source: 'x'.repeat(importerSvc.IMPORTER_SOURCE_CHAR_LIMIT + 1),
+    })).rejects.toMatchObject({ code: importerSvc.ERR_VALIDATION });
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+});
+
 describe('classifyImportContent', () => {
   it('passes valid contentType + confidence + reasoning through verbatim', async () => {
     mockRunStagedLLM.mockResolvedValueOnce({
@@ -380,6 +658,23 @@ describe('classifyImportContent', () => {
     expect(result.confidence).toBe('high');
     expect(result.reasoning).toBe('has FADE IN markers');
     expect(result.runId).toBe('run-classify-1');
+  });
+
+  it('forwards providerOverride + modelOverride to the classify stage call', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'novel', confidence: 'high', reasoning: 'chapters' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-classify-override',
+    });
+    await importerSvc.classifyImportContent({
+      source: 'some prose', providerOverride: 'anthropic', modelOverride: 'claude-opus-4-7',
+    });
+    expect(mockRunStagedLLM).toHaveBeenCalledWith(
+      'importer-classify',
+      expect.any(Object),
+      expect.objectContaining({ providerOverride: 'anthropic', modelOverride: 'claude-opus-4-7' }),
+    );
   });
 
   it('drops a hallucinated contentType not in IMPORTER_CONTENT_TYPES to null', async () => {
@@ -573,6 +868,39 @@ describe('commitImport', () => {
     expect(issue.stages.idea.input).toContain('Synopsis: Aria finds the letter.');
     // Issue was wired to the first season.
     expect(issue.seasonId).toBe(result.series.seasons[0].id);
+  });
+
+  it('seeds stages.comicScript (not prose) for a comic-script import', async () => {
+    // A comic-script source is already script-form, so its verbatim excerpt
+    // must land in comicScript (ready) — seeding prose would make the
+    // pipeline regenerate (re-interpret) the script.
+    const { uni, ser } = await setupForCommit();
+    const script = 'PAGE 1\nPANEL 1\nGiant descends.\nCAPTION\nNot real.';
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      contentType: 'comic-script',
+      canonSelections: { characters: [], places: [], objects: [] },
+      issues: [{ title: 'Issue 1', arcPosition: 1, proseExcerpt: script }],
+    });
+    const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
+    expect(issue.stages.comicScript.output).toBe(script);
+    expect(issue.stages.comicScript.status).toBe('ready');
+    // prose is NOT seeded — the script never round-trips through it.
+    expect(issue.stages.prose?.output).toBeFalsy();
+  });
+
+  it('still seeds stages.prose when contentType is absent (older clients)', async () => {
+    const { uni, ser } = await setupForCommit();
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      issues: [{ title: 'Issue 1', arcPosition: 1, proseExcerpt: 'Plain prose.' }],
+    });
+    const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
+    expect(issue.stages.prose.output).toBe('Plain prose.');
+    expect(issue.stages.comicScript?.output).toBeFalsy();
   });
 
   it('refuses to commit when the series arc is locked', async () => {

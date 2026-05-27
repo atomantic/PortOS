@@ -478,6 +478,10 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
   return result;
 }
 
+// Series mirror of `unlinkCollectionsForUniverse` — same cascade semantics,
+// same reason for preserving `updatedAt` (see that function's note). A series
+// merge tombstones the loser series-collection and the loser series; the
+// series-tombstone cascade must not bump the collection past its own tombstone.
 export async function unlinkCollectionsForSeries(seriesId) {
   if (typeof seriesId !== 'string' || !seriesId) return [];
   const needle = seriesId.slice(0, SERIES_ID_MAX);
@@ -487,11 +491,10 @@ export async function unlinkCollectionsForSeries(seriesId) {
       .map((c, i) => (c.seriesId === needle ? i : -1))
       .filter((i) => i >= 0);
     if (!matches.length) return [];
-    const now = new Date().toISOString();
     const next = [...all];
     const unlinkedIds = [];
     for (const i of matches) {
-      next[i] = { ...all[i], seriesId: null, updatedAt: now };
+      next[i] = { ...all[i], seriesId: null };
       unlinkedIds.push(all[i].id);
     }
     await writeAll(next);
@@ -529,6 +532,17 @@ export async function renameCollectionForSeries(seriesId, newSeriesName) {
 // becomes a normal user-owned collection (renamable, deletable, etc.). The
 // items themselves are preserved — the user may still want the renders.
 // Returns the list of unlinked collection ids (empty when none matched).
+//
+// Deliberately does NOT bump `updatedAt`. This is a CASCADED side-effect of
+// the owner universe's deletion, not a user edit — severing the link doesn't
+// change the collection's content (items are untouched). Advancing the LWW
+// clock here would make the unlinked bucket look "freshly edited" and out-race
+// the collection's OWN tombstone on a peer: a universe merge tombstones the
+// loser auto-collection (older `updatedAt`) AND tombstones the universe, whose
+// cascade lands first on the receiver. A bump here would defeat the (older)
+// collection tombstone under pure LWW and strand a live duplicate on the peer.
+// Items always union on merge (`mergeCollectionItems`), so preserving the
+// timestamp can't lose renders.
 export async function unlinkCollectionsForUniverse(universeId) {
   if (typeof universeId !== 'string' || !universeId) return [];
   const needle = universeId.slice(0, UNIVERSE_ID_MAX);
@@ -538,11 +552,10 @@ export async function unlinkCollectionsForUniverse(universeId) {
       .map((c, i) => (c.universeId === needle ? i : -1))
       .filter((i) => i >= 0);
     if (!matches.length) return [];
-    const now = new Date().toISOString();
     const next = [...all];
     const unlinkedIds = [];
     for (const i of matches) {
-      next[i] = { ...all[i], universeId: null, updatedAt: now };
+      next[i] = { ...all[i], universeId: null };
       unlinkedIds.push(all[i].id);
     }
     await writeAll(next);

@@ -22,6 +22,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 afterAll(cleanup);
 
 const dataSync = await import('./dataSync.js');
+const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 
 const SERIES_DIR = join(tempRoot, 'pipeline-series');
 const ISSUES_DIR = join(tempRoot, 'pipeline-issues');
@@ -816,5 +817,97 @@ describe('dataSync — videoHistory category', () => {
     await dataSync.applyRemote('videoHistory', { videos: [row('v2')] });
     const after = await dataSync.getChecksum('videoHistory');
     expect(after.checksum).not.toBe(before.checksum);
+  });
+});
+
+describe('dataSync — per-category schema gate (cross-key isolation)', () => {
+  // A sender always stamps its FULL schemaVersions map (buildPortosMeta spreads
+  // PORTOS_SCHEMA_VERSIONS). The old whole-payload gate rejected EVERY category
+  // when the sender was ahead on ANY one of them. These tests pin the new
+  // per-category behavior: an ahead-mismatch only gates the category whose
+  // storage layout that snapshot actually writes.
+  const aheadOnUniverses = {
+    portosVersion: '99.0.0',
+    schemaVersions: { universes: 6, pipelineSeries: 1, pipelineIssues: 1, mediaCollections: 1 },
+  };
+
+  it('does NOT block a videoHistory snapshot when the sender is ahead on universes', async () => {
+    // videoHistory has no versioned storage layout, so it must keep syncing
+    // even from a sender on a newer universes layout. This is the exact latent
+    // bug the per-category gate fixes (the old union gate rejected it).
+    writeJSON(VIDEO_HISTORY_PATH, []);
+    const result = await dataSync.applyRemote('videoHistory', {
+      videos: [{ id: 'v1', prompt: 'p', filename: 'v1.mp4', createdAt: '2026-05-22T00:00:00Z' }],
+    }, { portosMeta: aheadOnUniverses });
+    expect(result.blockedBySchema).toBeUndefined();
+    expect(result.applied).toBe(true);
+  });
+
+  it('does NOT block a pipeline snapshot when the sender is ahead on universes', async () => {
+    writeSeriesState([]);
+    writeIssueState([]);
+    const result = await dataSync.applyRemote('pipeline', {
+      series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
+      issues: [],
+    }, { portosMeta: aheadOnUniverses });
+    expect(result.blockedBySchema).toBeUndefined();
+    expect(result.applied).toBe(true);
+    expect(readSeriesState().find((s) => s.id === 'ser-1')).toBeTruthy();
+  });
+
+  it('does NOT block a mediaCollections snapshot when the sender is ahead on universes', async () => {
+    writeJSON(MEDIA_COLLECTIONS_PATH, { collections: [] });
+    const result = await dataSync.applyRemote('mediaCollections', {
+      collections: [{
+        id: 'c-new', name: 'New', description: '', coverKey: null, universeId: null, seriesId: null,
+        items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      }],
+    }, { portosMeta: aheadOnUniverses });
+    expect(result.blockedBySchema).toBeUndefined();
+    expect(result.applied).toBe(true);
+  });
+
+  it('does NOT block a universe snapshot when the sender is ahead on mediaCollections only', async () => {
+    writeUniverseState({ universes: [], runs: [] });
+    const result = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } } });
+    expect(result.blockedBySchema).toBeUndefined();
+    expect(result.applied).toBe(true);
+  });
+
+  it('STILL blocks a pipeline snapshot when the sender is ahead on pipelineSeries (relevant category)', async () => {
+    writeSeriesState([]);
+    writeIssueState([]);
+    const result = await dataSync.applyRemote('pipeline', {
+      series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
+      issues: [],
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 2, pipelineIssues: 1, mediaCollections: 1 } } });
+    expect(result.applied).toBe(false);
+    expect(result.blockedBySchema).toBeDefined();
+    // The reported gap is scoped to the relevant category — NOT mis-attributed.
+    expect(result.blockedBySchema.ahead).toEqual([
+      { category: 'pipelineSeries', senderV: 2, receiverV: 1 },
+    ]);
+    expect(readSeriesState()).toEqual([]); // nothing written
+  });
+
+  // ---- gate-map completeness (fail-open guard) -------------------------
+  it('every snapshot category has a deliberate schema-key mapping', () => {
+    // No `|| []` fallthrough surprises: a future category must be mapped
+    // explicitly (even to []) so the gate decision for it is intentional.
+    const map = dataSync.getSnapshotCategorySchemaKeys();
+    for (const category of dataSync.getSupportedCategories()) {
+      expect(Array.isArray(map[category])).toBe(true);
+    }
+  });
+
+  it('every versioned PORTOS_SCHEMA_VERSIONS key is reachable from some snapshot category', () => {
+    // A newly-versioned category can't ship without being wired into the
+    // per-category snapshot gate — otherwise its snapshot transfer is ungated.
+    const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
+    for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {
+      expect(covered.has(key)).toBe(true);
+    }
   });
 });

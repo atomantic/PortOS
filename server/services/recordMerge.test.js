@@ -132,6 +132,21 @@ describe('recordMerge — pure union helpers', () => {
     expect(record.starterPrompt).toBe('A + B unified');
   });
 
+  it('buildUniverseUnion reports a union summary for list fields the folded copy adds to', () => {
+    const { unionSummary } = merge.buildUniverseUnion(
+      { name: 'Dup', starterPrompt: 'A', categories: {}, influences: { embrace: ['neon'], avoid: [] }, characters: [], places: [], objects: [] },
+      { name: 'Dup', starterPrompt: 'A', categories: {}, influences: { embrace: ['rain', 'NEON'], avoid: ['blur'] }, characters: [], places: [], objects: [] },
+    );
+    // embrace: survivor ['neon'] + loser ['rain','NEON'] → dedupe 'NEON' → ['neon','rain'] (2 total, +1)
+    const style = unionSummary.find((r) => r.field === 'Style prompt (embrace)');
+    expect(style).toEqual({ field: 'Style prompt (embrace)', survivor: 1, merged: 2, added: 1 });
+    // avoid: survivor [] + loser ['blur'] → ['blur'] (1 total, +1)
+    const neg = unionSummary.find((r) => r.field === 'Negative prompt (avoid)');
+    expect(neg).toEqual({ field: 'Negative prompt (avoid)', survivor: 0, merged: 1, added: 1 });
+    // Empty list fields (characters/places/objects/categories/sheets) are omitted.
+    expect(unionSummary.map((r) => r.field)).toEqual(['Style prompt (embrace)', 'Negative prompt (avoid)']);
+  });
+
   it('buildUniverseUnion fieldOverrides honor empty-string clears', () => {
     const { conflicts, record } = merge.buildUniverseUnion(
       { name: 'Dup', starterPrompt: 'A', categories: {}, influences: {}, characters: [], places: [], objects: [] },

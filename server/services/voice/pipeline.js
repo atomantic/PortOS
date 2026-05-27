@@ -559,7 +559,13 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
 
   const toolsEnabled = !!cfg.llm.tools?.enabled;
   const intent = toolsEnabled ? getToolSpecsForIntent(userText) : { specs: undefined, activeGroups: classifyIntent(userText) };
-  const toolSpecs = intent.specs;
+  let toolSpecs = intent.specs;
+  // Code-agent delegation is a separate opt-in. When it's off, never offer the
+  // tool to the LLM even if the utterance matched the `code` intent group —
+  // otherwise the model could try to dispatch an agent the user hasn't enabled.
+  if (toolSpecs && !cfg.llm.codeAgent?.enabled) {
+    toolSpecs = toolSpecs.filter((s) => s.function?.name !== 'dispatch_code_agent');
+  }
 
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
@@ -642,8 +648,9 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     const iterStart = Date.now();
     let firstDeltaAt = null;
     let deltaChars = 0;
-    tlog(`llm.start iter=${iter + 1}/${maxIterations} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
+    tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
     const llm = await streamChat(messages, {
+      provider: cfg.llm.provider,
       model: cfg.llm.model,
       signal,
       tools: toolSpecs,

@@ -13,8 +13,10 @@ import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
+  RECORD_KIND_SCHEMA_CATEGORIES,
   buildPortosMeta,
   compareSchemaVersions,
+  scopeVersionDiff,
   formatVersionGap,
 } from '../lib/schemaVersions.js';
 import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
@@ -719,6 +721,42 @@ const CATEGORIES = {
   videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote }
 };
 
+// Map a snapshot CATEGORY to the `PORTOS_SCHEMA_VERSIONS` keys whose storage
+// layout that category's `applyRemote` actually writes — derived from the
+// canonical record-kind map so it can't drift. `applyRemote` gates only on
+// these keys, so a sender that bumped/added an unrelated category (e.g. a new
+// `mediaCollections` version) no longer rejects an unrelated category's
+// snapshot.
+//
+// EVERY category is listed explicitly (not via a `|| []` fallthrough) so the
+// guard test below can assert completeness: a future category, or a future
+// storage-layout version added to a currently-unversioned one, can't ship
+// without a deliberate mapping decision here. The unversioned categories map
+// to `[]` (their merges are LWW/deep-union/append-tolerant with no versioned
+// on-disk layout today). KNOWN trade-off of per-category scoping: an
+// already-shipped OLD receiver no longer blanket-blocks a future sender that
+// bumps a category this version doesn't yet know is versioned — that's the
+// inverse of the whole-payload over-blocking this change exists to fix.
+// Introducing versioning for one of these must add its key to
+// PORTOS_SCHEMA_VERSIONS AND here (the coverage test enforces it).
+const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
+  universe: RECORD_KIND_SCHEMA_CATEGORIES.universe,
+  pipeline: [...RECORD_KIND_SCHEMA_CATEGORIES.series, ...RECORD_KIND_SCHEMA_CATEGORIES.issue],
+  mediaCollections: RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection,
+  goals: [],
+  character: [],
+  digitalTwin: [],
+  meatspace: [],
+  videoHistory: [],
+};
+
+// Exported for the boot-adjacent guard test (see dataSync.pipelineUniverse.test.js):
+// every snapshot category must have a deliberate schema-key mapping, and every
+// versioned PORTOS_SCHEMA_VERSIONS key must be reachable from some category.
+export function getSnapshotCategorySchemaKeys() {
+  return SNAPSHOT_CATEGORY_SCHEMA_KEYS;
+}
+
 // Per-`(category, forPeerId)` `{ fingerprints, checksum }` cache. The
 // orchestrator hits getChecksum every cycle — by far the hottest sync-side I/O —
 // so caching keyed on underlying-file `(mtime, size)` lets it stat-and-return
@@ -904,7 +942,11 @@ export async function applyRemote(category, remoteData, options = {}) {
   const portosMeta = isPlainObject(options.portosMeta) ? options.portosMeta : null;
   const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
   const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
-  const versionDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  // Full union diff for diagnostics; gate (and report) only on the schema
+  // categories THIS snapshot category actually writes, so an ahead-mismatch on
+  // an unrelated category can't reject this category's snapshot.
+  const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  const versionDiff = scopeVersionDiff(fullDiff, SNAPSHOT_CATEGORY_SCHEMA_KEYS[category] || []);
   if (versionDiff.ahead.length > 0) {
     console.warn(
       `⚠️ dataSync: rejecting "${category}" snapshot — ${formatVersionGap(versionDiff)} ` +

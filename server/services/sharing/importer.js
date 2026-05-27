@@ -30,7 +30,7 @@ import { isSafeRecordId } from '../../lib/validation.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
-import { PORTOS_SCHEMA_VERSIONS, compareSchemaVersions, formatVersionGap } from '../../lib/schemaVersions.js';
+import { PORTOS_SCHEMA_VERSIONS, RECORD_KIND_SCHEMA_CATEGORIES, compareSchemaVersions, scopeVersionDiff, formatVersionGap } from '../../lib/schemaVersions.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
@@ -392,6 +392,47 @@ async function readReferencedRecords(bucketPath, manifest) {
 }
 
 /**
+ * Which `PORTOS_SCHEMA_VERSIONS` categories does this manifest actually carry?
+ * Used to scope the per-category schema gate so a sender ahead on an unrelated
+ * category doesn't reject an import that never touches it. Derived from the
+ * manifest's declared `recordIds` + `kind` + bundled `collection` — NOT from
+ * reading the record files (the gate runs before any record read, and a
+ * manifest delivered ahead of its records still declares what it carries).
+ *
+ * Id-prefix → kind mirrors `readReferencedRecords` above (`ser-` → series,
+ * `iss-` → issue, `chr-`/`set-`/`obj-` → universe bible sub-records); a UUID is
+ * a universe record EXCEPT on a `media` manifest, where UUIDs are media-job
+ * records. Media-job records are intentionally NOT gated: they have no
+ * versioned storage layout, and `mergeMediaJobRecords` is insert-only by id
+ * (never overwrites, stores the record verbatim, readers use optional
+ * chaining) — so a future-shape job degrades gracefully rather than corrupting,
+ * exactly like the unlisted `videoHistory` category. `media-annotations`
+ * manifests bypass the records pipeline entirely and carry no versioned layout
+ * → never gated.
+ */
+function relevantSchemaCategoriesForManifest(manifest) {
+  if (manifest?.kind === 'media-annotations') return [];
+  const categories = new Set();
+  const add = (keys) => { for (const k of keys) categories.add(k); };
+  const ids = Array.isArray(manifest?.recordIds) ? manifest.recordIds : [];
+  for (const id of ids) {
+    if (typeof id !== 'string') continue;
+    if (id.startsWith('ser-')) add(RECORD_KIND_SCHEMA_CATEGORIES.series);
+    else if (id.startsWith('iss-')) add(RECORD_KIND_SCHEMA_CATEGORIES.issue);
+    else if (id.startsWith('chr-') || id.startsWith('set-') || id.startsWith('obj-')) add(RECORD_KIND_SCHEMA_CATEGORIES.universe);
+    else if (manifest?.kind !== 'media') add(RECORD_KIND_SCHEMA_CATEGORIES.universe);
+  }
+  // Mirror peerSync's gate predicate: a bundled collection only counts as a
+  // mediaCollections transfer when it's a live record (a tombstone collection
+  // carries only delete fields, safe at any version). Today's exporter never
+  // bundles a deleted collection, so this is defensive consistency.
+  if (isPlainObject(manifest?.collection) && manifest.collection.deleted !== true) {
+    add(RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection);
+  }
+  return [...categories];
+}
+
+/**
  * Auto-merge mode: apply records into live state.
  *
  * Each record either inserts under its manifest id (via insertWithId) on
@@ -589,7 +630,12 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   let collectionPendingUniverse = null;
   let collectionPendingSeries = null;
   let collectionTombstonedUniverse = null;
-  if (manifest.collection) {
+  // `isPlainObject` (not bare truthiness) so this apply path agrees exactly
+  // with the schema gate's `relevantSchemaCategoriesForManifest`, which only
+  // counts a plain-object `collection` as carrying the mediaCollections
+  // category. A truthy non-object (corrupt/hand-crafted manifest) must not
+  // slip past the gate yet still reach the merge.
+  if (isPlainObject(manifest.collection)) {
     // Suppress re-export of the owner record while the collection items
     // land — the items themselves drive recordEvents, which would loop
     // back through the receiver's own subscriptions if not gated.
@@ -812,7 +858,11 @@ export async function processManifest(bucketId, manifestFilename) {
   const senderSchemaVersions = isPlainObject(manifest.portosSchemaVersions)
     ? manifest.portosSchemaVersions
     : {};
-  const portosDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  // Scope the gate to the categories this manifest actually carries, so an
+  // ahead-mismatch on a category the manifest doesn't touch can't refuse the
+  // import. Full union diff stays available for diagnostics.
+  const portosFullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
+  const portosDiff = scopeVersionDiff(portosFullDiff, relevantSchemaCategoriesForManifest(manifest));
   if (portosDiff.ahead.length > 0) {
     // Mark processed so subsequent chokidar fan-outs (every asset/record
     // file landing under the bucket triggers a backlog scan that re-walks

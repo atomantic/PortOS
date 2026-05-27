@@ -269,6 +269,38 @@ vi.mock('../lib/multipart.js', () => ({
   uploadFields: () => (_req, _res, next) => next(),
 }));
 
+// Controllable mergeSeries for series merge route contract tests.
+const mergeSeriesMock = vi.fn();
+vi.mock('../services/recordMerge.js', async () => {
+  const actual = await vi.importActual('../services/recordMerge.js');
+  return { ...actual, mergeSeries: (...args) => mergeSeriesMock(...args) };
+});
+
+// Controllable mergeFieldsWithAI for series/merge/ai-resolve error contracts.
+const mergeFieldsWithAIMock = vi.fn();
+vi.mock('../services/recordMergeAI.js', async () => {
+  const actual = await vi.importActual('../services/recordMergeAI.js');
+  return { ...actual, mergeFieldsWithAI: (...args) => mergeFieldsWithAIMock(...args) };
+});
+
+// Editorial analysis — spy the service + batch runner so route tests assert
+// dispatch/validation without hitting an LLM provider or the SSE machinery.
+const getSeriesEditorialMock = vi.fn(async () => ({ coverage: { analyzed: 0, total: 0 }, roadmap: [], characters: [], protagonist: null, supportingArcs: [] }));
+const analyzeIssueMock = vi.fn(async () => ({ status: 'complete', sections: [], characters: [], rollup: {} }));
+const getIssueAnalysisMock = vi.fn(async () => null);
+vi.mock('../services/pipeline/editorialAnalysis.js', () => ({
+  getSeriesEditorial: (...a) => getSeriesEditorialMock(...a),
+  analyzeIssue: (...a) => analyzeIssueMock(...a),
+  getIssueAnalysis: (...a) => getIssueAnalysisMock(...a),
+}));
+const startSeriesAnalysisMock = vi.fn(async () => ({ runId: 'ed-run-1', alreadyRunning: false }));
+vi.mock('../services/pipeline/editorialAnalysisRunner.js', () => ({
+  startSeriesAnalysis: (...a) => startSeriesAnalysisMock(...a),
+  attachClient: vi.fn(() => false),
+  cancelSeriesAnalysis: vi.fn(() => true),
+  isSeriesAnalysisActive: vi.fn(() => false),
+}));
+
 const pipelineRouter = (await import('./pipeline.js')).default;
 const universeSvc = await import('../services/universeBuilder.js');
 
@@ -288,6 +320,8 @@ describe('pipeline routes', () => {
     fileStore.clear();
     uuidCounter = 0;
     vi.clearAllMocks();
+    mergeSeriesMock.mockReset();
+    mergeFieldsWithAIMock.mockReset();
   });
 
   it('POST /series → 201 with created series', async () => {
@@ -328,12 +362,113 @@ describe('pipeline routes', () => {
     expect(res.body).toHaveProperty('orphans');
   });
 
-  it('POST /series/merge rejects identical survivor/loser ids with 400', async () => {
+  it('POST /series/merge rejects identical survivor/loser ids with 400 (Zod refine)', async () => {
+    // Zod catches same-id at schema level → 400 with generic validation code.
     const app = makeApp();
     const res = await request(app)
       .post('/api/pipeline/series/merge')
       .send({ survivorId: 'ser-1', loserId: 'ser-1' });
     expect(res.status).toBe(400);
+  });
+
+  it('POST /series/merge returns { merged: true, cascade } on success', async () => {
+    const app = makeApp();
+    mergeSeriesMock.mockResolvedValueOnce({
+      survivorId: 'ser-uuid-1',
+      loserId: 'ser-uuid-2',
+      merged: true,
+      cascade: { issuesToRepoint: 0, loserCollectionItemCount: 0 },
+    });
+
+    const res = await request(app)
+      .post('/api/pipeline/series/merge')
+      .send({ survivorId: 'ser-uuid-1', loserId: 'ser-uuid-2' });
+    expect(res.status).toBe(200);
+    expect(res.body.merged).toBe(true);
+    expect(res.body).toHaveProperty('cascade');
+    expect(res.body.survivorId).toBe('ser-uuid-1');
+    expect(mergeSeriesMock).toHaveBeenCalledWith(
+      'ser-uuid-1', 'ser-uuid-2', {}, expect.objectContaining({ fieldOverrides: {} }),
+    );
+  });
+
+  describe('POST /series/merge/ai-resolve error contracts', () => {
+    it('400 when survivorId === loserId (Zod schema guard)', async () => {
+      const res = await request(makeApp())
+        .post('/api/pipeline/series/merge/ai-resolve')
+        .send({ survivorId: 'ser-1', loserId: 'ser-1', fields: ['logline'] });
+      expect(res.status).toBe(400);
+      expect(mergeFieldsWithAIMock).not.toHaveBeenCalled();
+    });
+
+    it('400 when survivorId does not match ser-<uuid> pattern', async () => {
+      const res = await request(makeApp())
+        .post('/api/pipeline/series/merge/ai-resolve')
+        .send({ survivorId: 'u-1', loserId: 'ser-uuid-2', fields: ['logline'] });
+      expect(res.status).toBe(400);
+      expect(mergeFieldsWithAIMock).not.toHaveBeenCalled();
+    });
+
+    it('422 MERGE_AI_NO_MERGEABLE_FIELDS when fields are not non-empty strings on both sides', async () => {
+      const { ServerError } = await import('../lib/errorHandler.js');
+      mergeFieldsWithAIMock.mockRejectedValueOnce(
+        new ServerError('No mergeable text fields', { status: 422, code: 'MERGE_AI_NO_MERGEABLE_FIELDS' }),
+      );
+
+      // Pre-populate series so the route can fetch them.
+      const app = makeApp();
+      await request(app).post('/api/pipeline/series').send({ name: 'AI-A', universeId: 'u-1' });
+      await request(app).post('/api/pipeline/series').send({ name: 'AI-B', universeId: 'u-1' });
+      const seriesSvc = await import('../services/pipeline/series.js');
+      const all = await seriesSvc.listSeries();
+      const [serA, serB] = all;
+
+      const res = await request(app)
+        .post('/api/pipeline/series/merge/ai-resolve')
+        .send({ survivorId: serA.id, loserId: serB.id, fields: ['logline'] });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('MERGE_AI_NO_MERGEABLE_FIELDS');
+    });
+
+    it('503 MERGE_AI_NO_PROVIDER when no AI provider is configured', async () => {
+      const { ServerError } = await import('../lib/errorHandler.js');
+      mergeFieldsWithAIMock.mockRejectedValueOnce(
+        new ServerError('No AI provider available', { status: 503, code: 'MERGE_AI_NO_PROVIDER' }),
+      );
+
+      const app = makeApp();
+      await request(app).post('/api/pipeline/series').send({ name: 'P-A', universeId: 'u-1', logline: 'x' });
+      await request(app).post('/api/pipeline/series').send({ name: 'P-B', universeId: 'u-1', logline: 'y' });
+      const seriesSvc = await import('../services/pipeline/series.js');
+      const all = await seriesSvc.listSeries();
+      const [serA, serB] = all;
+
+      const res = await request(app)
+        .post('/api/pipeline/series/merge/ai-resolve')
+        .send({ survivorId: serA.id, loserId: serB.id, fields: ['logline'] });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('MERGE_AI_NO_PROVIDER');
+    });
+
+    it('502 LLM_INVALID_JSON when the LLM returns unparseable JSON', async () => {
+      const { ServerError } = await import('../lib/errorHandler.js');
+      mergeFieldsWithAIMock.mockRejectedValueOnce(
+        new ServerError('LLM returned invalid JSON', { status: 502, code: 'LLM_INVALID_JSON' }),
+      );
+
+      const app = makeApp();
+      await request(app).post('/api/pipeline/series').send({ name: 'J-A', universeId: 'u-1', logline: 'x' });
+      await request(app).post('/api/pipeline/series').send({ name: 'J-B', universeId: 'u-1', logline: 'y' });
+      const seriesSvc = await import('../services/pipeline/series.js');
+      const all = await seriesSvc.listSeries();
+      const [serA, serB] = all;
+
+      const res = await request(app)
+        .post('/api/pipeline/series/merge/ai-resolve')
+        .send({ survivorId: serA.id, loserId: serB.id, fields: ['logline'] });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('LLM_INVALID_JSON');
+    });
   });
 
   it('PATCH /series/:id 404s for unknown id', async () => {
@@ -1887,5 +2022,73 @@ describe('pipeline routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.deleted).toBe(false);
     });
+  });
+});
+
+describe('editorial roadmap routes', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it('GET /series/:id/editorial returns 404 for an unknown series', async () => {
+    const r = await request(makeApp()).get('/api/pipeline/series/ser-nope/editorial');
+    expect(r.status).toBe(404);
+    expect(getSeriesEditorialMock).not.toHaveBeenCalled();
+  });
+
+  it('GET /series/:id/editorial dispatches the aggregate for a known series', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).get(`/api/pipeline/series/${ser.body.id}/editorial`);
+    expect(r.status).toBe(200);
+    expect(r.body).toHaveProperty('coverage');
+    expect(getSeriesEditorialMock).toHaveBeenCalledWith(ser.body.id);
+  });
+
+  it('POST /issues/:id/editorial/analyze validates body and dispatches', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+
+    const bad = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/editorial/analyze`)
+      .send({ force: 'yes' });
+    expect(bad.status).toBe(400);
+
+    const ok = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/editorial/analyze`)
+      .send({ force: true });
+    expect(ok.status).toBe(200);
+    expect(ok.body.status).toBe('complete');
+    expect(analyzeIssueMock).toHaveBeenCalledWith(iss.body.id, { force: true });
+  });
+
+  it('POST /issues/:id/editorial/analyze returns 404 for an unknown issue', async () => {
+    const r = await request(makeApp())
+      .post('/api/pipeline/issues/iss-nope/editorial/analyze')
+      .send({});
+    expect(r.status).toBe(404);
+    expect(analyzeIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('POST /series/:id/editorial/analyze returns runId + sseUrl', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/editorial/analyze`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.runId).toBe('ed-run-1');
+    expect(r.body.sseUrl).toBe(`/api/pipeline/series/${ser.body.id}/editorial/analyze/progress`);
+    expect(startSeriesAnalysisMock).toHaveBeenCalled();
+  });
+
+  it('GET /issues/:id/editorial returns a none-status stub when never analyzed', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app).get(`/api/pipeline/issues/${iss.body.id}/editorial`);
+    expect(r.status).toBe(200);
+    expect(r.body.status).toBe('none');
   });
 });

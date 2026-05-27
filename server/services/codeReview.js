@@ -73,6 +73,9 @@ export function pickCodeReviewDefaults(settings) {
 let cachedDefaults = null
 settingsEvents.on('settings:updated', () => { cachedDefaults = null })
 
+/** Test-only: reset the memoized defaults cache to its uninitialized sentinel. */
+export function __resetCodeReviewDefaultsCache() { cachedDefaults = null }
+
 export async function getCodeReviewDefaults() {
   if (cachedDefaults) return cachedDefaults
   cachedDefaults = pickCodeReviewDefaults(await getSettings())

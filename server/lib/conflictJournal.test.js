@@ -114,4 +114,18 @@ describe('conflictJournal', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].localSnapshot.starterPrompt).toBe('precious local edit');
   });
+
+  it('deleteSyncBaseHash removes an existing entry so getSyncBaseHash returns null', async () => {
+    const base = uni({ starterPrompt: 'base' });
+    const hash = cj.contentHashForRecord('universe', base);
+    await cj.setSyncBaseHash('universe', 'u-del', hash);
+    expect(await cj.getSyncBaseHash('universe', 'u-del')).toBe(hash);
+    await cj.deleteSyncBaseHash('universe', 'u-del');
+    expect(await cj.getSyncBaseHash('universe', 'u-del')).toBeNull();
+  });
+
+  it('deleteSyncBaseHash is a no-op for a key that was never set', async () => {
+    await expect(cj.deleteSyncBaseHash('universe', 'nonexistent')).resolves.toBeUndefined();
+    expect(await cj.getSyncBaseHash('universe', 'nonexistent')).toBeNull();
+  });
 });

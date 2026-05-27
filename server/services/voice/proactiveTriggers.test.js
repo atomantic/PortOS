@@ -1,17 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The wiring test exercises the REAL event emitters (they're module
-// singletons) but injects a fake `speak`, so no config/tts/timezone mocking is
-// needed — the delivery primitive never runs.
+// singletons) but injects a fake `speak`, so no tts/timezone mocking is needed
+// — the delivery primitive never runs. Only `getVoiceConfig` is overridden
+// (the agent:completed handler reads it for the announceOnComplete gate);
+// the rest of config.js (voiceHome, PIPER_BIN_NAME) must stay real because
+// the proactiveSpeech → tts import chain reads those at module load.
+vi.mock('./config.js', async (importActual) => ({
+  ...(await importActual()),
+  getVoiceConfig: vi.fn(async () => ({ enabled: true, llm: { codeAgent: { announceOnComplete: true } } })),
+}));
+
 import { errorEvents } from '../../lib/errorHandler.js';
 import { cosEvents } from '../cosEvents.js';
 import { notificationEvents } from '../notifications.js';
+import { getVoiceConfig } from './config.js';
 import {
   allowBySource,
   isHighPriorityNotification,
   formatErrorLine,
   formatTaskLine,
   formatNotificationLine,
+  formatTaskCompletionLine,
   wireProactiveTriggers,
   RATE_LIMIT_MS,
 } from './proactiveTriggers.js';
@@ -92,12 +102,35 @@ describe('formatNotificationLine', () => {
   });
 });
 
+describe('formatTaskCompletionLine', () => {
+  it('reports success with the first line of the task description', () => {
+    const line = formatTaskCompletionLine({
+      status: 'completed',
+      description: 'Fix the flaky backup test\n\nmore detail here',
+    });
+    expect(line).toBe('Your coding task is done: Fix the flaky backup test.');
+  });
+
+  it('reports a blocked task as a failure', () => {
+    const line = formatTaskCompletionLine({ status: 'blocked', description: 'Refactor the registry' });
+    expect(line).toMatch(/didn't finish cleanly/i);
+    expect(line).toMatch(/Refactor the registry/);
+  });
+
+  it('falls back to a generic line when no description is present', () => {
+    expect(formatTaskCompletionLine({ status: 'completed', description: '' }))
+      .toBe('Your coding task is done.');
+    expect(formatTaskCompletionLine(null)).toBe('');
+  });
+});
+
 describe('wireProactiveTriggers', () => {
   let unwire;
   let speak;
 
   beforeEach(() => {
     speak = vi.fn(async () => ({ ok: true }));
+    getVoiceConfig.mockResolvedValue({ enabled: true, llm: { codeAgent: { announceOnComplete: true } } });
   });
 
   afterEach(() => {
@@ -213,9 +246,93 @@ describe('wireProactiveTriggers', () => {
     }
   });
 
-  it('default RATE_LIMIT_MS covers all three wired sources', () => {
+  it('rate-limits the throttled sources but NOT solicited task completions', () => {
     expect(RATE_LIMIT_MS).toHaveProperty('error');
     expect(RATE_LIMIT_MS).toHaveProperty('task:ready');
     expect(RATE_LIMIT_MS).toHaveProperty('notification');
+    // Solicited completions are serialized (queued), not drop-throttled.
+    expect(RATE_LIMIT_MS).not.toHaveProperty('task-complete');
+  });
+
+  it('announces BOTH of two back-to-back completions (no drop-based throttle)', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    const upd = (id) => ({ type: 'user', action: 'updated', task: { id, status: 'completed', description: `task ${id}`, metadata: { voiceDispatch: true } } });
+    cosEvents.emit('tasks:changed', upd('a'));
+    cosEvents.emit('tasks:changed', upd('b'));
+    await flush();
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(2);
+    const spoken = speak.mock.calls.map((c) => c[0].text).join(' | ');
+    expect(spoken).toMatch(/task a/);
+    expect(spoken).toMatch(/task b/);
+  });
+
+  // Helper: a tasks:changed 'updated' event payload for a voice-dispatched task.
+  const taskUpdate = (status, extra = {}) => ({
+    type: 'user',
+    action: 'updated',
+    task: { id: 't1', status, description: 'Fix the backup test', metadata: { voiceDispatch: true, ...extra } },
+  });
+
+  it('announces a voice-dispatched task completion as a solicited line', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+
+    // A non-voice task completing must NOT speak.
+    cosEvents.emit('tasks:changed', { type: 'user', action: 'updated', task: { status: 'completed', description: 'x', metadata: {} } });
+    await flush();
+    expect(speak).not.toHaveBeenCalled();
+
+    // A voice-dispatched one does, flagged solicited so it bypasses the
+    // proactive-enabled gate downstream.
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak.mock.calls[0][0]).toMatchObject({ source: 'task-complete', solicited: true, priority: 'normal' });
+    expect(speak.mock.calls[0][0].text).toMatch(/Fix the backup test/);
+  });
+
+  it('accepts the string "true" voiceDispatch flag (markdown round-trip)', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', { type: 'user', action: 'updated', task: { status: 'completed', description: 'y', metadata: { voiceDispatch: 'true' } } });
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses high priority for a blocked (failed) dispatched task', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', taskUpdate('blocked'));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak.mock.calls[0][0].priority).toBe('high');
+  });
+
+  it('does NOT announce on non-terminal updates (retry → pending, spawn → in_progress)', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', taskUpdate('pending'));
+    cosEvents.emit('tasks:changed', taskUpdate('in_progress'));
+    await flush();
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('suppresses the failure line for a user-terminated task', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', taskUpdate('blocked', { blockedCategory: 'user-terminated' }));
+    await flush();
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('ignores non-update actions (added/deleted/reordered)', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', { type: 'user', action: 'added', task: { status: 'completed', metadata: { voiceDispatch: true } } });
+    await flush();
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('does not announce when announceOnComplete is disabled', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: true, llm: { codeAgent: { announceOnComplete: false } } });
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).not.toHaveBeenCalled();
   });
 });

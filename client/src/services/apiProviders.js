@@ -1,7 +1,9 @@
 import { request } from './apiCore.js';
 
 // Providers
-export const getProviders = () => request('/providers');
+// `options` (e.g. { silent: true }) lets callers that own their own error UI
+// suppress the helper's default error toast.
+export const getProviders = (options) => request('/providers', options);
 export const getActiveProvider = () => request('/providers/active');
 export const setActiveProvider = (id) => request('/providers/active', {
   method: 'PUT',
@@ -19,7 +21,7 @@ export const updateProvider = (id, data) => request(`/providers/${id}`, {
 export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
 export const getSampleProviders = () => request('/providers/samples');
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
-export const refreshProviderModels = (id) => request(`/providers/${id}/refresh-models`, { method: 'POST' });
+export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
 
 // Provider status (usage limits, availability)
 export const getProviderStatuses = () => request('/providers/status');

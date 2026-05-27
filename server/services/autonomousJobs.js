@@ -1579,6 +1579,7 @@ function getAllowedCommands() {
 }
 
 export {
+  agentDataCleanup,
   getAllJobs,
   getJob,
   getEnabledJobs,

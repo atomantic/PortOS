@@ -7,7 +7,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -62,6 +62,13 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.codeReview !== undefined) {
     validateRequest(codeReviewSettingsSchema.partial(), req.body.codeReview);
+  }
+  // Home location ({ lat, lon }) read by the weather_now voice tool. The schema
+  // already makes both fields optional + nullable (clearing falls back to the
+  // tool default), and the refine enforces both-or-neither — so validate the
+  // whole slice rather than .partial()ing away that pairing rule.
+  if (req.body?.location !== undefined) {
+    validateRequest(locationSettingsSchema, req.body.location);
   }
   const merged = await updateSettings(req.body);
   // The queue caches codex.parallelLimit in-process; sync it from the

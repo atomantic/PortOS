@@ -165,6 +165,21 @@ vi.mock('../lib/mediaModels.js', () => ({
   isErnie: () => false,
 }));
 
+// Controllable listSeries for DELETE /:id → 409 UNIVERSE_HAS_LIVE_SERIES test.
+// universeBuilder.deleteUniverse() calls listSeries() to guard against live series.
+const listSeriesMock = vi.fn(async () => []);
+vi.mock('../services/pipeline/series.js', async () => {
+  const actual = await vi.importActual('../services/pipeline/series.js');
+  return { ...actual, listSeries: (...args) => listSeriesMock(...args) };
+});
+
+// Controllable mergeFieldsWithAI for ai-resolve error contract tests.
+const mergeFieldsWithAIMock = vi.fn();
+vi.mock('../services/recordMergeAI.js', async () => {
+  const actual = await vi.importActual('../services/recordMergeAI.js');
+  return { ...actual, mergeFieldsWithAI: (...args) => mergeFieldsWithAIMock(...args) };
+});
+
 const universeBuilderRoutes = (await import('./universeBuilder.js')).default;
 
 const buildApp = () => {
@@ -184,6 +199,9 @@ describe('universe-builder routes', () => {
     uuidCounter = 0;
     collectionsByName.clear();
     collectionsByUniverseId.clear();
+    listSeriesMock.mockReset();
+    listSeriesMock.mockResolvedValue([]);
+    mergeFieldsWithAIMock.mockReset();
   });
 
   it('GET / returns []', async () => {
@@ -879,11 +897,116 @@ describe('universe-builder routes', () => {
       expect(res.body).toEqual({ groups: [] });
     });
 
-    it('POST /merge rejects identical survivor/loser ids with 400', async () => {
+    it('POST /merge rejects identical survivor/loser ids with 400 (Zod refine)', async () => {
+      // Zod catches same-id at schema level → 400 with generic validation code.
       const res = await request(buildApp())
         .post('/api/universe-builder/merge')
         .send({ survivorId: 'u-1', loserId: 'u-1' });
       expect(res.status).toBe(400);
+    });
+
+    it('POST /merge returns { merged: true, cascade } on success', async () => {
+      const app = buildApp();
+      // Universe A has a logline; B has an empty logline — only A's name is
+      // non-empty, so there are no true scalar conflicts when `fieldChoices`
+      // picks the survivor for the `name` field.
+      const a = await request(app).post('/api/universe-builder').send({ name: 'Merge-A', logline: 'A logline' });
+      const b = await request(app).post('/api/universe-builder').send({ name: 'Merge-B' });
+      expect(a.status).toBe(201);
+      expect(b.status).toBe(201);
+
+      const res = await request(app)
+        .post('/api/universe-builder/merge')
+        // Explicitly resolve the name conflict so the merge can proceed.
+        .send({ survivorId: a.body.id, loserId: b.body.id, fieldChoices: { name: 'survivor' } });
+      expect(res.status).toBe(200);
+      expect(res.body.merged).toBe(true);
+      expect(res.body).toHaveProperty('cascade');
+      expect(res.body.survivorId).toBe(a.body.id);
+      expect(res.body.loserId).toBe(b.body.id);
+    });
+
+    it('DELETE /:id → 409 UNIVERSE_HAS_LIVE_SERIES with context.blockingSeries', async () => {
+      const app = buildApp();
+      const created = await request(app)
+        .post('/api/universe-builder')
+        .send({ name: 'Blocked Universe' });
+      expect(created.status).toBe(201);
+      const universeId = created.body.id;
+
+      // Simulate a live series linked to this universe so deleteUniverse throws.
+      listSeriesMock.mockResolvedValue([
+        { id: 'ser-uuid-block', name: 'Linked Series', universeId },
+      ]);
+
+      const del = await request(app).delete(`/api/universe-builder/${universeId}`);
+      expect(del.status).toBe(409);
+      expect(del.body.code).toBe('UNIVERSE_HAS_LIVE_SERIES');
+      expect(del.body.context).toBeDefined();
+      expect(Array.isArray(del.body.context.blockingSeries)).toBe(true);
+      expect(del.body.context.blockingSeries[0].id).toBe('ser-uuid-block');
+    });
+  });
+
+  describe('POST /merge/ai-resolve error contracts', () => {
+    it('422 MERGE_AI_NO_MERGEABLE_FIELDS when no fields are non-empty strings on both sides', async () => {
+      const app = buildApp();
+      const a = await request(app).post('/api/universe-builder').send({ name: 'AI-A' });
+      const b = await request(app).post('/api/universe-builder').send({ name: 'AI-B' });
+
+      // All requested fields are empty on at least one side — service throws.
+      const { ServerError } = await import('../lib/errorHandler.js');
+      mergeFieldsWithAIMock.mockRejectedValueOnce(
+        new ServerError('No mergeable text fields', { status: 422, code: 'MERGE_AI_NO_MERGEABLE_FIELDS' }),
+      );
+
+      const res = await request(app)
+        .post('/api/universe-builder/merge/ai-resolve')
+        .send({ survivorId: a.body.id, loserId: b.body.id, fields: ['logline'] });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('MERGE_AI_NO_MERGEABLE_FIELDS');
+    });
+
+    it('503 MERGE_AI_NO_PROVIDER when no AI provider is configured', async () => {
+      const app = buildApp();
+      const a = await request(app).post('/api/universe-builder').send({ name: 'NoProvider-A', logline: 'x' });
+      const b = await request(app).post('/api/universe-builder').send({ name: 'NoProvider-B', logline: 'y' });
+
+      const { ServerError } = await import('../lib/errorHandler.js');
+      mergeFieldsWithAIMock.mockRejectedValueOnce(
+        new ServerError('No AI provider available for AI-assisted merge', { status: 503, code: 'MERGE_AI_NO_PROVIDER' }),
+      );
+
+      const res = await request(app)
+        .post('/api/universe-builder/merge/ai-resolve')
+        .send({ survivorId: a.body.id, loserId: b.body.id, fields: ['logline'] });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('MERGE_AI_NO_PROVIDER');
+    });
+
+    it('502 LLM_INVALID_JSON when the LLM returns unparseable JSON', async () => {
+      const app = buildApp();
+      const a = await request(app).post('/api/universe-builder').send({ name: 'BadJSON-A', logline: 'x' });
+      const b = await request(app).post('/api/universe-builder').send({ name: 'BadJSON-B', logline: 'y' });
+
+      const { ServerError } = await import('../lib/errorHandler.js');
+      mergeFieldsWithAIMock.mockRejectedValueOnce(
+        new ServerError('LLM returned invalid JSON for AI merge', { status: 502, code: 'LLM_INVALID_JSON' }),
+      );
+
+      const res = await request(app)
+        .post('/api/universe-builder/merge/ai-resolve')
+        .send({ survivorId: a.body.id, loserId: b.body.id, fields: ['logline'] });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('LLM_INVALID_JSON');
+    });
+
+    it('400 when survivorId === loserId (Zod schema guard)', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/merge/ai-resolve')
+        .send({ survivorId: 'u-1', loserId: 'u-1', fields: ['logline'] });
+      expect(res.status).toBe(400);
+      expect(mergeFieldsWithAIMock).not.toHaveBeenCalled();
     });
   });
 });

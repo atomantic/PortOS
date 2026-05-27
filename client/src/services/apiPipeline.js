@@ -411,6 +411,44 @@ export const cancelPipelineAutoRunText = (issueId) =>
 export const pipelineAutoRunSseUrl = (issueId) =>
   `/api/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text/progress`;
 
+// ---- Editorial roadmap / reader-emotion analysis ----
+// Aggregate roadmap: { coverage, roadmap[], characters[], protagonist, supportingArcs, ... }
+export const getSeriesEditorial = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial`, options);
+
+// Full per-issue snapshot: { sections[], characters[], rollup, stale, ... } or { status: 'none' }
+export const getIssueEditorial = (issueId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/editorial`, options);
+
+// Analyze ONE issue (synchronous; returns the finished snapshot)
+export const analyzeIssueEditorial = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/editorial/analyze`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Analyze the whole series (batch). { runId, alreadyRunning, sseUrl } — subscribe
+// via pipelineEditorialSseUrl to stream per-issue progress.
+export const analyzeSeriesEditorial = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const cancelSeriesEditorial = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/cancel`, {
+    method: 'POST',
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight batch.
+export const getSeriesEditorialStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/status`, options);
+
+export const pipelineEditorialSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
+
 // ---- Audio stage ----
 // Flat list of every voice the active engines expose, namespaced as
 // `engine:voiceName` (e.g. `kokoro:af_bella`, `piper:lessac-medium`). The

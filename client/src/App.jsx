@@ -78,6 +78,7 @@ const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
 const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const Importer = lazyWithReload(() => import('./pages/Importer'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
+const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 
 // Loading fallback for lazy-loaded pages
@@ -267,6 +268,7 @@ export default function App() {
           <Route path="importer" element={<Importer />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
+          <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
           <Route path="pipeline/series/:seriesId/sync" element={<SyncView kind="series" param="seriesId" backPath="/pipeline" />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />
           <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />

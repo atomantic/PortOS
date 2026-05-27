@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // Stub every external side-effect before importing tools.js so the unit test
 // exercises pure validation/dispatch logic without hitting the filesystem.
@@ -36,6 +36,13 @@ vi.mock('../notifications.js', () => ({
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
+// timer_set delegates scheduling/persistence to ./timers.js — stub it so this
+// unit test stays pure dispatch/validation (timers.test.js covers firing,
+// persistence, and dedup).
+const scheduleTimerMock = vi.fn(() => ({ id: 'timer-1', fireAt: Date.now() + 600000, deduped: false }));
+vi.mock('./timers.js', () => ({
+  scheduleTimer: (...args) => scheduleTimerMock(...args),
+}));
 // Open-Meteo fetch — controllable per-test via weatherFetchRef.
 const weatherFetchRef = { value: { ok: true, json: async () => ({ current: { temperature_2m: 64, weather_code: 3 } }) } };
 vi.mock('../../lib/fetchWithTimeout.js', () => ({
@@ -70,6 +77,8 @@ vi.mock('../feeds.js', () => ({
 // 'completed' event the real providers emit on imageGenEvents — without
 // that, the tool's await would hang for 5 minutes.
 const codexEnabledRef = { value: false };
+// Drives settings.location for the weather_now configured-location tests.
+const settingsLocationRef = { value: null };
 
 // Hoisting note: vi.mock factories run before the module under test loads,
 // so we can't import imageGenEvents up here. Instead, do the import lazily
@@ -100,7 +109,10 @@ vi.mock('../imageGen/index.js', () => ({
   IMAGE_GEN_MODES: ['external', 'local', 'codex'],
 }));
 vi.mock('../settings.js', () => ({
-  getSettings: vi.fn(async () => ({ imageGen: { codex: { enabled: codexEnabledRef.value } } })),
+  getSettings: vi.fn(async () => ({
+    imageGen: { codex: { enabled: codexEnabledRef.value } },
+    location: settingsLocationRef.value,
+  })),
 }));
 
 // askService.runAsk is an async generator. Default mock yields a small
@@ -121,8 +133,33 @@ vi.mock('../askService.js', () => ({
   }),
 }));
 
+// dispatch_code_agent reads voice config (codeAgent gate + provider/model) and
+// lazily imports cos.js for addTask/isRunning. Mock both so the tool can be
+// exercised without a real settings file or CoS daemon.
+vi.mock('./config.js', () => ({
+  getVoiceConfig: vi.fn(async () => ({ llm: { codeAgent: { enabled: true, provider: '', model: '' } } })),
+}));
+vi.mock('../cos.js', () => ({
+  addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
+  isRunning: vi.fn(() => true),
+}));
+// dispatch_code_agent resolves a code-capable provider when none is pinned.
+// Default the active provider to a code-capable (tui) one so the inherit path
+// is exercised; individual tests override for the API-default / substitution
+// / no-CLI-provider cases.
+vi.mock('../providers.js', () => ({
+  getActiveProvider: vi.fn(async () => ({ id: 'claude-code', type: 'tui', enabled: true })),
+  getAllProviders: vi.fn(async () => ({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] })),
+  // Default: a pinned provider isn't in the test registry → resolves to null,
+  // so the pin is trusted as-is (matches the spawner's unknown-provider path).
+  getProviderById: vi.fn(async () => null),
+}));
+
 const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent, anchorLocalMidnightUtc } = await import('./tools.js');
 const { getUtcOffsetMs: mockedGetUtcOffsetMs } = await import('../../lib/timezone.js');
+const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
+const { addTask: mockedAddTask, isRunning: mockedIsRunning } = await import('../cos.js');
+const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../providers.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -139,6 +176,126 @@ describe('getToolSpecs', () => {
 describe('dispatchTool unknown tool', () => {
   it('throws when tool name is unknown', async () => {
     await expect(dispatchTool('nope_tool', {})).rejects.toThrow(/Unknown tool/);
+  });
+});
+
+describe('dispatch_code_agent', () => {
+  afterEach(() => {
+    mockedAddTask.mockClear();
+    mockedIsRunning.mockReturnValue(true);
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: '', model: '' } } });
+    mockedGetActiveProvider.mockResolvedValue({ id: 'claude-code', type: 'tui', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] });
+    mockedGetProviderById.mockResolvedValue(null);
+  });
+
+  it('rejects an empty task without creating a CoS task', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: '   ' });
+    expect(r.ok).toBe(false);
+    expect(mockedAddTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses when codeAgent is disabled', async () => {
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: false } } });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/disabled/);
+    expect(mockedAddTask).not.toHaveBeenCalled();
+  });
+
+  it('creates a voice-dispatched user task without pinning provider/model by default', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the failing backup test' });
+    expect(r.ok).toBe(true);
+    expect(r.taskId).toBe('task-test');
+    expect(mockedAddTask).toHaveBeenCalledTimes(1);
+    const [data, taskType] = mockedAddTask.mock.calls[0];
+    expect(taskType).toBe('user');
+    // Contract: isolated worktree + PR (never edits the working tree in place).
+    expect(data).toMatchObject({ description: 'fix the failing backup test', voiceDispatch: true, useWorktree: true, openPR: true });
+    // System-default behavior: no provider/model keys when none configured.
+    expect(data).not.toHaveProperty('provider');
+    expect(data).not.toHaveProperty('model');
+  });
+
+  it('pins provider/model when configured', async () => {
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'codex-cli', model: 'gpt-5' } } });
+    await dispatchTool('dispatch_code_agent', { task: 'add a flag' });
+    expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ provider: 'codex-cli', model: 'gpt-5' });
+  });
+
+  it('substitutes an enabled CLI/TUI provider when the system default is an API backend', async () => {
+    // A coding agent can't run on an API provider (LM Studio/Ollama); without
+    // a pin we must NOT inherit the API default — pick a code-capable provider.
+    mockedGetActiveProvider.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ providers: [
+      { id: 'lmstudio', type: 'api', enabled: true },
+      { id: 'codex', type: 'cli', enabled: true },
+    ] });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(true);
+    const [data] = mockedAddTask.mock.calls[0];
+    expect(data.provider).toBe('codex');
+    // A substituted provider must not carry a model meant for another provider.
+    expect(data).not.toHaveProperty('model');
+  });
+
+  it('errors when the system default is an API backend and no CLI/TUI provider is enabled', async () => {
+    mockedGetActiveProvider.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ providers: [{ id: 'lmstudio', type: 'api', enabled: true }] });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/code-capable/);
+    expect(mockedAddTask).not.toHaveBeenCalled();
+  });
+
+  it('substitutes a CLI/TUI provider when a hand-edited config pins an API-only provider', async () => {
+    // The Voice UI only lists cli/tui providers for the code agent, but a
+    // hand-edited config can pin an API one — which can't run a coding CLI.
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'lmstudio', model: 'qwen' } } });
+    mockedGetProviderById.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ providers: [
+      { id: 'lmstudio', type: 'api', enabled: true },
+      { id: 'claude-code', type: 'tui', enabled: true },
+    ] });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(true);
+    const [data] = mockedAddTask.mock.calls[0];
+    expect(data.provider).toBe('claude-code');
+    expect(data).not.toHaveProperty('model');
+  });
+
+  it('trusts a pinned provider that is not in the registry (spawner handles unknown)', async () => {
+    // getProviderById → null means we can't judge the pin's type; leave it for
+    // the spawner rather than swapping a provider we know nothing about.
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'my-custom-cli', model: 'x' } } });
+    mockedGetProviderById.mockResolvedValue(null);
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(true);
+    expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ provider: 'my-custom-cli', model: 'x' });
+  });
+
+  it('warns in the summary when the CoS runner is stopped', async () => {
+    mockedIsRunning.mockReturnValue(false);
+    const r = await dispatchTool('dispatch_code_agent', { task: 'refactor X' });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toMatch(/stopped/i);
+  });
+});
+
+describe('code intent classification', () => {
+  it('routes coding requests to the code group', () => {
+    expect([...classifyIntent('have the agent fix the failing test')]).toContain('code');
+    expect([...classifyIntent('refactor the widget registry')]).toContain('code');
+    expect([...classifyIntent('write a unit test for the echo filter')]).toContain('code');
+  });
+
+  it('does not route plain reminders/notes/ambiguous-verb phrases to the code group', () => {
+    expect([...classifyIntent('remind me to call mom')]).not.toContain('code');
+    expect([...classifyIntent('what is on my calendar today')]).not.toContain('code');
+    // Ambiguous verbs require a code-domain object — these must NOT match.
+    expect([...classifyIntent('implement my morning routine')]).not.toContain('code');
+    expect([...classifyIntent('debug my relationship with my mom')]).not.toContain('code');
+    expect([...classifyIntent('add a feature to my calendar')]).not.toContain('code');
   });
 });
 
@@ -1031,6 +1188,9 @@ describe('meatspace_log_workout', () => {
 });
 
 describe('weather_now', () => {
+  // Reset in afterEach (not inline) so a thrown assertion can't leak a stale
+  // configured location into the next test.
+  afterEach(() => { settingsLocationRef.value = null; });
   it('returns temperature + mapped conditions', async () => {
     weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 71.4, weather_code: 3 } }) };
     const r = await dispatchTool('weather_now', { lat: 40, lon: -74 });
@@ -1050,6 +1210,32 @@ describe('weather_now', () => {
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/Couldn't reach the weather service/);
   });
+  it('uses the configured settings.location when no coordinates are passed', async () => {
+    weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 55, weather_code: 0 } }) };
+    settingsLocationRef.value = { lat: 51.5074, lon: -0.1278 };
+    const r = await dispatchTool('weather_now', {});
+    expect(r.ok).toBe(true);
+    expect(r.lat).toBe(51.5074);
+    expect(r.lon).toBe(-0.1278);
+  });
+  it('lets explicit coordinates override the configured location', async () => {
+    weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 55, weather_code: 0 } }) };
+    settingsLocationRef.value = { lat: 51.5074, lon: -0.1278 };
+    const r = await dispatchTool('weather_now', { lat: 40, lon: -74 });
+    expect(r.ok).toBe(true);
+    expect(r.lat).toBe(40);
+    expect(r.lon).toBe(-74);
+  });
+  it('falls back to the default location when settings.location is null-cleared', async () => {
+    weatherFetchRef.value = { ok: true, json: async () => ({ current: { temperature_2m: 55, weather_code: 0 } }) };
+    // Number(null) is 0, so a naive resolver would pin 0,0 — assert the helper
+    // treats a null coordinate as absent and falls through to the default.
+    settingsLocationRef.value = { lat: null, lon: null };
+    const r = await dispatchTool('weather_now', {});
+    expect(r.ok).toBe(true);
+    expect(r.lat).toBe(37.7749);
+    expect(r.lon).toBe(-122.4194);
+  });
 });
 
 describe('timer_set', () => {
@@ -1063,16 +1249,13 @@ describe('timer_set', () => {
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/capped at 24 hours/);
   });
-  it('sets a timer and schedules a notification', async () => {
-    vi.useFakeTimers();
-    addNotificationMock.mockClear();
+  it('delegates a valid timer to the persistent scheduler', async () => {
+    scheduleTimerMock.mockClear();
     const r = await dispatchTool('timer_set', { minutes: 10, label: 'call mom' });
     expect(r.ok).toBe(true);
     expect(r.durationMs).toBe(600000);
     expect(r.summary).toMatch(/Timer set for 10 minutes/);
-    await vi.advanceTimersByTimeAsync(600000);
-    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/call mom/) }));
-    vi.useRealTimers();
+    expect(scheduleTimerMock).toHaveBeenCalledWith({ totalMs: 600000, label: 'call mom' });
   });
 });
 

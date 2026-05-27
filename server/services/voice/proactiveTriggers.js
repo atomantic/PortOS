@@ -30,6 +30,7 @@ import { errorEvents } from '../../lib/errorHandler.js';
 import { cosEvents } from '../cosEvents.js';
 import { notificationEvents } from '../notifications.js';
 import { speakProactive as defaultSpeak } from './proactiveSpeech.js';
+import { getVoiceConfig } from './config.js';
 
 // Per-source minimum interval between spoken lines (ms). Tuned for an opt-in
 // assistant: critical errors are rare so a wide spacing is fine; tasks and
@@ -38,6 +39,12 @@ export const RATE_LIMIT_MS = {
   error: 90_000,
   'task:ready': 60_000,
   notification: 60_000,
+  // NOTE: there is intentionally NO 'task-complete' entry. Completions of
+  // voice-dispatched tasks are solicited (the user asked for each one), so a
+  // drop-based throttle would silently lose the second of two tasks finishing
+  // close together. Instead the wiring serializes completion lines onto a
+  // queue (see taskCompleteTail) so they are spoken one after another without
+  // dropping or overlapping.
 };
 
 // Spoken lines should be short — synthesis is capped at MAX_PROACTIVE_TEXT_LEN
@@ -83,6 +90,32 @@ export const formatNotificationLine = (notification) => {
   return description ? `${title}. ${description}` : title;
 };
 
+// Truthy check mirroring isTruthyMeta — task metadata round-trips through
+// TASKS.md, so `voiceDispatch: true` comes back as the STRING 'true'. Kept
+// inline so this module stays decoupled from the agent-state helpers.
+const isMetaTrue = (v) => v === true || v === 'true';
+
+// Completion of a voice-dispatched coding task, keyed off the task's TERMINAL
+// status (completed / blocked) rather than per-agent-attempt — so a task that
+// retries doesn't announce on every attempt, and a user-cancelled task is
+// suppressed by the caller. The PR URL is NOT spoken — it isn't created until
+// cleanup runs after completion, and a GitHub URL is poor speech anyway; the
+// user reviews the PR visually. Uses the first line of the description so a
+// multi-line task spec doesn't get read out.
+export const formatTaskCompletionLine = (task) => {
+  if (!task) return '';
+  const desc = clip((task.description || '').split('\n')[0]);
+  const success = task.status === 'completed';
+  if (!desc) {
+    return success
+      ? 'Your coding task is done.'
+      : "Heads up — a coding task you dispatched didn't finish cleanly.";
+  }
+  return success
+    ? `Your coding task is done: ${desc}.`
+    : `Heads up — the coding task "${desc}" didn't finish cleanly.`;
+};
+
 /**
  * Subscribe proactive speech to live event sources.
  *
@@ -112,7 +145,7 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   // event already claimed the slot) so the budget isn't spent on a non-line.
   // try/finally only — a synthesis rejection still propagates to the caller's
   // catch.
-  const dispatch = async (source, text, priority) => {
+  const dispatch = async (source, text, priority, { solicited = false } = {}) => {
     if (!text) return;
     const now = Date.now();
     if (!allowBySource(source, lastSpokenAt.get(source), now, limits)) return;
@@ -120,7 +153,7 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     lastSpokenAt.set(source, now);
     let ok = false;
     try {
-      const result = await speak({ io, text, priority, source });
+      const result = await speak({ io, text, priority, source, solicited });
       ok = !!result?.ok;
     } finally {
       if (!ok && lastSpokenAt.get(source) === now) lastSpokenAt.set(source, previous);
@@ -141,15 +174,50 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   const onTaskReady = (task) => fire('task:ready', formatTaskLine(task), 'normal');
   const onNotification = (notification) => fire('notification', formatNotificationLine(notification), 'high');
 
+  // Announce completion of a coding task the user dispatched by voice. Keyed
+  // off the TERMINAL task status (tasks:changed → updated → completed/blocked)
+  // rather than agent:completed, so a task that retries on a transient failure
+  // announces once (at its terminal outcome), not on every attempt. Gated on
+  // cheap synchronous checks first (action / terminal status / voiceDispatch)
+  // before the config read. A user-cancelled task lands as blocked with
+  // blockedCategory 'user-terminated' — suppress it (the user stopped it on
+  // purpose; "didn't finish cleanly" would be wrong). Solicited: bypasses
+  // proactive-enabled but not voice-disabled / quiet hours.
+  //
+  // Completions are SERIALIZED onto this tail promise rather than going
+  // through the per-source rate limit: each completion is solicited, so a
+  // drop-based throttle would silently lose the second of two tasks that
+  // finish close together. Chaining makes two near-simultaneous completions
+  // speak one after the other (no drop, no overlapping audio).
+  let taskCompleteTail = Promise.resolve();
+  const onTaskUpdated = (evt) => {
+    if (evt?.action !== 'updated') return;
+    const task = evt.task;
+    const status = task?.status;
+    if (status !== 'completed' && status !== 'blocked') return;
+    if (!isMetaTrue(task.metadata?.voiceDispatch)) return;
+    if (status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') return;
+    taskCompleteTail = taskCompleteTail.then(async () => {
+      const cfg = await getVoiceConfig();
+      if (cfg?.llm?.codeAgent?.announceOnComplete === false) return;
+      const priority = status === 'completed' ? 'normal' : 'high';
+      await dispatch('task-complete', formatTaskCompletionLine(task), priority, { solicited: true });
+    }).catch((err) =>
+      console.error(`🔕 voice: proactive task-complete trigger failed: ${err?.message || err}`),
+    );
+  };
+
   errorEvents.on('error', onError);
   cosEvents.on('task:ready', onTaskReady);
+  cosEvents.on('tasks:changed', onTaskUpdated);
   notificationEvents.on('added', onNotification);
 
-  console.log('🔔 voice: proactive triggers wired (error/task:ready/notification)');
+  console.log('🔔 voice: proactive triggers wired (error/task:ready/tasks:changed/notification)');
 
   return () => {
     errorEvents.off('error', onError);
     cosEvents.off('task:ready', onTaskReady);
+    cosEvents.off('tasks:changed', onTaskUpdated);
     notificationEvents.off('added', onNotification);
   };
 };

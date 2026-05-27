@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deepMerge, isPlainObject, canonicalStringify } from './objects.js';
+import { deepMerge, isEmptyScalar, isPlainObject, canonicalStringify } from './objects.js';
 
 describe('isPlainObject', () => {
   it('returns true for plain `{}`-shaped values', () => {
@@ -29,6 +29,40 @@ describe('isPlainObject', () => {
     expect(isPlainObject(new Map())).toBe(true);
     class Foo { }
     expect(isPlainObject(new Foo())).toBe(true);
+  });
+});
+
+describe('isEmptyScalar', () => {
+  it('returns true for null and undefined', () => {
+    expect(isEmptyScalar(null)).toBe(true);
+    expect(isEmptyScalar(undefined)).toBe(true);
+  });
+
+  it('returns true for empty string and whitespace-only strings', () => {
+    expect(isEmptyScalar('')).toBe(true);
+    expect(isEmptyScalar('   ')).toBe(true);
+    expect(isEmptyScalar('\t\n')).toBe(true);
+  });
+
+  it('returns true for an empty array', () => {
+    expect(isEmptyScalar([])).toBe(true);
+  });
+
+  it('returns false for non-empty strings', () => {
+    expect(isEmptyScalar('hello')).toBe(false);
+    expect(isEmptyScalar(' x ')).toBe(false);
+  });
+
+  it('returns false for non-empty arrays', () => {
+    expect(isEmptyScalar([1])).toBe(false);
+    expect(isEmptyScalar([''])).toBe(false);
+  });
+
+  it('returns false for numbers, booleans, and plain objects', () => {
+    expect(isEmptyScalar(0)).toBe(false);
+    expect(isEmptyScalar(false)).toBe(false);
+    expect(isEmptyScalar({})).toBe(false);
+    expect(isEmptyScalar({ a: 1 })).toBe(false);
   });
 });
 

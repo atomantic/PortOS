@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useId, Children, cloneElement, isValidElement } from 'react';
-import { Save, Mic, Play, Zap } from 'lucide-react';
+import { Save, Mic, Play, Zap, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import {
   getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, testTts, fetchPiperVoice,
 } from '../../services/apiVoice';
+import { getProviders, refreshProviderModels } from '../../services/apiProviders';
 import { playWav, webSpeechSupported } from '../../services/voiceClient';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
 import { formatVoiceLabel } from '../../lib/voiceLabel';
@@ -14,7 +15,7 @@ const SERVICE_LABELS = {
   'web-speech': 'Web Speech API (STT)',
   piper: 'Piper (TTS)',
   kokoro: 'Kokoro (TTS)',
-  lmstudio: 'LM Studio (LLM)',
+  llm: 'LLM provider',
 };
 
 const STT_ENGINES = [
@@ -87,6 +88,11 @@ export function VoiceTab() {
   const [previewingVoice, setPreviewingVoice] = useState(null);
   const [downloadingVoice, setDownloadingVoice] = useState(null);
   const [widgetHidden, setWidgetHidden] = useState(readVoiceHidden);
+  // API-type providers only — voice needs low-latency streaming chat, which
+  // CLI/TUI providers can't deliver.
+  const [apiProviders, setApiProviders] = useState([]);
+  const [codeProviders, setCodeProviders] = useState([]);
+  const [refreshingModels, setRefreshingModels] = useState(false);
 
   const toggleWidgetHidden = (next) => {
     writeVoiceHidden(next);
@@ -109,6 +115,18 @@ export function VoiceTab() {
       .then(([config, s]) => { setCfg(config); setStatus(s); })
       .catch(() => toast.error('Failed to load voice settings'))
       .finally(() => setLoading(false));
+    // Load the provider registry once. The conversational brain can only
+    // stream through `api`-type providers (filtered here); the code-agent
+    // picker draws from `cli`/`tui` providers (Claude Code, Codex, Gemini) —
+    // those are the ones that can actually edit code. Silent: the empty-list
+    // fallback is the error UI, so don't also pop a toast.
+    getProviders({ silent: true })
+      .then((data) => {
+        const all = data?.providers || [];
+        setApiProviders(all.filter((p) => p.type === 'api'));
+        setCodeProviders(all.filter((p) => p.type === 'cli' || p.type === 'tui'));
+      })
+      .catch(() => { setApiProviders([]); setCodeProviders([]); });
   }, []);
 
   // Refetch the voice catalog whenever the user flips TTS engine so the picker
@@ -194,12 +212,54 @@ export function VoiceTab() {
     patch('stt.modelPath', `~/.portos/voice/models/${m.file}`);
   };
 
+  // Re-query the selected provider's /models endpoint and refresh the dropdown
+  // (LM Studio / Ollama load models on demand, so the list goes stale).
+  const handleRefreshModels = async (providerId) => {
+    if (!providerId || refreshingModels) return;
+    setRefreshingModels(true);
+    try {
+      // Silent: the route 404s when the provider returns no models, so the
+      // catch below owns the error toast (avoids a double toast).
+      const updated = await refreshProviderModels(providerId, { silent: true });
+      setApiProviders((prev) => prev.map((p) => (p.id === providerId ? { ...p, models: updated.models || [] } : p)));
+      toast.success(`Refreshed models for ${updated.name || providerId} (${updated.models?.length || 0})`);
+    } catch (err) {
+      toast.error(`Failed to refresh models: ${err.message}`);
+    } finally {
+      setRefreshingModels(false);
+    }
+  };
+
   if (loading || !cfg) return <BrailleSpinner text="Loading voice settings" />;
 
   const engine = cfg.tts.engine || 'kokoro';
   const sttEngine = cfg.stt.engine || 'whisper';
   const activeVoice = engine === 'kokoro' ? cfg.tts.kokoro?.voice : cfg.tts.piper?.voice;
   const voices = voiceList.voices || [];
+
+  // LLM provider/model pickers. The saved provider/model are always shown even
+  // when missing from the registry (e.g. provider deleted, or a model not in
+  // the cached list) so the select never silently drops the user's choice.
+  const llmProvider = cfg.llm.provider || 'lmstudio';
+  const llmModel = cfg.llm.model || 'auto';
+  const selectedProvider = apiProviders.find((p) => p.id === llmProvider);
+  const providerMissing = apiProviders.length > 0 && !selectedProvider;
+  const providerModels = selectedProvider?.models || [];
+  const modelMissing = llmModel !== 'auto' && !providerModels.includes(llmModel);
+
+  // Code-agent delegation picker. Empty provider/model = "system default" (the
+  // CoS spawner's activeProvider + selectModelForTask). The saved choice is
+  // shown even when absent from the registry so the select never drops it.
+  const codeAgentCfg = cfg.llm.codeAgent || {};
+  const codeProvider = codeAgentCfg.provider || '';
+  const codeModel = codeAgentCfg.model || '';
+  const selectedCodeProvider = codeProviders.find((p) => p.id === codeProvider);
+  // Only flag a missing provider AFTER the registry loads — otherwise a saved
+  // agent is briefly mislabeled "(not a coding agent)" during the fetch (or if
+  // it fails and codeProviders stays []). Mirrors providerMissing above.
+  const codeProviderMissing = codeProviders.length > 0 && !!codeProvider && !selectedCodeProvider;
+  const codeProviderModels = selectedCodeProvider?.models || [];
+  const codeModelMissing = !!codeModel && !codeProviderModels.includes(codeModel);
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-6">
@@ -208,9 +268,10 @@ export function VoiceTab() {
         <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
       </div>
       <p className="text-xs text-gray-500 -mt-4">
-        Hands-free or push-to-talk voice. Whisper (STT) + Kokoro/Piper (TTS) + LM Studio (LLM)
-        with tool calling for real actions (brain capture, goal updates, PM2 control, feed
-        digests, time, and more). Everything runs on this machine — no external API calls.
+        Hands-free or push-to-talk voice. Whisper (STT) + Kokoro/Piper (TTS) + your chosen LLM
+        provider with tool calling for real actions (brain capture, goal updates, PM2 control, feed
+        digests, time, and more). Pick a local provider (LM Studio, Ollama) to keep everything on
+        this machine, or any OpenAI-compatible API.
       </p>
 
       <label className="flex items-start gap-3 cursor-pointer">
@@ -385,14 +446,60 @@ export function VoiceTab() {
           </>
         )}
 
-        <Field label="LLM model" hint="'auto' picks the first loaded LM Studio model">
-          <input
-            type="text"
-            value={cfg.llm.model}
-            onChange={(e) => patch('llm.model', e.target.value)}
+        <Field label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
+          <select
+            value={llmProvider}
+            onChange={(e) => {
+              // Switching provider invalidates the old model — reset to 'auto'
+              // so we don't send a model the new provider doesn't have.
+              patch('llm.provider', e.target.value);
+              patch('llm.model', 'auto');
+            }}
             className={inputCls}
-          />
+          >
+            {providerMissing && (
+              <option value={llmProvider}>{llmProvider} (not an API provider)</option>
+            )}
+            {apiProviders.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.enabled === false ? ' (disabled)' : ''}
+              </option>
+            ))}
+            {apiProviders.length === 0 && <option value={llmProvider}>{llmProvider}</option>}
+          </select>
         </Field>
+
+        {/* Not wrapped in <Field>: the select sits beside a refresh button, so
+            the id must land on the <select> (Field injects it onto the first
+            child, which would be the flex wrapper — orphaning the label). */}
+        <div className="space-y-1">
+          <label htmlFor="voice-llm-model" className="block text-sm text-gray-400">LLM model</label>
+          <p className="text-xs text-gray-500">'auto' uses the provider's default model, or the fastest loaded model for LM Studio / Ollama.</p>
+          <div className="flex items-center gap-2">
+            <select
+              id="voice-llm-model"
+              value={llmModel}
+              onChange={(e) => patch('llm.model', e.target.value)}
+              className={`${inputCls} flex-1`}
+            >
+              <option value="auto">auto</option>
+              {modelMissing && <option value={llmModel}>{llmModel} (current)</option>}
+              {providerModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => handleRefreshModels(llmProvider)}
+              disabled={refreshingModels || providerMissing || apiProviders.length === 0}
+              aria-label="Refresh model list from the provider"
+              title="Refresh model list from the provider"
+              className="shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
+            >
+              {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
+            </button>
+          </div>
+        </div>
 
         <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
           <input
@@ -478,6 +585,74 @@ export function VoiceTab() {
             </span>
           </div>
         </label>
+
+        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
+          <input
+            type="checkbox"
+            checked={cfg.llm.codeAgent?.enabled === true}
+            onChange={(e) => patch('llm.codeAgent.enabled', e.target.checked)}
+            className="w-4 h-4 mt-0.5 shrink-0"
+          />
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+            <span className="text-sm text-white">Enable coding-agent delegation</span>
+            <span className="text-xs text-gray-500">
+              Lets you say "have the agent fix X" — dispatches a CLI coding agent in an isolated worktree that opens a PR. Needs tools enabled above.
+            </span>
+          </div>
+        </label>
+
+        {cfg.llm.codeAgent?.enabled === true && (
+          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pl-7">
+            <Field label="Coding agent" hint="Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (Settings → Providers).">
+              <select
+                value={codeProvider}
+                onChange={(e) => {
+                  // Switching agent invalidates the old model — reset to default.
+                  patch('llm.codeAgent.provider', e.target.value);
+                  patch('llm.codeAgent.model', '');
+                }}
+                className={inputCls}
+              >
+                <option value="">System default</option>
+                {codeProviderMissing && (
+                  <option value={codeProvider}>{codeProvider} (not a coding agent)</option>
+                )}
+                {codeProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.enabled === false ? ' (disabled)' : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Model" hint="'System default' lets the agent pick per task complexity.">
+              <select
+                value={codeModel}
+                onChange={(e) => patch('llm.codeAgent.model', e.target.value)}
+                className={inputCls}
+              >
+                <option value="">System default</option>
+                {codeModelMissing && <option value={codeModel}>{codeModel} (current)</option>}
+                {codeProviderModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </Field>
+            <label className="flex items-start gap-3 cursor-pointer sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={cfg.llm.codeAgent?.announceOnComplete !== false}
+                onChange={(e) => patch('llm.codeAgent.announceOnComplete', e.target.checked)}
+                className="w-4 h-4 mt-0.5 shrink-0"
+              />
+              <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+                <span className="text-sm text-white">Announce when a dispatched task finishes</span>
+                <span className="text-xs text-gray-500">
+                  Speaks the result when the agent completes. Still honors quiet hours.
+                </span>
+              </div>
+            </label>
+          </div>
+        )}
 
         <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
           <input

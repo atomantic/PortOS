@@ -104,6 +104,20 @@ export async function setSyncBaseHash(kind, id, hash) {
   _baseDirty = true;
 }
 
+/**
+ * Remove the base hash for a pruned record (idempotent — no-op if already
+ * absent). Call when a tombstone is force-pruned so the entry doesn't grow
+ * without bound on long-lived federated installs.
+ */
+export async function deleteSyncBaseHash(kind, id) {
+  const map = await ensureBaseLoaded();
+  const key = baseKey(kind, id);
+  if (!map.has(key)) return;
+  map.delete(key);
+  _baseDirty = true;
+  await flushBaseHashes();
+}
+
 /** Persist the base-hash map if dirty. Serialized so concurrent flushes can't
  *  interleave file writes. Call once after a merge's write loop. */
 export function flushBaseHashes() {

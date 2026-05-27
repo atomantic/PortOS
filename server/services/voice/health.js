@@ -1,4 +1,4 @@
-// Voice stack health checks — whisper.cpp + LM Studio + (when active) Piper.
+// Voice stack health checks — whisper.cpp + LLM provider + (when active) Piper.
 // Kokoro runs in-process; readiness is reported via the in-memory model flag.
 
 import { existsSync } from 'fs';
@@ -6,16 +6,17 @@ import { join } from 'path';
 import { getVoiceConfig, expandPath, voiceHome } from './config.js';
 import { readyState as kokoroReadyState } from './tts-kokoro.js';
 import { which } from './bootstrap.js';
+import { resolveLlmEndpoint, authHeaders } from './llm.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 3000;
 let cache = null;
 
-const probe = async (url) => {
+const probe = async (url, headers = {}) => {
   const started = Date.now();
   try {
-    const res = await fetchWithTimeout(url, { method: 'GET' }, PROBE_TIMEOUT_MS);
+    const res = await fetchWithTimeout(url, { method: 'GET', headers }, PROBE_TIMEOUT_MS);
     const latencyMs = Date.now() - started;
     if (!res.ok) return { ok: false, state: 'bad_status', status: res.status, latencyMs };
     return { ok: true, status: res.status, latencyMs };
@@ -28,12 +29,13 @@ const probe = async (url) => {
   }
 };
 
-const lmStudioBaseUrl = () => (process.env.LM_STUDIO_URL || 'http://localhost:1234').replace(/\/+$/, '').replace(/\/v1$/, '');
-
 export const checkAll = async (cfg) => {
   const voice = cfg || await getVoiceConfig();
   const sttEngine = voice.stt?.engine || 'whisper';
-  const cacheKey = `${sttEngine}|${voice.tts.engine}|${voice.stt.endpoint}`;
+  const llmProvider = voice.llm?.provider || 'lmstudio';
+  // Provider is part of the cache key so switching the voice LLM provider in
+  // Settings re-probes the new endpoint instead of serving the stale badge.
+  const cacheKey = `${sttEngine}|${voice.tts.engine}|${voice.stt.endpoint}|${llmProvider}`;
   if (cache && cache.key === cacheKey && Date.now() - cache.ts < CACHE_TTL_MS) {
     // Refresh kokoro readiness on every call — it's a cheap in-memory check
     // and flips from lazy → loading → loaded mid-cache-window after first synthesis.
@@ -44,10 +46,12 @@ export const checkAll = async (cfg) => {
     return cache.value;
   }
 
-  // STT probes: whisper.cpp needs an HTTP health check; web-speech runs in
-  // the browser so just report it as available.
-  const probes = [probe(`${lmStudioBaseUrl()}/v1/models`)];
-  const labels = ['lmstudio'];
+  // LLM probe: hit the configured provider's OpenAI-compatible /models endpoint
+  // (with apiKey when the provider needs auth) so the badge reflects whichever
+  // provider drives voice, not just LM Studio.
+  const { apiBase, apiKey } = await resolveLlmEndpoint(llmProvider);
+  const probes = [probe(`${apiBase}/models`, authHeaders(apiKey))];
+  const labels = ['llm'];
   if (sttEngine === 'whisper') {
     probes.unshift(probe(voice.stt.endpoint));
     labels.unshift('whisper');

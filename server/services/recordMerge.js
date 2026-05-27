@@ -30,7 +30,7 @@ import {
   VARIATIONS_PER_CATEGORY_MAX, COMPOSITE_SHEETS_MAX, INFLUENCES_PER_LIST_MAX, IMAGE_REFS_PER_ENTRY_MAX,
 } from './universeBuilder.js';
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
-import { canonicalStringify } from '../lib/objects.js';
+import { canonicalStringify, isEmptyScalar } from '../lib/objects.js';
 import { getSeries, updateSeries, deleteSeries, listSeries } from './pipeline/series.js';
 import { reassignIssuesToSeries, listIssues } from './pipeline/issues.js';
 import {
@@ -177,9 +177,6 @@ const unionSeasons = (survivor = [], loser = []) => {
   return out;
 };
 
-const isEmptyScalar = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
-  || (Array.isArray(v) && v.length === 0);
-
 /**
  * Resolve a set of scalar fields between survivor + loser.
  * Returns `{ values, conflicts, autoResolved }`:
@@ -239,6 +236,47 @@ const SERIES_SCALARS = [
   'writersRoomWorkId',
 ];
 
+// ---- union summary (preview only) ----
+//
+// List-shaped fields are unioned (no data loss) rather than surfaced as
+// survivor/loser conflicts — but that combine is otherwise invisible in the
+// merge modal. These helpers build a per-field summary the preview renders so
+// the user can SEE what's being folded together. `survivor` = entries kept
+// from the survivor, `added` = entries the folded copy contributed beyond
+// those (after dedupe), so `survivor + added === merged` always holds.
+const listLen = (a) => (Array.isArray(a) ? a.length : 0);
+// Categories are a keyed map of buckets; count the variations across all
+// buckets (the actual unioned leaf entries), not the bucket keys.
+const categoryVariationCount = (cats) =>
+  Object.values(cats && typeof cats === 'object' ? cats : {})
+    .reduce((n, b) => n + listLen(b?.variations), 0);
+
+const summaryRow = (field, survivorCount, mergedCount) => ({
+  field,
+  survivor: survivorCount,
+  merged: mergedCount,
+  added: Math.max(0, mergedCount - survivorCount),
+});
+const listRow = (field, survivorList, mergedList) => summaryRow(field, listLen(survivorList), listLen(mergedList));
+
+// `record` is the already-unioned result, so the loser's net contribution is
+// derived as `merged - survivor` (post-dedupe) rather than from the raw loser —
+// that's why these take only (survivor, record).
+/** Per-list-field combine summary for a universe merge preview. */
+export const summarizeUniverseUnion = (survivor, record) => [
+  listRow('Style prompt (embrace)', survivor.influences?.embrace, record.influences?.embrace),
+  listRow('Negative prompt (avoid)', survivor.influences?.avoid, record.influences?.avoid),
+  summaryRow('Categories', categoryVariationCount(survivor.categories), categoryVariationCount(record.categories)),
+  listRow('Composite sheets', survivor.compositeSheets, record.compositeSheets),
+  listRow('Characters', survivor.characters, record.characters),
+  listRow('Places', survivor.places, record.places),
+  listRow('Objects', survivor.objects, record.objects),
+].filter((r) => r.merged > 0);
+
+/** Per-list-field combine summary for a series merge preview. */
+export const summarizeSeriesUnion = (survivor, record) =>
+  [listRow('Seasons', survivor.seasons, record.seasons)].filter((r) => r.merged > 0);
+
 /** Build the unioned universe patch + conflict report from survivor + loser. */
 export const buildUniverseUnion = (survivor, loser, fieldChoices = {}, fieldOverrides = {}) => {
   const { values, conflicts, autoResolved } = resolveScalars(UNIVERSE_SCALARS, survivor, loser, fieldChoices, fieldOverrides);
@@ -251,7 +289,7 @@ export const buildUniverseUnion = (survivor, loser, fieldChoices = {}, fieldOver
     places: mergeExtractedBible(survivor.places, loser.places, BIBLE_KIND.PLACE),
     objects: mergeExtractedBible(survivor.objects, loser.objects, BIBLE_KIND.OBJECT),
   };
-  return { record, conflicts, autoResolved };
+  return { record, conflicts, autoResolved, unionSummary: summarizeUniverseUnion(survivor, record) };
 };
 
 /** Build the unioned series patch + conflict report from survivor + loser. */
@@ -261,7 +299,7 @@ export const buildSeriesUnion = (survivor, loser, fieldChoices = {}, fieldOverri
     ...values,
     seasons: unionSeasons(survivor.seasons, loser.seasons),
   };
-  return { record, conflicts, autoResolved };
+  return { record, conflicts, autoResolved, unionSummary: summarizeSeriesUnion(survivor, record) };
 };
 
 const requireResolved = (conflicts) => {
@@ -287,7 +325,7 @@ export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { d
   const survivor = await getUniverse(survivorId);
   const loser = await getUniverse(loserId);
 
-  const { record, conflicts, autoResolved } = buildUniverseUnion(survivor, loser, fieldChoices, fieldOverrides);
+  const { record, conflicts, autoResolved, unionSummary } = buildUniverseUnion(survivor, loser, fieldChoices, fieldOverrides);
 
   // Cascade preview: which series re-point, how many collection items fold.
   const childSeries = (await listSeries()).filter((s) => s.universeId === loserId);
@@ -298,7 +336,7 @@ export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { d
   };
 
   if (dryRun) {
-    return { survivorId, loserId, preview: { ...survivor, ...record }, conflicts, autoResolved, cascade };
+    return { survivorId, loserId, preview: { ...survivor, ...record }, conflicts, autoResolved, unionSummary, cascade };
   }
   requireResolved(conflicts);
 
@@ -361,7 +399,7 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
     throw makeErr('Series can only be merged within the same universe', ERR_VALIDATION);
   }
 
-  const { record, conflicts, autoResolved } = buildSeriesUnion(survivor, loser, fieldChoices, fieldOverrides);
+  const { record, conflicts, autoResolved, unionSummary } = buildSeriesUnion(survivor, loser, fieldChoices, fieldOverrides);
 
   const loserCollection = await findCollectionBySeriesId(loserId);
   // Issues are reassigned to the survivor un-grouped; count for the preview.
@@ -372,7 +410,7 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
   };
 
   if (dryRun) {
-    return { survivorId, loserId, preview: { ...survivor, ...record }, conflicts, autoResolved, cascade };
+    return { survivorId, loserId, preview: { ...survivor, ...record }, conflicts, autoResolved, unionSummary, cascade };
   }
   requireResolved(conflicts);
 

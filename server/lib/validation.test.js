@@ -13,7 +13,9 @@ import {
   normalizeReviewers,
   buildReviewWithArgs,
   createCosTaskSchema,
-  featureProviderConfigSchema
+  featureProviderConfigSchema,
+  codeReviewSettingsSchema,
+  locationSettingsSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -39,6 +41,39 @@ describe('validation.js', () => {
       expect(featureProviderConfigSchema.safeParse({ providerId: 42 }).success).toBe(false);
     });
   });
+
+  describe('codeReviewSettingsSchema', () => {
+    it('accepts a valid full payload', () => {
+      const r = codeReviewSettingsSchema.safeParse({
+        reviewers: ['copilot', 'lmstudio'],
+        stopMode: 'on-clean',
+        reviewerApplies: true,
+        lmstudioModel: 'qwen2.5-coder:7b',
+        ollamaModel: 'codellama',
+      })
+      expect(r.success).toBe(true)
+    })
+
+    it('accepts an empty object (all fields optional)', () => {
+      expect(codeReviewSettingsSchema.safeParse({}).success).toBe(true)
+    })
+
+    it('rejects unknown keys (strict mode)', () => {
+      const r = codeReviewSettingsSchema.safeParse({
+        reviewers: ['copilot'],
+        unknownField: 'oops',
+      })
+      expect(r.success).toBe(false)
+    })
+
+    it('rejects an unknown reviewer enum value', () => {
+      expect(codeReviewSettingsSchema.safeParse({ reviewers: ['bogus'] }).success).toBe(false)
+    })
+
+    it('rejects an unknown stopMode', () => {
+      expect(codeReviewSettingsSchema.safeParse({ stopMode: 'nope' }).success).toBe(false)
+    })
+  })
 
   describe('processSchema', () => {
     it('should validate a complete process object', () => {
@@ -705,6 +740,42 @@ describe('validation.js', () => {
       // must be stripped so updateStageConfig's `{...existing, ...updated}`
       // spread can never see them.
       expect(out).toEqual({ name: 'x' });
+    });
+  });
+
+  describe('locationSettingsSchema', () => {
+    it('accepts a valid lat/lon pair', () => {
+      const r = locationSettingsSchema.safeParse({ lat: 37.7749, lon: -122.4194 });
+      expect(r.success).toBe(true);
+      expect(r.data).toEqual({ lat: 37.7749, lon: -122.4194 });
+    });
+
+    it('accepts an empty object (no location set)', () => {
+      expect(locationSettingsSchema.safeParse({}).success).toBe(true);
+    });
+
+    it('accepts both fields null (cleared location)', () => {
+      expect(locationSettingsSchema.safeParse({ lat: null, lon: null }).success).toBe(true);
+    });
+
+    it('rejects only one coordinate set (both-or-neither)', () => {
+      expect(locationSettingsSchema.safeParse({ lat: 37.7749 }).success).toBe(false);
+      expect(locationSettingsSchema.safeParse({ lat: 37.7749, lon: null }).success).toBe(false);
+      expect(locationSettingsSchema.safeParse({ lon: -122.4194 }).success).toBe(false);
+    });
+
+    it('rejects out-of-range coordinates', () => {
+      expect(locationSettingsSchema.safeParse({ lat: 91, lon: 0 }).success).toBe(false);
+      expect(locationSettingsSchema.safeParse({ lat: 0, lon: 181 }).success).toBe(false);
+      expect(locationSettingsSchema.safeParse({ lat: -91, lon: 0 }).success).toBe(false);
+    });
+
+    it('rejects non-number coordinates', () => {
+      expect(locationSettingsSchema.safeParse({ lat: '37.7', lon: '-122.4' }).success).toBe(false);
+    });
+
+    it('rejects unknown keys (strict)', () => {
+      expect(locationSettingsSchema.safeParse({ lat: 1, lon: 1, alt: 100 }).success).toBe(false);
     });
   });
 });

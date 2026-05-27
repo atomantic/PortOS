@@ -1,7 +1,43 @@
-// LM Studio streaming chat — SSE parser yielding token deltas via onDelta callback.
+// Provider-aware streaming chat — SSE parser yielding token deltas via onDelta
+// callback. The OpenAI-compatible endpoint is resolved from the configured
+// voice provider (Settings → Voice → LLM provider) so any `api`-type provider
+// in the toolkit registry (LM Studio, Ollama, NVIDIA, OpenAI-compatible, …) can
+// drive voice. CLI/TUI providers can't stream low-latency tokens, so they're
+// not offered. Falls back to the legacy env-based LM Studio default when the
+// provider is missing, not API-type, or the toolkit hasn't warmed yet.
 
-const LM_STUDIO_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:1234')
-  .replace(/\/+$/, '').replace(/\/v1$/, '');
+import { getProviderById } from '../providers.js';
+
+// Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
+// INCLUDING the version path, so callers append `/models` / `/chat/completions`.
+const LM_STUDIO_API_BASE = () => `${(process.env.LM_STUDIO_URL || 'http://localhost:1234')
+  .replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
+
+/**
+ * Resolve the OpenAI-compatible endpoint for the voice text LLM.
+ * @param {string} [providerId='lmstudio']
+ * @returns {Promise<{ apiBase: string, apiKey: string, defaultModel: string|null, providerName: string }>}
+ */
+export const resolveLlmEndpoint = async (providerId = 'lmstudio') => {
+  const provider = await getProviderById(providerId || 'lmstudio').catch(() => null);
+  if (provider && provider.type === 'api' && provider.endpoint) {
+    // Back-compat: the LM_STUDIO_URL env override still wins for the built-in
+    // lmstudio provider, so installs that pointed it at another host keep
+    // working without re-saving the provider endpoint.
+    const useEnv = provider.id === 'lmstudio' && process.env.LM_STUDIO_URL;
+    return {
+      apiBase: (useEnv ? LM_STUDIO_API_BASE() : provider.endpoint).replace(/\/+$/, ''),
+      apiKey: provider.apiKey || '',
+      defaultModel: provider.defaultModel || null,
+      providerName: provider.name || providerId,
+    };
+  }
+  // No usable API provider (CLI/TUI, missing, or toolkit not warmed) — fall
+  // back to the env-based LM Studio default so voice still works out of the box.
+  return { apiBase: LM_STUDIO_API_BASE(), apiKey: '', defaultModel: null, providerName: 'LM Studio' };
+};
+
+export const authHeaders = (apiKey) => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
 
 // Approximate parameter count from LM Studio model id so 'auto' avoids a 70B
 // when smaller, faster models are available. Returns Infinity for non-matches
@@ -95,14 +131,21 @@ const sortBySpeed = (list) => list.slice().sort((a, b) => {
   return as - bs;
 });
 
-const resolveModel = async (requested, { requireTools = false } = {}) => {
-  const res = await fetch(`${LM_STUDIO_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
-  if (!res || !res.ok) return requested && requested !== 'auto' ? requested : null;
-  const body = await res.json();
+const resolveModel = async (requested, { apiBase, apiKey, defaultModel = null, requireTools = false } = {}) => {
+  const isAuto = !requested || requested === 'auto';
+  const res = await fetch(`${apiBase}/models`, { headers: authHeaders(apiKey), signal: AbortSignal.timeout(5000) }).catch(() => null);
+  // Models list unreachable: honor an explicit pin, else the provider's
+  // configured default, else give up (caller throws "no model available").
+  if (!res || !res.ok) return isAuto ? defaultModel : requested;
+  const body = await res.json().catch(() => null);
   const ids = (body?.data || []).map((m) => m.id);
-  if (requested && requested !== 'auto') {
-    return ids.includes(requested) ? requested : ids[0] || null;
+  if (!isAuto) {
+    return ids.includes(requested) ? requested : ids[0] || requested;
   }
+  // 'auto' — prefer the provider's configured default when set (hosted
+  // providers expose dozens of models; the latency heuristics below are tuned
+  // for a local LM Studio model list, not a hosted catalog).
+  if (defaultModel) return defaultModel;
   // 'auto' selection priority for voice latency:
   //   1. tool-capable + non-reasoning, smallest first  (the sweet spot)
   //   2. tool-capable + reasoning, smallest first      (slow but works)
@@ -218,6 +261,7 @@ export const extractInlineToolCalls = (text) => {
  *
  * @param {Array<object>} messages
  * @param {object} opts
+ * @param {string} [opts.provider='lmstudio']  voice LLM provider id (toolkit registry)
  * @param {string} [opts.model='auto']
  * @param {AbortSignal} [opts.signal]
  * @param {(delta: string) => void} [opts.onDelta]
@@ -226,14 +270,15 @@ export const extractInlineToolCalls = (text) => {
  */
 export const streamChat = async (messages, opts = {}) => {
   const resolveStart = Date.now();
-  const model = await resolveModel(opts.model, { requireTools: !!opts.tools?.length });
+  const { apiBase, apiKey, defaultModel, providerName } = await resolveLlmEndpoint(opts.provider);
+  const model = await resolveModel(opts.model, { apiBase, apiKey, defaultModel, requireTools: !!opts.tools?.length });
   const resolveMs = Date.now() - resolveStart;
-  if (!model) throw new Error('No LM Studio model available');
-  // Surface resolution time — non-trivial when LM Studio is warming up a new
+  if (!model) throw new Error(`No model available for voice provider "${providerName}"`);
+  // Surface resolution time — non-trivial when the backend is warming up a new
   // model, and invisible otherwise because we only logged once the stream
   // finished. opts.tag lets the pipeline inject its turn id for correlation.
   const tag = opts.tag ? `[${opts.tag}] ` : '';
-  console.log(`🤖 ${tag}lmstudio.resolve requested=${opts.model || 'auto'} → ${model} in ${resolveMs}ms`);
+  console.log(`🤖 ${tag}voice.llm.resolve provider=${providerName} requested=${opts.model || 'auto'} → ${model} in ${resolveMs}ms`);
 
   const started = Date.now();
   // When the resolved model has a reasoning mode, try every known disable
@@ -271,16 +316,16 @@ export const streamChat = async (messages, opts = {}) => {
   }
 
   const reqStart = Date.now();
-  const res = await fetch(`${LM_STUDIO_BASE()}/v1/chat/completions`, {
+  const res = await fetch(`${apiBase}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
     body: JSON.stringify(body),
     signal: opts.signal,
   });
-  console.log(`🤖 ${tag}lmstudio.headers ${res.status} in ${Date.now() - reqStart}ms`);
+  console.log(`🤖 ${tag}voice.llm.headers ${res.status} in ${Date.now() - reqStart}ms`);
   if (!res.ok || !res.body) {
     const errBody = await res.text().catch(() => '');
-    throw new Error(`LM Studio chat failed: ${res.status} ${errBody.slice(0, 200)}`);
+    throw new Error(`${providerName} chat failed: ${res.status} ${errBody.slice(0, 200)}`);
   }
 
   const decoder = new TextDecoder();

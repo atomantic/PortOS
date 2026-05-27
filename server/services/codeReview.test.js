@@ -21,11 +21,13 @@ import {
   pickCodeReviewDefaults,
   getCodeReviewDefaults,
   runLocalCodeReview,
+  __resetCodeReviewDefaultsCache,
 } from './codeReview.js'
 
 describe('codeReview helpers', () => {
   afterEach(() => {
     mockedSettings.current = {}
+    __resetCodeReviewDefaultsCache()
     vi.restoreAllMocks()
   })
 

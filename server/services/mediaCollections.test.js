@@ -416,6 +416,24 @@ describe('mediaCollections service', () => {
       expect(await svc.unlinkCollectionsForUniverse(null)).toEqual([]);
     });
 
+    it('unlinkCollectionsForUniverse preserves updatedAt (cascade side-effect, not a user edit)', async () => {
+      // The bump would let the unlinked bucket out-race its own tombstone on a
+      // peer during a universe merge — see unlinkCollectionsForUniverse's note.
+      fileStore.set('/mock/data/media-collections.json', {
+        collections: [{
+          id: 'uc-u1', name: 'Universe: Foo', description: '', coverKey: null,
+          universeId: 'u-1', seriesId: null,
+          items: [{ kind: 'image', ref: 'art.png', addedAt: '2026-05-26T13:00:00.000Z' }],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-26T13:00:00.000Z',
+        }],
+      });
+      await svc.unlinkCollectionsForUniverse('u-1');
+      const fresh = (await svc.listCollections()).find(c => c.id === 'uc-u1');
+      expect(fresh.universeId).toBeNull();
+      expect(fresh.updatedAt).toBe('2026-05-26T13:00:00.000Z');
+      expect(fresh.items).toHaveLength(1);
+    });
+
     describe('findOrCreateUniverseCollection', () => {
       it('mints a DETERMINISTIC id (uc-<universeId>) so federated peers converge, not a random UUID', async () => {
         const c = await svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Foo' });
@@ -728,6 +746,22 @@ describe('mediaCollections service', () => {
       expect(renamed.name).toBe('Orphan');
     });
 
+    it('unlinkCollectionsForSeries preserves updatedAt (cascade side-effect, not a user edit)', async () => {
+      fileStore.set('/mock/data/media-collections.json', {
+        collections: [{
+          id: 'sc-ser1', name: 'Series: Foo', description: '', coverKey: null,
+          universeId: null, seriesId: 'ser-1',
+          items: [{ kind: 'image', ref: 'cover.png', addedAt: '2026-05-26T13:00:00.000Z' }],
+          createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-26T13:00:00.000Z',
+        }],
+      });
+      await svc.unlinkCollectionsForSeries('ser-1');
+      const fresh = (await svc.listCollections()).find(c => c.id === 'sc-ser1');
+      expect(fresh.seriesId).toBeNull();
+      expect(fresh.updatedAt).toBe('2026-05-26T13:00:00.000Z');
+      expect(fresh.items).toHaveLength(1);
+    });
+
     it('addItem on a series-linked collection emits recordUpdated("series", seriesId)', async () => {
       const events = [];
       const { recordEvents } = await import('./sharing/recordEvents.js');
@@ -933,6 +967,54 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(merged.updatedAt).toBe('2026-05-22T03:00:00Z');
     // But items still union — that's the entire point of the merge
     expect(merged.items.map(i => i.ref).sort()).toEqual(['local.png', 'remote.png']);
+  });
+
+  it('universe-merge cascade race: an unlink does not out-race the collection tombstone', async () => {
+    // Repro of the real peer bug. A universe merge tombstones the loser auto-
+    // collection (with the merge-time updatedAt) AND tombstones the loser
+    // universe. On the receiving peer the UNIVERSE tombstone's cascade
+    // (unlinkCollectionsForUniverse) lands first and nulls the collection's
+    // universeId. If that unlink bumped updatedAt to "now", the collection's
+    // own (older) tombstone would then lose LWW and a live duplicate would
+    // survive. Because the cascade unlink preserves updatedAt, the tombstone
+    // still wins and converges to deleted.
+    fileStore.set('/mock/data/media-collections.json', {
+      collections: [{
+        id: 'uc-loser',
+        name: 'Universe: Clandestiny',
+        description: '',
+        coverKey: null,
+        universeId: 'u-loser',
+        seriesId: null,
+        items: [{ kind: 'image', ref: 'folded.png', addedAt: '2026-05-26T13:00:00.000Z' }],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-26T13:00:00.000Z', // last real edit, BEFORE the merge
+      }],
+    });
+    // 1. Universe tombstone cascade hits the receiver first.
+    await svc.unlinkCollectionsForUniverse('u-loser');
+    const afterUnlink = (await svc.listCollections()).find(c => c.id === 'uc-loser');
+    expect(afterUnlink.universeId).toBeNull();
+    expect(afterUnlink.updatedAt).toBe('2026-05-26T13:00:00.000Z'); // NOT bumped
+    // 2. The collection's own tombstone (merge-time, newer than the last edit) arrives.
+    await svc.mergeMediaCollectionsFromSync([{
+      id: 'uc-loser',
+      name: 'Universe: Clandestiny',
+      description: '',
+      coverKey: null,
+      universeId: null,
+      seriesId: null,
+      items: [],
+      createdAt: '2026-05-22T00:00:00Z',
+      updatedAt: '2026-05-26T13:31:33.807Z',
+      deleted: true,
+      deletedAt: '2026-05-26T13:31:33.807Z',
+    }]);
+    // No live duplicate left behind.
+    expect((await svc.listCollections()).some(c => c.id === 'uc-loser')).toBe(false);
+    const tomb = (await svc.listCollections({ includeDeleted: true })).find(c => c.id === 'uc-loser');
+    expect(tomb.deleted).toBe(true);
+    expect(tomb.items).toEqual([]);
   });
 
   it('reports count:0 when nothing actually changes (no-op no-op)', async () => {

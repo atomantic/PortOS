@@ -214,6 +214,13 @@
       "returnsJson": false,
       "variables": []
     },
+    "pipeline-editorial-analysis": {
+      "name": "Pipeline — Editorial Reader-Emotion Analysis",
+      "description": "Read one issue's reader-facing content (prose, comic script, or teleplay) and map the reader's emotional journey section by section, plus plot tension, character arcs, and protagonist detection. Feeds the series Editorial Roadmap. Runs at `heavy` tier — analyzes full issue content.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-extract-scenes": {
       "name": "Pipeline — Extract Scenes from TV Teleplay",
       "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",

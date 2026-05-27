@@ -40,6 +40,7 @@ import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
+  deleteSyncBaseHash,
 } from '../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
 import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './mediaCollections.js';
@@ -1494,6 +1495,7 @@ export async function pruneTombstonedUniverses(beforeMs) {
       if (!Number.isFinite(t) || t >= beforeMs) return false;
       const { rm } = await import('fs/promises');
       await rm(s.recordDir(id), { recursive: true, force: true });
+      await deleteSyncBaseHash('universe', id);
       return true;
     })
   ));

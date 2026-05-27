@@ -11,6 +11,7 @@ import { tmpdir } from 'os';
 // runs against the real on-disk paths via the tmpdir-redirect pattern below.
 
 import { PATHS } from '../../lib/fileUtils.js';
+import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 
 vi.mock('../instances.js', async () => {
   return {
@@ -2012,6 +2013,7 @@ describe('peerSync', () => {
       vi.mocked(mergeUniversesFromSync).mockClear();
       vi.mocked(mergeSeriesFromSync).mockClear();
       vi.mocked(mergeIssuesFromSync).mockClear();
+      vi.mocked(mergeMediaCollectionsFromSync).mockClear();
     });
 
     describe('receiver — applyIncomingPush', () => {
@@ -2079,6 +2081,147 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-a',
         });
         expect(mergeUniversesFromSync).toHaveBeenCalled();
+      });
+
+      // ---- per-category gate: cross-key isolation -------------------------
+      // The sender stamps its full schemaVersions map. A push must only be
+      // gated on the categories THIS record actually writes.
+      it('does NOT reject a universe push when the sender is ahead on mediaCollections only', async () => {
+        // universes is equal; the sender bumped an unrelated category. The old
+        // whole-payload gate would have rejected this universe push.
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1' }),
+        ]);
+      });
+
+      it('does NOT reject a series push with NO bundled issues when the sender is ahead on pipelineIssues only', async () => {
+        // No issues ride along, so pipelineIssues is not a transferred category.
+        await applyIncomingPush({
+          kind: 'series',
+          record: { id: 's1', name: 'Foo' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+        });
+        expect(mergeSeriesFromSync).toHaveBeenCalled();
+        expect(mergeIssuesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('DOES reject a series push WITH bundled issues when the sender is ahead on pipelineIssues', async () => {
+        // Issues are being transferred, so a pipelineIssues ahead-mismatch must
+        // gate the push — otherwise the receiver merges issues it can't parse.
+        const rejection = await applyIncomingPush({
+          kind: 'series',
+          record: { id: 's1', name: 'Foo' },
+          issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 2, receiverV: 1 }]);
+        expect(mergeSeriesFromSync).not.toHaveBeenCalled();
+        expect(mergeIssuesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('DOES reject a universe push WITH a bundled linkedCollection when the sender is ahead on mediaCollections', async () => {
+        // The linked collection is a transferred category, so a mediaCollections
+        // ahead-mismatch must gate even though universes is equal.
+        const rejection = await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', name: 'Foo' },
+          linkedCollection: { id: 'col-1', name: 'Universe: U', items: [] },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
+        expect(mergeUniversesFromSync).not.toHaveBeenCalled();
+        expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+      });
+
+      // ---- tombstone-aware per-category scoping --------------------------
+      it('does NOT reject a pure tombstone push even when the sender is ahead on that record kind (delete converges)', async () => {
+        // A tombstone carries only id+deleted+deletedAt+updatedAt — safe at any
+        // schema version. Gating it would strand federated deletes when one peer
+        // upgrades ahead. The merge still runs (the delete must land).
+        await applyIncomingPush({
+          kind: 'universe',
+          record: { id: 'u1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+        });
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'u1', deleted: true }),
+        ]);
+      });
+
+      it('DOES reject a deleted-series push that bundles a LIVE issue when the sender is ahead on pipelineIssues', async () => {
+        // deleteSeries does not cascade-tombstone child issues, and the push
+        // bundles every child — so a deleted series can carry full-shape LIVE
+        // issues. The series tombstone alone is safe, but the live issues are
+        // NOT; gate pipelineIssues so they can't corrupt an older receiver.
+        const rejection = await applyIncomingPush({
+          kind: 'series',
+          record: { id: 's1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
+          issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+        }).catch((err) => err);
+        expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 2, receiverV: 1 }]);
+        expect(mergeSeriesFromSync).not.toHaveBeenCalled();
+        expect(mergeIssuesFromSync).not.toHaveBeenCalled();
+      });
+
+      it('does NOT reject a deleted-series push whose bundled issues are ALL tombstones (cascade delete converges)', async () => {
+        // Series tombstone + issue tombstones only — no live record in any
+        // category, so nothing gates and the whole delete cascade converges
+        // even though the sender is ahead on both pipelineSeries and pipelineIssues.
+        await applyIncomingPush({
+          kind: 'series',
+          record: { id: 's1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
+          issues: [{ id: 'i1', seriesId: 's1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' }],
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 9 } },
+        });
+        expect(mergeSeriesFromSync).toHaveBeenCalled();
+        expect(mergeIssuesFromSync).toHaveBeenCalledWith([
+          expect.objectContaining({ id: 'i1', deleted: true }),
+        ]);
+      });
+    });
+
+    describe('gate-map completeness (fail-open guard)', () => {
+      it('every PEER_SUBSCRIBABLE_KIND resolves to a schema-category mapping', () => {
+        // A new push kind that writes a versioned layout must be added to
+        // RECORD_KIND_SCHEMA_CATEGORIES, or its push would bypass the gate
+        // entirely (silent cross-install corruption). `mediaCollection` maps
+        // via the same key; series issues are unioned at the call site.
+        for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+          expect(Array.isArray(RECORD_KIND_SCHEMA_CATEGORIES[kind])).toBe(true);
+          expect(RECORD_KIND_SCHEMA_CATEGORIES[kind].length).toBeGreaterThan(0);
+        }
+      });
+
+      it('every versioned PORTOS_SCHEMA_VERSIONS key is reachable from a record kind', () => {
+        // So a newly-versioned category can't ship without being wired into the
+        // per-category gate (which would leave its transfers ungated).
+        const covered = new Set(Object.values(RECORD_KIND_SCHEMA_CATEGORIES).flat());
+        for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {
+          expect(covered.has(key)).toBe(true);
+        }
       });
     });
 

@@ -10,7 +10,13 @@
  * future schema change only has to flip the third column.
  */
 
+import { randomUUID } from 'crypto';
 import { runStagedLLM } from '../lib/stageRunner.js';
+import { importerEvents } from './importerEvents.js';
+// Re-export so consumers reach the analyze-phase progress bus through the
+// importer's public surface (the socket bridge imports it from the source
+// module directly; tests + future callers use this).
+export { importerEvents };
 import {
   listUniverses,
   getUniverse,
@@ -26,7 +32,11 @@ import {
 } from './pipeline/series.js';
 import { createIssue, deleteIssue, listIssues } from './pipeline/issues.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
-import { IMPORTER_CONTENT_TYPES } from '../lib/validation.js';
+import { COMIC_NUM, COMIC_HEADER_TAIL } from '../lib/comicScriptParser.js';
+import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/validation.js';
+// Re-export the per-issue excerpt ceiling so callers/tests can reference the
+// same value the mechanical comic split validates against.
+export { IMPORTER_PROSE_EXCERPT_MAX };
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 
 // Surfaced to the route layer so the importer's policy errors become 400s
@@ -39,6 +49,25 @@ export const ERR_LOCKED = 'IMPORTER_LOCKED';
 export const ERR_PARTIAL_COMMIT_ISSUES = 'IMPORTER_PARTIAL_COMMIT_ISSUES';
 
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
+
+// Ordered stages surfaced to the client's live progress checklist during the
+// analyze phase. Emitted in the `start` frame so the client renders the list
+// without hardcoding (and drifting from) it; each stage then flips to
+// `running`/`done` via `stage` frames. `canon` + `arc` run in parallel — both
+// go `running` together, then resolve independently.
+export const ANALYZE_STAGES = [
+  { id: 'canon', label: 'Extracting canon (characters, places, objects)' },
+  { id: 'arc', label: 'Extracting story arc & seasons' },
+  { id: 'issues', label: 'Proposing issue split' },
+];
+
+// Each analyze stage feeds the ENTIRE source corpus (tens of thousands of
+// chars) to a heavy-tier model in one shot, so the toolkit's 5-min default
+// (DEFAULT_TIMEOUT) is too tight — a false timeout triggers an expensive
+// from-scratch fallback re-run. 20 min gives real headroom while staying
+// under the toolkit's 30-min MAX_TIMEOUT ceiling. Passed as `timeoutOverride`
+// on every analyze stage call.
+export const ANALYZE_STAGE_TIMEOUT_MS = 1_200_000;
 
 // Sanity ceiling on the source corpus — matches the schema-layer abuse guard
 // (`importerSourceField`, 5MB) so the importer doesn't impose an *artificial*
@@ -62,8 +91,57 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
   'comic-script': null,
 });
 
+// Which text stage an issue's verbatim excerpt seeds at commit. A content type
+// that is ALREADY in a script form seeds that script stage (ready) so the
+// pipeline renders the user's verbatim text instead of regenerating it; prose
+// types seed `stages.prose`. One table row per new structured type — e.g.
+// screenplay → 'teleplay' is the queued follow-up (PLAN.md
+// [importer-screenplay-teleplay-seed]).
+const CONTENT_TYPE_SEED_STAGE = Object.freeze({
+  'comic-script': 'comicScript',
+});
+const DEFAULT_SEED_STAGE = 'prose';
+const seedStageFor = (contentType) => CONTENT_TYPE_SEED_STAGE[contentType] || DEFAULT_SEED_STAGE;
+
 const normName = (s) => String(s || '').trim().toLowerCase();
 const isStr = (v) => typeof v === 'string';
+
+// Required + oversized-ceiling guard for the source corpus. Shared by
+// analyze / classify / retry-issues so the check and its (verbatim) error
+// message live in one place.
+function assertSourceWithinLimit(source) {
+  if (!isStr(source) || !source.trim()) {
+    throw makeErr('source is required', ERR_VALIDATION);
+  }
+  if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
+    throw makeErr(
+      `Source is ${source.length.toLocaleString()} chars — exceeds the ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}-char ceiling. Trim the source or wait for chunked-extraction support.`,
+      ERR_VALIDATION,
+    );
+  }
+}
+
+// Per-content-type Mustache section-guard booleans — the prompt templates use
+// `{{#isComicScript}}…{{/isComicScript}}` blocks (Mustache, not Liquid), so we
+// expose presence flags rather than the raw contentType string.
+const buildTypeFlags = (contentType) => ({
+  isShortStory: contentType === 'short-story',
+  isNovel: contentType === 'novel',
+  isScreenplay: contentType === 'screenplay',
+  isComicScript: contentType === 'comic-script',
+});
+
+// Shared per-call options for the analyze-tier staged LLM calls. Returns a
+// FRESH object each call so the parallel canon + arc invocations can't leak
+// bookkeeping state across each other, and keeps the source tag + extended
+// timeout in lock-step across analyze and retry-issues.
+const analyzeLlmOpts = (providerOverride, modelOverride) => ({
+  providerOverride,
+  modelOverride,
+  source: 'importer-analyze',
+  returnsJson: true,
+  timeoutOverride: ANALYZE_STAGE_TIMEOUT_MS,
+});
 
 // Wire schema (importerSeasonEntry) caps season.number at 99 — mirror
 // that ceiling here so the auto-assign path can't silently land a value
@@ -326,6 +404,182 @@ function buildArcPreview(raw) {
   };
 }
 
+// --- Mechanical comic-script splitting -------------------------------------
+//
+// A comic script is already issue/page-structured prose, so re-running it
+// through a heavy LLM to "propose" an issue split both costs tokens and
+// risks the model rephrasing verbatim panel/dialogue text. When the script
+// carries explicit ISSUE or PAGE headers we split on them deterministically
+// instead — verbatim, instant, free. Falls back (returns null) to the LLM
+// split when no headers are found so a header-less comic script still works.
+
+// Default page bundle size when a script has PAGE markers but no ISSUE
+// markers and the user didn't request a specific issue count. ~22 pages is
+// the floppy-issue convention referenced in DEFAULT_TARGET_ISSUE_COUNT_HINT.
+const COMIC_PAGES_PER_ISSUE = 22;
+
+// Header-like line gate: comic ISSUE/PAGE headers sit on their own short,
+// usually all-caps line. Capping length keeps a prose sentence that happens
+// to open with "Page " or "Issue " from being mistaken for a structural
+// marker (the LLM fallback still covers genuinely header-less scripts).
+const COMIC_HEADER_MAX_LEN = 80;
+// `ISSUE #3`, `ISSUE 3`, `ISSUE THREE`, `ISSUE 3: TITLE`, `ISSUE THREE - TITLE`.
+// `COMIC_NUM` + `COMIC_HEADER_TAIL` (shared with the render-time parser via
+// comicScriptParser.js) restrict the number token to digits/spelled-numbers
+// AND require a standalone header form — so prose like "Issue resolved." or
+// "Issue 1 of the saga lay open" (content that merely starts with the keyword)
+// isn't mis-split. A title is captured only after a separator. Sharing the
+// grammar keeps the import-time split and the render-time parse in agreement —
+// except for the COMIC_HEADER_MAX_LEN (80) length cap applied here but NOT by
+// the render-time bare parser, so a rare >80-char PAGE/ISSUE header folds into
+// the prior segment at split time yet still opens a page at render time.
+const ISSUE_HEADER_RE = new RegExp(`^issue\\b\\s*#?\\s*(${COMIC_NUM})\\b\\s*(?:[:.\\-–—]\\s*(.*))?\\s*$`, 'i');
+// `PAGE 1`, `PAGE ONE`, `PAGES 2-3`, `PAGE ONE (FIVE PANELS)`
+const PAGE_HEADER_RE = new RegExp(`^pages?\\b\\s*#?\\s*(${COMIC_NUM})\\b${COMIC_HEADER_TAIL}`, 'i');
+
+// Locate header lines matching `re`. Returns `[{ idx, title }]` where `idx`
+// is the 0-based line index and `title` is the trailing text after the
+// number (ISSUE only; '' otherwise).
+function findComicHeaders(lines, re) {
+  const headers = [];
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t || t.length > COMIC_HEADER_MAX_LEN) continue;
+    const m = re.exec(t);
+    if (m) headers.push({ idx: i, title: (m[2] || '').trim() });
+  }
+  return headers;
+}
+
+// Slice `lines[startIdx..endIdx)` back into a verbatim string (newline-
+// joined) and trim surrounding blank lines without touching interior text.
+function joinSegment(lines, startIdx, endIdx) {
+  return lines.slice(startIdx, endIdx).join('\n').replace(/^\n+|\n+$/g, '');
+}
+
+/**
+ * Mechanically split a comic script into issue proposals on its ISSUE / PAGE
+ * headers. Returns an array of `{ title, arcPosition, proseExcerpt }` (no
+ * logline/synopsis — the split deliberately does NOT interpret), or `null`
+ * when no usable headers are found (caller falls back to the LLM split).
+ *
+ * Pure + exported for unit testing. `targetIssueCount` (when a positive
+ * integer) forces the PAGE-bundling path to produce exactly that many issues,
+ * evenly distributed; ISSUE headers always win when present.
+ */
+export function splitComicScriptIssues(source, { targetIssueCount = null } = {}) {
+  if (!isStr(source) || !source.trim()) return null;
+  const lines = source.split(/\r\n|\r|\n/);
+
+  // 1) Explicit ISSUE headers — one issue per header, verbatim. Any text
+  //    before the first header (title page / credits) folds into issue 1.
+  const issueHeaders = findComicHeaders(lines, ISSUE_HEADER_RE);
+  if (issueHeaders.length > 0) {
+    const out = [];
+    for (let i = 0; i < issueHeaders.length; i++) {
+      const startIdx = i === 0 ? 0 : issueHeaders[i].idx;
+      const endIdx = i + 1 < issueHeaders.length ? issueHeaders[i + 1].idx : lines.length;
+      const proseExcerpt = joinSegment(lines, startIdx, endIdx);
+      if (!proseExcerpt.trim()) continue;
+      out.push({
+        // Preserve the script's own issue title verbatim when present;
+        // otherwise label sequentially. Title-casing would be a rewrite.
+        title: issueHeaders[i].title || `Issue ${i + 1}`,
+        arcPosition: i + 1,
+        proseExcerpt,
+      });
+    }
+    return out.length > 0 ? out : null;
+  }
+
+  // 2) No ISSUE headers — bundle PAGE markers into issues.
+  const pageHeaders = findComicHeaders(lines, PAGE_HEADER_RE);
+  if (pageHeaders.length === 0) return null; // header-less → LLM fallback
+
+  // Each page spans from its header to the next (preamble folds into page 1).
+  const pages = pageHeaders.map((h, i) => {
+    const startIdx = i === 0 ? 0 : h.idx;
+    const endIdx = i + 1 < pageHeaders.length ? pageHeaders[i + 1].idx : lines.length;
+    return joinSegment(lines, startIdx, endIdx);
+  }).filter((p) => p.trim());
+  if (pages.length === 0) return null;
+
+  // How many issues to produce: explicit user count (clamped to page count)
+  // beats the ~22-pages-per-issue default.
+  const requested = Number.isInteger(targetIssueCount) && targetIssueCount > 0
+    ? Math.min(targetIssueCount, pages.length)
+    : Math.max(1, Math.ceil(pages.length / COMIC_PAGES_PER_ISSUE));
+
+  // Distribute pages as evenly as possible across `requested` issues — the
+  // first `remainder` issues get one extra page so no pages are dropped.
+  const base = Math.floor(pages.length / requested);
+  const remainder = pages.length % requested;
+  const out = [];
+  let cursor = 0;
+  for (let i = 0; i < requested; i++) {
+    const take = base + (i < remainder ? 1 : 0);
+    const slice = pages.slice(cursor, cursor + take);
+    cursor += take;
+    const proseExcerpt = slice.join('\n\n').replace(/^\n+|\n+$/g, '');
+    if (!proseExcerpt.trim()) continue;
+    out.push({ title: `Issue ${i + 1}`, arcPosition: i + 1, proseExcerpt });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Propose the issue split for a source. Comic scripts try the mechanical
+ * header split first (verbatim, no LLM); everything else — and header-less
+ * comics — fall through to the staged `importer-issue-proposal` LLM call.
+ * Shared by `analyzeImport` and the retry-issues route so both honor the
+ * mechanical path identically.
+ *
+ * Returns `{ issues, runId, method }` where `method` is `'mechanical'`
+ * (runId null) or `'llm'`.
+ */
+async function proposeIssues({ seriesName, contentType, source, typeFlags, arcSummary, targetIssueCount, userRequestedCount, llmOpts }) {
+  if (contentType === 'comic-script') {
+    const mechanical = splitComicScriptIssues(source, {
+      targetIssueCount: userRequestedCount ? targetIssueCount : null,
+    });
+    if (mechanical && mechanical.length > 0) {
+      // A verbatim issue can exceed the commit-time proseExcerpt ceiling.
+      // Fail HERE (analyze/retry) with an actionable message instead of
+      // letting it sail through to a confusing commit-time 400.
+      const oversized = mechanical.findIndex((iss) => iss.proseExcerpt.length > IMPORTER_PROSE_EXCERPT_MAX);
+      if (oversized !== -1) {
+        throw makeErr(
+          `Issue ${oversized + 1} of the comic split is ${mechanical[oversized].proseExcerpt.length.toLocaleString()} chars — over the ${IMPORTER_PROSE_EXCERPT_MAX.toLocaleString()}-char per-issue limit. Add ISSUE/PAGE headers so it splits into smaller issues, or split the source.`,
+          ERR_VALIDATION,
+        );
+      }
+      console.log(`📚 importer: split comic script into ${mechanical.length} issue(s) on existing headers (no LLM rewrite)`);
+      return { issues: mechanical, runId: null, method: 'mechanical' };
+    }
+  }
+  const issueCountHint = userRequestedCount
+    ? targetIssueCount
+    : DEFAULT_TARGET_ISSUE_COUNT_HINT[contentType];
+  const issuesRun = await runStagedLLM('importer-issue-proposal', {
+    seriesName,
+    contentType,
+    source,
+    ...typeFlags,
+    arcSummary,
+    // `targetIssueCount` (number) is the value the prompt interpolates;
+    // `isUserRequestedCount` (boolean) gates the "user-requested — produce
+    // exactly this many" copy vs the softer "default for this type" copy so
+    // a per-type hint isn't presented as a hard user constraint.
+    targetIssueCount: issueCountHint,
+    isUserRequestedCount: userRequestedCount,
+  }, llmOpts);
+  return {
+    issues: Array.isArray(issuesRun.content?.issues) ? issuesRun.content.issues : [],
+    runId: issuesRun.runId,
+    method: 'llm',
+  };
+}
+
 const CLASSIFIER_CONFIDENCES = new Set(['high', 'medium', 'low']);
 // 4K chars is roughly 1 200 tokens — enough to see chapter markers, scene
 // headings, and panel breaks. Exported so the client can trim its payload
@@ -344,19 +598,12 @@ export const CLASSIFY_SOURCE_HEAD_CHARS = 4_000;
  * gated similarly. The reasoning string is passed through verbatim so the
  * UI can show it in a tooltip beside the auto-pick.
  */
-export async function classifyImportContent({ source, providerOverride } = {}) {
-  if (!isStr(source) || !source.trim()) {
-    throw makeErr('source is required', ERR_VALIDATION);
-  }
-  if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
-    throw makeErr(
-      `Source is ${source.length.toLocaleString()} chars — exceeds the ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}-char ceiling. Trim the source or wait for chunked-extraction support.`,
-      ERR_VALIDATION,
-    );
-  }
+export async function classifyImportContent({ source, providerOverride, modelOverride } = {}) {
+  assertSourceWithinLimit(source);
   const sourceHead = source.slice(0, CLASSIFY_SOURCE_HEAD_CHARS);
   const run = await runStagedLLM('importer-classify', { sourceHead }, {
     providerOverride,
+    modelOverride,
     source: 'importer-classify',
     returnsJson: true,
   });
@@ -384,11 +631,13 @@ export async function classifyImportContent({ source, providerOverride } = {}) {
  * the find-or-created universe + series exist on disk so the commit phase
  * has stable ids to reference.
  *
- * Partial-failure safety (Thread A): universe + series are NOT written to
- * disk until after all three LLM calls succeed. Pre-existing records are
- * looked up first; new records are persisted only at the end. A network
- * timeout or parse failure during any LLM stage therefore leaves no
- * orphaned half-created records behind.
+ * Partial-failure safety: universe + series are NOT written to disk until
+ * after the canon + arc passes succeed. A failure in either of those leaves
+ * no orphaned half-created records behind (the function throws before any
+ * create). The issue split, by contrast, is non-fatal — canon + arc are the
+ * expensive passes, so a split timeout/parse error sets `issueSplitFailed`
+ * and still returns the canon + arc preview (with universe + series shells
+ * persisted) so the client can retry ONLY the split via `retryIssueSplit`.
  */
 export async function analyzeImport({
   universeName,
@@ -396,6 +645,7 @@ export async function analyzeImport({
   contentType,
   source,
   providerOverride,
+  modelOverride,
   targetIssueCount,
 } = {}) {
   if (!isStr(universeName) || !universeName.trim()) {
@@ -404,15 +654,7 @@ export async function analyzeImport({
   if (!isStr(seriesName) || !seriesName.trim()) {
     throw makeErr('seriesName is required', ERR_VALIDATION);
   }
-  if (!isStr(source) || !source.trim()) {
-    throw makeErr('source is required', ERR_VALIDATION);
-  }
-  if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
-    throw makeErr(
-      `Source is ${source.length.toLocaleString()} chars — exceeds the ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}-char ceiling. Trim the source or wait for chunked-extraction support.`,
-      ERR_VALIDATION,
-    );
-  }
+  assertSourceWithinLimit(source);
 
   // Look up pre-existing records WITHOUT creating anything yet. Creation is
   // deferred until after all LLM calls succeed so a failure above never
@@ -446,25 +688,31 @@ export async function analyzeImport({
   // returnsJson gates extractJson() in stageRunner — required even though
   // the stage-config also declares `returnsJson: true` (that field is
   // metadata for the Prompts UI; the runtime only consults the per-call
-  // option). Helper returns a FRESH object each call so a future runner
-  // that decides to add bookkeeping (`opts.attempt`, `opts.startedAt`)
-  // can't leak state across our parallel canon + arc invocations.
-  const buildLlmOpts = () => ({ providerOverride, source: 'importer-analyze', returnsJson: true });
+  // option). `analyzeLlmOpts` returns a FRESH object each call so a future
+  // runner that adds bookkeeping can't leak state across our parallel
+  // canon + arc invocations.
+  const buildLlmOpts = () => analyzeLlmOpts(providerOverride, modelOverride);
 
-  const userRequestedCount = Number.isFinite(targetIssueCount) && targetIssueCount > 0;
-  const issueCountHint = userRequestedCount
-    ? targetIssueCount
-    : DEFAULT_TARGET_ISSUE_COUNT_HINT[contentType];
-
-  // Per-type booleans for the Mustache section guards in the prompt
-  // templates (PortOS's template engine is Mustache, not Liquid — no
-  // `{% if x == 'y' %}` support, so we expose presence flags instead).
-  const typeFlags = {
-    isShortStory: contentType === 'short-story',
-    isNovel: contentType === 'novel',
-    isScreenplay: contentType === 'screenplay',
-    isComicScript: contentType === 'comic-script',
+  // Live stage progress (see ANALYZE_STAGES). `runId` lets the client ignore
+  // stragglers from a prior run. Emitting is best-effort UI sugar — never let
+  // a listener throw abort the extraction, so swallow + log at this boundary.
+  const runId = randomUUID();
+  const emitProgress = (frame) => {
+    try {
+      importerEvents.emit('progress', { runId, ...frame });
+    } catch (err) {
+      console.error(`❌ importer progress emit failed: ${err.message}`);
+    }
   };
+  const emitStage = (id, status) => emitProgress({ type: 'stage', id, status });
+  emitProgress({ type: 'start', stages: ANALYZE_STAGES });
+
+  // `proposeIssues` derives the per-type issue-count hint internally; analyze
+  // only needs the boolean to forward.
+  const userRequestedCount = Number.isFinite(targetIssueCount) && targetIssueCount > 0;
+
+  // Per-type Mustache section-guard booleans (see buildTypeFlags).
+  const typeFlags = buildTypeFlags(contentType);
 
   // Use the known persisted name for prompt variables when the record
   // already exists; fall back to the trimmed input for new records.
@@ -474,6 +722,11 @@ export async function analyzeImport({
   // Canon + arc are independent reads of the same source — fire in
   // parallel. Issue-proposal depends on the arc summary, so chain after
   // arc resolves.
+  emitStage('canon', 'running');
+  emitStage('arc', 'running');
+  // `.then` on each promise flips its stage to `done` the moment that pass
+  // resolves — Promise.all alone would only report after BOTH finish, which
+  // would make the slower of the two appear stalled in the checklist.
   const [canonRun, arcRun] = await Promise.all([
     runStagedLLM('importer-canon-extract', {
       universeName: promptUniverseName,
@@ -482,13 +735,13 @@ export async function analyzeImport({
       source,
       existingCanonBlock: buildExistingCanonBlock(existingCanon),
       ...typeFlags,
-    }, buildLlmOpts()),
+    }, buildLlmOpts()).then((r) => { emitStage('canon', 'done'); return r; }),
     runStagedLLM('importer-arc-extract', {
       seriesName: promptSeriesName,
       contentType,
       source,
       ...typeFlags,
-    }, buildLlmOpts()),
+    }, buildLlmOpts()).then((r) => { emitStage('arc', 'done'); return r; }),
   ]);
 
   // Pull the arc summary in before issue-proposal so the issue boundaries
@@ -506,23 +759,45 @@ export async function analyzeImport({
   }
   const arcSummary = arcContent.summary || arcContent.logline || `${promptSeriesName} — ${contentType}`;
 
-  const issuesRun = await runStagedLLM('importer-issue-proposal', {
+  emitStage('issues', 'running');
+  // Issue split tolerates failure: canon + arc are the expensive passes and
+  // they already succeeded, so a timeout / parse error on the split must NOT
+  // throw them away. On failure we flag `issueSplitFailed` and return the
+  // canon + arc preview anyway — the client offers a "retry issue split" that
+  // re-runs ONLY this pass (see POST /api/importer/retry-issues). Comic
+  // scripts take the mechanical header split first (no LLM), which both
+  // sidesteps the timeout and preserves verbatim panel/dialogue text.
+  let issueProposals = [];
+  let issuesRunId = null;
+  let issueSplitFailed = false;
+  let issueSplitError = null;
+  const issueResult = await proposeIssues({
     seriesName: promptSeriesName,
     contentType,
     source,
-    ...typeFlags,
+    typeFlags,
     arcSummary,
-    // `targetIssueCount` (number) is the value the prompt interpolates;
-    // `isUserRequestedCount` (boolean) gates the "user-requested — produce
-    // exactly this many" copy vs the softer "default for this type" copy so
-    // a per-type hint isn't presented as a hard user constraint.
-    targetIssueCount: issueCountHint,
-    isUserRequestedCount: userRequestedCount,
-  }, buildLlmOpts());
+    targetIssueCount,
+    userRequestedCount,
+    llmOpts: buildLlmOpts(),
+  }).catch((err) => {
+    issueSplitFailed = true;
+    issueSplitError = err?.message || String(err);
+    console.error(`❌ importer issue split failed (canon+arc preserved): ${issueSplitError}`);
+    return null;
+  });
+  if (issueResult) {
+    issueProposals = issueResult.issues;
+    issuesRunId = issueResult.runId;
+    emitStage('issues', 'done');
+  } else {
+    emitStage('issues', 'error');
+  }
 
-  // All LLM calls succeeded — now persist any new records. Pre-existing
-  // records are returned as-is; new records are created here at the end so
-  // a failure above never leaves orphaned data on disk.
+  // Canon + arc succeeded — persist any new records so the preview has stable
+  // ids the client can commit/retry against. The issue split may have failed
+  // (issueSplitFailed); that's surfaced to the client, not fatal. Pre-existing
+  // records are returned as-is.
   //
   // Thread A: wrap the two-step create in a try/catch so a `createSeries`
   // failure doesn't leave an orphaned universe on disk. We only delete the
@@ -561,11 +836,15 @@ export async function analyzeImport({
     },
     arcPreview,
     seasonsPreview: Array.isArray(arcRun.content?.seasons) ? arcRun.content.seasons : [],
-    issueProposals: Array.isArray(issuesRun.content?.issues) ? issuesRun.content.issues : [],
+    issueProposals,
+    // True when the issue split failed after canon+arc succeeded — the client
+    // shows a "retry issue split" affordance instead of throwing the run away.
+    issueSplitFailed,
+    issueSplitError,
     runIds: {
       canon: canonRun.runId,
       arc: arcRun.runId,
-      issues: issuesRun.runId,
+      issues: issuesRunId,
     },
     providerId: canonRun.providerId,
     model: canonRun.model,
@@ -585,6 +864,44 @@ export async function analyzeImport({
 }
 
 /**
+ * Re-run ONLY the issue split — the recovery path when `analyzeImport`
+ * returned `issueSplitFailed: true` (canon + arc succeeded, the split timed
+ * out / failed). Re-extracting canon + arc would burn the two expensive
+ * passes again, so this re-runs just the split against the same source, with
+ * the arc summary the user already has in the Review panel for alignment.
+ * Comic scripts take the mechanical header path first (see `proposeIssues`).
+ */
+export async function retryIssueSplit({
+  contentType,
+  source,
+  seriesName,
+  arcSummary,
+  targetIssueCount,
+  providerOverride,
+  modelOverride,
+} = {}) {
+  assertSourceWithinLimit(source);
+  if (!IMPORTER_CONTENT_TYPES.includes(contentType)) {
+    throw makeErr(`Unknown contentType "${contentType}"`, ERR_VALIDATION);
+  }
+  const userRequestedCount = Number.isFinite(targetIssueCount) && targetIssueCount > 0;
+  const promptSeriesName = isStr(seriesName) && seriesName.trim() ? seriesName.trim() : 'the series';
+  const result = await proposeIssues({
+    seriesName: promptSeriesName,
+    contentType,
+    typeFlags: buildTypeFlags(contentType),
+    source,
+    // Fall back to a synthetic summary so the LLM prompt always has the
+    // {{arcSummary}} var (the mechanical comic path ignores it entirely).
+    arcSummary: isStr(arcSummary) && arcSummary.trim() ? arcSummary : `${promptSeriesName} — ${contentType}`,
+    targetIssueCount,
+    userRequestedCount,
+    llmOpts: analyzeLlmOpts(providerOverride, modelOverride),
+  });
+  return { issueProposals: result.issues, method: result.method, runId: result.runId };
+}
+
+/**
  * Phase 2: commit. Merges the user-confirmed canon into the universe,
  * writes the arc + seasons onto the series, then creates one issue per
  * proposal with prose pre-seeded. Validates the locked-arc guard one more
@@ -597,6 +914,9 @@ export async function commitImport({
   arc = null,
   seasons = [],
   issues = [],
+  // Content type drives which stage each issue's verbatim excerpt seeds (see
+  // the stage-seed block below). Absent → prose-seed (prior behavior).
+  contentType = null,
   // Destructive replace: wipes existing issues, overwrites arc + seasons.
   // Universe canon still merges additively (it's shared across series, so
   // a per-series destructive replace would be too coarse). Default false.
@@ -940,7 +1260,11 @@ export async function commitImport({
       // create + updateStage(prose) + updateStage(idea).
       const stages = {};
       if (proposal.proseExcerpt) {
-        stages.prose = { status: 'ready', output: proposal.proseExcerpt };
+        // Route the verbatim excerpt to the stage that matches the source form
+        // (see CONTENT_TYPE_SEED_STAGE): a comic-script seeds stages.comicScript
+        // (ready) so the pipeline renders the user's verbatim script instead of
+        // regenerating it; everything else seeds stages.prose.
+        stages[seedStageFor(contentType)] = { status: 'ready', output: proposal.proseExcerpt };
       }
       const ideaSeed = [
         proposal.logline && `Logline: ${proposal.logline}`,

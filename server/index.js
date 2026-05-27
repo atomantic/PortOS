@@ -58,6 +58,7 @@ import lmstudioRoutes from './routes/lmstudio.js';
 import voiceRoutes from './routes/voice.js';
 import { getVoiceConfig } from './services/voice/config.js';
 import { reconcile as reconcileVoice } from './services/voice/bootstrap.js';
+import { initVoiceTimers } from './services/voice/timers.js';
 import browserRoutes from './routes/browser.js';
 import moltworldToolsRoutes from './routes/moltworldTools.js';
 import moltworldWsRoutes from './routes/moltworldWs.js';
@@ -502,6 +503,9 @@ getInitSettings().then(s => {
 }).catch(err => console.error(`❌ Telegram settings read failed: ${err.message}`));
 // Reconcile voice stack (start portos-whisper if voice.enabled)
 getVoiceConfig().then(reconcileVoice).catch(err => console.error(`❌ Voice reconcile failed: ${err.message}`));
+// Re-arm any voice timers that survived a restart (independent of voice.enabled —
+// a pending reminder should still fire even if voice is currently off).
+initVoiceTimers().catch(err => console.error(`❌ Voice timer init failed: ${err.message}`));
 // Check for update completion marker from a previous update cycle
 const updateMarkerPath = join(PATHS.data, 'update-complete.json');
 const removeMarker = () => unlink(updateMarkerPath).catch(e => {

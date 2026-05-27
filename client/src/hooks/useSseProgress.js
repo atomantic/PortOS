@@ -16,13 +16,28 @@ export function useSseProgress(url, { enabled = true } = {}) {
   const [frames, setFrames] = useState([]);
   const [latest, setLatest] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
+  // `closed` flips true when the stream ends for ANY reason — a terminal frame
+  // OR a connection failure/404 (e.g. the server pruned a fast-completing job
+  // before we attached). Consumers that gate UI on a run being "in flight" use
+  // this to recover instead of hanging forever waiting for a terminal frame
+  // that will never arrive. Reset to false on every (re)subscribe.
+  const [closed, setClosed] = useState(false);
   const esRef = useRef(null);
 
   useEffect(() => {
-    if (!url || !enabled) return undefined;
+    if (!url || !enabled) {
+      // Clear terminal/open state when disabled so a later re-enable starts
+      // clean. Without this, a stale `closed=true` from a finished run makes a
+      // consumer's "is the stream over?" check fire immediately on the NEXT
+      // subscribe, tearing down the new stream before it can deliver progress.
+      setIsOpen(false);
+      setClosed(false);
+      return undefined;
+    }
     setFrames([]);
     setLatest(null);
     setIsOpen(false);
+    setClosed(false);
 
     const es = new EventSource(url);
     esRef.current = es;
@@ -39,10 +54,19 @@ export function useSseProgress(url, { enabled = true } = {}) {
       setLatest(data);
       if (TERMINAL_TYPES.has(data?.type)) {
         es.close();
+        setIsOpen(false); // the connection is now closed — keep isOpen honest
+        setClosed(true);
       }
     };
     es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) setIsOpen(false);
+      // EventSource fails (no auto-retry) on a non-2xx / non-event-stream
+      // response — readyState CLOSED. Surface that as a terminal close so the
+      // consumer stops waiting; transient errors (readyState CONNECTING) are
+      // left alone so the browser's own retry can recover.
+      if (es.readyState === EventSource.CLOSED) {
+        setIsOpen(false);
+        setClosed(true);
+      }
     };
 
     return () => {
@@ -51,5 +75,5 @@ export function useSseProgress(url, { enabled = true } = {}) {
     };
   }, [url, enabled]);
 
-  return { frames, latest, isOpen, close: () => esRef.current?.close() };
+  return { frames, latest, isOpen, closed, close: () => esRef.current?.close() };
 }

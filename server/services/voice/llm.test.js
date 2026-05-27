@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { extractInlineToolCalls, isToolCapable, isReasoningModel, TOOL_CAPABLE_PATTERNS, REASONING_PATTERNS } from './llm.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock the provider registry shim so resolveLlmEndpoint can be exercised
+// without warming the AI toolkit.
+vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
+import { getProviderById } from '../providers.js';
+
+import {
+  extractInlineToolCalls, isToolCapable, isReasoningModel,
+  TOOL_CAPABLE_PATTERNS, REASONING_PATTERNS, resolveLlmEndpoint,
+} from './llm.js';
 
 describe('extractInlineToolCalls', () => {
   it('returns empty when no tag is present', () => {
@@ -157,5 +166,71 @@ describe('isReasoningModel', () => {
 
   it('exports the pattern list for introspection', () => {
     expect(Array.isArray(REASONING_PATTERNS)).toBe(true);
+  });
+});
+
+describe('resolveLlmEndpoint', () => {
+  const ORIG_ENV = process.env.LM_STUDIO_URL;
+  beforeEach(() => {
+    getProviderById.mockReset();
+    delete process.env.LM_STUDIO_URL;
+  });
+  afterEach(() => {
+    if (ORIG_ENV === undefined) delete process.env.LM_STUDIO_URL;
+    else process.env.LM_STUDIO_URL = ORIG_ENV;
+  });
+
+  it('uses an API provider endpoint, apiKey, and default model', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'nvidia-kimi', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1',
+      apiKey: 'secret', defaultModel: 'moonshotai/kimi-k2-5', name: 'NVIDIA Kimi',
+    });
+    const ep = await resolveLlmEndpoint('nvidia-kimi');
+    expect(ep.apiBase).toBe('https://integrate.api.nvidia.com/v1');
+    expect(ep.apiKey).toBe('secret');
+    expect(ep.defaultModel).toBe('moonshotai/kimi-k2-5');
+    expect(ep.providerName).toBe('NVIDIA Kimi');
+  });
+
+  it('strips trailing slashes from the provider endpoint', async () => {
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1/', apiKey: '' });
+    const ep = await resolveLlmEndpoint('ollama');
+    expect(ep.apiBase).toBe('http://localhost:11434/v1');
+  });
+
+  it('falls back to the env LM Studio default for CLI/TUI providers', async () => {
+    getProviderById.mockResolvedValue({ id: 'claude-code', type: 'cli', command: 'claude' });
+    const ep = await resolveLlmEndpoint('claude-code');
+    expect(ep.apiBase).toBe('http://localhost:1234/v1');
+    expect(ep.apiKey).toBe('');
+    expect(ep.defaultModel).toBeNull();
+  });
+
+  it('falls back when the provider is missing or the lookup throws', async () => {
+    getProviderById.mockRejectedValue(Object.assign(new Error('not ready'), { code: 'AI_TOOLKIT_NOT_INITIALIZED' }));
+    const ep = await resolveLlmEndpoint('lmstudio');
+    expect(ep.apiBase).toBe('http://localhost:1234/v1');
+  });
+
+  it('honors LM_STUDIO_URL env override for the built-in lmstudio provider', async () => {
+    process.env.LM_STUDIO_URL = 'http://10.0.0.5:1234';
+    getProviderById.mockResolvedValue({ id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', apiKey: 'lm-studio' });
+    const ep = await resolveLlmEndpoint('lmstudio');
+    // Env override wins over the registry endpoint for back-compat.
+    expect(ep.apiBase).toBe('http://10.0.0.5:1234/v1');
+  });
+
+  it('does NOT apply the env override to non-lmstudio providers', async () => {
+    process.env.LM_STUDIO_URL = 'http://10.0.0.5:1234';
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', apiKey: '' });
+    const ep = await resolveLlmEndpoint('ollama');
+    expect(ep.apiBase).toBe('http://localhost:11434/v1');
+  });
+
+  it('defaults to lmstudio when no provider id is passed', async () => {
+    getProviderById.mockResolvedValue(null);
+    const ep = await resolveLlmEndpoint();
+    expect(getProviderById).toHaveBeenCalledWith('lmstudio');
+    expect(ep.apiBase).toBe('http://localhost:1234/v1');
   });
 });
