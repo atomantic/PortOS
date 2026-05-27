@@ -430,6 +430,17 @@ Thud!`;
     expect(pages[0].panels[0].caption).toBe('In the beginning, there was nothing.');
   });
 
+  it('captures every line of a multi-line balloon under one speaker cue', () => {
+    // A speaker followed by multiple lines before the next cue/label must keep
+    // ALL lines — earlier only the first survived and the rest were dropped.
+    const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nThe curse is broken.\nFinally, after all these years.\nCAPTION\nThe end.');
+    expect(pages[0].panels[0].dialogue).toEqual([
+      { character: 'GIANT', line: 'The curse is broken.' },
+      { character: 'GIANT', line: 'Finally, after all these years.' },
+    ]);
+    expect(pages[0].panels[0].caption).toBe('The end.');
+  });
+
   it('preserves a dangling speaker cue (no spoken line before the next marker) as text, not dropped', () => {
     const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nPANEL 2\nAnother shot.');
     // GIANT had no spoken line before PANEL 2 — it must survive in the panel

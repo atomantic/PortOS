@@ -123,6 +123,10 @@ function normalizeBareComicScript(script) {
   // from being misread as dialogue.
   let awaitingFirst = false;
   let pendingSpeaker = null;
+  // Speaker whose dialogue is currently open (field === 'dialogue'). Every
+  // following line until the next cue/label/marker is attributed to them, so a
+  // multi-line balloon doesn't lose its 2nd+ lines.
+  let dialogueSpeaker = null;
 
   // A speaker cue whose spoken line never arrived (next line was a marker or
   // EOF) is emitted back as plain text rather than dropped, so no input line
@@ -139,38 +143,48 @@ function normalizeBareComicScript(script) {
 
     if (BARE_PAGE_LINE.test(t)) {
       flushDanglingSpeaker();
-      pageNum += 1; panelNum = 0; inPanel = false; field = null; awaitingFirst = false;
+      pageNum += 1; panelNum = 0; inPanel = false; field = null; awaitingFirst = false; dialogueSpeaker = null;
       out.push(`## Page ${pageNum}`);
       continue;
     }
     if (BARE_PANEL_LINE.test(t)) {
       flushDanglingSpeaker();
-      panelNum += 1; inPanel = true; field = 'description'; awaitingFirst = true;
+      panelNum += 1; inPanel = true; field = 'description'; awaitingFirst = true; dialogueSpeaker = null;
       out.push(`Panel ${panelNum}`);
       continue;
     }
     if (inPanel && BARE_CAPTION_LINE.test(t)) {
       flushDanglingSpeaker();
-      out.push('Caption:'); field = 'caption'; awaitingFirst = true;
+      out.push('Caption:'); field = 'caption'; awaitingFirst = true; dialogueSpeaker = null;
       continue;
     }
     if (inPanel && BARE_SFX_LINE.test(t)) {
       flushDanglingSpeaker();
-      out.push('SFX:'); field = 'sfx'; awaitingFirst = true;
+      out.push('SFX:'); field = 'sfx'; awaitingFirst = true; dialogueSpeaker = null;
       continue;
     }
-    // The spoken line for a pending speaker (markers were handled above and
-    // already flushed the speaker, so reaching here means a real dialogue line).
-    if (pendingSpeaker && t) {
+    // First spoken line for a pending speaker. The `!BARE_SPEAKER_LINE` guard
+    // stops a second bare-name line (two cues in a row) from being eaten as the
+    // first speaker's dialogue — the speaker-cue branch below re-flushes instead.
+    if (pendingSpeaker && t && !BARE_SPEAKER_LINE.test(t)) {
       out.push('Dialogue:');
       out.push(`${pendingSpeaker}: ${t}`);
+      dialogueSpeaker = pendingSpeaker;
       pendingSpeaker = null;
-      field = null; // dialogue closes the active field
+      field = 'dialogue'; // continuation lines stay attributed to this speaker
+      continue;
+    }
+    // Continuation line of a multi-line balloon — attribute it to the same
+    // speaker so parsePanelBody captures it (otherwise lines 2+ were dropped).
+    if (field === 'dialogue' && dialogueSpeaker && t) {
+      out.push(`${dialogueSpeaker}: ${t}`);
       continue;
     }
     // Speaker cue — only when NOT the forced first content line after a label.
     if (inPanel && t && !awaitingFirst && BARE_SPEAKER_LINE.test(t)) {
+      flushDanglingSpeaker(); // a prior cue with no spoken line keeps its text
       pendingSpeaker = t;
+      field = null; dialogueSpeaker = null; // end any in-progress dialogue
       continue;
     }
     // First content line after a PANEL opens the Description field.
