@@ -176,4 +176,29 @@ describe('storyBuilder — generate delegation', () => {
     expect(series.arc.logline).toBe('spine');
     expect(series.locked.arc).toBe(true);
   });
+
+  it('defaults the provider/model from session.llm when no per-call override is given', async () => {
+    const s = await sb.createStorySession({ title: 'X', llm: { provider: 'prov-x', model: 'model-y' } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'al', summary: 'as', seasonOutlines: [] }, runId: 'r', providerId: 'p', model: 'm',
+    }));
+    await sb.generateStep(s.id, 'plotArc'); // no options → must fall back to session.llm
+    // arcPlanner forwards the resolved override into runStagedLLM's options.
+    expect(stageRunnerSpy).toHaveBeenCalledWith(
+      expect.any(String), expect.any(Object),
+      expect.objectContaining({ providerOverride: 'prov-x', modelOverride: 'model-y' }),
+    );
+  });
+
+  it('an explicit per-call provider override beats session.llm', async () => {
+    const s = await sb.createStorySession({ title: 'X', llm: { provider: 'prov-x', model: 'model-y' } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'al', summary: 'as', seasonOutlines: [] }, runId: 'r', providerId: 'p', model: 'm',
+    }));
+    await sb.generateStep(s.id, 'plotArc', { providerId: 'override-z', model: 'override-m' });
+    expect(stageRunnerSpy).toHaveBeenCalledWith(
+      expect.any(String), expect.any(Object),
+      expect.objectContaining({ providerOverride: 'override-z', modelOverride: 'override-m' }),
+    );
+  });
 });

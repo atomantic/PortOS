@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { filterSelectableModels } from '../utils/providers';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
@@ -8,10 +9,11 @@ import toast from '../components/ui/Toast';
 import { useLockToggle } from '../hooks/useLockToggle';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
-  setStoryCurrentStep, lockStoryStep, unlockStoryStep,
+  updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
+  getProviders,
 } from '../services/api';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
@@ -26,6 +28,49 @@ const pickArcFields = (arc) => {
 const CONTENT_TYPE_LABELS = {
   'short-story': 'Short story', novel: 'Novel', screenplay: 'Screenplay', 'comic-script': 'Comic script',
 };
+
+// Shared AI provider + model picker. The selection applies to EVERY Story
+// Builder operation (idea expand, aesthetic, arc, reader map, character refine,
+// and the importer's analyze) — see the session.llm fallback in the conductor.
+// `value` is `{ provider, model }`; empty strings mean "use the stage default".
+function ProviderModelPicker({ value, onChange, id = 'stb' }) {
+  const [providers, setProviders] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    getProviders({ silent: true })
+      .then((data) => { if (!cancelled) setProviders((data?.providers || []).filter((p) => p.enabled)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const models = useMemo(() => {
+    const p = providers.find((x) => x.id === value?.provider);
+    return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
+  }, [providers, value?.provider]);
+
+  return (
+    <div className="flex items-center gap-2">
+      <label htmlFor={`${id}-provider`} className="text-xs text-gray-500 whitespace-nowrap">AI</label>
+      <select
+        id={`${id}-provider`} value={value?.provider || ''}
+        onChange={(e) => onChange({ provider: e.target.value, model: '' })}
+        className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs max-w-[10rem]"
+      >
+        <option value="">Default provider</option>
+        {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      {models.length > 0 && (
+        <select
+          id={`${id}-model`} aria-label="Model" value={value?.model || ''}
+          onChange={(e) => onChange({ provider: value?.provider || '', model: e.target.value })}
+          className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs max-w-[12rem]"
+        >
+          <option value="">Default model</option>
+          {models.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      )}
+    </div>
+  );
+}
 
 // ── Index view: list existing sessions + create a new one ──────────────────
 
@@ -130,6 +175,7 @@ function ImportPanel({ onCreated }) {
   const [seriesName, setSeriesName] = useState('');
   const [contentType, setContentType] = useState('comic-script');
   const [source, setSource] = useState('');
+  const [llm, setLlm] = useState({ provider: '', model: '' });
   const [analyzing, setAnalyzing] = useState(false);
   const [preview, setPreview] = useState(null);
   const [retrying, setRetrying] = useState(false);
@@ -143,7 +189,10 @@ function ImportPanel({ onCreated }) {
     }
     setAnalyzing(true); setPreview(null);
     const res = await analyzeImport(
-      { universeName: universeName.trim(), seriesName: seriesName.trim(), contentType, source },
+      {
+        universeName: universeName.trim(), seriesName: seriesName.trim(), contentType, source,
+        providerOverride: llm.provider || undefined, modelOverride: llm.model || undefined,
+      },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Analyze failed'); return null; });
     setAnalyzing(false);
@@ -153,7 +202,10 @@ function ImportPanel({ onCreated }) {
   const retryIssues = async () => {
     setRetrying(true);
     const res = await retryImporterIssues(
-      { contentType, source, seriesName: seriesName.trim(), arcSummary: preview?.arcPreview?.summary || '' },
+      {
+        contentType, source, seriesName: seriesName.trim(), arcSummary: preview?.arcPreview?.summary || '',
+        providerOverride: llm.provider || undefined, modelOverride: llm.model || undefined,
+      },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Retry failed'); return null; });
     setRetrying(false);
@@ -188,6 +240,8 @@ function ImportPanel({ onCreated }) {
       seedIdea: (preview.arcPreview?.summary || preview.arcPreview?.logline || '').slice(0, 4000),
       universeId: preview.universe.id,
       seriesId: preview.series.id,
+      // Persist the picker choice so every in-wizard operation uses it too.
+      llm: { provider: llm.provider || null, model: llm.model || null },
     }, { silent: true }).catch((err) => { toast.error(err?.message || 'Failed to start the builder'); return null; });
     setCommitting(false);
     if (session) onCreated(session);
@@ -202,6 +256,10 @@ function ImportPanel({ onCreated }) {
         Paste a finished story (comic script, screenplay, novel, or short story). It's reverse-engineered into a
         universe, plot arc, characters, and issues — then you review and lock each stage in the builder.
       </p>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-xs text-gray-500">Provider/model used for this import and every later step:</span>
+        <ProviderModelPicker value={llm} onChange={setLlm} id="imp" />
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label htmlFor="imp-uni" className="block text-sm text-gray-400 mb-1">Universe name</label>
@@ -605,17 +663,36 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     navigate(`/story-builder/${storyId}/${id}`);
   };
 
+  // Persist the picker choice to session.llm — the conductor reads it as the
+  // default provider/model for every generate/refine, so one selection drives
+  // the whole wizard.
+  const saveLlm = async (next) => {
+    await updateStorySession(storyId, {
+      llm: { provider: next.provider || null, model: next.model || null },
+    }, { silent: true }).catch(() => {});
+    reload();
+  };
+
   if (loading) return <div className="p-6 text-gray-400 flex items-center gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Loading…</div>;
   if (!session) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
       <div className="max-w-5xl mx-auto">
-        <header className="mb-4">
-          <Link to="/story-builder" className="text-xs text-gray-500 hover:text-port-accent">← All stories</Link>
-          <h1 className="text-2xl font-bold flex items-center gap-2 mt-1">
-            <Sparkles className="w-6 h-6 text-port-accent" /> {session.title}
-          </h1>
+        <header className="mb-4 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <Link to="/story-builder" className="text-xs text-gray-500 hover:text-port-accent">← All stories</Link>
+            <h1 className="text-2xl font-bold flex items-center gap-2 mt-1">
+              <Sparkles className="w-6 h-6 text-port-accent" /> {session.title}
+            </h1>
+          </div>
+          {/* Applies to every operation in this story (idea expand, aesthetic,
+              arc, reader map, character refine). */}
+          <ProviderModelPicker
+            value={{ provider: session.llm?.provider || '', model: session.llm?.model || '' }}
+            onChange={saveLlm}
+            id="stb-detail"
+          />
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">

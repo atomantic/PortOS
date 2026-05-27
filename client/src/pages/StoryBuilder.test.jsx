@@ -35,6 +35,8 @@ const api = vi.hoisted(() => ({
   commitImport: vi.fn(),
   retryImporterIssues: vi.fn(),
   IMPORTER_CONTENT_TYPES: ['short-story', 'novel', 'screenplay', 'comic-script'],
+  getProviders: vi.fn(),
+  updateStorySession: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
 
@@ -53,6 +55,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getStoryBuilderSteps.mockResolvedValue({ steps: STEPS });
   api.listStorySessions.mockResolvedValue([]);
+  api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }] });
+  api.updateStorySession.mockResolvedValue({});
   // Benign default so a post-import navigation that mounts the detail view
   // (which calls getStorySession) doesn't reject; the detail tests override it.
   api.getStorySession.mockResolvedValue({
@@ -119,6 +123,33 @@ describe('StoryBuilder — index', () => {
     );
   });
 
+  it('import tab: threads the picked provider into analyze and the created session', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.analyzeImport.mockResolvedValue({
+      universe: { id: 'u9', name: 'Giant' }, series: { id: 's9' },
+      canonPreview: { characters: [], places: [], objects: [] },
+      arcPreview: { logline: 'x', summary: 's' }, seasonsPreview: [],
+      issueProposals: [{ title: 'I1' }], issueSplitFailed: false,
+    });
+    api.commitImport.mockResolvedValue({});
+    api.createStorySession.mockResolvedValue({ id: 'stb-imp', currentStep: 'idea' });
+
+    renderAt('/story-builder');
+    fireEvent.click(await screen.findByText('Import a finished work'));
+    fireEvent.change(await screen.findByLabelText('AI'), { target: { value: 'p1' } });
+    fireEvent.change(screen.getByLabelText('Universe name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText('Series name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText(/Source text/), { target: { value: 'x' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Analyze$/ }));
+    await waitFor(() => expect(api.analyzeImport).toHaveBeenCalledWith(
+      expect.objectContaining({ providerOverride: 'p1' }), expect.anything(),
+    ));
+    fireEvent.click(await screen.findByRole('button', { name: /Import & start building/ }));
+    await waitFor(() => expect(api.createStorySession).toHaveBeenCalledWith(
+      expect.objectContaining({ llm: { provider: 'p1', model: null } }), expect.anything(),
+    ));
+  });
+
   it('import tab: blocks "Import & build" when no issues were extracted, offers retry', async () => {
     const { fireEvent } = await import('@testing-library/react');
     api.analyzeImport.mockResolvedValue({
@@ -150,6 +181,20 @@ describe('StoryBuilder — detail stepper', () => {
     expect(screen.getByText('Lock & continue')).toBeTruthy();
     const next = screen.getByRole('button', { name: /Next/i });
     expect(next.disabled).toBe(true);
+  });
+
+  it('persists the provider/model picker choice to session.llm', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Salt Run', currentStep: 'idea', seedIdea: 'seed',
+      universeId: 'u1', seriesId: 's1', steps: mkSteps(), staleSteps: [], llm: { provider: '', model: '' },
+    });
+    renderAt('/story-builder/stb-1/idea');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('AI'), { target: { value: 'p1' } });
+    await waitFor(() => expect(api.updateStorySession).toHaveBeenCalledWith(
+      'stb-1', { llm: { provider: 'p1', model: null } }, expect.anything(),
+    ));
   });
 
   it('shows the stale warning + "Unlock to revise" when an upstream step changed', async () => {

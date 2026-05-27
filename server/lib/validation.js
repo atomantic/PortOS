@@ -1784,6 +1784,12 @@ export const storySessionCreateSchema = z.object({
   // Import mode supplies pre-created ids; seed mode mints shells server-side.
   universeId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
   seriesId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
+  // Picker choice that drives every Story Builder operation; nullable so the
+  // UI can send "use the stage default" explicitly.
+  llm: z.object({
+    provider: z.string().trim().max(80).nullable().optional(),
+    model: z.string().trim().max(200).nullable().optional(),
+  }).optional(),
 }).strict();
 
 export const storySessionUpdateSchema = z.object({

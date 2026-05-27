@@ -422,11 +422,16 @@ export async function setIssueLock(id, issueId, locked) {
 // route can surface runId / changes / rationale.
 export async function generateStep(id, stepId, options = {}) {
   const session = await getStorySession(id);
+  // Provider/model resolution: an explicit per-call override wins, else fall
+  // back to the session's saved picker choice (session.llm) so a single
+  // selection at the top of the Story Builder drives every operation.
+  const reqProviderId = options.providerId || session.llm?.provider || undefined;
+  const reqModel = options.model || session.llm?.model || undefined;
   if (stepId === 'idea') {
     const { content, runId, providerId, model } = await runStagedLLM(
       'story-builder-idea-expand',
       { universeName: session.title, seedIdea: session.seedIdea || '' },
-      { providerOverride: options.providerId, modelOverride: options.model, returnsJson: true, source: 'story-builder-idea-expand' },
+      { providerOverride: reqProviderId, modelOverride: reqModel, returnsJson: true, source: 'story-builder-idea-expand' },
     );
     const expandedIdea = isStr(content?.expandedIdea) ? content.expandedIdea.trim() : '';
     const logline = isStr(content?.logline) ? content.logline.trim() : '';
@@ -449,8 +454,8 @@ export async function generateStep(id, stepId, options = {}) {
       premise: universe.premise,
       styleNotes: universe.styleNotes,
       locked: universe.locked,
-      providerId: options.providerId,
-      model: options.model,
+      providerId: reqProviderId,
+      model: reqModel,
     });
     const updated = await updateUniverse(session.universeId, {
       logline: expanded.logline,
@@ -463,7 +468,7 @@ export async function generateStep(id, stepId, options = {}) {
   if (stepId === 'plotArc') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
     const { arc, seasons, runId, providerId, model } = await generateArcOverview(session.seriesId, {
-      providerOverride: options.providerId, modelOverride: options.model,
+      providerOverride: reqProviderId, modelOverride: reqModel,
     });
     // A null arc means the LLM returned nothing identifying — refuse rather
     // than wiping a previously-generated arc with `updateSeries({ arc: null })`.
@@ -474,7 +479,7 @@ export async function generateStep(id, stepId, options = {}) {
   if (stepId === 'readerMap') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
     const { readerMap, runId, providerId, model } = await generateReaderMap(session.seriesId, {
-      providerOverride: options.providerId, modelOverride: options.model,
+      providerOverride: reqProviderId, modelOverride: reqModel,
     });
     const series = await getSeries(session.seriesId);
     const updated = await updateSeries(session.seriesId, { arc: { ...(series.arc || {}), readerMap } });
@@ -485,6 +490,9 @@ export async function generateStep(id, stepId, options = {}) {
 
 export async function refineStep(id, stepId, { feedback, entryId, providerId, model } = {}) {
   const session = await getStorySession(id);
+  // Same fallback as generateStep: explicit override → session picker choice.
+  const reqProviderId = providerId || session.llm?.provider || undefined;
+  const reqModel = model || session.llm?.model || undefined;
   if (stepId === 'universeAesthetic') {
     if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
     const universe = await getUniverse(session.universeId);
@@ -496,8 +504,8 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
       influences: universe.influences,
       locked: universe.locked,
       feedback,
-      providerId,
-      model,
+      providerId: reqProviderId,
+      model: reqModel,
     });
     const updated = await updateUniverse(session.universeId, {
       logline: refined.logline,
@@ -509,7 +517,7 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
   }
   if (stepId === 'readerMap') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
-    const { readerMap, changes, rationale, runId } = await refineReaderMap(session.seriesId, feedback, { providerId, model });
+    const { readerMap, changes, rationale, runId } = await refineReaderMap(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
     const series = await getSeries(session.seriesId);
     const updated = await updateSeries(session.seriesId, { arc: { ...(series.arc || {}), readerMap } });
     return { result: updated, changes, rationale, runId };
@@ -517,7 +525,7 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
   if (stepId === 'characters') {
     if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
     if (!isStr(entryId)) throw makeErr('entryId is required to refine a character', ERR_VALIDATION);
-    const out = await refineUniverseCharacter(session.universeId, entryId, { providerId, model });
+    const out = await refineUniverseCharacter(session.universeId, entryId, { providerId: reqProviderId, model: reqModel });
     return { result: out.universe, changes: out.changes || [], rationale: out.rationale || '' };
   }
   throw makeErr(`Refine is not supported for step "${stepId}"`, ERR_VALIDATION);
