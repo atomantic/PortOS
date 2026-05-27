@@ -429,7 +429,10 @@ const COMIC_HEADER_MAX_LEN = 80;
 // AND require a standalone header form — so prose like "Issue resolved." or
 // "Issue 1 of the saga lay open" (content that merely starts with the keyword)
 // isn't mis-split. A title is captured only after a separator. Sharing the
-// grammar keeps the import-time split and the render-time parse in agreement.
+// grammar keeps the import-time split and the render-time parse in agreement —
+// except for the COMIC_HEADER_MAX_LEN (80) length cap applied here but NOT by
+// the render-time bare parser, so a rare >80-char PAGE/ISSUE header folds into
+// the prior segment at split time yet still opens a page at render time.
 const ISSUE_HEADER_RE = new RegExp(`^issue\\b\\s*#?\\s*(${COMIC_NUM})\\b\\s*(?:[:.\\-–—]\\s*(.*))?\\s*$`, 'i');
 // `PAGE 1`, `PAGE ONE`, `PAGES 2-3`, `PAGE ONE (FIVE PANELS)`
 const PAGE_HEADER_RE = new RegExp(`^pages?\\b\\s*#?\\s*(${COMIC_NUM})\\b${COMIC_HEADER_TAIL}`, 'i');

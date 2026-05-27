@@ -187,7 +187,10 @@ function normalizeBareComicScript(script) {
     }
     // Continuation line of a multi-line balloon — attribute it to the same
     // speaker so parsePanelBody captures it (otherwise lines 2+ were dropped).
-    if (field === 'dialogue' && dialogueSpeaker && t) {
+    // The `!BARE_SPEAKER_LINE` guard (same as the pendingSpeaker branch above)
+    // lets a SECOND speaker cue in the panel fall through to the speaker-cue
+    // branch below instead of being eaten as the first speaker's dialogue.
+    if (field === 'dialogue' && dialogueSpeaker && t && !BARE_SPEAKER_LINE.test(t)) {
       out.push(`${dialogueSpeaker}: ${t}`);
       continue;
     }

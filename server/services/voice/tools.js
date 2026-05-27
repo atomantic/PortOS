@@ -1675,10 +1675,15 @@ const TOOLS = [
         return Number.isFinite(n) ? n : null;
       };
       const settings = await getSettings().catch(() => ({}));
+      // Treat the configured location as a both-or-neither pair (the save-time
+      // schema enforces this, but a hand-edited settings.json could set only
+      // one half). A half-set pair falls through to the default for BOTH
+      // coordinates rather than mixing one custom value with one default.
       const cfgLat = numOrNull(settings?.location?.lat);
       const cfgLon = numOrNull(settings?.location?.lon);
-      const resolvedLat = numOrNull(lat) ?? cfgLat ?? DEFAULT_LAT;
-      const resolvedLon = numOrNull(lon) ?? cfgLon ?? DEFAULT_LON;
+      const cfgValid = cfgLat !== null && cfgLon !== null;
+      const resolvedLat = numOrNull(lat) ?? (cfgValid ? cfgLat : null) ?? DEFAULT_LAT;
+      const resolvedLon = numOrNull(lon) ?? (cfgValid ? cfgLon : null) ?? DEFAULT_LON;
       if (resolvedLat < -90 || resolvedLat > 90 || resolvedLon < -180 || resolvedLon > 180) {
         return { ok: false, summary: 'Latitude must be -90..90 and longitude -180..180.' };
       }

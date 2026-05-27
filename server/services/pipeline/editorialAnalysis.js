@@ -37,8 +37,10 @@ const NOTE_MAX = 500;
 // Cap the content we send to the model. Prose/script stage output is bounded
 // at STAGE_OUTPUT_MAX (~400KB) which would blow the context window (and the
 // JSON instruction block with it) on a long issue, yielding a truncated /
-// malformed response that sanitizeAnalysis silently degrades to empty. ~48K
-// chars (~12K tokens) leaves ample room for the prompt + a heavy-tier reply.
+// malformed response that extractJson rejects (it throws "Invalid JSON in AI
+// response", surfacing as an analysis error rather than a silent empty
+// snapshot). ~48K chars (~12K tokens) leaves ample room for the prompt + a
+// heavy-tier reply.
 const CONTENT_MAX = 48_000;
 
 const nowIso = () => new Date().toISOString();

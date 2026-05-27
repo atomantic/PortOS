@@ -196,10 +196,13 @@ export async function spawnAgentForTask(task) {
         reason: status.reason
       });
 
-      // Try to get a fallback provider (check task-level, then provider-level, then system default)
-      const allProviders = await getAllProviders();
+      // Try to get a fallback provider (check task-level, then provider-level, then system default).
+      // getFallbackProvider indexes its providers arg by id, so pass a map — NOT the
+      // { activeProvider, providers: [...] } shape getAllProviders() returns (mirrors promptRunner.js).
+      const { providers: providerList = [] } = await getAllProviders();
+      const providersMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
       const taskFallbackId = task.metadata?.fallbackProvider;
-      const fallbackResult = await getFallbackProvider(provider.id, allProviders, taskFallbackId);
+      const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId);
 
       if (fallbackResult) {
         emitLog('info', `Using fallback provider: ${fallbackResult.provider.id} (source: ${fallbackResult.source})`, {

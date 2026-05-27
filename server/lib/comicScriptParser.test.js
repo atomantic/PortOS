@@ -458,6 +458,17 @@ Thud!`;
     expect(pages[0].panels[0].caption).toBe('The end.');
   });
 
+  it('attributes a second speaker cue in the same panel to the new speaker (not the first)', () => {
+    // Two speakers in one panel is extremely common. The continuation-line
+    // branch must let a fresh all-caps cue open a NEW speaker instead of
+    // swallowing it as the first speaker's dialogue.
+    const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nHello there.\nKESSA\nHi back.');
+    expect(pages[0].panels[0].dialogue).toEqual([
+      { character: 'GIANT', line: 'Hello there.' },
+      { character: 'KESSA', line: 'Hi back.' },
+    ]);
+  });
+
   it('preserves a dangling speaker cue (no spoken line before the next marker) as text, not dropped', () => {
     const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nPANEL 2\nAnother shot.');
     // GIANT had no spoken line before PANEL 2 — it must survive in the panel

@@ -1612,9 +1612,10 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
   'short-story', 'novel', 'screenplay', 'comic-script',
 ]);
 
-// Hard ceiling at the schema layer; the orchestrator enforces a tighter
-// 200K business-rule limit and returns a friendlier error. The 5MB ceiling
-// here mirrors writersRoomDraftSaveSchema.
+// Hard ceiling at the schema layer (mirrors writersRoomDraftSaveSchema). The
+// orchestrator's IMPORTER_SOURCE_CHAR_LIMIT matches this 5MB ceiling and
+// returns a friendlier error; the real operational limit is dynamic — the
+// active provider's context window.
 const importerSourceField = z.string().min(1).max(5_000_000);
 
 // Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript).
