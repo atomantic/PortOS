@@ -1844,33 +1844,39 @@ const TOOLS = [
       const provider = typeof codeAgent.provider === 'string' ? codeAgent.provider.trim() : '';
       const model = typeof codeAgent.model === 'string' ? codeAgent.model.trim() : '';
 
-      // Resolve a code-capable provider when none is explicitly pinned. A coding
-      // agent must run a CLI/TUI provider (Claude Code, Codex, Gemini CLI, …);
-      // an API backend (LM Studio / Ollama / OpenAI-compatible) can't, and the
-      // spawner would otherwise fall through to the Claude CLI spawn config with
-      // a non-Claude model name (buildCliSpawnConfig defaults to claude). So only
-      // inherit the system default when it is itself code-capable; if it's an API
-      // provider, substitute the first enabled CLI/TUI provider, and if there is
-      // none, fail with actionable copy instead of queuing a doomed task.
+      // Resolve a code-capable provider. A coding agent must run a CLI/TUI
+      // provider (Claude Code, Codex, Gemini CLI, …); an API backend (LM Studio
+      // / Ollama / OpenAI-compatible) can't, and the spawner would otherwise
+      // fall through to the Claude CLI spawn config with a non-Claude model name
+      // (buildCliSpawnConfig defaults to claude). Validate BOTH the inherited
+      // system default AND an explicit pin — the Voice settings UI only lists
+      // CLI/TUI providers for the code agent, but a hand-edited config can still
+      // pin an API one. When the effective provider isn't code-capable,
+      // substitute the first enabled CLI/TUI provider, or fail with actionable
+      // copy if none exists. A pin that doesn't resolve to a known provider is
+      // left as-is (the spawner surfaces the unknown-provider error).
+      const { getActiveProvider, getAllProviders, getProviderById } = await import('../providers.js');
+      const isCodeCapable = (p) => p?.type === 'cli' || p?.type === 'tui';
+      const candidate = provider
+        ? await getProviderById(provider).catch(() => null)
+        : await getActiveProvider().catch(() => null);
+      const needsSwap = provider
+        ? (candidate != null && !isCodeCapable(candidate)) // known pin that's API-only
+        : !isCodeCapable(candidate);                        // default (incl. none) not capable
       let resolvedProvider = provider;
       let substituted = false;
-      if (!resolvedProvider) {
-        const { getActiveProvider, getAllProviders } = await import('../providers.js');
-        const isCodeCapable = (p) => p?.type === 'cli' || p?.type === 'tui';
-        const active = await getActiveProvider().catch(() => null);
-        if (!isCodeCapable(active)) {
-          const { providers = [] } = await getAllProviders().catch(() => ({ providers: [] }));
-          const codeProvider = providers.find((p) => p?.enabled && isCodeCapable(p));
-          if (!codeProvider) {
-            return {
-              ok: false,
-              error: 'no code-capable provider',
-              summary: "Your active AI provider can't run a coding agent. Enable a CLI provider like Claude Code, Codex, or Gemini under Settings, AI Providers, then try again.",
-            };
-          }
-          resolvedProvider = codeProvider.id;
-          substituted = true;
+      if (needsSwap) {
+        const { providers = [] } = await getAllProviders().catch(() => ({ providers: [] }));
+        const codeProvider = providers.find((p) => p?.enabled && isCodeCapable(p));
+        if (!codeProvider) {
+          return {
+            ok: false,
+            error: 'no code-capable provider',
+            summary: "Your AI provider can't run a coding agent. Enable a CLI provider like Claude Code, Codex, or Gemini under Settings, AI Providers, then try again.",
+          };
         }
+        resolvedProvider = codeProvider.id;
+        substituted = true;
       }
 
       const created = await addTask({

@@ -150,13 +150,16 @@ vi.mock('../cos.js', () => ({
 vi.mock('../providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'claude-code', type: 'tui', enabled: true })),
   getAllProviders: vi.fn(async () => ({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] })),
+  // Default: a pinned provider isn't in the test registry → resolves to null,
+  // so the pin is trusted as-is (matches the spawner's unknown-provider path).
+  getProviderById: vi.fn(async () => null),
 }));
 
 const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent, anchorLocalMidnightUtc } = await import('./tools.js');
 const { getUtcOffsetMs: mockedGetUtcOffsetMs } = await import('../../lib/timezone.js');
 const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
 const { addTask: mockedAddTask, isRunning: mockedIsRunning } = await import('../cos.js');
-const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders } = await import('../providers.js');
+const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../providers.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -183,6 +186,7 @@ describe('dispatch_code_agent', () => {
     mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: '', model: '' } } });
     mockedGetActiveProvider.mockResolvedValue({ id: 'claude-code', type: 'tui', enabled: true });
     mockedGetAllProviders.mockResolvedValue({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] });
+    mockedGetProviderById.mockResolvedValue(null);
   });
 
   it('rejects an empty task without creating a CoS task', async () => {
@@ -242,6 +246,32 @@ describe('dispatch_code_agent', () => {
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/code-capable/);
     expect(mockedAddTask).not.toHaveBeenCalled();
+  });
+
+  it('substitutes a CLI/TUI provider when a hand-edited config pins an API-only provider', async () => {
+    // The Voice UI only lists cli/tui providers for the code agent, but a
+    // hand-edited config can pin an API one — which can't run a coding CLI.
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'lmstudio', model: 'qwen' } } });
+    mockedGetProviderById.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ providers: [
+      { id: 'lmstudio', type: 'api', enabled: true },
+      { id: 'claude-code', type: 'tui', enabled: true },
+    ] });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(true);
+    const [data] = mockedAddTask.mock.calls[0];
+    expect(data.provider).toBe('claude-code');
+    expect(data).not.toHaveProperty('model');
+  });
+
+  it('trusts a pinned provider that is not in the registry (spawner handles unknown)', async () => {
+    // getProviderById → null means we can't judge the pin's type; leave it for
+    // the spawner rather than swapping a provider we know nothing about.
+    mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'my-custom-cli', model: 'x' } } });
+    mockedGetProviderById.mockResolvedValue(null);
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(true);
+    expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ provider: 'my-custom-cli', model: 'x' });
   });
 
   it('warns in the summary when the CoS runner is stopped', async () => {

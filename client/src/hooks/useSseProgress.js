@@ -54,6 +54,7 @@ export function useSseProgress(url, { enabled = true } = {}) {
       setLatest(data);
       if (TERMINAL_TYPES.has(data?.type)) {
         es.close();
+        setIsOpen(false); // the connection is now closed — keep isOpen honest
         setClosed(true);
       }
     };
