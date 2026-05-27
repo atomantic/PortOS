@@ -34,15 +34,22 @@ export function useSeriesEditorial(seriesId) {
   }, [seriesId]);
 
   // Initial load + re-attach to a batch still running from a prior visit so its
-  // completion still refreshes this view.
+  // completion still refreshes this view. The `canceled` guard prevents a slow
+  // response for a previous seriesId from overwriting the current one's state
+  // after a fast switch (inline fetch rather than `reload()` so it's guarded).
   useEffect(() => {
-    if (!seriesId) { setLoading(false); return; }
+    if (!seriesId) { setLoading(false); return undefined; }
+    let canceled = false;
     setLoading(true);
-    reload().finally(() => setLoading(false));
+    getSeriesEditorial(seriesId, { silent: true })
+      .then((data) => { if (!canceled) setAggregate(data); })
+      .catch(() => { if (!canceled) setAggregate(null); })
+      .finally(() => { if (!canceled) setLoading(false); });
     getSeriesEditorialStatus(seriesId, { silent: true })
-      .then((s) => { if (s?.active) setAnalysisEnabled(true); })
+      .then((s) => { if (!canceled && s?.active) setAnalysisEnabled(true); })
       .catch(() => {});
-  }, [seriesId, reload]);
+    return () => { canceled = true; };
+  }, [seriesId]);
 
   // Reload when the batch ends. `closed` covers a terminal frame OR a
   // dropped/404 stream (fast batch pruned before we attached), so the UI never
