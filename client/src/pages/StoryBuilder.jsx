@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { filterSelectableModels } from '../utils/providers';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt';
+import { universeStylePreset } from '../lib/universeStylePreset';
+import { descriptorForCanonEntry } from '../lib/canonPrompt';
+import { pipelineImageCfgToRenderOpts, readPipelineImageSettings, PIPELINE_IMAGE_DEFAULTS } from '../lib/pipelineImageDefaults';
+import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
@@ -13,7 +18,7 @@ import {
   generateStoryStep, refineStoryStep, setStoryIssueLock,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
-  getProviders,
+  getProviders, getSettings, generateImage, updateUniverse,
 } from '../services/api';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
@@ -487,32 +492,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     );
   }
   if (stepId === 'characters') {
-    const cast = universe?.characters || [];
-    return (
-      <div className="space-y-3">
-        {cast.length === 0 && (
-          <p className="text-gray-600 italic text-sm">
-            No characters yet. Add them in the <Link to={universe?.id ? `/universes/${universe.id}` : '/universes'} className="text-port-accent">Universe Builder</Link> or after generating the arc.
-          </p>
-        )}
-        {cast.map((c) => (
-          <div key={c.id} className="bg-port-bg border border-port-border rounded p-2 flex items-start justify-between gap-2">
-            <div>
-              <div className="font-medium text-sm">{c.name} {c.locked && <Lock className="w-3 h-3 inline text-port-success" />}</div>
-              <div className="text-xs text-gray-400">{c.physicalDescription || (Array.isArray(c.descriptor) ? c.descriptor.map((d) => d.value).join(', ') : '')}</div>
-            </div>
-            {!locked && (
-              <button
-                onClick={() => runRefine('', c.id)} disabled={busy}
-                className="text-xs inline-flex items-center gap-1 border border-port-border rounded px-2 py-1 hover:border-port-accent disabled:opacity-50"
-              >
-                <Wand2 className="w-3 h-3" /> Refine
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    );
+    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} />;
   }
   if (stepId === 'issues') {
     return <IssuesPanel session={session} series={series} issues={issues} onChanged={onChanged} />;
@@ -536,6 +516,98 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     );
   }
   return null;
+}
+
+// Characters step — review the cast and generate a styled preview image per
+// character so the world style + character style can be eyeballed together.
+// Reuses the Universe Builder's exact render path: composeStyledPrompt +
+// universeStylePreset → generateImage → EntryThumbSlot (spinner → image), and
+// persists the resulting filename onto the universe canon entry's imageRefs.
+function StepCharacters({ session, universe, locked, onChanged }) {
+  const cast = universe?.characters || [];
+  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
+  const [renderingJobs, setRenderingJobs] = useState({});
+  const [refiningId, setRefiningId] = useState(null);
+
+  useEffect(() => {
+    getSettings({ silent: true })
+      .then((s) => setImageCfg(readPipelineImageSettings(s)))
+      .catch(() => {});
+  }, []);
+
+  const renderChar = async (c) => {
+    const description = descriptorForCanonEntry('characters', c);
+    if (!description.trim()) { toast.error(`Add a description for ${c.name} before generating a preview`); return; }
+    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+    const styled = composeStyledPrompt(
+      `${c.name}: ${description}`,
+      baseOpts.negativePrompt || '',
+      universe ? universeStylePreset(universe) : null,
+    );
+    const queued = await generateImage(
+      { ...baseOpts, prompt: styled.prompt, negativePrompt: styled.negativePrompt || undefined },
+      { silent: true },
+    ).catch((err) => { toast.error(err?.message || 'Render failed'); return null; });
+    if (!queued?.jobId) return;
+    setRenderingJobs((p) => ({ ...p, [c.id]: queued.jobId }));
+  };
+
+  // Section-local renders don't carry a universeRun tag, so the server's
+  // imageRef append hook never fires — persist the filename ourselves (mirrors
+  // UniverseCanonSection.handleRefCompleted).
+  const onCharRendered = async (charId, filename) => {
+    setRenderingJobs((p) => { if (!p[charId]) return p; const n = { ...p }; delete n[charId]; return n; });
+    if (!filename || !universe?.id) return;
+    const list = (universe.characters || []).map((e) =>
+      e.id === charId ? { ...e, imageRefs: [...(e.imageRefs || []), filename] } : e);
+    await updateUniverse(universe.id, { characters: list }, { silent: true }).catch(() => {});
+    onChanged();
+  };
+
+  const refineChar = async (entryId) => {
+    setRefiningId(entryId);
+    const res = await refineStoryStep(session.id, 'characters', { entryId }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Refine failed'); return null; });
+    setRefiningId(null);
+    if (res) { toast.success(res.changes?.length ? `Refined — ${res.changes.length} change(s)` : 'Refined'); onChanged(); }
+  };
+
+  return (
+    <div className="space-y-3">
+      {cast.length === 0 && (
+        <p className="text-gray-600 italic text-sm">
+          No characters yet. Add them in the <Link to={universe?.id ? `/universes/${universe.id}` : '/universes'} className="text-port-accent">Universe Builder</Link> or after generating the arc.
+        </p>
+      )}
+      {cast.length > 0 && (
+        <p className="text-xs text-gray-500">Generate a preview for each character to check the world style and character read correctly together.</p>
+      )}
+      {cast.map((c) => (
+        <div key={c.id} className="bg-port-bg border border-port-border rounded p-2 flex items-start gap-3">
+          <EntryThumbSlot
+            imageRefs={c.imageRefs}
+            inFlightJobId={renderingJobs[c.id] || null}
+            onRender={() => renderChar(c)}
+            onComplete={(fn) => onCharRendered(c.id, fn)}
+            canRender={!locked && Boolean(universe?.id)}
+            alt={c.name}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-sm">{c.name} {c.locked && <Lock className="w-3 h-3 inline text-port-success" />}</div>
+            <div className="text-xs text-gray-400">{c.physicalDescription || (Array.isArray(c.descriptor) ? c.descriptor.map((d) => d.value).join(', ') : '')}</div>
+          </div>
+          {!locked && (
+            <button
+              onClick={() => refineChar(c.id)} disabled={refiningId === c.id}
+              className="text-xs inline-flex items-center gap-1 border border-port-border rounded px-2 py-1 hover:border-port-accent disabled:opacity-50 shrink-0"
+            >
+              {refiningId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} Refine
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function IssuesPanel({ session, series, issues, onChanged }) {

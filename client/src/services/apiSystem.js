@@ -134,9 +134,10 @@ export const provisionTailnetCert = () => request('/instances/provision-cert', {
 
 // Image Generation
 export const getImageGenStatus = (mode) => request(`/image-gen/status${mode ? `?mode=${encodeURIComponent(mode)}` : ''}`);
-export const generateImage = (data) => request('/image-gen/generate', {
+export const generateImage = (data, options = {}) => request('/image-gen/generate', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options,
 });
 // Curated style presets — code-static on the server, so cache the in-flight
 // promise and reuse it for the lifetime of the page. Eliminates the repeat

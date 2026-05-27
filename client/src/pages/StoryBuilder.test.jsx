@@ -36,7 +36,9 @@ const api = vi.hoisted(() => ({
   retryImporterIssues: vi.fn(),
   IMPORTER_CONTENT_TYPES: ['short-story', 'novel', 'screenplay', 'comic-script'],
   getProviders: vi.fn(),
-  updateStorySession: vi.fn(),
+  getSettings: vi.fn(),
+  generateImage: vi.fn(),
+  updateUniverse: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
 
@@ -57,6 +59,9 @@ beforeEach(() => {
   api.listStorySessions.mockResolvedValue([]);
   api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }] });
   api.updateStorySession.mockResolvedValue({});
+  api.getSettings.mockResolvedValue({});
+  api.generateImage.mockResolvedValue({ jobId: 'job-1' });
+  api.updateUniverse.mockResolvedValue({});
   // Benign default so a post-import navigation that mounts the detail view
   // (which calls getStorySession) doesn't reject; the detail tests override it.
   api.getStorySession.mockResolvedValue({
@@ -214,6 +219,27 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(api.lockStoryStep).toHaveBeenCalledWith('stb-1', 'idea', expect.anything()));
     // …then advances the current-step pointer to the next step (universeAesthetic).
     await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'universeAesthetic', expect.anything()));
+  });
+
+  it('characters step: renders a per-character preview slot and generates a styled preview image', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'X', currentStep: 'characters', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true }, plotArc: { locked: true }, readerMap: { locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' },
+    });
+    api.getUniverse.mockResolvedValue({
+      id: 'u1', name: 'Giant', influences: { embrace: ['noir'], avoid: [] }, styleNotes: 'inky',
+      characters: [{ id: 'ch1', name: 'Kessa', physicalDescription: 'tall, scarred', imageRefs: [] }],
+    });
+    renderAt('/story-builder/stb-1/characters');
+    await waitFor(() => expect(screen.getByText('Kessa')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('Render image for this item'));
+    await waitFor(() => expect(api.generateImage).toHaveBeenCalled());
+    // The prompt fuses the character descriptor with the universe style.
+    const arg = api.generateImage.mock.calls[0][0];
+    expect(arg.prompt).toContain('Kessa');
+    expect(arg.prompt.toLowerCase()).toContain('noir');
   });
 
   it('persists the provider/model picker choice to session.llm', async () => {

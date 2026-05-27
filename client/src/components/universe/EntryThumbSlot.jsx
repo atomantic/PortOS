@@ -29,6 +29,10 @@ export default function EntryThumbSlot({
   primaryImageRef = null,
   onRender = null,
   onPreview = null,
+  // Fired with the rendered filename when an in-flight job completes (forwarded
+  // to MediaJobThumb's onFilename) so callers can persist the new ref + clear
+  // the in-flight job without their own job subscription.
+  onComplete = null,
   canRender = true,
   alt = 'Render',
   // `'lg'` renders the empty-state box at 64x96 with a bigger Sparkles
@@ -50,6 +54,7 @@ export default function EntryThumbSlot({
         label={alt}
         size={size === 'lg' ? 'sm' : 'xs'}
         onPreview={onPreview}
+        onFilename={onComplete}
       />
     );
   }
