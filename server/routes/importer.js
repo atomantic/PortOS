@@ -5,11 +5,13 @@ import {
   importerAnalyzeSchema,
   importerCommitSchema,
   importerClassifySchema,
+  importerRetryIssuesSchema,
 } from '../lib/validation.js';
 import {
   analyzeImport,
   classifyImportContent,
   commitImport,
+  retryIssueSplit,
   ERR_VALIDATION,
   ERR_LOCKED,
   ERR_PARTIAL_COMMIT_ISSUES,
@@ -76,6 +78,15 @@ router.post('/classify', asyncHandler(async (req, res) => {
 router.post('/analyze', asyncHandler(async (req, res) => {
   const input = validateRequest(importerAnalyzeSchema, req.body || {});
   const result = await analyzeImport(input).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Recovery path for a failed issue split — re-runs ONLY the split (canon +
+// arc are preserved client-side from the prior analyze). Cheap relative to a
+// full re-analyze; comic scripts resolve mechanically with no LLM call.
+router.post('/retry-issues', asyncHandler(async (req, res) => {
+  const input = validateRequest(importerRetryIssuesSchema, req.body || {});
+  const result = await retryIssueSplit(input).catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
 

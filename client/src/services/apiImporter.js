@@ -39,3 +39,12 @@ export const commitImport = (payload, options = {}) => request('/importer/commit
   body: JSON.stringify(payload),
   ...options,
 });
+
+// Recovery path when analyze returned `issueSplitFailed` — re-runs ONLY the
+// issue split (canon + arc are preserved in the Review panel). Returns
+// `{ issueProposals, method }`.
+export const retryImporterIssues = (payload, options = {}) => request('/importer/retry-issues', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options,
+});
