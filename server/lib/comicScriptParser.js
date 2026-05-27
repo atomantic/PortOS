@@ -174,10 +174,12 @@ function normalizeBareComicScript(script) {
       out.push('SFX:'); field = 'sfx'; awaitingFirst = true; dialogueSpeaker = null;
       continue;
     }
-    // First spoken line for a pending speaker. The `!BARE_SPEAKER_LINE` guard
-    // stops a second bare-name line (two cues in a row) from being eaten as the
-    // first speaker's dialogue — the speaker-cue branch below re-flushes instead.
-    if (pendingSpeaker && t && !BARE_SPEAKER_LINE.test(t)) {
+    // First spoken line for a pending speaker. A speaker cue is ALWAYS followed
+    // by its own dialogue, so emit this line as that speaker's dialogue even
+    // when it is all-caps — a shouted line like `I DON'T KNOW` also matches
+    // BARE_SPEAKER_LINE, and guarding here would drop it to the panel text.
+    // (The first line after a cue can never itself be a second cue.)
+    if (pendingSpeaker && t) {
       out.push('Dialogue:');
       out.push(`${pendingSpeaker}: ${t}`);
       dialogueSpeaker = pendingSpeaker;
@@ -187,9 +189,11 @@ function normalizeBareComicScript(script) {
     }
     // Continuation line of a multi-line balloon — attribute it to the same
     // speaker so parsePanelBody captures it (otherwise lines 2+ were dropped).
-    // The `!BARE_SPEAKER_LINE` guard (same as the pendingSpeaker branch above)
-    // lets a SECOND speaker cue in the panel fall through to the speaker-cue
-    // branch below instead of being eaten as the first speaker's dialogue.
+    // Unlike the first-line branch above, a fresh all-caps NAME-like line in
+    // continuation position IS treated as a SECOND speaker cue: the
+    // `!BARE_SPEAKER_LINE` guard lets it fall through to the speaker-cue branch
+    // below. Two speakers in one panel is common, and a second balloon's cue
+    // naturally follows the first speaker's spoken line.
     if (field === 'dialogue' && dialogueSpeaker && t && !BARE_SPEAKER_LINE.test(t)) {
       out.push(`${dialogueSpeaker}: ${t}`);
       continue;

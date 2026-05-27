@@ -143,11 +143,20 @@ vi.mock('../cos.js', () => ({
   addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
   isRunning: vi.fn(() => true),
 }));
+// dispatch_code_agent resolves a code-capable provider when none is pinned.
+// Default the active provider to a code-capable (tui) one so the inherit path
+// is exercised; individual tests override for the API-default / substitution
+// / no-CLI-provider cases.
+vi.mock('../providers.js', () => ({
+  getActiveProvider: vi.fn(async () => ({ id: 'claude-code', type: 'tui', enabled: true })),
+  getAllProviders: vi.fn(async () => ({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] })),
+}));
 
 const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent, anchorLocalMidnightUtc } = await import('./tools.js');
 const { getUtcOffsetMs: mockedGetUtcOffsetMs } = await import('../../lib/timezone.js');
 const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
 const { addTask: mockedAddTask, isRunning: mockedIsRunning } = await import('../cos.js');
+const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders } = await import('../providers.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -172,6 +181,8 @@ describe('dispatch_code_agent', () => {
     mockedAddTask.mockClear();
     mockedIsRunning.mockReturnValue(true);
     mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: '', model: '' } } });
+    mockedGetActiveProvider.mockResolvedValue({ id: 'claude-code', type: 'tui', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] });
   });
 
   it('rejects an empty task without creating a CoS task', async () => {
@@ -206,6 +217,31 @@ describe('dispatch_code_agent', () => {
     mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'codex-cli', model: 'gpt-5' } } });
     await dispatchTool('dispatch_code_agent', { task: 'add a flag' });
     expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ provider: 'codex-cli', model: 'gpt-5' });
+  });
+
+  it('substitutes an enabled CLI/TUI provider when the system default is an API backend', async () => {
+    // A coding agent can't run on an API provider (LM Studio/Ollama); without
+    // a pin we must NOT inherit the API default — pick a code-capable provider.
+    mockedGetActiveProvider.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ providers: [
+      { id: 'lmstudio', type: 'api', enabled: true },
+      { id: 'codex', type: 'cli', enabled: true },
+    ] });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(true);
+    const [data] = mockedAddTask.mock.calls[0];
+    expect(data.provider).toBe('codex');
+    // A substituted provider must not carry a model meant for another provider.
+    expect(data).not.toHaveProperty('model');
+  });
+
+  it('errors when the system default is an API backend and no CLI/TUI provider is enabled', async () => {
+    mockedGetActiveProvider.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
+    mockedGetAllProviders.mockResolvedValue({ providers: [{ id: 'lmstudio', type: 'api', enabled: true }] });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/code-capable/);
+    expect(mockedAddTask).not.toHaveBeenCalled();
   });
 
   it('warns in the summary when the CoS runner is stopped', async () => {

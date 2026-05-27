@@ -1844,6 +1844,35 @@ const TOOLS = [
       const provider = typeof codeAgent.provider === 'string' ? codeAgent.provider.trim() : '';
       const model = typeof codeAgent.model === 'string' ? codeAgent.model.trim() : '';
 
+      // Resolve a code-capable provider when none is explicitly pinned. A coding
+      // agent must run a CLI/TUI provider (Claude Code, Codex, Gemini CLI, …);
+      // an API backend (LM Studio / Ollama / OpenAI-compatible) can't, and the
+      // spawner would otherwise fall through to the Claude CLI spawn config with
+      // a non-Claude model name (buildCliSpawnConfig defaults to claude). So only
+      // inherit the system default when it is itself code-capable; if it's an API
+      // provider, substitute the first enabled CLI/TUI provider, and if there is
+      // none, fail with actionable copy instead of queuing a doomed task.
+      let resolvedProvider = provider;
+      let substituted = false;
+      if (!resolvedProvider) {
+        const { getActiveProvider, getAllProviders } = await import('../providers.js');
+        const isCodeCapable = (p) => p?.type === 'cli' || p?.type === 'tui';
+        const active = await getActiveProvider().catch(() => null);
+        if (!isCodeCapable(active)) {
+          const { providers = [] } = await getAllProviders().catch(() => ({ providers: [] }));
+          const codeProvider = providers.find((p) => p?.enabled && isCodeCapable(p));
+          if (!codeProvider) {
+            return {
+              ok: false,
+              error: 'no code-capable provider',
+              summary: "Your active AI provider can't run a coding agent. Enable a CLI provider like Claude Code, Codex, or Gemini under Settings, AI Providers, then try again.",
+            };
+          }
+          resolvedProvider = codeProvider.id;
+          substituted = true;
+        }
+      }
+
       const created = await addTask({
         description: text,
         priority: 'HIGH',
@@ -1857,12 +1886,13 @@ const TOOLS = [
         // worktree and surfaces a PR for review.
         useWorktree: true,
         openPR: true,
-        // Pin only when configured. Omitting provider/model lets the CoS
-        // spawner fall back to the system default (providers.json
-        // activeProvider) + selectModelForTask — the "default to system AI
-        // provider → model" behavior.
-        ...(provider ? { provider } : {}),
-        ...(model ? { model } : {}),
+        // Pin the configured (or substituted code-capable) provider. Omitting
+        // it lets the CoS spawner inherit the system default — only done when
+        // that default is itself code-capable (see resolution above). A pinned
+        // model belongs to a specific provider, so drop it when we substituted
+        // a different provider than the (empty) configured one.
+        ...(resolvedProvider ? { provider: resolvedProvider } : {}),
+        ...(model && !substituted ? { model } : {}),
       }, 'user');
 
       // addTask auto-spawns user tasks, but only while the CoS runner is up.

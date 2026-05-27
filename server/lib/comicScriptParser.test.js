@@ -458,6 +458,14 @@ Thud!`;
     expect(pages[0].panels[0].caption).toBe('The end.');
   });
 
+  it('emits an all-caps first dialogue line as dialogue, not a dropped second cue', () => {
+    // A speaker cue is always followed by its spoken line; an all-caps shout
+    // immediately after the cue must be that speaker's dialogue even though it
+    // matches the speaker-cue shape — the first line after a cue is never a cue.
+    const { pages } = parseComicScript("PAGE 1\nPANEL 1\nA scared face.\nGIANT\nI DON'T KNOW");
+    expect(pages[0].panels[0].dialogue).toEqual([{ character: 'GIANT', line: "I DON'T KNOW" }]);
+  });
+
   it('attributes a second speaker cue in the same panel to the new speaker (not the first)', () => {
     // Two speakers in one panel is extremely common. The continuation-line
     // branch must let a fresh all-caps cue open a NEW speaker instead of
