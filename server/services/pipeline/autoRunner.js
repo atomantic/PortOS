@@ -75,9 +75,24 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       if (!record.cancelRequested) {
         await runStageIfNeeded(issueId, 'idea', options);
       }
-      // Stage 2: prose — depends on idea
+      // Stage 2: prose — depends on idea. SKIP when the issue arrived
+      // script-first (an imported comic seeds stages.comicScript ready with
+      // prose empty): forward-generating prose here would synthesize content
+      // the authored script was never derived from, burn tokens, and — because
+      // editorialAnalysis prefers prose — make the Reader Map analyze the
+      // generated prose instead of the user's verbatim script. A backport
+      // (Create → Importer) is the deliberate way to fill prose from the
+      // script. `force` still regenerates.
       if (!record.cancelRequested) {
-        await runStageIfNeeded(issueId, 'prose', options);
+        const proseIssue = await getIssue(issueId);
+        const proseEmpty = !isStageReady(proseIssue.stages?.prose);
+        const scriptAuthored = isStageReady(proseIssue.stages?.comicScript)
+          || isStageReady(proseIssue.stages?.teleplay);
+        if (proseEmpty && scriptAuthored && !options.force) {
+          broadcast(issueId, { type: 'skip', stage: 'prose', reason: 'script already authored (imported script-first) — not back-filling prose' });
+        } else {
+          await runStageIfNeeded(issueId, 'prose', options);
+        }
       }
       // Stage 3: comicScript + teleplay in parallel — both depend only on prose
       if (!record.cancelRequested) {

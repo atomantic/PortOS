@@ -47,6 +47,137 @@ const FIELD_RE = /^(?:\*\*)?(Description|Caption(?:\s+\d+)?|Dialogue|SFX)\s*:(?:
 const NONE_RE = /^\(\s*none\s*\)$/i;
 const isNoneValue = (s) => !s || NONE_RE.test(s.trim());
 
+// --- Bare-format normalization ---------------------------------------------
+//
+// Imported comic scripts (Create → Importer) commonly use the bare
+// screenplay convention — uppercase `PAGE 1` / `PANEL 1` headers with the
+// label on its own line and the content on the following line(s):
+//
+//   PAGE 1
+//   <page-level art direction>
+//   PANEL 1
+//   <panel description>
+//   CAPTION
+//   <caption text>
+//   GIANT
+//   <spoken line>
+//   SFX
+//   Thud!
+//
+// The pipeline's own comic-script stage emits the field-labeled Markdown
+// form (`## Page N`, `**Description:**`, `**Caption:**`, `Dialogue:`). Rather
+// than rewrite the user's stored script, we detect the bare form and convert
+// it to the canonical shape IN MEMORY before the main parse, so the verbatim
+// text seeded into `stages.comicScript.output` is preserved while still
+// rendering into pages/panels. Markers are matched case-sensitively (real
+// headers are uppercase) so prose like "Page after page…" isn't mistaken
+// for a header.
+const BARE_PAGE_LINE = /^\s*PAGES?\s+\S+/;     // PAGE 1 / PAGES 2-3
+const BARE_PANEL_LINE = /^\s*PANELS?\s+\S+/;   // PANEL 1
+const BARE_CAPTION_LINE = /^\s*CAPTION\b/;     // CAPTION / CAPTION 2:
+const BARE_SFX_LINE = /^\s*SFX\b/;             // SFX
+// A standalone dialogue speaker cue: a short, NAME-like all-caps token,
+// optionally with a parenthetical (`GIANT`, `KESSA (WHISPERED)`). It must NOT
+// contain sentence punctuation (`. , ! ? :`) so a terse all-caps panel
+// description ("THE CITY BURNS.") or a slugline ("INT. VAULT - NIGHT") is not
+// misread as a speaker. Even so, the FIRST content line after a PANEL/CAPTION/
+// SFX label is never treated as a speaker (see normalizeBareComicScript), which
+// protects all-caps descriptions and all-caps SFX content ("KRAKOOM").
+const BARE_SPEAKER_LINE = /^[A-Z][A-Z0-9 '’&-]{0,28}(?:\s*\([^)]*\))?$/;
+// Canonical page header — its presence means the script is already in the
+// pipeline's Markdown form, so we leave it untouched.
+const CANONICAL_PAGE_RE = /^##\s+Page\s/im;
+
+// Detect the bare form: no canonical `## Page` header, but at least one bare
+// uppercase `PAGE N` line.
+function isBareComicScript(script) {
+  if (CANONICAL_PAGE_RE.test(script)) return false;
+  return script.split(/\r?\n/).some((l) => BARE_PAGE_LINE.test(l));
+}
+
+// Convert the bare form to the canonical Markdown the main parser consumes.
+// Pages and panels are renumbered sequentially (the numbers are cosmetic —
+// the parser keys off the headers, not the values).
+function normalizeBareComicScript(script) {
+  const out = [];
+  let pageNum = 0;
+  let panelNum = 0;
+  let inPanel = false;
+  // Which field the current content lines belong to: 'description' | 'caption'
+  // | 'sfx' | null (page-level, or right after a dialogue line).
+  let field = null;
+  // True for the line immediately after a label (PANEL→description, CAPTION,
+  // SFX). That line is always the field's content, NEVER a speaker cue — this
+  // is what keeps a terse all-caps description or an all-caps SFX ("KRAKOOM")
+  // from being misread as dialogue.
+  let awaitingFirst = false;
+  let pendingSpeaker = null;
+
+  // A speaker cue whose spoken line never arrived (next line was a marker or
+  // EOF) is emitted back as plain text rather than dropped, so no input line
+  // is lost.
+  const flushDanglingSpeaker = () => {
+    if (pendingSpeaker) {
+      out.push(pendingSpeaker);
+      pendingSpeaker = null;
+    }
+  };
+
+  for (const raw of script.split(/\r?\n/)) {
+    const t = raw.trim();
+
+    if (BARE_PAGE_LINE.test(t)) {
+      flushDanglingSpeaker();
+      pageNum += 1; panelNum = 0; inPanel = false; field = null; awaitingFirst = false;
+      out.push(`## Page ${pageNum}`);
+      continue;
+    }
+    if (BARE_PANEL_LINE.test(t)) {
+      flushDanglingSpeaker();
+      panelNum += 1; inPanel = true; field = 'description'; awaitingFirst = true;
+      out.push(`Panel ${panelNum}`);
+      continue;
+    }
+    if (inPanel && BARE_CAPTION_LINE.test(t)) {
+      flushDanglingSpeaker();
+      out.push('Caption:'); field = 'caption'; awaitingFirst = true;
+      continue;
+    }
+    if (inPanel && BARE_SFX_LINE.test(t)) {
+      flushDanglingSpeaker();
+      out.push('SFX:'); field = 'sfx'; awaitingFirst = true;
+      continue;
+    }
+    // The spoken line for a pending speaker (markers were handled above and
+    // already flushed the speaker, so reaching here means a real dialogue line).
+    if (pendingSpeaker && t) {
+      out.push('Dialogue:');
+      out.push(`${pendingSpeaker}: ${t}`);
+      pendingSpeaker = null;
+      field = null; // dialogue closes the active field
+      continue;
+    }
+    // Speaker cue — only when NOT the forced first content line after a label.
+    if (inPanel && t && !awaitingFirst && BARE_SPEAKER_LINE.test(t)) {
+      pendingSpeaker = t;
+      continue;
+    }
+    // First content line after a PANEL opens the Description field.
+    if (awaitingFirst && t && field === 'description') {
+      out.push(`Description: ${t}`);
+      awaitingFirst = false;
+      continue;
+    }
+    // First content line after CAPTION/SFX, plus every continuation line and
+    // page-level/blank line, passes through — the main parser appends it to
+    // the open field.
+    if (t) awaitingFirst = false;
+    out.push(raw);
+  }
+  flushDanglingSpeaker();
+  return out.join('\n');
+}
+
 const PANEL_LIMITS = Object.freeze({
   PAGES_MAX: 200,
   PANELS_PER_PAGE_MAX: 24,
@@ -141,7 +272,13 @@ export function parseComicScript(script) {
     return { coverConcept: '', backCoverConcept: '', pages: [] };
   }
 
-  const lines = script.split(/\r?\n/);
+  // Imported scripts often arrive in the bare `PAGE`/`PANEL`/`CAPTION` form
+  // (see normalizeBareComicScript). Convert to canonical Markdown first so
+  // the verbatim stored script still parses into pages/panels. Canonical
+  // scripts are detected and left untouched, so existing behavior is unchanged.
+  const bare = isBareComicScript(script);
+  const normalized = bare ? normalizeBareComicScript(script) : script;
+  const lines = normalized.split(/\r?\n/);
   const pages = [];
   let currentPage = null;
   let currentRawLines = null;
@@ -158,7 +295,16 @@ export function parseComicScript(script) {
   const flushPanel = () => {
     if (!inAnyPanel || !currentPage || !currentPanelLines) return;
     const panel = parsePanelBody(currentPanelLines);
-    if (panel.description) {
+    // Canonical (LLM-authored) scripts: keep only description-bearing panels —
+    // a stray `**Caption:**` with no description is generator noise (a floating
+    // header) and is intentionally dropped. Imported bare scripts: keep a panel
+    // with ANY content, because a caption-only / dialogue-only / SFX-only panel
+    // (e.g. a narration-over-black splash) is a legitimate authored beat and
+    // dropping it would lose the user's verbatim text.
+    const hasContent = bare
+      ? (panel.description || panel.caption || panel.sfx || panel.dialogue.length > 0)
+      : Boolean(panel.description);
+    if (hasContent) {
       currentPage.panels.push({ ...panel, imageJobId: null });
     }
     currentPanelLines = null;

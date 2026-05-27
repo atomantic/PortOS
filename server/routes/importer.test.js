@@ -14,6 +14,7 @@ vi.mock('../services/importer.js', async () => {
     analyzeImport: vi.fn(),          // mocked behavior
     classifyImportContent: vi.fn(),  // mocked behavior
     commitImport: vi.fn(),           // mocked behavior
+    retryIssueSplit: vi.fn(),        // mocked behavior
   };
 });
 
@@ -49,7 +50,7 @@ describe('GET /api/importer/config', () => {
 });
 
 describe('POST /api/importer/classify', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it('returns 200 with the classifier result on success', async () => {
     importerSvc.classifyImportContent.mockResolvedValue({
@@ -81,7 +82,7 @@ describe('POST /api/importer/classify', () => {
 });
 
 describe('POST /api/importer/analyze', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it('returns 200 with the service result on success', async () => {
     importerSvc.analyzeImport.mockResolvedValue({ universe: {}, series: {}, issueProposals: [] });
@@ -128,8 +129,49 @@ describe('POST /api/importer/analyze', () => {
   });
 });
 
+describe('POST /api/importer/retry-issues', () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it('returns 200 with the re-proposed issues on success', async () => {
+    importerSvc.retryIssueSplit.mockResolvedValue({
+      issueProposals: [{ title: 'Issue 1', proseExcerpt: 'verbatim' }],
+      method: 'mechanical',
+    });
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/retry-issues').send({
+      contentType: 'comic-script',
+      source: 'ISSUE #1\nstuff',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.method).toBe('mechanical');
+    expect(res.body.issueProposals).toHaveLength(1);
+  });
+
+  it('rejects an unknown contentType at the Zod layer with 400', async () => {
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/retry-issues').send({
+      contentType: 'haiku',
+      source: 'x',
+    });
+    expect(res.status).toBe(400);
+    expect(importerSvc.retryIssueSplit).not.toHaveBeenCalled();
+  });
+
+  it('maps a service ERR_VALIDATION to 400', async () => {
+    const err = Object.assign(new Error('source is required'), { code: ERR_VALIDATION });
+    importerSvc.retryIssueSplit.mockRejectedValue(err);
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/retry-issues').send({
+      contentType: 'novel',
+      source: 'x',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe(ERR_VALIDATION);
+  });
+});
+
 describe('POST /api/importer/commit', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it('returns 200 with the service result on success', async () => {
     importerSvc.commitImport.mockResolvedValue({

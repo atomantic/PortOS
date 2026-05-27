@@ -120,6 +120,32 @@ describe('pipeline auto-runner', () => {
     expect(generated).toContain('idea');
   });
 
+  it('does NOT back-fill prose when a script stage is already authored (imported script-first)', async () => {
+    // An imported comic seeds stages.comicScript ready with prose empty.
+    // Forward-generating prose would synthesize content the script wasn't
+    // derived from and (via editorialAnalysis's prose-preference) shadow the
+    // verbatim script — so the auto-runner must skip prose here.
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'comicScript', { status: 'ready', output: 'PAGE 1\nPANEL 1\nA scene.' });
+    await autoRunner.startAutoRunTextStages(issue.id);
+    await waitFor(() => {
+      const run = autoRunner.__testing.runs.get(issue.id);
+      return run?.lastPayload?.type === 'complete';
+    });
+    expect(generated).not.toContain('prose');      // skipped — script-first
+    expect(generated).not.toContain('comicScript'); // already ready
+    const final = await issuesSvc.getIssue(issue.id);
+    expect(final.stages?.prose?.output || '').toBe('');
+  });
+
+  it('DOES generate prose for a script-first issue when force=true', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'comicScript', { status: 'ready', output: 'PAGE 1\nPANEL 1\nA scene.' });
+    await autoRunner.startAutoRunTextStages(issue.id, { force: true });
+    await waitFor(() => generated.includes('prose'));
+    expect(generated).toContain('prose');
+  });
+
   it('returns alreadyRunning=true on concurrent start', async () => {
     const { issue } = await seed();
     const first = await autoRunner.startAutoRunTextStages(issue.id);

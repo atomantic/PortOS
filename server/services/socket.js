@@ -19,6 +19,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { importerEvents } from './importerEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -561,9 +562,25 @@ export function initSocket(io) {
   // Set up AI status event forwarding (broadcast to all clients)
   setupAIStatusEventForwarding();
 
+  // Set up importer stage-progress forwarding (broadcast to all clients)
+  setupImporterEventForwarding();
+
   // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
   // and high-priority notifications — rate-limited per source).
   setupProactiveSpeechForwarding();
+}
+
+// Bridge importer analyze-phase stage progress onto Socket.IO so the Importer
+// page can render a live checklist while a (multi-minute, multi-pass) analyze
+// runs. Single-user trust model: broadcast to all clients; each frame carries
+// a `runId` so the client ignores stragglers from a prior run.
+let importerForwardingSetup = false;
+function setupImporterEventForwarding() {
+  if (importerForwardingSetup) return;
+  importerForwardingSetup = true;
+  importerEvents.on('progress', (data) => {
+    if (ioInstance) ioInstance.emit('importer:progress', data);
+  });
 }
 
 let aiStatusForwardingSetup = false;

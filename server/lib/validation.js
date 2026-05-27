@@ -1617,6 +1617,12 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
 // here mirrors writersRoomDraftSaveSchema.
 const importerSourceField = z.string().min(1).max(5_000_000);
 
+// Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript).
+// Far below importerSourceField's 5MB so a single bundled comic issue can't
+// blow past it silently — analyze validates against this so the failure
+// surfaces at analyze, not as a commit-time 400.
+export const IMPORTER_PROSE_EXCERPT_MAX = 500_000;
+
 // Classify endpoint only sees the source — no universe/series context. The
 // LLM only consumes the head, so the schema is intentionally minimal.
 export const importerClassifySchema = z.object({
@@ -1639,6 +1645,21 @@ export const importerAnalyzeSchema = z.object({
   // Pinned model id for the chosen provider; '' from the UI ("Default model")
   // coerces to undefined so runStagedLLM falls back to the stage/provider
   // default model.
+  modelOverride: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
+  targetIssueCount: z.number().int().min(1).max(50).optional(),
+}).strict();
+
+// Retry-issues endpoint — re-runs ONLY the issue split after a failed analyze
+// (canon + arc are preserved client-side). No universe/series names needed;
+// `arcSummary` (optional) lets the LLM align issue boundaries to the arc the
+// user already has in the Review panel, and `seriesName` is purely cosmetic
+// prompt context.
+export const importerRetryIssuesSchema = z.object({
+  contentType: z.enum(IMPORTER_CONTENT_TYPES),
+  source: importerSourceField,
+  seriesName: z.string().trim().max(200).optional(),
+  arcSummary: z.string().max(8000).optional(),
+  providerOverride: z.preprocess(emptyToUndefined, z.string().trim().max(120).optional()),
   modelOverride: z.preprocess(emptyToUndefined, z.string().trim().max(200).optional()),
   targetIssueCount: z.number().int().min(1).max(50).optional(),
 }).strict();
@@ -1697,8 +1718,10 @@ const importerIssueEntry = z.object({
   // novel chapter can land verbatim. Optional — the LLM may omit the
   // excerpt on some issues. When present, must be non-empty + non-whitespace
   // so it doesn't seed prose.output with whitespace and mark the stage
-  // `ready` misleadingly.
-  proseExcerpt: z.string().min(1).max(500_000).refine(
+  // `ready` misleadingly. Exported so the mechanical comic splitter can
+  // validate against the SAME ceiling at analyze time (a verbatim split could
+  // otherwise produce an excerpt commit would reject — a confusing dead-end).
+  proseExcerpt: z.string().min(1).max(IMPORTER_PROSE_EXCERPT_MAX).refine(
     (s) => s.trim().length > 0,
     { message: 'proseExcerpt must contain non-whitespace content' },
   ).optional(),
@@ -1715,6 +1738,12 @@ export const importerCommitSchema = z.object({
   arc: importerArcShape.nullable().optional(),
   seasons: z.array(importerSeasonEntry).max(50).default([]),
   issues: z.array(importerIssueEntry).min(1).max(50),
+  // Drives which stage each issue's verbatim excerpt seeds: a `comic-script`
+  // import is already script-form, so its excerpt seeds `stages.comicScript`
+  // (ready) and the pipeline never regenerates — every other type seeds
+  // `stages.prose`. Optional + defaulting to prose-seed keeps older clients
+  // (which don't send it) on the prior behavior.
+  contentType: z.enum(IMPORTER_CONTENT_TYPES).optional(),
   // Replace-mode flag — when true, every existing issue on the series is
   // deleted before the incoming `issues` are created, and `series.arc` +
   // `series.seasons[]` are written verbatim (not merged). Canon is still
