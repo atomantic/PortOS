@@ -183,6 +183,20 @@ describe('StoryBuilder — detail stepper', () => {
     expect(next.disabled).toBe(true);
   });
 
+  it('"Lock & continue" locks the step AND auto-advances to the next', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Salt Run', currentStep: 'idea', seedIdea: 'seed',
+      universeId: 'u1', seriesId: 's1', steps: mkSteps(), staleSteps: [], llm: { provider: '', model: '' },
+    });
+    renderAt('/story-builder/stb-1/idea');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
+    fireEvent.click(screen.getByText('Lock & continue'));
+    await waitFor(() => expect(api.lockStoryStep).toHaveBeenCalledWith('stb-1', 'idea', expect.anything()));
+    // …then advances the current-step pointer to the next step (universeAesthetic).
+    await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'universeAesthetic', expect.anything()));
+  });
+
   it('persists the provider/model picker choice to session.llm', async () => {
     const { fireEvent } = await import('@testing-library/react');
     api.getStorySession.mockResolvedValue({

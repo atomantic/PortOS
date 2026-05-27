@@ -650,7 +650,17 @@ function StoryBuilderDetail({ storyId, stepParam }) {
 
   const lock = useLockToggle({
     patchFn: (next) => (next ? lockStoryStep(storyId, activeStepId, { silent: true }) : unlockStoryStep(storyId, activeStepId, { silent: true })),
-    onSuccess: () => reload(),
+    onSuccess: (_updated, next) => {
+      reload();
+      // "Lock & continue" should actually continue — on a successful LOCK,
+      // auto-advance to the next step (the just-locked step makes it reachable;
+      // the server re-gates the pointer move). Unlocking stays put.
+      if (next && activeIdx >= 0 && activeIdx < stepIds.length - 1) {
+        const nextId = stepIds[activeIdx + 1];
+        setStoryCurrentStep(storyId, nextId, { silent: true }).catch(() => {});
+        navigate(`/story-builder/${storyId}/${nextId}`);
+      }
+    },
     lockedMessage: `${activeStep?.label || 'Step'} locked`,
     unlockedMessage: `${activeStep?.label || 'Step'} unlocked`,
     errorMessage: 'Failed to update lock',
