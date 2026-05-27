@@ -416,12 +416,15 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     }
   };
 
-  const genButton = (label = 'Generate with AI') => (
+  // Once a step has generated content, the button becomes "Re-generate" (with a
+  // refresh icon) so it's clear it has already been run.
+  const genButton = (label = 'Generate with AI', hasContent = false) => (
     <button
       onClick={runGenerate} disabled={busy || locked}
       className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
     >
-      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {label}
+      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : (hasContent ? <RefreshCw className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />)}
+      {hasContent ? 'Re-generate' : label}
     </button>
   );
 
@@ -430,7 +433,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
       <div className="space-y-3">
         <FieldBlock label="Working title" value={session.title} />
         <FieldBlock label="Starter idea" value={session.seedIdea} />
-        {!locked && genButton('Expand idea with AI')}
+        {!locked && genButton('Expand idea with AI', Boolean((universe?.logline || '').trim()))}
         <p className="text-xs text-gray-500">Expanding seeds the universe starter prompt and series premise for the next steps.</p>
       </div>
     );
@@ -444,7 +447,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <FieldBlock label="Influences — embrace" value={(universe?.influences?.embrace || []).join(', ')} />
         <FieldBlock label="Influences — avoid" value={(universe?.influences?.avoid || []).join(', ')} />
         <div className="flex items-center gap-2">
-          {!locked && genButton('Expand aesthetic')}
+          {!locked && genButton('Expand aesthetic', Boolean((universe?.premise || universe?.styleNotes || '').trim()))}
           {universe?.id && (
             <Link to={`/universes/${universe.id}`} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-port-accent">
               <ExternalLink className="w-4 h-4" /> Deep-edit in Universe Builder
@@ -464,7 +467,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <FieldBlock label="Themes" value={(arc.themes || []).join(', ')} />
         <FieldBlock label="Emotional shape (Vonnegut)" value={arc.shape} />
         <div className="flex items-center gap-2">
-          {!locked && genButton('Generate plot arc')}
+          {!locked && genButton('Generate plot arc', Boolean((arc.logline || arc.summary || '').trim()))}
           {series?.id && (
             <Link to={`/pipeline/series/${series.id}`} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-port-accent">
               <ExternalLink className="w-4 h-4" /> Deep-edit on the Arc Canvas
@@ -478,7 +481,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     return (
       <div className="space-y-3">
         <ReaderMapView readerMap={arc.readerMap} />
-        {!locked && genButton('Generate reader map')}
+        {!locked && genButton('Generate reader map', Boolean(arc.readerMap))}
         {!locked && arc.readerMap && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} />}
       </div>
     );

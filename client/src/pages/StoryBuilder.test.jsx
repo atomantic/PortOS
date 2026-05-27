@@ -183,6 +183,25 @@ describe('StoryBuilder — detail stepper', () => {
     expect(next.disabled).toBe(true);
   });
 
+  it('shows "Generate reader map" when empty and "Re-generate" once content exists', async () => {
+    // Empty reader map → first-run label.
+    api.getPipelineSeries.mockResolvedValueOnce({ id: 's1', arc: { logline: 'AL', summary: 'AS', readerMap: null } });
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'X', currentStep: 'readerMap', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true }, plotArc: { locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' },
+    });
+    const { unmount } = renderAt('/story-builder/stb-1/readerMap');
+    await waitFor(() => expect(screen.getByText('Generate reader map')).toBeTruthy());
+    unmount();
+
+    // Populated reader map → button flips to "Re-generate".
+    api.getPipelineSeries.mockResolvedValue({ id: 's1', arc: { logline: 'AL', summary: 'AS', readerMap: { hooks: [{ id: 'rm-1', label: 'h' }] } } });
+    renderAt('/story-builder/stb-1/readerMap');
+    await waitFor(() => expect(screen.getByText('Re-generate')).toBeTruthy());
+    expect(screen.queryByText('Generate reader map')).toBeNull();
+  });
+
   it('"Lock & continue" locks the step AND auto-advances to the next', async () => {
     const { fireEvent } = await import('@testing-library/react');
     api.getStorySession.mockResolvedValue({
