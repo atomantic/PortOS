@@ -5,7 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, timeAgo } from '../../utils/formatters';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
-  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, controlOllamaService
+  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService
 } from '../../services/api';
 import socket from '../../services/socket';
 
@@ -304,8 +304,9 @@ export function LocalLlmTab() {
     };
   }, [loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
 
-  const runAction = useCallback((key, fn, successMsg) => {
-    setConfirmAction(null);
+  const runAction = useCallback((key, fn, successMsg, options = {}) => {
+    const { onError, clearConfirm = true } = options;
+    if (clearConfirm) setConfirmAction(null);
     setActionInProgress(key);
     return fn()
       .then((result) => {
@@ -322,8 +323,15 @@ export function LocalLlmTab() {
         }
         loadStatus();
         loadCatalog(selected, query, catalogSource, activeCategory);
+        return result;
       })
-      .catch(() => { /* request() surfaces API errors as a toast */ })
+      .catch((err) => {
+        // Caller-handled errors (e.g. OLLAMA_OUTDATED → offer to upgrade) ask us
+        // to skip the default toast and run their own handler instead. The error
+        // toast from apiCore has already fired unless the caller passed {silent}
+        // through fn — onError just gets to consume the structured code/context.
+        if (typeof onError === 'function') onError(err);
+      })
       .finally(() => setActionInProgress(null));
   }, [loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
 
@@ -354,10 +362,45 @@ export function LocalLlmTab() {
   }, [activeCategory, catalog, catalogCategories, catalogSource]);
 
   // LM Studio's REST fallback returns { pending: true } — the download was only
-  // queued, not finished — so don't claim "installed" in that case.
-  const install = (modelId) => runAction(`install-${modelId}`, () => installLocalLlmModel(selected, modelId),
-    (r) => r?.pending ? `${modelId} download started` : `${modelId} installed`);
+  // queued, not finished — so don't claim "installed" in that case. Install is
+  // silent so an OLLAMA_OUTDATED failure replaces the default toast with an
+  // inline confirm row offering to auto-upgrade Ollama and retry.
+  const install = (modelId) => runAction(
+    `install-${modelId}`,
+    () => installLocalLlmModel(selected, modelId, { silent: true }),
+    (r) => r?.pending ? `${modelId} download started` : `${modelId} installed`,
+    {
+      onError: (err) => {
+        if (err?.code === 'OLLAMA_OUTDATED' && selected === 'ollama') {
+          setConfirmAction({
+            type: 'upgrade-ollama',
+            modelId,
+            label: 'Ollama is out of date for this model.',
+            detail: `${modelId} needs a newer Ollama than the one installed. PortOS can upgrade Ollama in place (Homebrew on macOS, the official Ollama installer on Linux), restart the service, and retry the download.`
+          });
+        } else {
+          // Any other failure: restore the default toast we suppressed.
+          toast.error(err?.message || 'Install failed');
+        }
+      },
+      clearConfirm: false
+    }
+  );
   const remove = (modelId) => runAction(`delete-${modelId}`, () => deleteLocalLlmModel(selected, modelId), `${modelId} deleted`);
+
+  const upgradeOllamaAndRetry = (modelId) => {
+    setConfirmAction(null);
+    // runAction resolves with the server result on success and undefined when
+    // its internal catch consumed the error — gate the retry on a truthy
+    // result so a failed upgrade doesn't loop straight back into the same 412.
+    runAction(
+      'upgrade-ollama',
+      () => upgradeLocalLlmBackend('ollama'),
+      (r) => r?.note ? `Ollama upgraded — ${r.note}` : 'Ollama upgraded'
+    ).then((r) => {
+      if (r?.success && modelId) install(modelId);
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -399,24 +442,38 @@ export function LocalLlmTab() {
                 <p className="text-sm text-white">{confirmAction.label}</p>
                 {confirmAction.detail && <p className="text-xs text-gray-400">{confirmAction.detail}</p>}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => runAction(`migrate-${confirmAction.to}-link`, () => migrateLocalLlmBackend(confirmAction.to, 'link'), summarizeMigrate)}
-                    disabled={busy}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent"
-                    title="Hardlink each GGUF so both backends share one file on disk (no extra space; falls back to a copy across filesystems)"
-                  >
-                    {actionInProgress === `migrate-${confirmAction.to}-link` ? <BrailleSpinner /> : <Link2 size={14} />}
-                    Link (share disk)
-                  </button>
-                  <button
-                    onClick={() => runAction(`migrate-${confirmAction.to}-copy`, () => migrateLocalLlmBackend(confirmAction.to, 'copy'), summarizeMigrate)}
-                    disabled={busy}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-border hover:bg-port-border/70 text-white"
-                    title="Make an independent duplicate on the target (uses extra disk; survives deleting the source backend's copy)"
-                  >
-                    {actionInProgress === `migrate-${confirmAction.to}-copy` ? <BrailleSpinner /> : <Copy size={14} />}
-                    Copy (independent)
-                  </button>
+                  {confirmAction.type === 'upgrade-ollama' ? (
+                    <button
+                      onClick={() => upgradeOllamaAndRetry(confirmAction.modelId)}
+                      disabled={busy}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent"
+                      title="Run brew upgrade ollama (macOS) or the official Ollama install script (Linux), then retry the model download"
+                    >
+                      {actionInProgress === 'upgrade-ollama' ? <BrailleSpinner /> : <Download size={14} />}
+                      Upgrade Ollama & Retry
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => runAction(`migrate-${confirmAction.to}-link`, () => migrateLocalLlmBackend(confirmAction.to, 'link'), summarizeMigrate)}
+                        disabled={busy}
+                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent"
+                        title="Hardlink each GGUF so both backends share one file on disk (no extra space; falls back to a copy across filesystems)"
+                      >
+                        {actionInProgress === `migrate-${confirmAction.to}-link` ? <BrailleSpinner /> : <Link2 size={14} />}
+                        Link (share disk)
+                      </button>
+                      <button
+                        onClick={() => runAction(`migrate-${confirmAction.to}-copy`, () => migrateLocalLlmBackend(confirmAction.to, 'copy'), summarizeMigrate)}
+                        disabled={busy}
+                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 bg-port-border hover:bg-port-border/70 text-white"
+                        title="Make an independent duplicate on the target (uses extra disk; survives deleting the source backend's copy)"
+                      >
+                        {actionInProgress === `migrate-${confirmAction.to}-copy` ? <BrailleSpinner /> : <Copy size={14} />}
+                        Copy (independent)
+                      </button>
+                    </>
+                  )}
                   <button onClick={() => setConfirmAction(null)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors">
                     Cancel
                   </button>

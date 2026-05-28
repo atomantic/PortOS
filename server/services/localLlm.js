@@ -238,6 +238,62 @@ export async function installBackend(backend, onProgress = () => {}) {
 }
 
 /**
+ * Upgrade an already-installed backend in place. Used when a model pull returns
+ * Ollama's 412 "requires a newer version of Ollama" error — instead of telling
+ * the user to download a new binary, we run the same package manager that put
+ * it there. macOS: `brew upgrade ollama` / `brew upgrade --cask lm-studio`.
+ * Linux Ollama: re-run the official install script (it's idempotent and acts as
+ * an upgrade). Windows / Linux-LM-Studio fall back to the download URL.
+ *
+ * @param {string} backend - 'ollama' | 'lmstudio'
+ * @param {(p: { event: string, message: string }) => void} [onProgress]
+ */
+export async function upgradeBackend(backend, onProgress = () => {}) {
+  if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
+  const emit = (message) => onProgress({ event: 'start', message })
+  const downloadHint = `Download the latest version from ${DOWNLOAD_URL[backend]}.`
+
+  if (!canAutoInstall(backend)) {
+    return { success: false, error: `Automatic upgrade isn't supported on this platform. ${downloadHint}` }
+  }
+
+  // Linux Ollama: the official install script is also the upgrade path.
+  if (process.platform === 'linux') {
+    emit('Upgrading Ollama via the official install script…')
+    const r = await runStreaming('bash', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], emit, BACKEND_INSTALL_TIMEOUT_MS)
+    if (!r.success) return { success: false, error: `Ollama upgrade failed: ${r.error}. ${downloadHint}` }
+    console.log('⬆️ Upgraded Ollama (linux script)')
+    return { success: true, backend }
+  }
+
+  // macOS: Homebrew.
+  if (!(await commandExists('brew', ['--version']))) {
+    return { success: false, error: `Homebrew not found — install it from https://brew.sh first, or ${downloadHint.toLowerCase()}` }
+  }
+  const label = backend === 'ollama' ? 'Ollama' : 'LM Studio'
+  const args = backend === 'ollama' ? ['upgrade', 'ollama'] : ['upgrade', '--cask', 'lm-studio']
+  emit(`Upgrading ${label} via Homebrew (this can take a few minutes)…`)
+  const r = await runStreaming('brew', args, emit, BACKEND_INSTALL_TIMEOUT_MS)
+  // brew exits non-zero with "already up-to-date" only on some versions; the
+  // common "Warning: ollama X.Y.Z already installed" path is exit 0. If we did
+  // get a real failure, surface it.
+  if (!r.success) return { success: false, error: `Homebrew upgrade failed: ${r.error}` }
+  console.log(`🍺 Upgraded ${label} via Homebrew`)
+  if (backend === 'ollama') {
+    // Restart the service so the new binary is actually running — `brew upgrade`
+    // doesn't bounce running services. Best-effort; report it in `note` either
+    // way so the user knows whether to restart Ollama themselves.
+    const stop = await ollamaManager.stopPersistentService().catch((err) => ({ success: false, error: err.message }))
+    const restart = await ollamaManager.startPersistentService().catch((err) => ({ success: false, error: err.message }))
+    const note = restart.success
+      ? 'Restarted Ollama service so the new binary is now serving requests.'
+      : `Upgraded, but PortOS could not restart the Ollama service (${restart.error || stop.error}). Restart it from the Local LLMs tab.`
+    return { success: true, backend, note }
+  }
+  return { success: true, backend, note: 'Restart LM Studio so the new binary is loaded.' }
+}
+
+/**
  * Start/stop the Ollama HTTP server from the UI. LM Studio is app-controlled,
  * so keep this intentionally narrow instead of inventing unreliable app-launch
  * behavior for every platform.

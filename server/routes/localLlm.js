@@ -23,7 +23,7 @@ import {
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { searchHuggingFaceModels } from '../services/huggingFaceCatalog.js'
 import {
-  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, controlOllamaServer
+  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
 } from '../services/localLlm.js'
 
 const router = Router()
@@ -120,12 +120,34 @@ router.post('/install', asyncHandler(async (req, res) => {
   })
   if (!result.success) {
     emit('error', result.error || 'Install failed')
-    return res.status(502).json({ error: result.error || 'Install failed', modelId })
+    // Forward structured `code` (e.g. OLLAMA_OUTDATED) so the client can offer
+    // a recovery action — like prompting to upgrade Ollama — instead of just
+    // surfacing the raw error string in a toast.
+    return res.status(502).json({ error: result.error || 'Install failed', modelId, ...(result.code ? { code: result.code } : {}) })
   }
   emit('complete', result.pending
     ? `${modelId} download started in LM Studio — it'll finish in the background`
     : `${modelId} installed on ${backend}`)
   res.json({ success: true, ...result })
+}))
+
+// POST /api/local-llm/upgrade-backend — upgrade an existing backend install
+// (Homebrew on macOS, official script for Ollama on Linux). Streams progress
+// over the same `localLlm:progress` socket event the install/pull paths use.
+router.post('/upgrade-backend', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(localLlmInstallBackendSchema, req.body)
+  const emit = emitter(req)
+  const result = await upgradeBackend(backend, ({ event, message }) => emit(event, message))
+    .catch((err) => {
+      emit('error', `Upgrade failed: ${err.message}`)
+      throw err
+    })
+  if (!result.success) {
+    emit('error', result.error || 'Upgrade failed')
+    return res.status(502).json({ error: result.error || 'Upgrade failed', backend })
+  }
+  emit('complete', `${backend === 'ollama' ? 'Ollama' : 'LM Studio'} upgraded${result.note ? ` — ${result.note}` : ''}`)
+  res.json(result)
 }))
 
 // POST /api/local-llm/delete — remove an installed model

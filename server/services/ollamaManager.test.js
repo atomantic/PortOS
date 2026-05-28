@@ -154,4 +154,17 @@ describe('ollamaManager.pullModel transient-error retry', () => {
 
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ retrying: true }))
   })
+
+  it('tags a 412 "newer version of Ollama" error with code OLLAMA_OUTDATED', async () => {
+    const pullModel = await loadPullModel()
+    const { pullUrls } = stubFetch([
+      makeStreamResponse([{ error: 'pull model manifest: 412: The model you are attempting to pull requires a newer version of Ollama. Please download the latest version at: https://ollama.com/download' }])
+    ])
+
+    const { result } = await runPull(pullModel, 'qwen3:8b')
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('OLLAMA_OUTDATED')
+    expect(pullUrls).toHaveLength(1) // not retried — outdated binary won't fix itself
+  })
 })

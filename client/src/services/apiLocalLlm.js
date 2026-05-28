@@ -10,14 +10,23 @@ export const getLocalLlmCatalog = (backend, q = '') =>
 export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
   request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
 
-export const installLocalLlmModel = (backend, modelId) =>
-  request('/local-llm/install', { method: 'POST', body: JSON.stringify({ backend, modelId }) });
+// `options` lets callers opt into `{ silent: true }` so structured failure codes
+// (e.g. OLLAMA_OUTDATED → offer to upgrade in place) can be handled by the UI
+// without the default error toast firing first and stacking with the prompt.
+export const installLocalLlmModel = (backend, modelId, options) =>
+  request('/local-llm/install', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });
 
 export const deleteLocalLlmModel = (backend, modelId) =>
   request('/local-llm/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }) });
 
 export const installLocalLlmBackend = (backend) =>
   request('/local-llm/install-backend', { method: 'POST', body: JSON.stringify({ backend }) });
+
+// Upgrade an already-installed backend in place (Homebrew on macOS, official
+// Ollama script on Linux). The pull-model path uses this on the OLLAMA_OUTDATED
+// recovery flow so a stale binary doesn't keep the user from installing new models.
+export const upgradeLocalLlmBackend = (backend) =>
+  request('/local-llm/upgrade-backend', { method: 'POST', body: JSON.stringify({ backend }) });
 
 export const controlOllamaService = (action) =>
   request('/local-llm/ollama-service', { method: 'POST', body: JSON.stringify({ action }) });

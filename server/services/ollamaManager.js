@@ -444,7 +444,25 @@ async function pullModel(modelId, onProgress) {
   }
 
   console.error(`⚠️ Ollama pull failed for ${modelId}: ${lastError}`)
-  return { success: false, error: lastError, modelId }
+  const code = isOllamaOutdatedError(lastError) ? 'OLLAMA_OUTDATED' : undefined
+  return { success: false, error: lastError, modelId, ...(code ? { code } : {}) }
+}
+
+/**
+ * Detect Ollama's "model requires a newer version" 412 response surfaced in the
+ * NDJSON stream. The registry returns it when a new model format (e.g. a fresh
+ * GGUF feature) lands before the local Ollama binary supports it; the fix is to
+ * upgrade the Ollama install. The error string we see looks like:
+ *   "pull model manifest: 412: The model you are attempting to pull requires
+ *    a newer version of Ollama. Please download the latest version at: …"
+ * Match on the "newer version of Ollama" phrase plus the 412 status code so a
+ * benign 412 from an unrelated path can't slip through.
+ * @param {string|null|undefined} error
+ */
+function isOllamaOutdatedError(error) {
+  if (!error) return false
+  const str = String(error)
+  return /\b412\b/.test(str) && /newer version of ollama/i.test(str)
 }
 
 /**
