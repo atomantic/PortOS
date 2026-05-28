@@ -29,5 +29,6 @@ TBD
   Dev machines that already ran migration 043 with the buggy reader-map prompts keep the bad copies in `data/prompts/stages/` — delete `story-builder-reader-map.md` and `story-builder-reader-map-refine.md` from that directory, then restart, and migration 043 will re-copy the fixed versions from `data.reference/`. Fresh installs are unaffected.
 
 - Series detail page: when the Story Bible drawer is open, the Series Arc + Editorial Roadmap split and the inner text + 260px Themes panel split now respond to the actual content-area width instead of viewport width. Switched to Tailwind v4 container queries — Roadmap drops below Arc when the content area is < 1024px, and Themes stacks below the logline/summary column when the Arc card is < 672px, preventing the text column from being squeezed into an unreadable strip.
+- Vite dev server: allow `*.ts.net` hosts so `npm run dev` works when launched via Tailscale MagicDNS (previously rejected with `Blocked request. This host ("…ts.net") is not allowed`).
 
 ## Removed
