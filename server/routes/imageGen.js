@@ -23,7 +23,9 @@ import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '..
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
-import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2, isZImage, isErnie, repoForModel } from '../lib/mediaModels.js';
+import { inspectModelCache } from '../lib/hfCache.js';
+import { startHfDownloadStream } from '../lib/sseDownload.js';
 import {
   REQUIRED_PACKAGES, detectPython, installPackages,
   createVenv, isAllowedPython, pipNameFor,
@@ -378,6 +380,42 @@ router.post('/avatar', asyncHandler(async (req, res) => {
 router.get('/models', (_req, res) => {
   res.json(local.listImageModels());
 });
+
+// Per-model download status. Returns `[{ id, repo, cached, sizeBytes }]` so
+// the form can show an inline "Available" or "Download" badge next to the
+// model picker — without waiting until a render to discover a multi-GB HF
+// download. Models without a known HF repo (typically third-party custom
+// entries with `runner: 'mflux'` and a non-default name) report
+// `cached: null` so the UI can render "unknown" rather than a misleading
+// "not downloaded" state. Lazy generation still works regardless of badge.
+router.get('/models/status', asyncHandler(async (_req, res) => {
+  const statuses = await Promise.all(getImageModels().map(async (m) => {
+    const repo = repoForModel(m);
+    if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+    const { cached, sizeBytes } = await inspectModelCache(repo);
+    return { id: m.id, repo, cached, sizeBytes };
+  }));
+  res.json(statuses);
+}));
+
+// SSE-driven model download. Cancels the python child if the client
+// disconnects mid-download; cross-route in-flight dedupe lives in
+// startHfDownloadStream so a FLUX repo shared with video gen can't spawn
+// two concurrent children.
+router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
+  const model = getImageModels().find((m) => m.id === req.params.modelId);
+  if (!model) {
+    return res.status(404).json({ error: `Unknown model id: ${req.params.modelId}` });
+  }
+  const repo = repoForModel(model);
+  if (!repo) {
+    return res.status(400).json({
+      error: `Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`,
+      code: 'NO_REPO_FOR_MODEL',
+    });
+  }
+  await startHfDownloadStream({ req, res, repo });
+}));
 
 router.get('/loras', asyncHandler(async (_req, res) => {
   res.json(await local.listLoraFilenames());

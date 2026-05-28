@@ -30,6 +30,9 @@ import {
   DEFAULT_NUM_FRAMES,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
+import { inspectModelCache } from '../lib/hfCache.js';
+import { startHfDownloadStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
@@ -177,6 +180,51 @@ async function resolveLocalPythonHealth(py) {
 router.get('/models', (_req, res) => {
   res.json(listVideoModels());
 });
+
+// Per-model download status — see /api/image-gen/models/status for the
+// shape contract. We also surface the active text-encoder repo so the
+// video form can warn when the Gemma encoder isn't downloaded yet (a
+// surprise multi-GB pull on top of the model itself).
+router.get('/models/status', asyncHandler(async (_req, res) => {
+  // Text encoder is shared across all video renders. A registry entry with
+  // `localPath` (e.g. an LM Studio install) trumps the HF cache check, so
+  // surface both the repo-cache status and the resolved local path so the UI
+  // can distinguish "not downloaded" from "served from LM Studio".
+  const encoderRepo = getTextEncoderRepo();
+  const [models, encoderInspection] = await Promise.all([
+    Promise.all(listVideoModels().map(async (m) => {
+      const repo = repoForModel(m);
+      if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+      const { cached, sizeBytes } = await inspectModelCache(repo);
+      return { id: m.id, repo, cached, sizeBytes };
+    })),
+    isHfRepoId(encoderRepo) ? inspectModelCache(encoderRepo) : Promise.resolve(null),
+  ]);
+  const textEncoder = encoderInspection
+    ? { repo: encoderRepo, ...encoderInspection }
+    : { repo: encoderRepo, cached: true, sizeBytes: 0 };
+  res.json({ models, textEncoder });
+}));
+
+router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
+  const model = listVideoModels().find((m) => m.id === req.params.modelId);
+  if (!model) return res.status(404).json({ error: `Unknown video model: ${req.params.modelId}` });
+  const repo = repoForModel(model);
+  if (!repo) return res.status(400).json({ error: `Model "${model.id}" has no HuggingFace repo on file.`, code: 'NO_REPO_FOR_MODEL' });
+  await startHfDownloadStream({ req, res, repo });
+}));
+
+// Text encoder pre-fetch. The Gemma encoder is a separate ~7-25 GB pull from
+// the video model itself, so it gets its own button on the video form.
+router.get('/text-encoder/download', asyncHandler(async (req, res) => {
+  const repo = getTextEncoderRepo();
+  // Local-path encoders (LM Studio) are not downloadable — they're served
+  // off disk and the status endpoint already reports cached: true for them.
+  if (!isHfRepoId(repo)) {
+    return res.status(400).json({ error: 'Active text encoder is a local-path entry, not an HF repo.', code: 'NOT_DOWNLOADABLE' });
+  }
+  await startHfDownloadStream({ req, res, repo });
+}));
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // Pre-enqueue cleanup hook: every throw path below MUST drop ALL multipart

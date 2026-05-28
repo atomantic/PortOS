@@ -64,7 +64,7 @@ vi.mock('../lib/multipart.js', () => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
+  PATHS: { root: '/mock', data: '/mock/data', images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
   // Route awaits ensureDir before staging the upload; no-op for tests since
   // we mock copyFile too.
   ensureDir: vi.fn(async () => {}),

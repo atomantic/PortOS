@@ -39,6 +39,7 @@ import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
+import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
   getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
@@ -192,6 +193,12 @@ export default function ImageGen() {
   // existing AUTOMATIC1111 wiring; the local mode also feeds the same hook
   // via imageGenEvents so the same UI bits light up).
   const { progress: externalProgress, begin: beginGenerate, end: endGenerate, resume: resumeGenerate } = useImageGenProgress();
+
+  // Per-model cache status drives the inline "Available / Download" badge
+  // under the model picker. Only meaningful for the local backend (external
+  // SD-API and Codex don't use HF cache), so we conditionally pass the
+  // status through to ImageGenControls below.
+  const modelDownload = useModelDownloadStatus({ kind: 'image' });
 
   // selectedMode is null until settings load — fall back to status.mode
   // so the form doesn't flicker between defaults.
@@ -993,6 +1000,9 @@ export default function ImageGen() {
             seed={seed} onSeedChange={setSeed}
             showSeed
             disabled={statusLoading}
+            modelStatus={isLocalMode ? modelDownload.getStatus(modelId) : null}
+            onModelDownload={isLocalMode ? modelDownload.start : undefined}
+            onModelDownloadCancel={modelDownload.cancel}
           />
 
           {isLocalMode && (

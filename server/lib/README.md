@@ -79,6 +79,9 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |
 | `ansiStrip.js` | Streaming ANSI / control-byte stripper. |
 | `hfToken.js` | HuggingFace token resolution (settings > env > CLI). |
+| `hfCache.js` | HuggingFace Hub cache inspection (`inspectModelCache(repoId)` → `{cached,sizeBytes,snapshotPath}`, `isModelCached`, `getHfCacheRoot`). Drives the inline "Available / Download" badge on the image + video gen forms. |
+| `hfDownload.js` | `downloadHfRepo({repo,onEvent})` returning `{promise,kill}` — spawns `scripts/hf_download_repo.py` in the FLUX.2 venv (fallback: mflux pythonPath) and emits SSE-friendly stage/progress/complete events. Powers the inline "Download" button next to the model picker. |
+| `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})` — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
 
 ## File & I/O
 

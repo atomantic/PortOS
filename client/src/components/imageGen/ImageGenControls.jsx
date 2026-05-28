@@ -13,6 +13,7 @@ import { filterResolutions, resolveResolutionLabel } from '../../lib/imageGenRes
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -39,6 +40,14 @@ export default function ImageGenControls({
   // Optional column override — defaults to 2/3 like the Image Gen page.
   // Pass e.g. "grid-cols-2 sm:grid-cols-4" to fit a denser layout.
   className = 'grid grid-cols-2 sm:grid-cols-3 gap-3',
+  // Pre-download badge integration. `modelStatus` is the per-model entry from
+  // useModelDownloadStatus().getStatus(modelId); `onModelDownload` /
+  // `onModelDownloadCancel` are optional triggers. Omitting the props hides
+  // the badge — callers that don't care (Universe Builder batch render) opt
+  // out by simply not passing them.
+  modelStatus = null,
+  onModelDownload,
+  onModelDownloadCancel,
 }) {
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
   const isCodex = mode === IMAGE_GEN_MODE.CODEX;
@@ -71,6 +80,14 @@ export default function ImageGenControls({
           >
             {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
+          {onModelDownload && modelStatus && (
+            <ModelDownloadBadge
+              status={modelStatus}
+              onDownload={() => onModelDownload(modelId)}
+              onCancel={onModelDownloadCancel}
+              estimateLabel={deriveSizeEstimate(currentModel?.name)}
+            />
+          )}
         </div>
       )}
 

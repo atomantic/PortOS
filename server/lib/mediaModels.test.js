@@ -605,6 +605,29 @@ describe('mediaModels registry', () => {
     logSpy.mockRestore();
   });
 
+  it('isHfRepoId accepts canonical org/name shape and rejects local paths cross-platform', async () => {
+    const { isHfRepoId } = await import('./mediaModels.js');
+    expect(isHfRepoId('black-forest-labs/FLUX.1-dev')).toBe(true);
+    expect(isHfRepoId('mlx-community/gemma-3-12b-it-4bit')).toBe(true);
+    // POSIX / home-relative
+    expect(isHfRepoId('/usr/local/share/model')).toBe(false);
+    expect(isHfRepoId('~/.cache/huggingface/hub')).toBe(false);
+    // Windows drive paths — both backslash and forward-slash style.
+    // These would silently pass the old `includes('/')` check and trip the
+    // download endpoints into treating an LM Studio path as a Hub repo.
+    expect(isHfRepoId('C:/Users/foo/model')).toBe(false);
+    expect(isHfRepoId('C:\\Users\\foo\\model')).toBe(false);
+    expect(isHfRepoId('D:/lmstudio/models')).toBe(false);
+    // UNC and other backslash-bearing paths
+    expect(isHfRepoId('\\\\server\\share\\model')).toBe(false);
+    // Multi-slash shapes are paths, not repo ids
+    expect(isHfRepoId('org/name/subdir')).toBe(false);
+    // Empty / non-string / non-namespaced legacy bare names
+    expect(isHfRepoId('')).toBe(false);
+    expect(isHfRepoId(null)).toBe(false);
+    expect(isHfRepoId('bare-name')).toBe(false);
+  });
+
   it('does NOT auto-recover the drifted entry (warn loud, but trust the registry on disk)', async () => {
     // Same setup as the first drift test — confirm that the warning does
     // NOT cause normalizeRegistry to silently re-add the missing built-in.

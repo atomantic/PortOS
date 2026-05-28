@@ -30,6 +30,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useSseProgress` | Generic JSON-frame EventSource subscriber. | New SSE progress stream — start here, build on top. |
+| `useModelDownloadStatus` | Image/video model cache-status + SSE pre-download. | Surfacing "Available" vs "Download" badge inline in the gen form. |
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
