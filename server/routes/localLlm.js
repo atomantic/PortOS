@@ -15,6 +15,7 @@ import {
   localLlmInstallSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
+  localLlmUnloadSchema,
   localLlmMigrateSchema,
   localLlmInstallBackendSchema,
   localLlmOllamaServiceSchema,
@@ -201,9 +202,8 @@ router.get('/loaded', asyncHandler(async (req, res) => {
 // LM Studio's unload lives at POST /api/lmstudio/unload — we don't proxy
 // it here to keep each backend's quirks behind its own router.
 router.post('/unload', asyncHandler(async (req, res) => {
-  const { backend, modelId } = req.body || {}
+  const { backend, modelId } = validateRequest(localLlmUnloadSchema, req.body)
   if (backend !== 'ollama') return res.status(400).json({ error: 'backend must be "ollama" (use /api/lmstudio/unload for LM Studio)' })
-  if (typeof modelId !== 'string' || modelId.length === 0) return res.status(400).json({ error: 'modelId is required' })
   const result = await unloadOllamaModel(modelId)
   if (!result.unloaded) return res.status(502).json({ error: result.reason || 'unload failed', modelId })
   res.json({ success: true, ...result })

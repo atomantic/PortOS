@@ -23,6 +23,7 @@ import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
+import { hfTokenEnv } from '../../lib/hfToken.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -284,7 +285,15 @@ const buildWan22Args = ({ model, prompt, width, height, numFrames, steps, guidan
     '--seed', String(seed),
     '--output', outputPath,
   ];
-  if (mode === 'i2v' && sourceImagePath) args.push('--image', sourceImagePath);
+  if (model.mode === 'i2v') {
+    if (!sourceImagePath) {
+      throw new ServerError(
+        'Wan 2.2 i2v requires a source image — upload one before running this model.',
+        { status: 400, code: 'WAN22_I2V_REQUIRES_IMAGE' },
+      );
+    }
+    args.push('--image', sourceImagePath);
+  }
   return { bin: WAN22_VENV_PYTHON, args };
 };
 
@@ -578,7 +587,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
   // NOT unset the var — Node coerces it to the literal string "undefined" —
   // so build the env explicitly and `delete`.
-  const childEnv = { ...process.env };
+  // Merge HF_TOKEN/HF_HOME via hfTokenEnv() so the Wan 2.2 / HunyuanVideo
+  // python helpers can authenticate snapshot_download() against gated repos
+  // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
+  // a gated repo, but the merge is harmless when no token is configured.
+  const childEnv = { ...process.env, ...(await hfTokenEnv()) };
   delete childEnv.PYTHONPATH;
   const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;

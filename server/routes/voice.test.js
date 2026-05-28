@@ -17,6 +17,11 @@ vi.mock('../services/voice/bootstrap.js', () => ({
   verifyBinaries: vi.fn(),
   verifyModels: vi.fn(),
   downloadPiperVoice: vi.fn(),
+  // POST /api/voice/whisper imports these at module load — without the
+  // mock entries the destructured imports resolve to `undefined` and the
+  // route TypeErrors the first time it's hit.
+  startWhisper: vi.fn(),
+  stopWhisper: vi.fn(),
 }));
 vi.mock('../services/voice/tts.js', () => ({
   synthesize: vi.fn(),

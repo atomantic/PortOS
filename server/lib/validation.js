@@ -1104,6 +1104,11 @@ export const localLlmInstallSchema = z.object({
   modelId: localLlmModelIdSchema,
 });
 export const localLlmDeleteSchema = localLlmInstallSchema;
+// Memory-management unload: same `backend` + `modelId` shape as install/delete
+// so the validator catches the same set of malformed ids (no leading dash,
+// no control chars) — those reach Ollama via `/api/generate` body fields and
+// then echo into PortOS's emoji-prefixed unload log line.
+export const localLlmUnloadSchema = localLlmInstallSchema;
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
 // Migrate moves models from the OTHER backend onto `to` (bidirectional, never
 // flips the default marker). `mode` picks how the GGUF lands on disk: 'link'

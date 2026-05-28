@@ -435,6 +435,12 @@ async function getLoadedModels() {
  * Uses the documented `keep_alive: 0` trick — issuing any generate/chat
  * request with keep_alive=0 expires the model the moment the request
  * resolves. We send an empty prompt so no tokens are generated.
+ *
+ * Precondition: only fires the evict when the model is currently resident
+ * per `/api/ps`. Without the check, `/api/generate` against a non-loaded
+ * model triggers Ollama to LOAD it from disk (potentially many GB) just
+ * to immediately evict — a thrash/DoS-amplification footgun reachable
+ * from any LAN client once `/api/local-llm/unload` is wired.
  * @returns {Promise<{ unloaded: true, model: string } | { unloaded: false, reason: string }>}
  */
 async function unloadModel(modelName) {
@@ -444,7 +450,13 @@ async function unloadModel(modelName) {
   if (!(await checkOllamaAvailable())) {
     return { unloaded: false, reason: 'Ollama unreachable' }
   }
-  const body = { model: modelName, prompt: '', keep_alive: 0, stream: false }
+  const loaded = await getLoadedModels()
+  if (!loaded.some((m) => m.id === modelName || m.name === modelName)) {
+    return { unloaded: false, reason: 'not loaded' }
+  }
+  // Native fetch does NOT auto-stringify object bodies — pass JSON.stringify
+  // so the wire body is valid JSON, not "[object Object]".
+  const body = JSON.stringify({ model: modelName, prompt: '', keep_alive: 0, stream: false })
   const result = await ollamaRequest('/api/generate', { method: 'POST', body }).catch((err) => ({ _err: err }))
   if (result && result._err) {
     return { unloaded: false, reason: result._err.message || 'request failed' }

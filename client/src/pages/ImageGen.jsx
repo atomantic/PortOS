@@ -491,11 +491,12 @@ export default function ImageGen() {
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
 
   const refreshFlux2Status = useCallback((signal) => {
-    return fetch('/api/image-gen/setup/flux2-status', { signal })
+    const qs = modelId ? `?modelId=${encodeURIComponent(modelId)}` : '';
+    return fetch(`/api/image-gen/setup/flux2-status${qs}`, { signal })
       .then((r) => r.ok ? r.json() : null)
       .then((s) => { if (s) setFlux2Status(s); })
       .catch(() => {});
-  }, []);
+  }, [modelId]);
 
   const refreshHfTokenStatus = useCallback((signal) => {
     return fetch('/api/image-gen/setup/hf-token-status', { signal })

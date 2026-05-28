@@ -51,6 +51,14 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   extractEvaluationFrames: vi.fn(async () => []),
 }));
 
+// hfTokenEnv() resolves to {} when no token is configured; mocking here
+// avoids touching the real settings layer (which would await an unmocked
+// `getSettings()` chain and hang the spawn-mock-driven tests).
+vi.mock('../../lib/hfToken.js', () => ({
+  hfTokenEnv: vi.fn(async () => ({})),
+  getHfToken: vi.fn(async () => null),
+}));
+
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => true),
   statSync: vi.fn(() => ({ size: 1000 })),

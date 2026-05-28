@@ -37,7 +37,8 @@ import { findDuplicateUniverseGroups, findSameNameUniverses } from '../services/
 import { mergeUniverses } from '../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
-import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
+import { usesDiffusersRunner } from '../lib/runners.js';
 import { IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/modes.js';
 import { resolveImageCleaners } from '../services/imageGen/index.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
@@ -578,7 +579,7 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     const selectedModel = allModels.find((m) => m.id === body.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
-    if (selectedModel && !isFlux2(selectedModel) && !isZImage(selectedModel) && !isErnie(selectedModel) && !py) {
+    if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
       throw new ServerError(
         'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
         { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },

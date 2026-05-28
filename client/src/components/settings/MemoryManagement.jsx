@@ -12,10 +12,15 @@
 //   - Piper TTS — spawned per-synthesis, no persistent process
 //   - Browser / Codex / Claude Code workers — managed elsewhere, not memory-pressure relevant
 //
-// Polls every 5s while mounted. Errors surface via the default apiCore toast
-// (no custom catch), so a single layer wins per the project convention.
+// Polls every 5s while mounted. The component owns the toast layer via
+// useAsyncAction (for explicit user actions) and the per-call `.catch()`
+// fallbacks in `refresh()` (for poll failures, which must NOT toast — the
+// panel would otherwise spam an error toast every 5s during a transient
+// Ollama outage). Every API helper is called with `{ silent: true }` so
+// apiCore's default toast doesn't fire underneath; per the CLAUDE.md
+// "Silent vs. toasting API requests" rule, custom catch ⇒ silent: true.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Cpu, Mic, Volume2, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -23,6 +28,8 @@ import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { formatBytes } from '../../utils/formatters';
 import { getLoadedLlmModels, unloadOllamaModel } from '../../services/apiLocalLlm.js';
 import { getTtsStatus, unloadKokoroTts, controlWhisper, getVoiceStatus } from '../../services/apiVoice.js';
+
+const SILENT = { silent: true };
 
 const POLL_MS = 5000;
 
@@ -46,15 +53,24 @@ export default function MemoryManagement() {
   const [loadedOllama, setLoadedOllama] = useState([]);
   const [ttsState, setTtsState] = useState({ state: 'lazy', loadedKey: null });
   const [whisperRunning, setWhisperRunning] = useState(false);
+  const [sttEngine, setSttEngine] = useState('whisper');
   const [loading, setLoading] = useState(true);
   const [lastFetched, setLastFetched] = useState(0);
+  // Guards the polled setState calls — a late /voice/status response that
+  // resolves after unmount would otherwise call setState on a dead tree.
+  // Never reset to true: React 18 dev double-mount runs the cleanup once
+  // and only re-mounts the same component instance; the new instance gets
+  // its own ref.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const refresh = useCallback(async () => {
     const [llm, tts, voice] = await Promise.all([
-      getLoadedLlmModels().catch(() => ({ ollama: [] })),
-      getTtsStatus().catch(() => ({ kokoro: { state: 'lazy', loadedKey: null } })),
-      getVoiceStatus().catch(() => null),
+      getLoadedLlmModels(SILENT).catch(() => ({ ollama: [] })),
+      getTtsStatus(SILENT).catch(() => ({ kokoro: { state: 'lazy', loadedKey: null } })),
+      getVoiceStatus(SILENT).catch(() => null),
     ]);
+    if (!mountedRef.current) return;
     setLoadedOllama(Array.isArray(llm?.ollama) ? llm.ollama : []);
     setTtsState(tts?.kokoro || { state: 'lazy', loadedKey: null });
     // voice.services.whisper.ok is the "PM2 process responsive" probe in
@@ -62,6 +78,7 @@ export default function MemoryManagement() {
     // default to "not running" — false negatives just mean the Stop button
     // briefly hides, which the next poll corrects.
     setWhisperRunning(Boolean(voice?.services?.whisper?.ok));
+    setSttEngine(voice?.sttEngine || 'whisper');
     setLoading(false);
     setLastFetched(Date.now());
   }, []);
@@ -73,35 +90,42 @@ export default function MemoryManagement() {
   }, [refresh]);
 
   const [unloadModel, unloadingModel] = useAsyncAction(async (modelId) => {
-    await unloadOllamaModel(modelId);
+    await unloadOllamaModel(modelId, SILENT);
     toast.success(`Unloaded ${modelId}`);
     await refresh();
   });
   const [unloadKokoro, unloadingKokoro] = useAsyncAction(async () => {
-    const result = await unloadKokoroTts();
+    const result = await unloadKokoroTts(SILENT);
     toast.success(result?.unloaded ? 'Kokoro TTS unloaded' : 'Kokoro was not loaded');
     await refresh();
   });
   const [stopWhisper, stoppingWhisper] = useAsyncAction(async () => {
-    await controlWhisper('stop');
+    await controlWhisper('stop', SILENT);
     toast.success('Whisper stopped');
     await refresh();
   });
   const [startWhisper, startingWhisper] = useAsyncAction(async () => {
-    await controlWhisper('start');
+    await controlWhisper('start', SILENT);
     toast.success('Whisper started');
     await refresh();
   });
   const [freeAll, freeingAll] = useAsyncAction(async () => {
+    // Re-poll first — the optimistic UI's `loadedOllama` snapshot is up to
+    // POLL_MS old, and the ollama unload now requires the model to actually
+    // be resident (else returns `not loaded`). Without the refresh, a model
+    // that idle-evicted between the last poll and the click would still get
+    // an evict request, which is at best a no-op and at worst (before the
+    // residency check) re-loaded the model from disk.
+    await refresh();
     // Fan out in parallel — the operations don't depend on each other and
     // doing them serially would visibly stall on whisper's PM2-delete step.
     // Per-step errors get swallowed here because freeAll is the "best effort"
     // path; refresh() then shows what actually got freed. Per-step toasts
     // would also stack four-deep on success which is just noise.
     const results = await Promise.allSettled([
-      ...loadedOllama.map((m) => unloadOllamaModel(m.id)),
-      whisperRunning ? controlWhisper('stop') : Promise.resolve(),
-      ttsState.state !== 'lazy' ? unloadKokoroTts() : Promise.resolve(),
+      ...loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)),
+      whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
+      ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
     ]);
     const failed = results.filter((r) => r.status === 'rejected').length;
     if (failed) toast.error(`Freed most resources — ${failed} action(s) failed`);
@@ -223,7 +247,7 @@ export default function MemoryManagement() {
         </div>
       )}
 
-      {!whisperRunning && (
+      {!whisperRunning && sttEngine === 'whisper' && (
         <div className="px-3 py-2 border-t border-port-border/50 flex items-center gap-2 text-xs text-gray-500">
           <AlertTriangle className="w-3 h-3 text-port-warning shrink-0" />
           <span className="flex-1">Whisper is stopped — voice transcription is offline.</span>

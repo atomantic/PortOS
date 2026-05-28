@@ -23,7 +23,8 @@ import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '..
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
-import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
+import { usesDiffusersRunner } from '../lib/runners.js';
 import {
   REQUIRED_PACKAGES, detectPython, installPackages,
   createVenv, isAllowedPython, pipNameFor,
@@ -347,7 +348,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const selectedModel = allModels.find((m) => m.id === data.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
-    if (selectedModel && !isFlux2(selectedModel) && !isZImage(selectedModel) && !isErnie(selectedModel) && !py) {
+    if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
       throw new ServerError(
         'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
         { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
@@ -630,15 +631,27 @@ router.get('/setup/flux2-install', asyncHandler(async (req, res) => {
 // license hasn't been accepted (HF_TOKEN missing) and the runner is set up.
 // `venvInstalled` reflects functional health (binary AND packages import) —
 // a half-broken venv would otherwise hide the install banner forever.
-router.get('/setup/flux2-status', asyncHandler(async (_req, res) => {
+router.get('/setup/flux2-status', asyncHandler(async (req, res) => {
   const [token, healthy] = await Promise.all([getHfToken(), isFlux2VenvHealthy()]);
   const venvPython = resolveFlux2Python();
+  // The 9B (bf16) and 4B variants ship as separately-gated repos with
+  // distinct HF license URLs. Use the active model's `licenseUrl` when the
+  // client supplies a `modelId`; fall back to the 4B URL for callers that
+  // pre-date the multi-variant registry.
+  const FLUX2_DEFAULT_LICENSE = 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B';
+  let licenseUrl = FLUX2_DEFAULT_LICENSE;
+  if (typeof req.query?.modelId === 'string' && req.query.modelId.length > 0) {
+    const model = getImageModels().find((m) => m.id === req.query.modelId);
+    if (isFlux2(model) && typeof model?.licenseUrl === 'string' && model.licenseUrl.length > 0) {
+      licenseUrl = model.licenseUrl;
+    }
+  }
   res.json({
     hfTokenPresent: !!token,
     venvInstalled: healthy,
     venvPath: venvPython,
     expectedVenvPath: FLUX2_VENV_DEFAULT,
-    licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B',
+    licenseUrl,
   });
 }));
 

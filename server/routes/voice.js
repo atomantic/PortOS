@@ -255,17 +255,29 @@ router.post('/tts/unload', asyncHandler(async (_req, res) => {
 // weights for the duration. Start re-binds the PM2 process using current
 // voice.stt config. Distinct from /api/voice/config (which persists enabled
 // state) — this is a transient stop, voice.enabled stays true.
+const whisperActionSchema = z.object({
+  action: z.enum(['start', 'stop']),
+});
 router.post('/whisper', asyncHandler(async (req, res) => {
-  const action = (req.body?.action || '').toString();
-  if (action !== 'start' && action !== 'stop') {
-    return res.status(400).json({ error: 'action must be "start" or "stop"' });
+  const parsed = whisperActionSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    throw new ServerError(
+      `Invalid whisper payload: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
+      { status: 400, code: 'VALIDATION_ERROR' },
+    );
   }
+  const { action } = parsed.data;
   if (action === 'stop') {
     await stopWhisper();
+    // Drop the cached `services.whisper.ok` so the next /voice/status reflects
+    // the just-flipped PM2 state — without this the Memory Management panel
+    // re-polls and sees up to 3s of "still running" after a successful stop.
+    invalidateHealthCache();
     return res.json({ success: true, action: 'stop' });
   }
   const cfg = await getVoiceConfig();
   const result = await startWhisper(cfg);
+  invalidateHealthCache();
   res.json({ success: true, action: 'start', ...result });
 }));
 
