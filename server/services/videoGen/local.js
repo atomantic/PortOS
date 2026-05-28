@@ -57,6 +57,14 @@ const IS_WIN = process.platform === 'win32';
 // Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
 
+// "Bring-your-own-venv" video runtimes — runtimes that resolve their own
+// Python interpreter inside buildArgs (LTX2_VENV_PYTHON / WAN22_VENV_PYTHON
+// / HUNYUAN_VENV_PYTHON), so the legacy mlx_video `settings.imageGen.local.
+// pythonPath` is irrelevant. Used by BOTH services/videoGen/local.js and
+// routes/videoGen.js to decide when to enforce the pythonPath gate — keep
+// the two in sync via this single export.
+export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(['ltx2', 'wan22', 'hunyuan']));
+
 export const listVideoModels = () => getVideoModels();
 
 export const defaultVideoModelId = () => getDefaultVideoModelId();
@@ -418,9 +426,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // actually uses it. ltx2/wan22/hunyuan resolve their own venv path inside
   // buildArgs — gating them on the unrelated mlx_video setting locks users
   // out of the runtimes they just installed via INSTALL_WAN22 / INSTALL_LTX2
-  // / INSTALL_HUNYUAN. Routes/videoGen.js mirrors this allowlist.
-  const BYOV_RUNTIMES = new Set(['ltx2', 'wan22', 'hunyuan']);
-  if (!pythonPath && !BYOV_RUNTIMES.has(model.runtime)) {
+  // / INSTALL_HUNYUAN. Routes/videoGen.js reads the same module-level set.
+  if (!pythonPath && !BYOV_VIDEO_RUNTIMES.has(model.runtime)) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   }
   // macOS/mlx_video requires a HuggingFace repo id — Windows doesn't (the

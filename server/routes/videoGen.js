@@ -21,6 +21,7 @@ import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import {
   listVideoModels,
   defaultVideoModelId,
+  BYOV_VIDEO_RUNTIMES,
   loadHistory,
   deleteHistoryItem,
   setHistoryItemHidden,
@@ -218,9 +219,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // inside buildArgs), so they must NOT be blocked by the legacy mlx_video
   // pythonPath setting. Without this gate, the queue would happily accept
   // a job that's known to fail and only surface it asynchronously on SSE,
-  // polluting the persisted queue with a doomed entry.
-  const BYOV_RUNTIMES = new Set(['ltx2', 'wan22', 'hunyuan']);
-  const runtimeBringsOwnVenv = effectiveModel && BYOV_RUNTIMES.has(effectiveModel.runtime);
+  // polluting the persisted queue with a doomed entry. The allowlist is
+  // shared with services/videoGen/local.js so the route and worker stay
+  // in sync.
+  const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
   if (!pythonPath && !runtimeBringsOwnVenv) {
     await cleanupTempUploads();
     throw new ServerError(

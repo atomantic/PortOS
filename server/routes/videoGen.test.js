@@ -29,6 +29,11 @@ vi.mock('../services/videoGen/local.js', () => ({
   // Mirrors the real export — keeps the route's keyframe-range check in
   // sync with whatever the service actually defaults to.
   DEFAULT_NUM_FRAMES: 121,
+  // The route gates pythonPath enforcement on this allowlist (ltx2/wan22/
+  // hunyuan bring their own venv). Mirror the real export so the
+  // "accepts BYOV-runtime when pythonPath missing" case passes and the
+  // negative case (legacy mlx_video model) still 400s.
+  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'wan22', 'hunyuan']),
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the
