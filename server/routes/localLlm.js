@@ -205,7 +205,17 @@ router.post('/unload', asyncHandler(async (req, res) => {
   const { backend, modelId } = validateRequest(localLlmUnloadSchema, req.body)
   if (backend !== 'ollama') return res.status(400).json({ error: 'backend must be "ollama" (use /api/lmstudio/unload for LM Studio)' })
   const result = await unloadOllamaModel(modelId)
-  if (!result.unloaded) return res.status(502).json({ error: result.reason || 'unload failed', modelId })
+  // "not loaded" is an idempotent no-op (the model already isn't resident
+  // — between the panel's last poll and this click it may have hit Ollama's
+  // keep_alive idle timer). Return 200 so the client sees a clean outcome
+  // and doesn't surface a red error toast. 502 stays reserved for genuine
+  // failures (Ollama unreachable / request errored / non-2xx from /api/generate).
+  if (!result.unloaded) {
+    if (result.reason === 'not loaded') {
+      return res.json({ success: true, unloaded: false, reason: result.reason, modelId })
+    }
+    return res.status(502).json({ error: result.reason || 'unload failed', modelId })
+  }
   res.json({ success: true, ...result })
 }))
 

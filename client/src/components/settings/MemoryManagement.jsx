@@ -64,23 +64,34 @@ export default function MemoryManagement() {
   // would otherwise keep the panel stuck on "Loading memory status…" in dev).
   const mountedRef = useMounted();
 
+  // Returns the fresh snapshot so callers (notably freeAll) can act on the
+  // values without waiting for React's async setState to flush — reading
+  // component state immediately after `await refresh()` would still see
+  // the prior poll's snapshot.
   const refresh = useCallback(async () => {
     const [llm, tts, voice] = await Promise.all([
       getLoadedLlmModels(SILENT).catch(() => ({ ollama: [] })),
       getTtsStatus(SILENT).catch(() => ({ kokoro: { state: 'lazy', loadedKey: null } })),
       getVoiceStatus(SILENT).catch(() => null),
     ]);
-    if (!mountedRef.current) return;
-    setLoadedOllama(Array.isArray(llm?.ollama) ? llm.ollama : []);
-    setTtsState(tts?.kokoro || { state: 'lazy', loadedKey: null });
-    // voice.services.whisper.ok is the "PM2 process responsive" probe in
-    // checkAll(). When the service block is missing (status fetch failed) we
-    // default to "not running" — false negatives just mean the Stop button
-    // briefly hides, which the next poll corrects.
-    setWhisperRunning(Boolean(voice?.services?.whisper?.ok));
-    setSttEngine(voice?.sttEngine || 'whisper');
+    const snapshot = {
+      loadedOllama: Array.isArray(llm?.ollama) ? llm.ollama : [],
+      ttsState: tts?.kokoro || { state: 'lazy', loadedKey: null },
+      // voice.services.whisper.ok is the "PM2 process responsive" probe in
+      // checkAll(). When the service block is missing (status fetch failed)
+      // we default to "not running" — false negatives just mean the Stop
+      // button briefly hides, which the next poll corrects.
+      whisperRunning: Boolean(voice?.services?.whisper?.ok),
+      sttEngine: voice?.sttEngine || 'whisper',
+    };
+    if (!mountedRef.current) return snapshot;
+    setLoadedOllama(snapshot.loadedOllama);
+    setTtsState(snapshot.ttsState);
+    setWhisperRunning(snapshot.whisperRunning);
+    setSttEngine(snapshot.sttEngine);
     setLoading(false);
     setLastFetched(Date.now());
+    return snapshot;
   }, []);
 
   useEffect(() => {
@@ -112,20 +123,20 @@ export default function MemoryManagement() {
   const [freeAll, freeingAll] = useAsyncAction(async () => {
     // Re-poll first — the optimistic UI's `loadedOllama` snapshot is up to
     // POLL_MS old, and the ollama unload now requires the model to actually
-    // be resident (else returns `not loaded`). Without the refresh, a model
-    // that idle-evicted between the last poll and the click would still get
-    // an evict request, which is at best a no-op and at worst (before the
-    // residency check) re-loaded the model from disk.
-    await refresh();
+    // be resident (else returns `not loaded`). Read from the returned
+    // snapshot rather than component state — React's async setState in
+    // refresh() won't have flushed by the time `loadedOllama` etc. is
+    // referenced in this same closure.
+    const fresh = (await refresh()) || { loadedOllama: [], whisperRunning: false, ttsState: { state: 'lazy' } };
     // Fan out in parallel — the operations don't depend on each other and
     // doing them serially would visibly stall on whisper's PM2-delete step.
     // Per-step errors get swallowed here because freeAll is the "best effort"
-    // path; refresh() then shows what actually got freed. Per-step toasts
-    // would also stack four-deep on success which is just noise.
+    // path; the trailing refresh() then shows what actually got freed.
+    // Per-step toasts would also stack four-deep on success which is noise.
     const results = await Promise.allSettled([
-      ...loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)),
-      whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
-      ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
+      ...fresh.loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)),
+      fresh.whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
+      fresh.ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
     ]);
     const failed = results.filter((r) => r.status === 'rejected').length;
     if (failed) toast.error(`Freed most resources — ${failed} action(s) failed`);
