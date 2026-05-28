@@ -78,3 +78,19 @@ export const readyState = () => {
   return loaded ? 'loaded' : 'loading';
 };
 export const isReady = () => loaded;
+export const loadedModelKey = () => loadedKey;
+
+// Drop the cached TTS instance so its ONNX weights can be GC'd. Next
+// synthesizeKokoro() call will pay the ~2–3s cold-start tax. Idempotent —
+// safe to call when nothing is loaded.
+//
+// Surface the post-unload state so the API caller can tell the difference
+// between "was loaded, now released" and "wasn't loaded to begin with".
+export const unloadKokoro = () => {
+  const wasLoaded = modelPromise !== null;
+  modelPromise = null;
+  loadedKey = null;
+  loaded = false;
+  if (wasLoaded) console.log('🧹 kokoro: unloaded (next synthesis will reload)');
+  return { unloaded: wasLoaded };
+};

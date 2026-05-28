@@ -40,3 +40,14 @@ export const switchLocalLlmBackend = (to) =>
 // 'copy' makes an independent duplicate. Never changes the default backend.
 export const migrateLocalLlmBackend = (to, mode = 'link') =>
   request('/local-llm/migrate', { method: 'POST', body: JSON.stringify({ to, mode }) });
+
+// Memory-management — models currently resident in VRAM/unified memory.
+// Used by the Memory Management panel to show what's eating space before
+// kicking off a big diffusion render.
+export const getLoadedLlmModels = () => request('/local-llm/loaded');
+
+// Force Ollama to evict a model immediately. LM Studio has its own
+// /api/lmstudio/unload endpoint (see apiCore default export usage in
+// LocalLlmTab) — we don't proxy it through this module.
+export const unloadOllamaModel = (modelId) =>
+  request('/local-llm/unload', { method: 'POST', body: JSON.stringify({ backend: 'ollama', modelId }) });

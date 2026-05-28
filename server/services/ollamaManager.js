@@ -412,6 +412,48 @@ async function getVersion() {
 }
 
 /**
+ * List models currently loaded into VRAM/unified memory (Ollama's `/api/ps`).
+ * Distinct from getInstalledModels(): a model on disk doesn't occupy memory
+ * until it's referenced by a request.
+ * @returns {Promise<Array<{ id, name, size, sizeVram, expiresAt }>>}
+ */
+async function getLoadedModels() {
+  if (!(await checkOllamaAvailable())) return []
+  const data = await ollamaRequest('/api/ps').catch(() => null)
+  if (!Array.isArray(data?.models)) return []
+  return data.models.map((m) => ({
+    id: m.name || m.model,
+    name: m.name || m.model,
+    size: m.size ?? null,
+    sizeVram: m.size_vram ?? null,
+    expiresAt: m.expires_at || null
+  }))
+}
+
+/**
+ * Force Ollama to evict a specific model from memory immediately.
+ * Uses the documented `keep_alive: 0` trick — issuing any generate/chat
+ * request with keep_alive=0 expires the model the moment the request
+ * resolves. We send an empty prompt so no tokens are generated.
+ * @returns {Promise<{ unloaded: true, model: string } | { unloaded: false, reason: string }>}
+ */
+async function unloadModel(modelName) {
+  if (typeof modelName !== 'string' || modelName.length === 0) {
+    return { unloaded: false, reason: 'missing model name' }
+  }
+  if (!(await checkOllamaAvailable())) {
+    return { unloaded: false, reason: 'Ollama unreachable' }
+  }
+  const body = { model: modelName, prompt: '', keep_alive: 0, stream: false }
+  const result = await ollamaRequest('/api/generate', { method: 'POST', body }).catch((err) => ({ _err: err }))
+  if (result && result._err) {
+    return { unloaded: false, reason: result._err.message || 'request failed' }
+  }
+  console.log(`🧹 ollama: unloaded ${modelName} (keep_alive=0)`)
+  return { unloaded: true, model: modelName }
+}
+
+/**
  * Pull a model, streaming progress. Resolves once the pull finishes.
  * During a transient-error backoff the callback fires with `retrying: true`
  * (and `percent: null`) so the UI can show a "retrying" banner instead of stalling.
@@ -735,6 +777,8 @@ async function getStatus(forceRefresh = false) {
 
 export {
   getInstalledModels,
+  getLoadedModels,
+  unloadModel,
   pullModel,
   deleteModel,
   getStatus,

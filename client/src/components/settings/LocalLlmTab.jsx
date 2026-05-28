@@ -8,6 +8,7 @@ import {
   deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService
 } from '../../services/api';
 import socket from '../../services/socket';
+import MemoryManagement from './MemoryManagement.jsx';
 
 const BACKENDS = [
   { id: 'ollama', label: 'Ollama', icon: Cpu },
@@ -420,6 +421,7 @@ export function LocalLlmTab() {
 
   return (
     <div className="space-y-4">
+      <MemoryManagement />
       {/* Backends — status + switch/migrate */}
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between">

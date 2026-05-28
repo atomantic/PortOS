@@ -16,3 +16,9 @@ export const testTts = (text, voice, engine) => {
   if (engine) body.engine = engine;
   return api.post('/voice/test', body, { responseType: 'arraybuffer', silent: true });
 };
+
+// Memory-management — Kokoro residency + unload, Whisper transient stop/start.
+// See MemoryManagement.jsx for the only consumer.
+export const getTtsStatus = () => api.get('/voice/tts/status');
+export const unloadKokoroTts = () => api.post('/voice/tts/unload', {});
+export const controlWhisper = (action) => api.post('/voice/whisper', { action });
