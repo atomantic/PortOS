@@ -16,6 +16,12 @@ export const BUCKET_COLORS = {
 
 export const BUCKET_COLOR_KEYS = Object.keys(BUCKET_COLORS);
 
+// Drag-and-drop payload types — shared so a link dragged from the list or
+// from another bucket, and a bucket dragged for reordering, are recognized
+// by any drop target regardless of which component initiated the drag.
+export const LINK_DND_TYPE = 'text/x-brain-link';
+export const BUCKET_DND_TYPE = 'text/x-brain-bucket';
+
 export function bucketColor(key) {
   return BUCKET_COLORS[key] || BUCKET_COLORS.accent;
 }

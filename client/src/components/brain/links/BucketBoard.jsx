@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { Plus, FolderPlus, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
@@ -7,13 +7,14 @@ import BucketCard from './BucketCard';
 /**
  * The bucket board: a responsive grid of bucket cards plus a "new bucket"
  * affordance. The bucket collection + links (the single source of truth) live
- * in the parent LinksTab and flow in via props; the board owns drag-and-drop.
+ * in the parent LinksTab and flow in via props. Drag-and-drop is carried via
+ * dataTransfer (link id / bucket id) so a link dragged from the list, a chip
+ * dragged from another bucket, and a bucket header dragged to reorder all
+ * resolve the same way regardless of which component started the drag.
  */
 export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, onAddLinkToBucket, onBucketDeleted }) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  const draggedLink = useRef(null);
-  const draggedBucket = useRef(null);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -50,24 +51,21 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
     }
   }, [onBucketDeleted, setBuckets]);
 
-  // --- Drag: move a chip into a bucket ---
-  const handleDropChip = useCallback((bucketId) => {
-    const link = draggedLink.current;
-    draggedLink.current = null;
+  // --- Drag: move a link (from the list or another bucket) into a bucket ---
+  const handleDropLink = useCallback((linkId, bucketId) => {
+    const link = links.find(l => l.id === linkId);
     if (link && link.bucketId !== bucketId) {
       onAssignLink?.(link, bucketId);
     }
-  }, [onAssignLink]);
+  }, [links, onAssignLink]);
 
   // --- Drag: reorder buckets ---
-  const handleReorder = useCallback((targetBucket) => {
-    const dragged = draggedBucket.current;
-    draggedBucket.current = null;
-    if (!dragged || dragged.id === targetBucket.id) return;
+  const handleReorder = useCallback((draggedId, targetBucket) => {
+    if (!draggedId || draggedId === targetBucket.id) return;
 
     setBuckets(prev => {
       const ids = prev.map(b => b.id);
-      const from = ids.indexOf(dragged.id);
+      const from = ids.indexOf(draggedId);
       const to = ids.indexOf(targetBucket.id);
       if (from === -1 || to === -1) return prev;
       const next = [...prev];
@@ -96,12 +94,8 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
             onDelete={handleDelete}
             onAddLink={onAddLinkToBucket}
             onRemoveLink={(link) => onAssignLink?.(link, null)}
-            onChipDragStart={(link) => { draggedLink.current = link; }}
-            onChipDragEnd={() => { draggedLink.current = null; }}
-            onDropChip={handleDropChip}
-            onHeaderDragStart={(b) => { draggedBucket.current = b; }}
-            onHeaderDragEnd={() => { draggedBucket.current = null; }}
-            onHeaderDropReorder={handleReorder}
+            onDropLink={(linkId) => handleDropLink(linkId, bucket.id)}
+            onReorderBucket={(draggedId) => handleReorder(draggedId, bucket)}
           />
         ))}
 

@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Plus, Edit2, Trash2, Save, X, Check, GripVertical } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import LinkChip from './LinkChip';
-import { bucketColor, BUCKET_COLORS, BUCKET_COLOR_KEYS } from './bucketColors';
+import { bucketColor, BUCKET_COLORS, BUCKET_COLOR_KEYS, LINK_DND_TYPE, BUCKET_DND_TYPE } from './bucketColors';
 
 /**
  * A single bucket (bookmark group): colored header with inline edit/delete,
  * a grid of link chips, and an inline "add URL" affordance. Acts as a drop
- * target so links can be dragged in from other buckets.
+ * target so a link can be dragged in (from the list or another bucket) and
+ * so buckets can be reordered by dragging their headers.
  */
 export default function BucketCard({
   bucket,
@@ -16,12 +17,8 @@ export default function BucketCard({
   onDelete,
   onAddLink,
   onRemoveLink,
-  onChipDragStart,
-  onChipDragEnd,
-  onDropChip,
-  onHeaderDragStart,
-  onHeaderDragEnd,
-  onHeaderDropReorder
+  onDropLink,
+  onReorderBucket
 }) {
   const formFromBucket = () => ({ name: bucket.name, color: bucket.color, icon: bucket.icon || '' });
   const [editing, setEditing] = useState(false);
@@ -65,8 +62,10 @@ export default function BucketCard({
       onDrop={(e) => {
         e.preventDefault();
         setDropActive(false);
-        onDropChip?.(bucket.id);
-        onHeaderDropReorder?.(bucket);
+        const linkId = e.dataTransfer.getData(LINK_DND_TYPE);
+        if (linkId) { onDropLink?.(linkId); return; }
+        const draggedBucketId = e.dataTransfer.getData(BUCKET_DND_TYPE);
+        if (draggedBucketId) onReorderBucket?.(draggedBucketId);
       }}
     >
       {/* Header */}
@@ -126,12 +125,14 @@ export default function BucketCard({
         </div>
       ) : (
         <div
-          className={`flex items-center gap-2 px-3 py-2 border-b ${colors.header}`}
+          className={`flex items-center gap-2 px-3 py-2 border-b cursor-grab ${colors.header}`}
           draggable
-          onDragStart={() => onHeaderDragStart?.(bucket)}
-          onDragEnd={onHeaderDragEnd}
+          onDragStart={(e) => {
+            e.dataTransfer.setData(BUCKET_DND_TYPE, bucket.id);
+            e.dataTransfer.effectAllowed = 'move';
+          }}
         >
-          <GripVertical size={14} className="shrink-0 text-gray-500 cursor-grab" />
+          <GripVertical size={14} className="shrink-0 text-gray-500" />
           {bucket.icon && <span className="shrink-0 text-base leading-none">{bucket.icon}</span>}
           <h3 className={`font-medium truncate flex-1 ${colors.text}`}>{bucket.name}</h3>
           <span className="text-xs text-gray-500">{links.length}</span>
@@ -182,8 +183,6 @@ export default function BucketCard({
             link={link}
             onRemove={onRemoveLink}
             draggable
-            onDragStart={() => onChipDragStart?.(link)}
-            onDragEnd={onChipDragEnd}
           />
         ))}
       </div>

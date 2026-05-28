@@ -670,6 +670,49 @@ export const getImageModels = () => {
   return (reg.image || []).filter((m) => !platformBroken(m.broken));
 };
 
+// Map a registry entry to the HuggingFace repo id whose weights need to be
+// resident on disk before generation can run. Used by the download-status
+// badge on the image/video gen forms.
+//
+// Most entries already carry `repo` directly. mflux's legacy `dev` / `schnell`
+// ids predate the field and resolve to the canonical Black Forest Labs repos
+// at runtime via the `mflux-generate` CLI — hardcode those two so the badge
+// can probe their HF cache the same way as every other model.
+const MFLUX_LEGACY_REPOS = {
+  dev: 'black-forest-labs/FLUX.1-dev',
+  schnell: 'black-forest-labs/FLUX.1-schnell',
+};
+
+export const repoForModel = (model) => {
+  if (!model || typeof model !== 'object') return null;
+  if (isNonEmptyString(model.repo)) return model.repo;
+  if (MFLUX_LEGACY_REPOS[model.id]) return MFLUX_LEGACY_REPOS[model.id];
+  return null;
+};
+
+// `getTextEncoderRepo()` can return either an HF repo id (`org/name`) or a
+// resolved local filesystem path when the registry entry has a `localPath`
+// override. Only `org/name` is a valid input to HF-cache inspection /
+// download endpoints.
+//
+// Reject local-path shapes across platforms:
+//  - POSIX absolute / home-relative: `/foo/bar`, `~/foo`
+//  - Windows drive paths (both backslash and forward-slash style): `C:\…`,
+//    `C:/Users/…` — without this check, a Windows install with a
+//    forward-slash-style localPath text encoder would be misclassified as
+//    an HF repo, triggering bogus cache inspection / download requests.
+//  - Windows UNC paths: `\\server\share\…`
+//  - Any path containing a backslash (Windows separator)
+// Then require exactly one `/` separator — standard HF repo ids are the
+// `org/name` shape; zero (`legacy-bare-name`) and multiple (a path) are not.
+export const isHfRepoId = (value) => {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (value.startsWith('/') || value.startsWith('~')) return false;
+  if (value.includes('\\')) return false;
+  if (/^[A-Za-z]:/.test(value)) return false;
+  return (value.match(/\//g) || []).length === 1;
+};
+
 // Resolve the active text encoder to a path mlx_video can pass via
 // --text-encoder-repo. Prefers `localPath` (e.g. an existing LM Studio
 // install) when it exists; otherwise returns the HF repo id which mlx_video

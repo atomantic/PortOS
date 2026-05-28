@@ -44,6 +44,8 @@ import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import ModelSelect from '../components/ModelSelect';
+import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
+import { useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID } from '../hooks/useModelDownloadStatus';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -469,6 +471,20 @@ export default function VideoGen() {
   }, [modelId, models, status?.defaultModel]);
 
   const currentModel = models.find((m) => m.id === modelId);
+
+  // Inline cache-status badge for the picked video model + the active text
+  // encoder (a separate ~7-25 GB HF pull). Drives the "Available" / "Download"
+  // affordance under the Model select, so users learn about the multi-GB
+  // pull before hitting Render.
+  const modelDownload = useModelDownloadStatus({ kind: 'video' });
+  const modelStatus = modelId ? modelDownload.getStatus(modelId) : null;
+  const textEncoderInfo = modelDownload.extra.textEncoder || null;
+  const textEncoderStatus = textEncoderInfo
+    ? (modelDownload.activeModelId === TEXT_ENCODER_DOWNLOAD_ID
+      ? { ...textEncoderInfo, downloading: true, progress: modelDownload.progress }
+      : textEncoderInfo)
+    : null;
+
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
@@ -1204,6 +1220,24 @@ export default function VideoGen() {
                   value={modelId}
                   onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidanceScale(''); }}
                 />
+                {modelStatus && (
+                  <ModelDownloadBadge
+                    status={modelStatus}
+                    onDownload={() => modelDownload.start(modelId)}
+                    onCancel={modelDownload.cancel}
+                    estimateLabel={deriveSizeEstimate(currentModel?.name)}
+                  />
+                )}
+                {textEncoderStatus && textEncoderStatus.cached === false && (
+                  <div className="mt-1">
+                    <p className="text-[10px] text-gray-500">Text encoder ({textEncoderStatus.repo}) is also required:</p>
+                    <ModelDownloadBadge
+                      status={textEncoderStatus}
+                      onDownload={() => modelDownload.start(TEXT_ENCODER_DOWNLOAD_ID)}
+                      onCancel={modelDownload.cancel}
+                    />
+                  </div>
+                )}
               </div>
             )}
 

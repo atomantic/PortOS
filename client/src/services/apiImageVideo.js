@@ -4,6 +4,9 @@ import { request } from './apiCore.js';
 // generateImage / getImageGenStatus / generateAvatar live in apiSystem.js for
 // backward compatibility with existing call sites.
 export const listImageModels = () => request('/image-gen/models');
+// Per-model download status: `[{ id, repo, cached, sizeBytes }]`. Drives the
+// inline Available/Download badge on the image gen form.
+export const getImageModelStatuses = () => request('/image-gen/models/status', { silent: true });
 export const listLoras = () => request('/image-gen/loras');
 export const listImageGallery = () => request('/image-gen/gallery');
 export const getActiveImageJob = () => request('/image-gen/active');
@@ -36,6 +39,10 @@ export const clearHfToken = () => request('/image-gen/setup/hf-token', { method:
 // Video gen
 export const getVideoGenStatus = () => request('/video-gen/status');
 export const listVideoModels = () => request('/video-gen/models');
+// `{ models: [...], textEncoder: { repo, cached, sizeBytes } }`. Same shape
+// contract as the image variant + a text-encoder block since the active
+// encoder is a separate multi-GB pull.
+export const getVideoModelStatuses = () => request('/video-gen/models/status', { silent: true });
 export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST' });
 export const listVideoHistory = () => request('/video-gen/history');
 export const deleteVideoHistoryItem = (id) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE' });

@@ -19,13 +19,15 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
-  FolderClosed
+  FolderClosed,
+  GripVertical
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import BucketBoard from '../links/BucketBoard';
+import { LINK_DND_TYPE } from '../links/bucketColors';
 
 /** Normalize a user-entered URL the way the quick-add form does. */
 function normalizeUrl(raw) {
@@ -443,13 +445,23 @@ export default function LinksTab({ onRefresh }) {
 
       {/* Links list */}
       <div className="space-y-3">
-        {visibleLinks.map(link => (
+        {visibleLinks.map(link => {
+          const isEditing = editingId === link.id;
+          return (
           <div
             key={link.id}
-            className="p-4 bg-port-card border border-port-border rounded-lg"
+            draggable={!isEditing}
+            onDragStart={!isEditing ? (e) => {
+              e.dataTransfer.setData(LINK_DND_TYPE, link.id);
+              e.dataTransfer.effectAllowed = 'move';
+            } : undefined}
+            className={`p-4 bg-port-card border border-port-border rounded-lg ${isEditing ? '' : 'cursor-grab'}`}
           >
             {/* Header row */}
             <div className="flex items-start justify-between gap-3 mb-2">
+              {!isEditing && (
+                <GripVertical size={16} className="shrink-0 mt-0.5 text-gray-600" title="Drag to a bucket" />
+              )}
               {editingId === link.id ? (
                 <div className="flex-1 space-y-2">
                   <div>
@@ -535,6 +547,7 @@ export default function LinksTab({ onRefresh }) {
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      draggable={false}
                       className="text-sm text-gray-400 hover:text-port-accent truncate block"
                     >
                       {link.url}
@@ -563,6 +576,7 @@ export default function LinksTab({ onRefresh }) {
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      draggable={false}
                       className="p-1.5 text-gray-400 hover:text-port-accent transition-colors"
                       title="Open in new tab"
                     >
@@ -722,7 +736,8 @@ export default function LinksTab({ onRefresh }) {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {visibleLinks.length === 0 && query && (
           <div className="text-center py-12 text-gray-500">
