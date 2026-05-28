@@ -146,6 +146,23 @@ describe('storyBuilder — integrity / staleness', () => {
     const view = await sb.getStorySessionView(s.id);
     expect(view.staleSteps).toEqual([]);
   });
+
+  it('flags a locked universeAesthetic stale when the idea step re-runs with a new starterPrompt', async () => {
+    // Regression for the codex review finding: universeAesthetic's upstream
+    // hash must track universe.starterPrompt (an idea-step OUTPUT that the
+    // aesthetic expand reads), not just session.seedIdea. Without this,
+    // re-running idea expand with the same seed but a non-deterministic LLM
+    // result silently keeps a locked aesthetic step un-flagged.
+    const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
+    await universeSvc.updateUniverse(s.universeId, { starterPrompt: 'starter v1' });
+    await sb.lockStep(s.id, 'universeAesthetic');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('universeAesthetic');
+    // Mutate starterPrompt — same seedIdea but a fresh expansion.
+    await universeSvc.updateUniverse(s.universeId, { starterPrompt: 'starter v2' });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('universeAesthetic');
+  });
 });
 
 describe('storyBuilder — generate delegation', () => {
@@ -200,5 +217,26 @@ describe('storyBuilder — generate delegation', () => {
       expect.any(String), expect.any(Object),
       expect.objectContaining({ providerOverride: 'override-z', modelOverride: 'override-m' }),
     );
+  });
+
+  it('generateStep(idea) skips writing a locked universe.logline', async () => {
+    // Regression for the codex review finding: locking the aesthetic step
+    // sets universe.locked.{logline,premise,...}=true, but updateUniverse
+    // doesn't enforce those locks on scalar writes — so a re-run of the
+    // idea step would otherwise silently clobber the locked logline.
+    const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
+    await universeSvc.updateUniverse(s.universeId, {
+      logline: 'frozen logline',
+      locked: { logline: true },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { expandedIdea: 'new starter prose', logline: 'replacement logline that must NOT land' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    await sb.generateStep(s.id, 'idea');
+    const universe = await universeSvc.getUniverse(s.universeId);
+    expect(universe.logline).toBe('frozen logline');
+    // starterPrompt is NOT locked by the aesthetic step's keys, so this DID land.
+    expect(universe.starterPrompt).toBe('new starter prose');
   });
 });

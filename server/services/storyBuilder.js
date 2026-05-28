@@ -266,10 +266,22 @@ function buildUpstreamInputs(session, universe, series) {
   const arc = projectArc(series);
   const readerMap = series?.arc?.readerMap || null;
   const cast = projectCast(universe);
+  // The idea step expands seedIdea into universe.starterPrompt + series
+  // logline/premise. Those are non-deterministic LLM outputs, so seedIdea
+  // alone is NOT a sufficient proxy for "idea-step content unchanged" — re-
+  // running idea expand can produce a different starterPrompt with the same
+  // seed, and downstream steps (aesthetic, plotArc) consume those outputs.
+  // Including them in the downstream hashes flags those locked steps stale
+  // when idea is regenerated.
+  const ideaOutputs = {
+    starterPrompt: universe?.starterPrompt || '',
+    seriesLogline: series?.logline || '',
+    seriesPremise: series?.premise || '',
+  };
   return {
     idea: { intakeMode: session.intakeMode, seedIdea: session.seedIdea || '' },
-    universeAesthetic: { seedIdea: session.seedIdea || '' },
-    plotArc: { aesthetic, seedIdea: session.seedIdea || '' },
+    universeAesthetic: { seedIdea: session.seedIdea || '', ideaOutputs },
+    plotArc: { aesthetic, seedIdea: session.seedIdea || '', ideaOutputs },
     readerMap: { arc },
     characters: { readerMap, arcSummary: arc.summary, aesthetic },
     issues: { arc, readerMap, cast },
@@ -438,8 +450,16 @@ export async function generateStep(id, stepId, options = {}) {
     const expandedIdea = isStr(content?.expandedIdea) ? content.expandedIdea.trim() : '';
     const logline = isStr(content?.logline) ? content.logline.trim() : '';
     // Seed the universe starter + series premise/logline from the expansion.
+    // Honor downstream lock keys: locking the universeAesthetic step sets
+    // universe.locked.{logline,...} via applyUnderlyingLock, but
+    // updateUniverse doesn't enforce those locks on scalar writes — so a
+    // re-run of the idea step would otherwise silently clobber a locked
+    // logline. Skip any scalar field the user has explicitly locked.
     if (session.universeId && expandedIdea) {
-      await updateUniverse(session.universeId, { starterPrompt: expandedIdea, ...(logline ? { logline } : {}) });
+      const universe = await getUniverse(session.universeId);
+      const patch = { starterPrompt: expandedIdea };
+      if (logline && !universe?.locked?.logline) patch.logline = logline;
+      await updateUniverse(session.universeId, patch);
     }
     if (session.seriesId) {
       await updateSeries(session.seriesId, { ...(logline ? { logline } : {}), ...(expandedIdea ? { premise: expandedIdea } : {}) });
