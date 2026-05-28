@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useSseProgress } from './useSseProgress.js';
+import toast from '../components/ui/Toast';
 import { getImageModelStatuses, getVideoModelStatuses } from '../services/apiImageVideo.js';
 
 // Sentinel `modelId` used to drive a text-encoder download instead of a model
@@ -58,12 +59,19 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   // Refetch on natural stream close. useSseProgress flips `closed:true` once
   // per subscription and resets to false when the URL changes; that single
   // transition is the safe signal — no extra `wasClosed` ref needed.
+  // A terminal error frame (gated repo, missing HF token, broken venv) is
+  // routed to a toast here because the active-badge state vanishes the moment
+  // we clear `activeModelId`; without this, the UI silently snaps back to the
+  // Download button and the actionable server message is lost.
   useEffect(() => {
     if (sse.closed) {
+      if (sse.latest?.type === 'error' && sse.latest?.message) {
+        toast.error(sse.latest.message);
+      }
       fetchStatuses();
       setActiveModelId(null);
     }
-  }, [sse.closed, fetchStatuses]);
+  }, [sse.closed, sse.latest, fetchStatuses]);
 
   const start = useCallback((modelId) => {
     setActiveModelId(modelId);

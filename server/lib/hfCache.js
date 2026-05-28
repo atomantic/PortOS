@@ -25,12 +25,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 // HF cache root resolution mirrors huggingface_hub's own precedence:
-// HF_HUB_CACHE > HF_HOME/hub > ~/.cache/huggingface/hub. We never set
-// HF_HOME ourselves (see imageGen/local.js header), so the third branch
-// is the common path for PortOS installs.
+// HF_HUB_CACHE > HF_HOME/hub > $XDG_CACHE_HOME/huggingface/hub
+// > ~/.cache/huggingface/hub. Skipping the XDG branch (the python lib does
+// honor it) would silently report a freshly-downloaded model as not cached
+// on Linux installs that set XDG_CACHE_HOME to a non-default location.
 export const getHfCacheRoot = () => {
   if (process.env.HF_HUB_CACHE) return process.env.HF_HUB_CACHE;
   if (process.env.HF_HOME) return join(process.env.HF_HOME, 'hub');
+  if (process.env.XDG_CACHE_HOME) return join(process.env.XDG_CACHE_HOME, 'huggingface', 'hub');
   return join(homedir(), '.cache', 'huggingface', 'hub');
 };
 

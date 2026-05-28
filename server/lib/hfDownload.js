@@ -53,12 +53,20 @@ export function downloadHfRepo({ repo, revision = null, onEvent }) {
 
   const promise = (async () => {
     const pythonPath = await resolveHfDownloadPython();
+    // Cancel-before-spawn check. resolveHfDownloadPython runs an
+    // isFlux2VenvHealthy() probe (several hundred ms cold) and getHfTokenInfo
+    // does file I/O; a kill() landing inside either await otherwise still
+    // lets the spawn fire below, leaving a multi-GB HF download running with
+    // no SSE client to consume progress and holding the inFlight slot until
+    // the whole snapshot finishes.
+    if (killed) return { ok: false, errorKind: 'cancelled', errorMessage: 'Cancelled' };
     if (!pythonPath) {
       const msg = 'No Python venv with huggingface_hub found. Install the FLUX.2 venv from Image Gen settings first.';
       onEvent({ type: 'error', message: msg, kind: 'venv_missing' });
       return { ok: false, errorKind: 'venv_missing', errorMessage: msg };
     }
     const { token } = await getHfTokenInfo();
+    if (killed) return { ok: false, errorKind: 'cancelled', errorMessage: 'Cancelled' };
     const env = { ...process.env };
     // The Python helper looks up the token by env-var name so we don't have
     // to pass secrets on argv. Strip any stale value when the user has
@@ -73,6 +81,10 @@ export function downloadHfRepo({ repo, revision = null, onEvent }) {
 
     return new Promise((resolve) => {
       proc = spawn(pythonPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      // Window: kill() could have fired between the second `if (killed)`
+      // check and the spawn returning the proc handle. Re-check now that we
+      // own a proc — if it raced, kill it immediately.
+      if (killed) proc.kill('SIGTERM');
 
       const handleLine = (raw) => {
         const line = raw.trim();

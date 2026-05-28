@@ -31,17 +31,21 @@ describe('hfCache', () => {
   let originalEnv;
 
   beforeEach(() => {
-    originalEnv = { HF_HUB_CACHE: process.env.HF_HUB_CACHE, HF_HOME: process.env.HF_HOME };
+    originalEnv = {
+      HF_HUB_CACHE: process.env.HF_HUB_CACHE,
+      HF_HOME: process.env.HF_HOME,
+      XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+    };
   });
 
   afterEach(() => {
-    process.env.HF_HUB_CACHE = originalEnv.HF_HUB_CACHE;
-    process.env.HF_HOME = originalEnv.HF_HOME;
-    if (originalEnv.HF_HUB_CACHE === undefined) delete process.env.HF_HUB_CACHE;
-    if (originalEnv.HF_HOME === undefined) delete process.env.HF_HOME;
+    for (const key of Object.keys(originalEnv)) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
   });
 
-  it('resolves cache root with precedence HF_HUB_CACHE > HF_HOME/hub > ~/.cache', () => {
+  it('resolves cache root with precedence HF_HUB_CACHE > HF_HOME/hub > XDG_CACHE_HOME/huggingface/hub > ~/.cache', () => {
     process.env.HF_HUB_CACHE = '/explicit/hub';
     expect(getHfCacheRoot()).toBe('/explicit/hub');
 
@@ -50,6 +54,10 @@ describe('hfCache', () => {
     expect(getHfCacheRoot()).toBe('/custom/hf/hub');
 
     delete process.env.HF_HOME;
+    process.env.XDG_CACHE_HOME = '/xdg/cache';
+    expect(getHfCacheRoot()).toBe('/xdg/cache/huggingface/hub');
+
+    delete process.env.XDG_CACHE_HOME;
     expect(getHfCacheRoot()).toMatch(/\.cache\/huggingface\/hub$/);
   });
 
