@@ -196,17 +196,6 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   const body = parsed.data;
   const s = await getSettings();
   const pythonPath = s.imageGen?.local?.pythonPath || null;
-  // Reject up-front when the local python isn't configured. Without this,
-  // the queue would happily accept the job, return 200/queued, and only
-  // surface the failure asynchronously on SSE — which then pollutes the
-  // persisted queue with a doomed entry.
-  if (!pythonPath) {
-    await cleanupTempUploads();
-    throw new ServerError(
-      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
-      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
-    );
-  }
   // Resolve the effective model up front — both the modelId-exists check
   // below AND the a2v runtime guard further down need the model entry,
   // and listVideoModels() is the kind of thing test mocks easily get out
@@ -222,6 +211,21 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     throw new ServerError(
       `Unknown modelId: ${body.modelId}`,
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+    );
+  }
+  // Reject up-front when the local python isn't configured AND the model's
+  // runtime needs it. ltx2/wan22/hunyuan bring their own venv (resolved
+  // inside buildArgs), so they must NOT be blocked by the legacy mlx_video
+  // pythonPath setting. Without this gate, the queue would happily accept
+  // a job that's known to fail and only surface it asynchronously on SSE,
+  // polluting the persisted queue with a doomed entry.
+  const BYOV_RUNTIMES = new Set(['ltx2', 'wan22', 'hunyuan']);
+  const runtimeBringsOwnVenv = effectiveModel && BYOV_RUNTIMES.has(effectiveModel.runtime);
+  if (!pythonPath && !runtimeBringsOwnVenv) {
+    await cleanupTempUploads();
+    throw new ServerError(
+      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
+      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
 

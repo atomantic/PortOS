@@ -20,11 +20,12 @@
 // apiCore's default toast doesn't fire underneath; per the CLAUDE.md
 // "Silent vs. toasting API requests" rule, custom catch ⇒ silent: true.
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Cpu, Mic, Volume2, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import useMounted from '../../hooks/useMounted.js';
 import { formatBytes } from '../../utils/formatters';
 import { getLoadedLlmModels, unloadOllamaModel } from '../../services/apiLocalLlm.js';
 import { getTtsStatus, unloadKokoroTts, controlWhisper, getVoiceStatus } from '../../services/apiVoice.js';
@@ -58,11 +59,10 @@ export default function MemoryManagement() {
   const [lastFetched, setLastFetched] = useState(0);
   // Guards the polled setState calls — a late /voice/status response that
   // resolves after unmount would otherwise call setState on a dead tree.
-  // Never reset to true: React 18 dev double-mount runs the cleanup once
-  // and only re-mounts the same component instance; the new instance gets
-  // its own ref.
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // useMounted resets the ref to true on every mount so React 18 StrictMode's
+  // mount→cleanup→remount cycle doesn't leave it permanently false (which
+  // would otherwise keep the panel stuck on "Loading memory status…" in dev).
+  const mountedRef = useMounted();
 
   const refresh = useCallback(async () => {
     const [llm, tts, voice] = await Promise.all([

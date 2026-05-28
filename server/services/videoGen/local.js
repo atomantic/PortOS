@@ -406,7 +406,6 @@ export const DEFAULT_NUM_FRAMES = 121;
 
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
-  if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
   // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
@@ -415,6 +414,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   const model = VIDEO_MODELS[modelId];
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  // Only require the legacy mlx_video pythonPath when the chosen runtime
+  // actually uses it. ltx2/wan22/hunyuan resolve their own venv path inside
+  // buildArgs — gating them on the unrelated mlx_video setting locks users
+  // out of the runtimes they just installed via INSTALL_WAN22 / INSTALL_LTX2
+  // / INSTALL_HUNYUAN. Routes/videoGen.js mirrors this allowlist.
+  const BYOV_RUNTIMES = new Set(['ltx2', 'wan22', 'hunyuan']);
+  if (!pythonPath && !BYOV_RUNTIMES.has(model.runtime)) {
+    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
+  }
   // macOS/mlx_video requires a HuggingFace repo id — Windows doesn't (the
   // diffusers wrapper hardcodes Lightricks/LTX-Video). A user-edited registry
   // entry missing `repo` would otherwise pass `undefined` into spawn args.
