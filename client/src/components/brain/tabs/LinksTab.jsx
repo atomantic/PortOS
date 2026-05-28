@@ -16,7 +16,9 @@ import {
   FolderOpen,
   Tag,
   ShieldCheck,
-  Search
+  Search,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
@@ -42,6 +44,9 @@ const CLONE_STATUS_STYLES = {
 
 export default function LinksTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
+  const [inputTitle, setInputTitle] = useState('');
+  const [inputTags, setInputTags] = useState('');
+  const [showDetails, setShowDetails] = useState(false);
   const [sending, setSending] = useState(false);
   const [links, setLinks] = useState([]);
   const [total, setTotal] = useState(0);
@@ -106,8 +111,14 @@ export default function LinksTab({ onRefresh }) {
       }
     }
 
+    const payload = { url };
+    const title = inputTitle.trim();
+    if (title) payload.title = title;
+    const tags = inputTags.split(',').map(t => t.trim()).filter(Boolean);
+    if (tags.length) payload.tags = tags;
+
     setSending(true);
-    const result = await api.createBrainLink({ url }).catch(err => {
+    const result = await api.createBrainLink(payload).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('This URL is already saved');
       } else {
@@ -121,6 +132,9 @@ export default function LinksTab({ onRefresh }) {
       const isGitHub = result.isGitHubRepo;
       toast.success(isGitHub ? 'GitHub repo added - cloning in background' : 'Link saved');
       setInputUrl('');
+      setInputTitle('');
+      setInputTags('');
+      setShowDetails(false);
       fetchLinks();
       onRefresh?.();
     }
@@ -129,6 +143,7 @@ export default function LinksTab({ onRefresh }) {
   const handleEdit = (link) => {
     setEditingId(link.id);
     setEditForm({
+      url: link.url,
       title: link.title,
       description: link.description || '',
       linkType: link.linkType,
@@ -137,7 +152,14 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleSaveEdit = async (linkId) => {
+    const url = editForm.url?.trim();
+    if (!url) {
+      toast.error('URL cannot be empty');
+      return;
+    }
+
     const updates = {
+      url,
       title: editForm.title,
       description: editForm.description,
       linkType: editForm.linkType,
@@ -145,7 +167,11 @@ export default function LinksTab({ onRefresh }) {
     };
 
     const result = await api.updateBrainLink(linkId, updates).catch(err => {
-      toast.error(err.message || 'Failed to update');
+      if (err.message?.includes('already exists')) {
+        toast.error('Another link already uses this URL');
+      } else {
+        toast.error(err.message || 'Failed to update');
+      }
       return null;
     });
 
@@ -252,6 +278,44 @@ export default function LinksTab({ onRefresh }) {
             )}
           </button>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowDetails(v => !v)}
+          className="mt-2 flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+        >
+          {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {showDetails ? 'Hide title & tags' : 'Add title & tags (optional)'}
+        </button>
+
+        {showDetails && (
+          <div className="mt-2 space-y-2">
+            <div>
+              <label htmlFor="link-title" className="sr-only">Title</label>
+              <input
+                id="link-title"
+                type="text"
+                value={inputTitle}
+                onChange={(e) => setInputTitle(e.target.value)}
+                placeholder="Title (defaults to repo name or URL)"
+                className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+                disabled={sending}
+              />
+            </div>
+            <div>
+              <label htmlFor="link-tags" className="sr-only">Tags</label>
+              <input
+                id="link-tags"
+                type="text"
+                value={inputTags}
+                onChange={(e) => setInputTags(e.target.value)}
+                placeholder="Tags (comma-separated)"
+                className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+                disabled={sending}
+              />
+            </div>
+          </div>
+        )}
+
         <p className="mt-2 text-xs text-gray-500">
           Paste any URL. GitHub repos will be automatically cloned for local reference.
         </p>
@@ -318,14 +382,29 @@ export default function LinksTab({ onRefresh }) {
             <div className="flex items-start justify-between gap-3 mb-2">
               {editingId === link.id ? (
                 <div className="flex-1 space-y-2">
-                  <input
-                    type="text"
-                    value={editForm.title}
-                    onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                    className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
-                    placeholder="Title"
-                    autoFocus
-                  />
+                  <div>
+                    <label htmlFor={`link-url-${link.id}`} className="block text-xs text-gray-400 mb-1">URL</label>
+                    <input
+                      id={`link-url-${link.id}`}
+                      type="url"
+                      value={editForm.url}
+                      onChange={(e) => setEditForm({ ...editForm, url: e.target.value })}
+                      className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                      placeholder="https://example.com"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={`link-title-${link.id}`} className="block text-xs text-gray-400 mb-1">Title</label>
+                    <input
+                      id={`link-title-${link.id}`}
+                      type="text"
+                      value={editForm.title}
+                      onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                      className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                      placeholder="Title"
+                      autoFocus
+                    />
+                  </div>
                   <textarea
                     value={editForm.description}
                     onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}

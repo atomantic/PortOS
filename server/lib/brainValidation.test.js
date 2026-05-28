@@ -26,6 +26,7 @@ import {
   inboxQuerySchema,
   linkRecordSchema,
   linkInputSchema,
+  linkUpdateInputSchema,
   linksQuerySchema,
   brainSyncQuerySchema,
   brainSyncPushSchema
@@ -501,6 +502,24 @@ describe('brainValidation.js', () => {
     });
   });
 
+  describe('linkUpdateInputSchema', () => {
+    it('should accept a url-only update', () => {
+      const result = linkUpdateInputSchema.safeParse({ url: 'https://example.com/new' });
+      expect(result.success).toBe(true);
+      expect(result.data.url).toBe('https://example.com/new');
+    });
+
+    it('should accept a title-only update (url omitted)', () => {
+      const result = linkUpdateInputSchema.safeParse({ title: 'New title' });
+      expect(result.success).toBe(true);
+      expect(result.data.url).toBeUndefined();
+    });
+
+    it('should reject an invalid url', () => {
+      expect(linkUpdateInputSchema.safeParse({ url: 'not-valid' }).success).toBe(false);
+    });
+  });
+
   describe('linksQuerySchema', () => {
     it('should apply defaults', () => {
       const result = linksQuerySchema.safeParse({});
@@ -513,6 +532,12 @@ describe('brainValidation.js', () => {
       const result = linksQuerySchema.safeParse({ isGitHubRepo: 'true' });
       expect(result.success).toBe(true);
       expect(result.data.isGitHubRepo).toBe(true);
+    });
+
+    it('should coerce the string "false" to false (not true)', () => {
+      const result = linksQuerySchema.safeParse({ isGitHubRepo: 'false' });
+      expect(result.success).toBe(true);
+      expect(result.data.isGitHubRepo).toBe(false);
     });
 
     it('should filter by linkType', () => {

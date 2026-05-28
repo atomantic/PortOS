@@ -608,10 +608,37 @@ async function cloneRepoInBackground(linkId, url) {
  */
 router.put('/links/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(linkUpdateInputSchema, req.body);
-  const link = await brainService.updateLink(req.params.id, data);
-  if (!link) {
+
+  const existing = await brainService.getLinkById(req.params.id);
+  if (!existing) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
+
+  // When the URL changes, re-derive the GitHub-specific fields so the link
+  // type / repo metadata stay consistent with the new target.
+  if (data.url && data.url !== existing.url) {
+    const duplicate = await brainService.getLinkByUrl(data.url);
+    if (duplicate && duplicate.id !== existing.id) {
+      throw new ServerError('Link with this URL already exists', {
+        status: 409,
+        code: 'DUPLICATE_URL',
+        context: { existingId: duplicate.id }
+      });
+    }
+
+    const parsed = githubCloner.parseGitHubUrl(data.url);
+    data.isGitHubRepo = !!parsed;
+    data.gitHubOwner = parsed?.owner || null;
+    data.gitHubRepo = parsed?.repo || null;
+
+    // The previous clone (if any) belongs to the old URL — reset clone state so
+    // it doesn't point at the wrong repo. The user can re-clone the new target.
+    data.localPath = null;
+    data.cloneStatus = 'none';
+    data.cloneError = null;
+  }
+
+  const link = await brainService.updateLink(req.params.id, data);
   res.json(link);
 }));
 

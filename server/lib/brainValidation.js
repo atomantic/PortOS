@@ -360,6 +360,7 @@ export const linkInputSchema = z.object({
 
 // Update Link input schema (partial)
 export const linkUpdateInputSchema = z.object({
+  url: z.string().url().optional(),
   title: z.string().min(1).max(500).optional(),
   description: z.string().max(2000).optional(),
   linkType: linkTypeEnum.optional(),
@@ -369,7 +370,12 @@ export const linkUpdateInputSchema = z.object({
 // Links query schema
 export const linksQuerySchema = z.object({
   linkType: linkTypeEnum.optional(),
-  isGitHubRepo: z.coerce.boolean().optional(),
+  // Query params arrive as strings; z.coerce.boolean() treats any non-empty
+  // string (including "false") as true, so parse the string value explicitly.
+  isGitHubRepo: z.preprocess(
+    v => (typeof v === 'string' ? v === 'true' : v),
+    z.boolean()
+  ).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   offset: z.coerce.number().int().min(0).optional().default(0)
 });
