@@ -35,7 +35,8 @@ const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
 // that broken interpreter. Every download would then fail on the broken
 // venv before reaching the working mflux pythonPath.
 export async function resolveHfDownloadPython() {
-  if (resolveFlux2Python() && await isFlux2VenvHealthy()) return resolveFlux2Python();
+  const flux2 = resolveFlux2Python();
+  if (flux2 && await isFlux2VenvHealthy()) return flux2;
   const settings = await getSettings();
   return settings?.imageGen?.local?.pythonPath || null;
 }

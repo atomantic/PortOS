@@ -24,7 +24,19 @@ export async function startHfDownloadStream({ req, res, repo, alreadyDownloadedM
   };
   const safeEnd = () => { if (!res.writableEnded) res.end(); };
 
+  // Disconnect bookkeeping wired BEFORE the cache-inspection await. The
+  // inspection can take double-digit ms on a cold cache; without this the
+  // client closing mid-await would land after spawn with no kill path.
+  let handle = null;
+  let aborted = false;
+  req.on('close', () => {
+    aborted = true;
+    if (handle) handle.kill();
+    safeEnd();
+  });
+
   const existing = await inspectModelCache(repo);
+  if (aborted) return;
   if (existing.cached) {
     send({ type: 'complete', message: alreadyDownloadedMessage || `${repo} already downloaded.`, repo, sizeBytes: existing.sizeBytes });
     return safeEnd();
@@ -34,11 +46,10 @@ export async function startHfDownloadStream({ req, res, repo, alreadyDownloadedM
     return safeEnd();
   }
 
-  const handle = downloadHfRepo({ repo, onEvent: send });
+  handle = downloadHfRepo({ repo, onEvent: send });
   inFlight.set(repo, handle);
   handle.promise.finally(() => {
     inFlight.delete(repo);
     safeEnd();
   });
-  req.on('close', () => { handle.kill(); safeEnd(); });
 }
