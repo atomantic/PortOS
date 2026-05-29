@@ -46,6 +46,33 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+vi.mock('../lib/pythonSetup.js', () => ({
+  REQUIRED_PACKAGES: ['mflux', 'mlx'],
+  HOST_ARCH: 'arm64',
+  isAllowedPython: vi.fn(() => true),
+  probePythonHealth: vi.fn(async () => ({
+    installed: ['mflux', 'mlx'], missing: [], missingPip: [],
+    externallyManaged: false, interpreterArch: 'arm64',
+  })),
+  detectPython: vi.fn(async () => '/usr/bin/python3'),
+  detectArm64Python: vi.fn(async () => null),
+  installPackages: vi.fn(() => ({ promise: Promise.resolve(), kill: vi.fn() })),
+  createVenv: vi.fn(async () => '/fake/venv/python'),
+  pipNameFor: (n) => n,
+  resolveFlux2Python: vi.fn(() => null),
+  FLUX2_VENV_DEFAULT: '/fake/flux2-venv',
+  installFlux2Venv: vi.fn(),
+  isFlux2VenvHealthy: vi.fn(async () => true),
+}));
+
+// Stat the python binary to key the cache. Override per-test for mtime
+// changes; default to a stable mtime so the cache HIT path works.
+const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000 }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, stat: (path) => mockStat(path) };
+});
+
 import * as imageGen from '../services/imageGen/index.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
@@ -547,6 +574,74 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
       expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('middle');
+    });
+  });
+
+  describe('GET /setup/check (cache behavior)', () => {
+    // Each test uses a unique pythonPath so the module-scope cache from one
+    // test doesn't bleed into the next (vi.clearAllMocks() resets call counts
+    // but not the cache Map).
+    let probePythonHealth, createVenv;
+    beforeEach(async () => {
+      const mod = await import('../lib/pythonSetup.js');
+      probePythonHealth = mod.probePythonHealth;
+      createVenv = mod.createVenv;
+      mockStat.mockReset();
+      mockStat.mockResolvedValue({ mtimeMs: 1_700_000_000_000 });
+    });
+
+    it('returns the same payload on a cache hit and only spawns python once', async () => {
+      const p = '/usr/bin/python3-cache-hit-test';
+      const r1 = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      const r2 = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(r1.body).toEqual(r2.body);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+    });
+
+    it('busts the cache when the python interpreter mtime changes', async () => {
+      const p = '/usr/bin/python3-mtime-test';
+      mockStat.mockResolvedValueOnce({ mtimeMs: 1_700_000_000_000 });
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      mockStat.mockResolvedValueOnce({ mtimeMs: 1_700_000_000_001 });
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not cache when stat fails (broken / missing path)', async () => {
+      const p = '/usr/bin/python3-stat-fail-test';
+      mockStat.mockRejectedValue(new Error('ENOENT'));
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('cache for distinct pythonPaths are independent', async () => {
+      const p1 = '/usr/bin/python3-distinct-a';
+      const p2 = '/opt/homebrew/bin/python3-distinct-b';
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p1)}`);
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p2)}`);
+      // Two distinct paths → two probe spawns; both then cached for repeats.
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p1)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('POST /setup/create-venv invalidates the base AND new venv cache entries', async () => {
+      const base = '/usr/bin/python3-venv-test';
+      // Warm cache for the base python.
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(base)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+
+      // Create venv (mocked to return /fake/venv/python).
+      const created = await request(app).post('/api/image-gen/setup/create-venv').send({ basePython: base });
+      expect(created.status).toBe(200);
+      expect(createVenv).toHaveBeenCalled();
+
+      // Next probe of the base python re-spawns (cache busted).
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(base)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
     });
   });
 });
