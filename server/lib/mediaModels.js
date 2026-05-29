@@ -79,12 +79,19 @@ const DEFAULT_REGISTRY = {
       // scripts/setup-image-video.sh`.
       {
         id: 'hunyuan_video',
-        name: 'HunyuanVideo (13B, ~60 GB — swap text encoder to 4-bit Gemma)',
+        // fp32-only on MPS: fp16/bf16 trip an MPS matmul accumulator-dtype
+        // assertion within ~2s of the first forward pass. At 576×1024×121
+        // frames × 30 steps that's a 4-8 hr render — marked `deprecated`
+        // so it lands in the "Legacy" optgroup. Migration 044 patches
+        // existing installs that still have the pre-fix shape.
+        name: 'HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)',
         repo: 'tencent/HunyuanVideo',
         runtime: 'hunyuan',
         mode: 't2v',
         steps: 30,
         guidance: 6.0,
+        precision: 'fp32',
+        deprecated: true,
       },
     ],
     windows: [

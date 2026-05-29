@@ -29,6 +29,7 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
+import RuntimeInstallModal from '../components/videoGen/RuntimeInstallModal';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
@@ -472,6 +473,37 @@ export default function VideoGen() {
 
   const currentModel = models.find((m) => m.id === modelId);
 
+  // Probe the per-runtime status BEFORE the user hits Generate — without
+  // this they'd see the buildArgs-time "venv not found" 500 with no good way
+  // to recover. The set of "BYOV" runtimes comes from /status server-side so
+  // it can't drift from the server's BYOV_RUNTIME_INFO map.
+  const [byovStatus, setByovStatus] = useState(null);
+  const [installModalOpen, setInstallModalOpen] = useState(false);
+  const byovRuntime = currentModel?.runtime;
+  const needsByovProbe = byovRuntime && (status?.byovRuntimes || []).includes(byovRuntime);
+  const refreshByovStatus = useCallback((signal) => {
+    if (!needsByovProbe) { setByovStatus(null); return Promise.resolve(); }
+    return fetch(`/api/video-gen/setup/runtime-status?runtime=${encodeURIComponent(byovRuntime)}`, { signal })
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => { if (s) setByovStatus(s); })
+      .catch(() => {});
+  }, [byovRuntime, needsByovProbe]);
+  useEffect(() => {
+    if (!needsByovProbe) { setByovStatus(null); return; }
+    const controller = new AbortController();
+    refreshByovStatus(controller.signal);
+    return () => controller.abort();
+  }, [needsByovProbe, refreshByovStatus]);
+  const byovRuntimeMissing = !!byovStatus && byovStatus.installed === false;
+  // While the runtime-status probe is in flight (`needsByovProbe` is true but
+  // we haven't received a response yet), `byovStatus` is null and
+  // `byovRuntimeMissing` reads false — without this guard the user could
+  // submit during that window and hit a venv-missing 500 before the install
+  // banner appears. Gate Generate / Enqueue on the broader "BYOV not yet
+  // confirmed ready" instead. The banner itself still keys on `byovRuntimeMissing`
+  // (we don't want to flash "isn't installed yet" copy before we know).
+  const byovGateBlocked = needsByovProbe && (byovStatus === null || byovStatus.installed === false);
+
   // Inline cache-status badge for the picked video model + the active text
   // encoder (a separate ~7-25 GB HF pull). Drives the "Available" / "Download"
   // affordance under the Model select, so users learn about the multi-GB
@@ -774,12 +806,16 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
+    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
   const handleEnqueue = () => {
-    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
+    // Mirror the Generate guard — a BYOV runtime that isn't installed yet
+    // would silently queue a doomed job that fails late in the worker with
+    // VENV_MISSING, hiding the installer banner from the user. Block at
+    // enqueue time so the only path forward is the install banner above.
+    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
     const payload = buildGeneratePayload();
     // Strip File blobs for snapshot — re-using a File across multiple queued
     // submissions is fine, but we need a stable JSON-ish summary for the
@@ -879,8 +915,14 @@ export default function VideoGen() {
     }
   };
 
-  const notConnected = status && status.connected === false;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked;
+  // `status.connected` reflects the LEGACY mlx_video pythonPath health. BYOV
+  // runtimes (ltx2/wan22/hunyuan) resolve their own venv inside the service
+  // layer, so a missing legacy pythonPath must NOT block them — gate only on
+  // `byovRuntimeMissing` for those models. Without this, a user who installed
+  // ONLY a BYOV runtime via the modal would stay stuck behind a "not
+  // configured" error from the unrelated legacy probe.
+  const notConnected = !!status && status.connected === false && !needsByovProbe;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked;
 
   // Symmetric frame picker for the FFLF + image modes. Each slot accepts
   // EITHER a gallery filename OR a fresh upload; the preview renders
@@ -1055,6 +1097,23 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          {byovRuntimeMissing && (
+            <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <strong className="font-semibold">{byovStatus.label}</strong> isn't installed yet.
+                PortOS can fetch and install it from {byovStatus.repoUrl?.replace('https://', '')} (~5-15 min, multi-GB on first run).
+              </div>
+              <button
+                type="button"
+                onClick={() => setInstallModalOpen(true)}
+                disabled={generating}
+                className="self-start sm:self-auto whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80 disabled:opacity-50"
+              >
+                <Sparkles size={14} />
+                Install {byovStatus.label}
+              </button>
+            </div>
+          )}
           <StylePresetPicker
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
@@ -1415,10 +1474,12 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
-                  extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
+                  byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
+                    : byovGateBlocked ? `Checking ${byovRuntime} runtime status…`
+                    : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
                     : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
                       ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
                       : 'Pick an audio file before generating')
@@ -1592,6 +1653,14 @@ export default function VideoGen() {
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
         <ImageGenTab />
       </Drawer>
+
+      <RuntimeInstallModal
+        open={installModalOpen}
+        runtime={byovRuntime}
+        label={byovStatus?.label}
+        onClose={() => setInstallModalOpen(false)}
+        onComplete={() => refreshByovStatus()}
+      />
     </div>
   );
 }

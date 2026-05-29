@@ -63,12 +63,14 @@
       },
       {
         "id": "hunyuan_video",
-        "name": "HunyuanVideo (13B, ~60 GB — swap text encoder to 4-bit Gemma)",
+        "name": "HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)",
         "repo": "tencent/HunyuanVideo",
         "runtime": "hunyuan",
         "mode": "t2v",
         "steps": 30,
-        "guidance": 6
+        "guidance": 6,
+        "precision": "fp32",
+        "deprecated": true
       }
     ],
     "windows": [
