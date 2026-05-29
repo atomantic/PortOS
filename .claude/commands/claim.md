@@ -1,6 +1,6 @@
 ---
 description: Claim the next unclaimed PLAN.md item by its [slug] ID, do the work in an isolated worktree, ship a PR, and clean up.
-argument-hint: "[<slug>] [--review-with=<copilot|codex|gemini|claude>]"
+argument-hint: "[<slug>] [--review-with=<copilot|codex|gemini|claude>] [--no-review]"
 ---
 
 # Claim — Pick the next PLAN.md item and ship it
@@ -12,7 +12,8 @@ Claim the next unclaimed `- [ ]` item from PLAN.md via the slug-ID system, work 
 **Arguments.** Parse `$ARGUMENTS` by splitting on whitespace — tokens starting with `--` are flags, the first remaining token is the slug. Either order works (`auth-bug --review-with=codex` and `--review-with=codex auth-bug` are equivalent).
 
 - **`<slug>`** — claim THAT specific item instead of auto-picking. Useful for cherry-picking out-of-order work. The slug must already exist in PLAN.md as a `- [ ]` line; this command never assigns new IDs (that's `/do:replan`'s job).
-- **`--review-with=<copilot|codex|gemini|claude>`** — pick which reviewer runs the post-PR review loop in Phase 6. Default: `copilot` (current behavior — `/do:pr` drives the GitHub Copilot review-and-fix loop). `codex`/`gemini`/`claude` skip the Copilot loop and run an iterative CLI-based review against the PR diff instead. Record the parsed value as `REVIEWER` and reference it in Phase 6.
+- **`--review-with=<copilot|codex|gemini|claude>`** — pick which reviewer runs the post-PR review loop in Phase 6. **No default — when omitted, the agent decides in Phase 6 whether the diff warrants an external review at all** (a 3-line value swap doesn't; a multi-file feature change does). Pass this flag explicitly to force a review regardless of the agent's judgment. `copilot` drives the GitHub Copilot review-and-fix loop via `/do:pr`; `codex`/`gemini`/`claude` skip Copilot and run an iterative CLI-based review against the PR diff. Record the parsed value as `REVIEWER` (or `auto` when omitted) and reference it in Phase 6.
+- **`--no-review`** — explicit opt-out from BOTH `/simplify` and the external review pass. Use when you want the agent to just ship without deliberation (e.g. a doc-only revert). Mutually exclusive with `--review-with`.
 
 ## Phase 1: Pick
 
@@ -121,13 +122,36 @@ git commit -m "docs([<slug>]): remove from PLAN.md and log to changelog"
 
 ## Phase 6: Review and ship
 
-1. **`/simplify`** — run the three-agent reuse/quality/efficiency review against your own diff and fix findings in the same diff (per the `feedback_simplify_after_significant_work` memory). Do this BEFORE opening the PR, not retroactively.
+**Decide the review intensity before doing any review work.** Three modes; pick exactly one:
 
-2. **Open the PR and run the review loop.** Branch on `REVIEWER` (parsed from `--review-with`, default `copilot`):
+| Mode | Trigger | What runs |
+|---|---|---|
+| **A. Forced** | `--review-with=<reviewer>` was passed | `/simplify` + the named reviewer's loop (6.2a or 6.2b) — no judgment, the user opted in |
+| **B. Forced skip** | `--no-review` was passed | Neither `/simplify` nor an external reviewer runs; only the local-review gate inside `/do:pr` (or a manual `/do:review` if opening the PR by hand) — useful for trivial reverts, doc-only changes |
+| **C. Judgment** | Neither flag passed (the common case) | The agent judges whether the diff merits each layer. **`/simplify` and the external review pass are independent decisions** — answer each on its own merits |
 
-   ### 6.2a — `REVIEWER=copilot` (default)
+**Heuristic for mode C — when to skip:**
 
-   Run **`/do:pr`**. It runs `/do:review` as a local-review gate AND drives the Copilot review-and-fix loop. Do NOT run `/do:review` separately first — `/do:pr` does it. Trust the loop. When `/do:pr` reports the PR is clean (zero unresolved Copilot comments, or you've judged the remaining findings to be nitpicks not worth another round), the PR is ready to merge.
+| Layer | Skip when | Run when |
+|---|---|---|
+| **`/simplify`** | Diff is a literal value swap (e.g. `"0"` → `"1"`), a single-line typo/comment fix, a PLAN-only edit, or any change with no new code paths / abstractions / helpers — there's nothing for the reuse/quality/efficiency agents to find | New code (functions, classes, components), new abstractions, refactors that move logic between files, multi-file feature work, anything where reuse opportunities or efficiency concerns plausibly exist |
+| **External reviewer** | Same as above PLUS the local-review gate (Tier 1+4 checklist in Phase 6.2) is clean AND the change is mechanically obvious (e.g. matches a published reference or follows an in-repo pattern verbatim) | New logic, security-adjacent code, schema/contract changes, route/handler additions, cross-file changes, anything where a second perspective on the *design* (not just the implementation) is worth a round-trip |
+
+When in mode C, **state the call before acting**: "Diff is N lines across M files, all in <area>; skipping `/simplify` (no new code paths) and external review (matches published reference)." or "Diff adds a new schema + route handler; running `/simplify` and requesting copilot review." This makes the judgment visible to the user so they can override.
+
+When in mode C with `/simplify` deferred but external review wanted, run `/simplify` first anyway — it's the cheaper of the two and may surface fixes that change what the reviewer sees.
+
+1. **`/simplify`** — run iff mode A, or mode C and the heuristic says yes. Fix findings in the same diff (per the `feedback_simplify_after_significant_work` memory). Do this BEFORE opening the PR, not retroactively.
+
+2. **Open the PR and run the review loop.** Pick the branch by `REVIEWER` (the parsed value from `--review-with`, or `auto` when not passed):
+
+   ### 6.2a — `REVIEWER=copilot` OR (`REVIEWER=auto` AND heuristic says review)
+
+   Run **`/do:pr --review-with=copilot`**. It runs `/do:review` as a local-review gate AND drives the Copilot review-and-fix loop. Do NOT run `/do:review` separately first — `/do:pr` does it. Trust the loop. When `/do:pr` reports the PR is clean (zero unresolved Copilot comments, or you've judged the remaining findings to be nitpicks not worth another round), the PR is ready to merge.
+
+   ### 6.2c — `REVIEWER=auto` AND heuristic says skip, OR `--no-review`
+
+   Skip the external review pass. Still run the local-review gate yourself by invoking **`/do:pr`** with NO `--review-with` flag — that runs the Tier 1+4 checklist against the diff (the spec calls this gate "REQUIRED" and it always fires) without requesting Copilot or any CLI reviewer. State the skip rationale ("3-line value swap, matches phosphene's published matrix, no external review") in the merge commit body so the audit trail is honest.
 
    ### 6.2b — `REVIEWER` is `codex`, `gemini`, or `claude`
 
