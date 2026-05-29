@@ -20,6 +20,7 @@ import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { getSettings } from '../services/settings.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
+import { stripDebugMallocEnv } from '../lib/processEnv.js';
 import {
   listVideoModels,
   defaultVideoModelId,
@@ -275,7 +276,7 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   // orphaned to init — the user sees the modal close but the bandwidth keeps
   // burning until the network drops or the snapshot completes.
   const child = spawn('bash', [scriptPath], {
-    env: { ...process.env, [info.installEnvVar]: '1' },
+    env: { ...stripDebugMallocEnv(process.env), [info.installEnvVar]: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });

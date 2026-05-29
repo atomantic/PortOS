@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { resolveFlux2Python, isFlux2VenvHealthy } from './pythonSetup.js';
 import { PATHS } from './fileUtils.js';
 import { getHfTokenInfo } from './hfToken.js';
+import { stripDebugMallocEnv } from './processEnv.js';
 import { getSettings } from '../services/settings.js';
 
 const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
@@ -70,7 +71,7 @@ export function downloadHfRepo({ repo, revision = null, onEvent }) {
     }
     const { token } = await getHfTokenInfo();
     if (killed) return { ok: false, errorKind: 'cancelled', errorMessage: 'Cancelled' };
-    const env = { ...process.env };
+    const env = stripDebugMallocEnv(process.env);
     // The Python helper looks up the token by env-var name so we don't have
     // to pass secrets on argv. Strip any stale value when the user has
     // explicitly cleared their stored token.

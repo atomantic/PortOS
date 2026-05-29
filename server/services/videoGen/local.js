@@ -24,6 +24,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
+import { stripDebugMallocEnv } from '../../lib/processEnv.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -136,6 +137,7 @@ export async function isByovRuntimeReady(runtimeId) {
   if (readyCache.get(runtimeId) === true) return true;
   const probeOk = await new Promise((resolve) => {
     const child = spawn(info.venvPython, ['-c', info.importProbe], {
+      env: stripDebugMallocEnv(process.env),
       stdio: ['ignore', 'ignore', 'ignore'],
     });
     const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 30000);
@@ -705,7 +707,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // python helpers can authenticate snapshot_download() against gated repos
   // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
   // a gated repo, but the merge is harmless when no token is configured.
-  const childEnv = { ...process.env, ...(await hfTokenEnv()) };
+  const childEnv = { ...stripDebugMallocEnv(process.env), ...(await hfTokenEnv()) };
   delete childEnv.PYTHONPATH;
   // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
   // immediately. Without this, child stdio is line-buffered against a pipe and

@@ -25,6 +25,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
+import { stripDebugMallocEnv } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -357,7 +358,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
   activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
-  const proc = spawn(bin, args, { env: { ...process.env, ...(await hfTokenEnv()) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(bin, args, { env: { ...stripDebugMallocEnv(process.env), ...(await hfTokenEnv()) }, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
   // Spawn ENOENT (missing/non-executable pythonPath) fires BOTH 'error' and
   // 'close' on Node — without this guard, a typo'd pythonPath emits two

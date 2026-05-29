@@ -4,6 +4,7 @@ import { arch, homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
+import { stripDebugMallocEnv } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -259,7 +260,7 @@ export async function checkPackages(pythonPath) {
 // live child handle so the caller's outer closure can track it for SIGTERM.
 function streamSpawn(bin, args, onLog, onProc) {
   return new Promise((resolve) => {
-    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, { env: stripDebugMallocEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] });
     onProc(proc);
     const onChunk = (chunk) => {
       for (const line of chunk.toString().split(/[\r\n]+/)) {
