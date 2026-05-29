@@ -39,28 +39,38 @@ export const updateSettings = (data, options) => request('/settings', {
   ...options
 });
 
+const isPlainObject = (v) =>
+  v != null && typeof v === 'object' && !Array.isArray(v);
+
 // PUT /api/settings shallow-merges top-level keys only — patching
 // `{ imageGen: { local: { pythonPath } } }` directly clobbers the rest of
 // `imageGen`. patchSettingsSlice fetches current settings, walks to the slice
 // at a dotted path, shallow-merges `partial` into it, and PUTs the rebuilt
 // top-level key so sibling subkeys survive. `options` flows through to the
 // final updateSettings (e.g. `{ silent: true }`).
+//
+// Non-object values along the path (a hand-edited settings.json with an
+// unexpected primitive/array at a slice or parent) are treated as absent so
+// they don't spread into character-indexed or numeric-indexed keys.
 export const patchSettingsSlice = async (slicePath, partial, options = {}) => {
   if (typeof slicePath !== 'string' || !slicePath) {
     throw new Error('patchSettingsSlice: slicePath required');
   }
-  if (partial == null || typeof partial !== 'object' || Array.isArray(partial)) {
+  if (!isPlainObject(partial)) {
     throw new Error('patchSettingsSlice: partial must be a plain object');
   }
   const segments = slicePath.split('.');
+  if (!segments.every(Boolean)) {
+    throw new Error('patchSettingsSlice: slicePath has empty segments');
+  }
   const current = await getSettings({ silent: true }).catch(() => ({}));
   let existing = current;
   for (const seg of segments) existing = existing?.[seg];
-  let updated = { ...(existing || {}), ...partial };
+  let updated = { ...(isPlainObject(existing) ? existing : {}), ...partial };
   for (let i = segments.length - 1; i > 0; i--) {
     let parent = current;
     for (let j = 0; j < i; j++) parent = parent?.[segments[j]];
-    updated = { ...(parent || {}), [segments[i]]: updated };
+    updated = { ...(isPlainObject(parent) ? parent : {}), [segments[i]]: updated };
   }
   return updateSettings({ [segments[0]]: updated }, options);
 };
