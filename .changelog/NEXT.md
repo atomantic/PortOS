@@ -1,5 +1,9 @@
 # Unreleased
 
+## Changed
+
+- **[patch-settings-slice-helper] Nested settings edits no longer risk clobbering sibling fields.** Saving a Python path from Video Gen, or an image-gen config from a pipeline / Writers Room stage, used to round-trip the entire current settings object — leaving unrelated top-level keys exposed to drift if the read raced a concurrent write elsewhere. These edits now scope themselves to the slice being changed.
+
 ## Added
 
 - **Voice coding agent can target a managed app.** When you dispatch a coding task by voice, you can now name a managed app ("fix the failing test in BookLoom") and the agent runs against that app's workspace instead of PortOS itself. The app name is fuzzy-matched, so "book loom", "BookLoom", and "bookloom" all resolve to the same app; if no app matches what you said, the agent refuses with a short list of valid names rather than silently running against PortOS.

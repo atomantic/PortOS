@@ -24,7 +24,7 @@ import {
   extractUniverseCanon, refineUniverseCharacter,
   getUniverseSeriesNames,
 } from '../../../services/apiUniverseBuilder';
-import { getSettings, updateSettings, generateImage } from '../../../services/apiSystem';
+import { getSettings, patchSettingsSlice, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import {
   matchCharactersInText, matchPlacesInText, matchObjectsInText,
@@ -177,11 +177,8 @@ export default function NounsStage({ issue, series }) {
 
   const persistImageCfg = useCallback(async (next) => {
     setImageCfg(next);
-    const current = await getSettings().catch(() => ({}));
-    await updateSettings({
-      ...current,
-      pipeline: { ...(current.pipeline || {}), imageGen: next },
-    }).catch((err) => toast.error(`Settings save failed: ${err.message}`));
+    await patchSettingsSlice('pipeline', { imageGen: next }, { silent: true })
+      .catch((err) => toast.error(`Settings save failed: ${err.message}`));
   }, []);
 
   const [searchParams, setSearchParams] = useSearchParams();

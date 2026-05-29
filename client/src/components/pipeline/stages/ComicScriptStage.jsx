@@ -24,7 +24,7 @@ import {
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
 } from '../../../services/api';
-import { getSettings, updateSettings } from '../../../services/apiSystem';
+import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
@@ -247,11 +247,8 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 
   const persistImageCfg = useCallback(async (next) => {
     setImageCfg(next);
-    const current = await getSettings().catch(() => ({}));
-    await updateSettings({
-      ...current,
-      pipeline: { ...(current.pipeline || {}), imageGen: next },
-    }).catch((err) => toast.error(`Settings save failed: ${err.message}`));
+    await patchSettingsSlice('pipeline', { imageGen: next }, { silent: true })
+      .catch((err) => toast.error(`Settings save failed: ${err.message}`));
   }, []);
 
   // URL-driven drawer state — mirrors StoryboardPanel so the settings panel

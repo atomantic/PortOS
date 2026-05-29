@@ -55,7 +55,7 @@ import {
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
   upscaleVideo,
   listImageGallery,
-  getSettings, updateSettings,
+  getSettings, patchSettingsSlice,
   getActiveVideoJob,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
@@ -545,20 +545,8 @@ export default function VideoGen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Settings PUT shallow-merges top-level keys, so the full imageGen slice
-  // must round-trip — otherwise mode/external/codex/expose get clobbered.
   const handleSavePythonPath = useCallback(async (path) => {
-    const current = await getSettings({ silent: true }).catch(() => ({}));
-    const imageGen = current?.imageGen || {};
-    await updateSettings(
-      {
-        imageGen: {
-          ...imageGen,
-          local: { ...(imageGen.local || {}), pythonPath: path || undefined },
-        },
-      },
-      { silent: true },
-    )
+    await patchSettingsSlice('imageGen.local', { pythonPath: path || undefined }, { silent: true })
       .then(() => refreshStatus())
       .catch((err) => toast.error(`Failed to save: ${err.message}`));
   }, [refreshStatus]);
