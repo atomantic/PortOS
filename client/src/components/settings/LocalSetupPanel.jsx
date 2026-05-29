@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle2, XCircle, Wand2, RefreshCw, Terminal, AlertTriangle, Box, Cpu } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import { usePrevious } from '../../hooks/usePrevious.js';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
@@ -69,12 +70,12 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   // packages" to "all installed" — covers manual refresh, terminal installs,
   // and the SSE-complete path. Without this, parent state (e.g. VideoGen's
   // status pill) stays stale until the user manually clicks its own refresh.
-  const prevHadMissingRef = useRef(false);
+  const hadMissing = !!check && Array.isArray(check.missing) && check.missing.length > 0;
+  const allInstalled = !!check && Array.isArray(check.missing) && check.missing.length === 0;
+  const prevHadMissing = usePrevious(hadMissing, false);
   useEffect(() => {
-    const allInstalled = !!check && Array.isArray(check.missing) && check.missing.length === 0;
-    if (allInstalled && prevHadMissingRef.current) onPackagesChanged?.();
-    prevHadMissingRef.current = !!check && Array.isArray(check.missing) && check.missing.length > 0;
-  }, [check, onPackagesChanged]);
+    if (allInstalled && prevHadMissing) onPackagesChanged?.();
+  }, [allInstalled, prevHadMissing, onPackagesChanged]);
 
   const handleDetect = async () => {
     setDetecting(true);
