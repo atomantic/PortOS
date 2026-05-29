@@ -276,17 +276,20 @@ def main() -> None:
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
     use_kv = bool(args.reference_images)
-    # The int8 path attaches a quanto-rehydrated transformer to the pipeline
-    # directly; the KV pipeline's reference-token attention hooks aren't
-    # guaranteed to fire correctly through that wrapper. Refuse early with a
-    # clear message rather than crash mid-inference. No shipped int8 model
-    # surfaces multi-ref via the UI today, but a curl caller could hit this.
-    if use_kv and args.quantization == "int8":
+    # Multi-reference editing is gated to the SDNQ Disty0 quantization today.
+    # The int8 path attaches a quanto-rehydrated transformer directly and the
+    # KV pipeline's reference-token attention hooks don't compose through that
+    # wrapper. The bf16 path loads from the gated base 9B repo (not the kv
+    # variant) whose transformer wasn't tuned for the reference-editing task,
+    # so the KV pipeline would run but produce off-task output. Both paths
+    # should refuse early with a clear message rather than mislead. Lift this
+    # gate per quantization once the corresponding KV pipeline is validated.
+    if use_kv and args.quantization in ("int8", "none"):
         print(
-            "❌ Multi-reference editing (--reference-images) is not supported on "
-            "int8 quantization — Flux2KleinKVPipeline's reference-attention path "
-            "doesn't compose with the requantize'd transformer. Use the sdnq or "
-            "bf16 variant for multi-reference renders.",
+            f"❌ Multi-reference editing (--reference-images) is not supported on "
+            f"{args.quantization} quantization yet. Use the SDNQ variant "
+            f"(flux2-klein-9b / flux2-klein-4b) for multi-reference renders; "
+            f"PLAN tracks the bf16 + KV pin as a follow-up.",
             file=sys.stderr,
         )
         sys.exit(64)
@@ -338,9 +341,17 @@ def main() -> None:
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)
 
+    # `formats=` pins PIL's decoder dispatch to the route layer's allowed-mime
+    # set — defense in depth against a Ghostscript-pipeline invocation via a
+    # spoofed EPS/PDF magic in a file the upload filter validated only by
+    # browser-supplied mimetype. The route already enforces .png/.jpg/.webp
+    # extensions and copies bytes through, so a malformed file just fails the
+    # decode cleanly here instead of routing into another format handler.
+    PIL_FORMATS_ALLOWED = ["PNG", "JPEG", "WEBP"]
+
     init_image = None
     if args.image_path and not use_kv:
-        init_image = Image.open(args.image_path).convert("RGB").resize(
+        init_image = Image.open(args.image_path, formats=PIL_FORMATS_ALLOWED).convert("RGB").resize(
             (int(args.width), int(args.height)), Image.LANCZOS
         )
 
@@ -351,7 +362,7 @@ def main() -> None:
     reference_pils = None
     if use_kv:
         reference_pils = [
-            Image.open(p).convert("RGB").resize(
+            Image.open(p, formats=PIL_FORMATS_ALLOWED).convert("RGB").resize(
                 (int(args.width), int(args.height)), Image.LANCZOS
             )
             for p in args.reference_images
