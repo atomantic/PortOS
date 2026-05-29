@@ -185,13 +185,12 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
-    // Multi-reference editing for FLUX.2. The Python runner currently ignores
-    // these flags — they're plumbed end-to-end so the UI + server contract is
-    // in place, but the actual multi-reference diffusers wiring is gated on
-    // the FLUX.2-klein-9B-kv model swap (see PLAN.md) since the user-facing
-    // model that supports this hasn't been validated yet. Adding them here
-    // (rather than waiting) keeps the wiring testable + avoids a second PR
-    // that touches the same lines.
+    // Multi-reference editing for FLUX.2. When the path list is non-empty,
+    // scripts/flux2_macos.py loads Flux2KleinKVPipeline (instead of the
+    // single-image Flux2KleinPipeline) and passes the refs as image=[PIL...].
+    // The route always emits parallel referenceImageStrengths (defaulting to
+    // 1.0 per ref); the runner warns on non-default values today because the
+    // KV pipeline doesn't yet expose per-reference attention weighting.
     if (referenceImagePaths?.length) {
       args.push('--reference-images', ...referenceImagePaths);
       if (referenceImageStrengths?.length) {
