@@ -25,8 +25,9 @@
  * changed) and exits without writing.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 const REL_PATH = 'data/media-models.json';
 
@@ -85,7 +86,7 @@ export default {
     }
 
     if (changed) {
-      await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+      await atomicWrite(path, `${JSON.stringify(config, null, 2)}\n`);
       console.log(`📝 ${REL_PATH}: pinned HunyuanVideo to fp32 + marked deprecated (MPS matmul fp16/bf16 broken)`);
     } else {
       console.log(`✅ ${REL_PATH}: HunyuanVideo entry already pinned to fp32 + deprecated, no changes`);

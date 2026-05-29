@@ -19,7 +19,8 @@
  * without writing.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { join } from 'path';
 
 const REL_PATH = 'data/media-models.json';
@@ -61,7 +62,7 @@ export default {
 
     if (entry.tokenizerRepo === OLD_TOKENIZER_REPO) {
       entry.tokenizerRepo = NEW_TOKENIZER_REPO;
-      await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+      await atomicWrite(path, `${JSON.stringify(config, null, 2)}\n`);
       console.log(`📝 ${REL_PATH}: pinned flux2-klein-9b tokenizerRepo → ${NEW_TOKENIZER_REPO} (enables multi-reference editing)`);
     } else {
       console.log(`✅ ${REL_PATH}: flux2-klein-9b tokenizerRepo is "${entry.tokenizerRepo}" (not the pre-change default) — leaving alone`);

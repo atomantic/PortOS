@@ -29,8 +29,9 @@
  * without writing.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 const REL_PATH = 'data/task-schedule.json';
 
@@ -72,7 +73,7 @@ export default {
     }
 
     meta.readOnly = false;
-    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+    await atomicWrite(path, `${JSON.stringify(config, null, 2)}\n`);
     console.log(`📝 ${REL_PATH}: flipped 'reference-watch' taskMetadata.readOnly true → false (v2 prompt needs write access to PLAN.md)`);
   },
 };

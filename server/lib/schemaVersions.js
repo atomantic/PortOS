@@ -7,14 +7,20 @@
  * upgraded sender silently corrupts a downstream peer whose code doesn't
  * yet understand a new storage layout.
  *
- * `PORTOS_SCHEMA_VERSIONS` is the per-sync-category contract. Each entry is
- * the type-level storage layout version the running code expects to read +
- * write. When a category bumps its version (e.g. universes 4→5 splitting
- * out of the monolithic JSON), update the number here AND ship the
- * corresponding `scripts/migrations/NNN-…js`. The number flows through
- * every outbound payload's `portosMeta.schemaVersions`; receivers compare
- * incoming vs local and reject ahead-mismatches (sender too new) or
- * behind-mismatches (sender too old to satisfy a forward-only field).
+ * `PORTOS_SCHEMA_VERSIONS` is the per-sync-category WIRE contract — distinct
+ * from the storage-layout version stamped on `data/{type}/index.json` (see
+ * each service's local `TYPE_SCHEMA_VERSION` const). Bump the wire contract
+ * for either:
+ *   (a) a storage layout change (e.g. universes 4→5 splitting out of the
+ *       monolithic JSON), OR
+ *   (b) an additive record-shape change that a not-yet-upgraded peer would
+ *       silently strip on round-trip (e.g. pipelineSeries 1→2 for the
+ *       `series.arc.readerMap` field).
+ * For (a) ship the corresponding `scripts/migrations/NNN-…js` to update the
+ * stamped storage version too; for (b) the local storage layout stays put.
+ * The number flows through every outbound payload's `portosMeta.schemaVersions`;
+ * receivers compare incoming vs local and reject ahead-mismatches (sender too
+ * new) or behind-mismatches (sender too old to satisfy a forward-only field).
  *
  * Absent categories default to 0 — the comparator treats 0 as "no check"
  * so historical / un-versioned data categories pass through unchanged.

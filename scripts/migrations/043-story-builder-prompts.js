@@ -10,8 +10,9 @@
  * idea-expand generation would throw "Stage not found".
  */
 
-import { access, copyFile, mkdir, readFile, writeFile, constants } from 'fs/promises';
+import { access, copyFile, mkdir, readFile, constants } from 'fs/promises';
 import { dirname, join } from 'path';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 // Each prompt file's basename doubles as its stage-config key (sans `.md`).
 const STAGES = [
@@ -78,7 +79,7 @@ export default {
         return;
       }
       await mkdir(dirname(installedConfigPath), { recursive: true });
-      await writeFile(installedConfigPath, JSON.stringify(installed, null, 2) + '\n', 'utf8');
+      await atomicWrite(installedConfigPath, `${JSON.stringify(installed, null, 2)}\n`);
       const action = installedExists ? 'merged' : 'created';
       console.log(`📝 story-builder stage-config (${action}): ${added} added`);
     } catch (err) {
