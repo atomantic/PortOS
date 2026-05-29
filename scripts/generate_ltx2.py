@@ -46,12 +46,13 @@ from pathlib import Path
 from typing import NoReturn
 
 # Must be set BEFORE any ltx_core_mlx import: ltx_core_mlx.model.transformer.model
-# reads LTX2_DIT_EVAL_EVERY at import time. The upstream default (=8) causes
-# ~15-25x perf loss on M-series Macs via per-block Metal command-buffer churn;
-# =0 disables lazy evaluation and avoids that overhead. setdefault lets a
-# caller-supplied env var override these if needed.
-os.environ.setdefault("LTX2_DIT_EVAL_EVERY", "0")
-os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "0")
+# reads LTX2_DIT_EVAL_EVERY at import time. Phosphene's M4 Max 64 GB I2V Balanced
+# 5s / 121 f matrix: upstream default =8 runs ~3 min/step (per-block Metal
+# command-buffer churn); =1 runs ~7 s/step (~25× faster denoise); =0 is also
+# fast but extends the post-decode deallocator hang. =1 wins on both axes.
+# setdefault lets a caller-supplied env var override.
+os.environ.setdefault("LTX2_DIT_EVAL_EVERY", "1")
+os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "1")
 
 
 def emit_status(msg: str) -> None:
