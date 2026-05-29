@@ -22,6 +22,8 @@ TBD
 
 ## Changed
 
+- **[flux2-multi-reference-python-runner] FLUX.2 multi-reference editing on Apple Silicon.** Uploading 2–4 reference images alongside a prompt on a FLUX.2 Klein 9B render now actually conditions the output on those references instead of silently ignoring them — Image Gen routes the request through the diffusers KV-cache multi-reference pipeline. The first time you run a multi-reference render after this update, you'll be asked to accept the FLUX.2-klein-9B-kv license on Hugging Face (one click; the runner surfaces a direct link if the license is missing).
+
 - **[test-route-suites-peer-fanout-mock-noise] Quieter test logs.** Two heavily-mocked route test suites stop printing ~128 misleading warnings per run that suggested peer-sync was failing.
 
 - **Image Gen: hi-res presets opened to HiDream + Qwen-Image, plus a Qwen comic-page draft preset.** `client/src/lib/imageGenResolutions.js`'s `compatibilityKey` previously fell through to `flux1` for HIDREAM/QWEN, silently denying their natural `1024×1536` / `1536×1024` / `1536²` hi-res variants. Both runners now return their own keys, the three hi-res entries advertise compatibility for FLUX2 + QWEN + HIDREAM, and the Flux portrait/landscape entries (`832×1216`, `1216×832`) also open to them. Added a Qwen-only `1328×2048 (Qwen comic draft — experimental)` preset for US-comic-trim-aspect draft renders — past Qwen's documented ~1664 long-edge support window but coherent in practice on the 20B MMDiT; pair with a 1.5× upscale for final 1988×3056 output. Partial fix for `[hidream-qwen-client-runner-consumers]`; LoRA-picker side still pending.

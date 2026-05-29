@@ -78,16 +78,42 @@ def probe_hf_auth(repo: str) -> None:
         print(f"⚠️ HF probe non-fatal error: {err}", file=sys.stderr)
 
 
-def load_pipeline_bf16(repo: str, device: str, dtype):
+def _resolve_pipeline_cls(use_kv: bool):
+    """Pick the diffusers pipeline class. `Flux2KleinKVPipeline` uses K/V-cached
+    reference-token attention for multi-reference editing; both classes share
+    the same component init signature (scheduler/vae/text_encoder/tokenizer/
+    transformer/is_distilled), so any flux2-klein repo loads into either.
+
+    Imports are lazy + branch-specific so a venv whose diffusers pin predates
+    the KV pipeline (i.e. before `Flux2KleinKVPipeline` was added upstream)
+    still serves single-image renders. The KV branch fails loudly with a clear
+    upgrade hint instead of an opaque ImportError mid-load."""
+    if use_kv:
+        try:
+            from diffusers import Flux2KleinKVPipeline
+        except ImportError:
+            print(
+                "❌ Multi-reference editing requires diffusers with "
+                "Flux2KleinKVPipeline. Re-run "
+                "`INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh` "
+                "to pick up the latest diffusers HEAD.",
+                file=sys.stderr,
+            )
+            sys.exit(65)
+        return Flux2KleinKVPipeline
+    from diffusers import Flux2KleinPipeline
+
+    return Flux2KleinPipeline
+
+
+def load_pipeline_bf16(repo: str, device: str, dtype, pipeline_cls):
     """Native bf16 load — no SDNQ, no Int8. Pipeline + tokenizer come from
     the gated base repo (e.g. black-forest-labs/FLUX.2-klein-9B). Practical
     only with ~64+ GB unified memory for the 9B variant."""
-    from diffusers import Flux2KleinPipeline
-
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
-    print(f"🔧 bf16: pipeline ← {repo}", file=sys.stderr)
+    print(f"🔧 bf16: pipeline ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("loading-pipeline"):
-        pipe = Flux2KleinPipeline.from_pretrained(
+        pipe = pipeline_cls.from_pretrained(
             repo,
             torch_dtype=dtype,
             low_cpu_mem_usage=True,
@@ -98,13 +124,12 @@ def load_pipeline_bf16(repo: str, device: str, dtype):
     return pipe
 
 
-def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
-    # `sdnq` registers a custom config type at import-time. The Flux2KleinPipeline
+def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype, pipeline_cls):
+    # `sdnq` registers a custom config type at import-time. The pipeline
     # `from_pretrained` call below pulls a config that references it, so the
     # import has to happen first. Keep it inside the function so the runner
     # also works for the int8 branch on systems without sdnq installed.
     import sdnq  # noqa: F401  (registration side-effect)
-    from diffusers import Flux2KleinPipeline
     from transformers import AutoTokenizer
 
     # STAGE markers are parsed by server/services/imageGen/local.js#handleLine
@@ -117,9 +142,9 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
     with heartbeat("loading-tokenizer"):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False)
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
-    print(f"🔧 sdnq: pipeline ← {repo}", file=sys.stderr)
+    print(f"🔧 sdnq: pipeline ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("loading-pipeline"):
-        pipe = Flux2KleinPipeline.from_pretrained(
+        pipe = pipeline_cls.from_pretrained(
             repo,
             tokenizer=tokenizer,
             torch_dtype=dtype,
@@ -131,9 +156,8 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
     return pipe
 
 
-def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
+def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype, pipeline_cls):
     from accelerate import init_empty_weights
-    from diffusers import Flux2KleinPipeline
     from huggingface_hub import snapshot_download
     from optimum.quanto import requantize
     from safetensors.torch import load_file
@@ -143,7 +167,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
     from flux2_quantized import QuantizedFlux2Transformer2DModel
 
     print(f"STAGE:download-int8-snapshot:{repo}", file=sys.stderr, flush=True)
-    print(f"🔧 int8: snapshot ← {repo}", file=sys.stderr)
+    print(f"🔧 int8: snapshot ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("downloading-snapshot"):
         model_path = snapshot_download(repo)
 
@@ -174,7 +198,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
 
     print(f"🔧 int8: VAE/scheduler ← {base_repo}", file=sys.stderr)
     with heartbeat("loading-vae-scheduler"):
-        pipe = Flux2KleinPipeline.from_pretrained(
+        pipe = pipeline_cls.from_pretrained(
             base_repo,
             transformer=None,
             text_encoder=None,
@@ -233,14 +257,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
     p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
-    # Multi-reference editing — accepted but currently ignored. The Node side
-    # already plumbs these end-to-end so the UI + server contract is shippable;
-    # the diffusers multi-reference pipeline wiring lands with the
-    # FLUX.2-klein-9B-kv model swap (see PLAN.md `flux2-multi-reference-python-runner`).
-    # Without these stubs argparse would reject the args with "unrecognized
-    # arguments" and break every single-init FLUX.2 render once the route is live.
-    p.add_argument("--reference-images", nargs="*", default=[], help="(reserved) absolute paths to reference images")
-    p.add_argument("--reference-strengths", nargs="*", default=[], help="(reserved) 0..1 strength per reference image, parallel to --reference-images")
+    # Multi-reference editing. When at least one reference image is provided,
+    # the runner loads `Flux2KleinKVPipeline` instead of `Flux2KleinPipeline`
+    # and forwards the list of PIL refs as the pipeline's `image=` kwarg.
+    # `--reference-strengths` is plumbed end-to-end but the KV pipeline doesn't
+    # expose per-reference weighting today — non-1.0 values log a warning and
+    # are otherwise treated as 1.0. Up to 4 references (route-side cap).
+    p.add_argument("--reference-images", nargs="*", default=[], help="absolute paths to reference images (multi-reference KV editing)")
+    p.add_argument("--reference-strengths", nargs="*", default=[], help="0..1 strength per reference image, parallel to --reference-images (reserved — not honored per-ref by the KV pipeline yet)")
     return p.parse_args()
 
 
@@ -251,22 +275,61 @@ def main() -> None:
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
+    use_kv = bool(args.reference_images)
+    # Multi-reference editing is gated to the SDNQ Disty0 quantization today.
+    # The int8 path attaches a quanto-rehydrated transformer directly and the
+    # KV pipeline's reference-token attention hooks don't compose through that
+    # wrapper. The bf16 path loads from the gated base 9B repo (not the kv
+    # variant) whose transformer wasn't tuned for the reference-editing task,
+    # so the KV pipeline would run but produce off-task output. Both paths
+    # should refuse early with a clear message rather than mislead. Lift this
+    # gate per quantization once the corresponding KV pipeline is validated.
+    if use_kv and args.quantization in ("int8", "none"):
+        print(
+            f"❌ Multi-reference editing (--reference-images) is not supported on "
+            f"{args.quantization} quantization yet. Use the SDNQ variant "
+            f"(flux2-klein-9b / flux2-klein-4b) for multi-reference renders; "
+            f"PLAN tracks the bf16 + KV pin as a follow-up.",
+            file=sys.stderr,
+        )
+        sys.exit(64)
+    pipeline_cls = _resolve_pipeline_cls(use_kv)
+    if use_kv:
+        # Warn — but don't fail — when the per-ref strength array carries
+        # non-default values. The route always sends 1.0 for slots that
+        # didn't ship an explicit weight; only a curl/test caller would land
+        # here with a non-1.0 today.
+        non_default = [(i, s) for i, s in enumerate(args.reference_strengths) if s and float(s) != 1.0]
+        if non_default:
+            entries = ", ".join(f"ref{i + 1}={s}" for i, s in non_default)
+            print(
+                f"⚠️ --reference-strengths {entries} — Flux2KleinKVPipeline does not expose "
+                f"per-reference weighting; treating each as 1.0.",
+                file=sys.stderr,
+            )
+        if args.image_path:
+            print(
+                "⚠️ --image-path supplied alongside --reference-images; the KV pipeline "
+                "doesn't support i2i strength, so the init image will be ignored.",
+                file=sys.stderr,
+            )
+
     if args.quantization == "sdnq":
         if not args.tokenizer_repo:
             print("❌ --tokenizer-repo is required for sdnq variants", file=sys.stderr)
             sys.exit(64)
         probe_hf_auth(args.tokenizer_repo)
-        pipe = load_pipeline_sdnq(args.repo, args.tokenizer_repo, device, dtype)
+        pipe = load_pipeline_sdnq(args.repo, args.tokenizer_repo, device, dtype, pipeline_cls)
     elif args.quantization == "int8":
         if not args.base_pipeline_repo:
             print("❌ --base-pipeline-repo is required for int8 variants", file=sys.stderr)
             sys.exit(64)
         probe_hf_auth(args.base_pipeline_repo)
-        pipe = load_pipeline_int8(args.repo, args.base_pipeline_repo, device, dtype)
+        pipe = load_pipeline_int8(args.repo, args.base_pipeline_repo, device, dtype, pipeline_cls)
     elif args.quantization == "none":
         # Native bf16 — `repo` is the gated base repo itself.
         probe_hf_auth(args.repo)
-        pipe = load_pipeline_bf16(args.repo, device, dtype)
+        pipe = load_pipeline_bf16(args.repo, device, dtype, pipeline_cls)
     else:
         print(f"❌ unknown quantization: {args.quantization}", file=sys.stderr)
         sys.exit(64)
@@ -278,10 +341,36 @@ def main() -> None:
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)
 
+    # `formats=` pins PIL's decoder dispatch to the route layer's allowed-mime
+    # set — defense in depth against a Ghostscript-pipeline invocation via a
+    # spoofed EPS/PDF magic in a file the upload filter validated only by
+    # browser-supplied mimetype. The route already enforces .png/.jpg/.webp
+    # extensions and copies bytes through, so a malformed file just fails the
+    # decode cleanly here instead of routing into another format handler.
+    PIL_FORMATS_ALLOWED = ["PNG", "JPEG", "WEBP"]
+
     init_image = None
-    if args.image_path:
-        init_image = Image.open(args.image_path).convert("RGB").resize(
+    if args.image_path and not use_kv:
+        init_image = Image.open(args.image_path, formats=PIL_FORMATS_ALLOWED).convert("RGB").resize(
             (int(args.width), int(args.height)), Image.LANCZOS
+        )
+
+    # Multi-reference editing — load each reference at the output resolution.
+    # The KV pipeline encodes refs through the VAE then caches their attention
+    # K/V on step 0; mismatched aspect ratios get LANCZOS-resized so the
+    # transformer sees a uniform patch grid across all references.
+    reference_pils = None
+    if use_kv:
+        reference_pils = [
+            Image.open(p, formats=PIL_FORMATS_ALLOWED).convert("RGB").resize(
+                (int(args.width), int(args.height)), Image.LANCZOS
+            )
+            for p in args.reference_images
+        ]
+        print(
+            f"🔗 multi-reference KV: {len(reference_pils)} reference image(s) at "
+            f"{int(args.width)}x{int(args.height)}",
+            file=sys.stderr,
         )
 
     callback = make_stepwise_callback(
@@ -311,7 +400,16 @@ def main() -> None:
         # only set when supported.
         if "callback_on_step_end_tensor_inputs" in accepted:
             pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
-    if init_image is not None and "image" in accepted:
+    if reference_pils is not None and "image" in accepted:
+        # Flux2KleinKVPipeline accepts `image` as a single PIL or List[PIL].
+        # Pass the list verbatim so it routes through the multi-reference
+        # K/V-cache code path. The signature filter above guarantees the kwarg
+        # is supported by the live pipeline.
+        pipe_kwargs["image"] = reference_pils
+        vae = getattr(pipe, "vae", None)
+        if vae is not None and hasattr(vae, "disable_tiling"):
+            vae.disable_tiling()
+    elif init_image is not None and "image" in accepted:
         pipe_kwargs["image"] = init_image
         # Disable VAE tiling for i2i — tiled encode of a small image
         # produces seams on the output (matches the reference impl).
@@ -338,24 +436,30 @@ def main() -> None:
         print(f"🖼️  stepwise summary: callback fired {s['count']} times, saved {s['saved']} previews", file=sys.stderr)
 
     if args.metadata:
-        write_sidecar(
-            args.output,
-            {
-                "id": Path(args.output).stem,
-                "prompt": args.prompt,
-                "negativePrompt": args.negative_prompt,
-                "modelId": args.model,
-                "seed": seed,
-                "width": int(args.width),
-                "height": int(args.height),
-                "steps": int(args.steps),
-                "guidance": float(args.guidance),
-                "quantization": args.quantization,
-                "filename": Path(args.output).name,
-                "initImageFilename": Path(args.image_path).name if args.image_path else None,
-                "initImageStrength": float(args.image_strength) if args.image_strength is not None else None,
-            },
-        )
+        sidecar = {
+            "id": Path(args.output).stem,
+            "prompt": args.prompt,
+            "negativePrompt": args.negative_prompt,
+            "modelId": args.model,
+            "seed": seed,
+            "width": int(args.width),
+            "height": int(args.height),
+            "steps": int(args.steps),
+            "guidance": float(args.guidance),
+            "quantization": args.quantization,
+            "filename": Path(args.output).name,
+            "initImageFilename": Path(args.image_path).name if (args.image_path and not use_kv) else None,
+            "initImageStrength": float(args.image_strength) if (args.image_strength is not None and not use_kv) else None,
+        }
+        if use_kv:
+            sidecar["pipelineClass"] = pipeline_cls.__name__
+            sidecar["referenceImageFilenames"] = [Path(p).name for p in args.reference_images]
+            # "Requested" — the KV pipeline doesn't expose per-reference attention
+            # weighting today (a non-1.0 entry only logs a warning), so the
+            # sidecar must not pretend these strengths were applied. Rename when
+            # diffusers exposes a real per-ref weighting knob.
+            sidecar["referenceStrengthsRequested"] = [float(s) for s in (args.reference_strengths or [])]
+        write_sidecar(args.output, sidecar)
 
     # Free VRAM eagerly so a back-to-back generation in the same process
     # doesn't OOM. The PortOS runner respawns per request right now, so this

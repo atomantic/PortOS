@@ -118,7 +118,7 @@
       "runner": "flux2",
       "quantization": "sdnq",
       "repo": "Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",
-      "tokenizerRepo": "black-forest-labs/FLUX.2-klein-9B",
+      "tokenizerRepo": "black-forest-labs/FLUX.2-klein-9B-kv",
       "steps": 8,
       "guidance": 3.5,
       "cfgDisabled": true

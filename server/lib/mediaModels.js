@@ -125,7 +125,11 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
-      tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B',
+      // KV repo's tokenizer is the same Qwen3 tokenizer as the base 9B repo,
+      // but the multi-reference editing path in scripts/flux2_macos.py probes
+      // HF auth against this value — pinning to the KV repo means accepting
+      // its license once enables both single-ref + multi-ref renders.
+      tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
