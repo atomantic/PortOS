@@ -6,6 +6,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { getSettings, updateSettings } from '../settings.js';
 import { deepMerge } from '../../lib/objects.js';
+import { expandHome } from '../../lib/fileUtils.js';
 
 const VOICE_HOME = join(homedir(), '.portos', 'voice');
 
@@ -110,12 +111,9 @@ export const VOICE_DEFAULTS = Object.freeze({
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
 });
 
-export const expandPath = (p) => {
-  if (typeof p !== 'string') return p;
-  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
-  if (p === '~') return homedir();
-  return p;
-};
+// Alias kept for backward-compat with the 5 callers under server/services/voice/.
+// The canonical implementation now lives in `server/lib/fileUtils.js#expandHome`.
+export const expandPath = expandHome;
 
 // Tiny in-memory cache so hot paths (per-turn enabled check in voice sockets)
 // don't hit disk on every dispatch. Invalidated on updateVoiceConfig and

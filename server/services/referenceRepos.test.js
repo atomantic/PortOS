@@ -3,8 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ─── mocks (must precede the import under test) ──────────────────────────────
 
 vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(async () => {}),
+  expandHome: vi.fn((p) => p),
   PATHS: { data: '/mock/data', root: '/mock/root' },
   readJSONFile: vi.fn(async () => ({ apps: {} })),
 }));

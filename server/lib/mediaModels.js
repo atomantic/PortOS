@@ -16,9 +16,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
 import { join, dirname } from 'path';
-import { PATHS } from './fileUtils.js';
+import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import { RUNNER_FAMILIES } from './runners.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
@@ -274,15 +273,6 @@ const DEFAULT_REGISTRY = {
     { id: 'gemma-bf16',     label: 'Gemma 3 12B bf16 (default, best quality, ~24 GB)',   repo: 'mlx-community/gemma-3-12b-it-bf16' },
   ],
   selectedTextEncoder: 'gemma-bf16',
-};
-
-// `path.join(homedir(), '/.foo')` discards the homedir because of the
-// leading slash, so we have to strip the `~/` prefix (or `~`) before joining.
-const expandHome = (p) => {
-  if (!p || !p.startsWith('~')) return p;
-  if (p === '~') return homedir();
-  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
-  return p;
 };
 
 let cached = null;

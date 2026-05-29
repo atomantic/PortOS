@@ -24,6 +24,7 @@ Exit codes: 0 ok, 2 user-error, 1 unexpected.
 """
 
 import argparse
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -41,11 +42,24 @@ except Exception as err:  # noqa: BLE001
     sys.exit(2)
 
 
+# `hf_hub_download(..., local_dir=...)` defaulted to populating `local_dir`
+# via symlinks into the HF cache on huggingface_hub < 0.23, which would
+# break BYOV installers (HiDream-O1) that need real on-disk files. Force
+# real copies with `local_dir_use_symlinks=False`. Newer huggingface_hub
+# (>= 0.23) deprecated the kwarg and always copies, eventually removing
+# it — probe the signature so we only pass it where it's still accepted.
+_HF_DOWNLOAD_ACCEPTS_SYMLINK_KWARG = (
+    "local_dir_use_symlinks" in inspect.signature(hf_hub_download).parameters
+)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pre-fetch a HuggingFace repo snapshot.")
     parser.add_argument("--repo", required=True, help="HF repo id, e.g. 'org/name'.")
     parser.add_argument("--revision", default=None, help="Optional revision (branch / tag / sha).")
     parser.add_argument("--token-env", default=None, help="Env var name to read the HF token from (e.g. HF_TOKEN).")
+    parser.add_argument("--local-dir", default=None, help="If set, materialize the repo as a flat copy at this dir instead of relying on the standard HF cache symlinks (used by BYOV installers like HiDream-O1 that need a real on-disk repo).")
+    parser.add_argument("--ignore", action="append", default=[], help="Glob pattern (fnmatch) to skip from the file list. Repeat for multiple patterns. e.g. --ignore 'scripts/**' --ignore 'docs/**' to skip non-weight subdirs.")
     args = parser.parse_args()
 
     token = None
@@ -81,6 +95,9 @@ def main() -> int:
     # as part of a snapshot (`.gitattributes` is, but `LICENSE` and similar
     # are — we keep them; the only true skip is the `.huggingface` folder).
     files = [f for f in files if not f.startswith(".huggingface/")]
+    if args.ignore:
+        import fnmatch
+        files = [f for f in files if not any(fnmatch.fnmatch(f, pat) for pat in args.ignore)]
     total = len(files)
     if total == 0:
         print(f"USER_ERROR:repo_empty:{args.repo}", file=sys.stderr, flush=True)
@@ -94,13 +111,20 @@ def main() -> int:
         # drives progress in either pipeline).
         print(f"STAGE:download:{i}/{total}:{filename}", file=sys.stderr, flush=True)
         print(f"DOWNLOAD:{i}/{total}:{filename}", file=sys.stderr, flush=True)
+        download_kwargs = {
+            "repo_id": args.repo,
+            "filename": filename,
+            "revision": args.revision,
+            "token": token,
+            "local_dir": args.local_dir,
+        }
+        # Only force copies when the caller actually asked for a flat
+        # on-disk layout — without `--local-dir`, hf_hub_download writes
+        # into the standard HF cache where symlinks are the contract.
+        if args.local_dir and _HF_DOWNLOAD_ACCEPTS_SYMLINK_KWARG:
+            download_kwargs["local_dir_use_symlinks"] = False
         try:
-            resolved = hf_hub_download(
-                repo_id=args.repo,
-                filename=filename,
-                revision=args.revision,
-                token=token,
-            )
+            resolved = hf_hub_download(**download_kwargs)
         except GatedRepoError:
             print(f"USER_ERROR:gated_repo:{args.repo}", file=sys.stderr, flush=True)
             print(f"❌ {args.repo} is gated. Accept the license + paste your HF token.", file=sys.stderr, flush=True)

@@ -20,10 +20,9 @@
  */
 
 import { existsSync, statSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, expandHome, PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { execGit } from '../lib/execGit.js';
 import {
@@ -31,17 +30,6 @@ import {
   updateApp,
 } from './apps.js';
 import { DEFAULT_REVIEWER } from '../lib/validation.js';
-
-// `path.join(homedir(), '/.foo')` discards the homedir because of the leading
-// slash, so we strip the `~/` prefix (or `~`) before joining. Same shape as
-// the helper in lib/mediaModels.js — kept inline here to avoid pulling in the
-// rest of that module just for one helper.
-const expandHome = (p) => {
-  if (!p || typeof p !== 'string' || !p.startsWith('~')) return p;
-  if (p === '~') return homedir();
-  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
-  return p;
-};
 
 const REFERENCE_REPOS_ROOT = join(PATHS.data, 'cos', 'reference-repos');
 
