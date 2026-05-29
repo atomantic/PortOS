@@ -182,6 +182,11 @@ describe('videoGen routes', () => {
       expect(r.body.pythonPath).toBe('/usr/bin/python3');
       expect(r.body.missingPackages).toEqual([]);
       expect(r.body.defaultModel).toBe('ltx2_unified');
+      // systemMemoryGb drives the client's a2v auto-select (largest model
+      // that fits in `systemMemoryGb - 16 GB` headroom). Pin the field's
+      // presence + type so a future accidental removal is caught here.
+      expect(typeof r.body.systemMemoryGb).toBe('number');
+      expect(r.body.systemMemoryGb).toBeGreaterThan(0);
     });
 
     it('reports disconnected with reason + missingPackages when packages fail to import', async () => {

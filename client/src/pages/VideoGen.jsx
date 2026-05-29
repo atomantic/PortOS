@@ -595,7 +595,12 @@ export default function VideoGen() {
       // so the user can at least try, and the install banner / OOM surfaces
       // the real constraint instead of a silent dropdown change.
       const reserveGb = 16;
-      const budget = status?.systemMemoryGb
+      // typeof === 'number' (not `status?.systemMemoryGb ? ...`) so a server
+      // legitimately reporting a tiny number (0 GB after rounding on a
+      // sub-GB box) flows through the `fits` check and lands on the
+      // smallest model. The truthiness shortcut would collapse 0 with
+      // "absent" and pick the LARGEST model on a tiny machine.
+      const budget = typeof status?.systemMemoryGb === 'number'
         ? Math.max(0, status.systemMemoryGb - reserveGb)
         : Number.POSITIVE_INFINITY;
       const sortedDesc = [...visibleModels].sort(
@@ -614,10 +619,13 @@ export default function VideoGen() {
     if (!fallback || fallback === modelId) return;
     // Toast only for the stale-id case (model removed from catalog). The
     // mode-incompatibility swap is expected behavior after a mode change —
-    // no need to surface it.
+    // no need to surface it. Name the destination model so users on a2v
+    // don't think they landed on `status.defaultModel` (they may not have —
+    // a2v picks the largest-fits model, which is often a dgrauet entry).
     if (!current && staleModelToastRef.current !== modelId) {
       staleModelToastRef.current = modelId;
-      toast(`Original model "${modelId}" is no longer available — using default`);
+      const fallbackName = models.find((m) => m.id === fallback)?.name || fallback;
+      toast(`Original model "${modelId}" is no longer available — switched to "${fallbackName}"`);
     }
     setModelId(fallback);
   }, [modelId, models, status?.defaultModel, status?.systemMemoryGb, mode, visibleModels]);
