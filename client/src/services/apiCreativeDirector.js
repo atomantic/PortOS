@@ -3,7 +3,7 @@ import { request } from './apiCore.js';
 export const listCreativeDirectorProjects = () => request('/creative-director');
 // Pass `{ slim: true }` to receive only the fields a polling consumer needs
 // (status / per-scene status / finalVideoId / failureReason / updatedAt) —
-// drops the unbounded `runs[]` history and the full treatment text. Useful
+// drops the `runs[]` history and the full treatment text. Useful
 // for 4s-poll surfaces like the Pipeline EpisodeVideoStage.
 export const getCreativeDirectorProject = (id, { slim = false } = {}) =>
   request(`/creative-director/${encodeURIComponent(id)}${slim ? '?slim=1' : ''}`);

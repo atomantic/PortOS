@@ -54,7 +54,6 @@ Items here need a research / design pass, an explicit decision, or a preconditio
 
 ### Audio / Video / Image gen
 
-- [ ] [render-slowness-on-long-sessions-per-scene-render] **Render slowness on long sessions.** Per-scene render time degraded from ~3.5 min to 10–30 min within one project. Profile after sustained use; verify round-22 dedup helped.
 - [ ] [pipeline-audio-phase-4c-2-4c-3-4d-2-local-oss] **Pipeline Audio Phase 4c.2/4c.3/4d.2.** Local OSS music gen (MusicGen sidecar; pick generator first); 3rd-party engine stubs; VO line muxing into the CD stitch with per-line offsets + music-bed ducking.
 - [ ] [native-fflf-deeper-test-on-real-keyframe-pairs] **Native FFLF deeper test on real keyframe pairs.** Validate with last frame of clip A + first frame of clip B from the same scene; expose more pipeline knobs (cfg-scale, stg-scale, stage1-steps) if interpolation looks weak.
 - [ ] [world-builder-phase-2-external-sd-api-per-bucket] **World Builder Phase 2 — external SD-API + per-bucket model overrides.** Wire Together / Replicate / Fal into world-builder batch path so high-end renders are practical; let each bucket pick its own model.

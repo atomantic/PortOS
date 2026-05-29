@@ -21,6 +21,41 @@ import { createCollection } from '../mediaCollections.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'creative-director-projects.json');
 
+// Without a cap, runs[] grows unbounded and every loadAll/saveAll (≈10 per
+// scene render) parses + serializes a file whose size scales with cumulative
+// renders — turning per-scene orchestration into O(N²) wall-clock. In-flight
+// runs are load-bearing for orphan/dedup detection in completionHook and the
+// boot recovery scan, so trim only preserves the most-recent terminal entries.
+const MAX_PERSISTED_RUNS = 200;
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed']);
+
+export function trimRuns(runs) {
+  if (!Array.isArray(runs)) return [];
+  if (runs.length <= MAX_PERSISTED_RUNS) return runs;
+  let inflightCount = 0;
+  for (const r of runs) {
+    if (!(r && TERMINAL_RUN_STATUSES.has(r.status))) inflightCount += 1;
+  }
+  const terminalBudget = Math.max(0, MAX_PERSISTED_RUNS - inflightCount);
+  // Walk backwards keeping every in-flight run + the most-recent `terminalBudget`
+  // terminal runs, then reverse the result so original chronological order is
+  // preserved (RunsTab sorts by startedAt, but recovery scans + completionHook
+  // predicates iterate runs[] directly and stay readable when it reads chronologically).
+  const kept = [];
+  let terminalsKept = 0;
+  for (let i = runs.length - 1; i >= 0; i -= 1) {
+    const r = runs[i];
+    const isTerminal = r && TERMINAL_RUN_STATUSES.has(r.status);
+    if (!isTerminal) {
+      kept.push(r);
+    } else if (terminalsKept < terminalBudget) {
+      kept.push(r);
+      terminalsKept += 1;
+    }
+  }
+  return kept.reverse();
+}
+
 async function loadAll() {
   const raw = await readJSONFile(PROJECTS_FILE, []);
   return Array.isArray(raw) ? raw : [];
@@ -30,6 +65,12 @@ async function saveAll(projects) {
   // Defense for first-run on a fresh checkout where data/ may not exist yet.
   // Mirrors videoTimeline/local.js#saveProjects.
   await ensureDir(PATHS.data);
+  // Enforce the runs[] cap at the single write chokepoint so every mutator
+  // (recordRun, updateRun, updateProject, setTreatment, updateScene) shrinks
+  // legacy over-cap arrays on first save without each having to remember.
+  for (const p of projects) {
+    if (Array.isArray(p?.runs)) p.runs = trimRuns(p.runs);
+  }
   await atomicWrite(PROJECTS_FILE, projects);
 }
 
@@ -174,9 +215,13 @@ export async function updateRun(id, runId, patch) {
   const project = all[idx];
   const runIdx = (project.runs || []).findIndex((r) => r.runId === runId);
   if (runIdx < 0) return null;
-  project.runs[runIdx] = { ...project.runs[runIdx], ...patch };
+  const updated = { ...project.runs[runIdx], ...patch };
+  project.runs[runIdx] = updated;
   project.updatedAt = new Date().toISOString();
   all[idx] = project;
+  // saveAll rewrites project.runs in place via trimRuns when over-cap, so
+  // runIdx may not point at the patched run afterwards — return the local
+  // reference captured pre-save instead.
   await saveAll(all);
-  return project.runs[runIdx];
+  return updated;
 }
