@@ -10,6 +10,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
 import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
 import { isToolCapable, isReasoningModel } from './llm.js';
+import { getProviderById } from '../providers.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 export const pexec = promisify(execFile);
@@ -234,9 +235,17 @@ const LMS_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:1234')
   .replace(/\/+$/, '').replace(/\/v1$/, '');
 
 // The auto-install + preload paths only know how to talk to LM Studio
-// (`lms get`, `lms load`, `/v1/models`). Default to `lmstudio` for installs
-// that pre-date `voice.llm.provider`, where the field is absent.
-const isLmStudioVoiceProvider = (cfg) => (cfg?.llm?.provider || 'lmstudio') === 'lmstudio';
+// (`lms get`, `lms load`, `/v1/models`). Mirror `resolveLlmEndpoint` in
+// `llm.js`: voice falls back to LM Studio whenever the configured provider
+// is missing, not api-type, or has no endpoint — so we still want to
+// provision in those cases. Only skip when the configured provider really
+// resolves to a usable non-lmstudio backend (e.g. a working Ollama).
+const isEffectiveLmStudioVoiceProvider = async (cfg) => {
+  const providerId = cfg?.llm?.provider || 'lmstudio';
+  if (providerId === 'lmstudio') return true;
+  const provider = await getProviderById(providerId).catch(() => null);
+  return !(provider && provider.type === 'api' && provider.endpoint);
+};
 
 const listLmStudioModels = async () => {
   const res = await fetch(`${LMS_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
@@ -268,7 +277,7 @@ export const ensureToolCapableModel = async (cfg) => {
   // if incompatible.
   if (!cfg?.llm?.tools?.enabled) return { skipped: 'tools-disabled' };
   if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
-  if (!isLmStudioVoiceProvider(cfg)) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
+  if (!(await isEffectiveLmStudioVoiceProvider(cfg))) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
 
   const installed = await listLmStudioModels();
   // Tool-capable AND non-reasoning AND under the size cap. The size cap is
@@ -348,7 +357,7 @@ const listLoadedModelKeys = async () => {
 export const preloadModel = async (cfg) => {
   if (!cfg?.enabled) return { skipped: 'voice-disabled' };
   if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
-  if (!isLmStudioVoiceProvider(cfg)) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
+  if (!(await isEffectiveLmStudioVoiceProvider(cfg))) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
   const lms = await which('lms');
   if (!lms) return { skipped: 'no-lms-cli' };
   const installed = await listLmStudioModels();
