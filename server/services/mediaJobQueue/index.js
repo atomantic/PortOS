@@ -115,19 +115,18 @@ function getGenModuleForJob(job) {
 
 // Drop the params snapshot of pythonPath; live settings always win for
 // local-Python jobs so a stale persisted snapshot can't poison the spawn.
-// Returns the (possibly-mutated) safeParams reference. Future live-resolved
-// fields (e.g. model.runtime-aware overrides) belong here so the seam stays
-// in one place instead of accreting into runJob.
+// Future live-resolved fields (e.g. model.runtime-aware overrides) belong
+// here so the seam stays in one place instead of accreting into runJob.
+// Mutates safeParams in place.
 async function resolveLiveParams(job, safeParams) {
   const usesLocalPython = job.kind === 'video' || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX);
-  if (!usesLocalPython) return safeParams;
+  if (!usesLocalPython) return;
   const live = await getSettings().catch(() => null);
   const livePythonPath = live?.imageGen?.local?.pythonPath || null;
   if (livePythonPath && livePythonPath !== safeParams.pythonPath) {
     console.log(`🐍 media-job [${job.id.slice(0, 8)}] pythonPath re-resolved from settings: ${safeParams.pythonPath} → ${livePythonPath}`);
   }
   safeParams.pythonPath = livePythonPath;
-  return safeParams;
 }
 
 export const mediaJobEvents = new EventEmitter();
