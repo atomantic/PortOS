@@ -24,6 +24,7 @@ Exit codes: 0 ok, 2 user-error, 1 unexpected.
 """
 
 import argparse
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -39,6 +40,17 @@ except Exception as err:  # noqa: BLE001
     print(f"USER_ERROR:venv_missing_hf_hub:{err}", file=sys.stderr, flush=True)
     print("❌ Python venv is missing huggingface_hub. Run the FLUX.2 install from Image Gen settings.", file=sys.stderr, flush=True)
     sys.exit(2)
+
+
+# `hf_hub_download(..., local_dir=...)` defaulted to populating `local_dir`
+# via symlinks into the HF cache on huggingface_hub < 0.23, which would
+# break BYOV installers (HiDream-O1) that need real on-disk files. Force
+# real copies with `local_dir_use_symlinks=False`. Newer huggingface_hub
+# (>= 0.23) deprecated the kwarg and always copies, eventually removing
+# it — probe the signature so we only pass it where it's still accepted.
+_HF_DOWNLOAD_ACCEPTS_SYMLINK_KWARG = (
+    "local_dir_use_symlinks" in inspect.signature(hf_hub_download).parameters
+)
 
 
 def main() -> int:
@@ -99,14 +111,20 @@ def main() -> int:
         # drives progress in either pipeline).
         print(f"STAGE:download:{i}/{total}:{filename}", file=sys.stderr, flush=True)
         print(f"DOWNLOAD:{i}/{total}:{filename}", file=sys.stderr, flush=True)
+        download_kwargs = {
+            "repo_id": args.repo,
+            "filename": filename,
+            "revision": args.revision,
+            "token": token,
+            "local_dir": args.local_dir,
+        }
+        # Only force copies when the caller actually asked for a flat
+        # on-disk layout — without `--local-dir`, hf_hub_download writes
+        # into the standard HF cache where symlinks are the contract.
+        if args.local_dir and _HF_DOWNLOAD_ACCEPTS_SYMLINK_KWARG:
+            download_kwargs["local_dir_use_symlinks"] = False
         try:
-            resolved = hf_hub_download(
-                repo_id=args.repo,
-                filename=filename,
-                revision=args.revision,
-                token=token,
-                local_dir=args.local_dir,
-            )
+            resolved = hf_hub_download(**download_kwargs)
         except GatedRepoError:
             print(f"USER_ERROR:gated_repo:{args.repo}", file=sys.stderr, flush=True)
             print(f"❌ {args.repo} is gated. Accept the license + paste your HF token.", file=sys.stderr, flush=True)
