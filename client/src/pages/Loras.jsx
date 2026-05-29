@@ -30,12 +30,16 @@ const RUNNER_LABEL = {
   [RUNNER_FAMILIES.FLUX2]: 'Flux 2',
   [RUNNER_FAMILIES.Z_IMAGE]: 'Z-Image',
   [RUNNER_FAMILIES.ERNIE]: 'ERNIE',
+  [RUNNER_FAMILIES.HIDREAM]: 'HiDream',
+  [RUNNER_FAMILIES.QWEN]: 'Qwen',
 };
 const RUNNER_BADGE_CLASS = {
   [RUNNER_FAMILIES.MFLUX]: 'bg-port-accent/20 text-port-accent border-port-accent/30',
   [RUNNER_FAMILIES.FLUX2]: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
   [RUNNER_FAMILIES.Z_IMAGE]: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
   [RUNNER_FAMILIES.ERNIE]: 'bg-amber-600/20 text-amber-300 border-amber-500/30',
+  [RUNNER_FAMILIES.HIDREAM]: 'bg-rose-600/20 text-rose-300 border-rose-500/30',
+  [RUNNER_FAMILIES.QWEN]: 'bg-sky-600/20 text-sky-300 border-sky-500/30',
 };
 
 export default function Loras() {
@@ -238,6 +242,8 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
     { key: RUNNER_FAMILIES.FLUX2,   label: 'Top for Flux 2',  cards: runners[RUNNER_FAMILIES.FLUX2] || [],   hint: 'Most-downloaded LoRAs trained against Flux.2 Klein 4B / 9B.', alwaysShow: true },
     { key: RUNNER_FAMILIES.Z_IMAGE, label: 'Top for Z-Image', cards: runners[RUNNER_FAMILIES.Z_IMAGE] || [], hint: 'Most-downloaded LoRAs trained against Z-Image / Z-Image-Turbo.', alwaysShow: true },
     { key: RUNNER_FAMILIES.ERNIE,   label: 'Top for ERNIE',   cards: runners[RUNNER_FAMILIES.ERNIE] || [],   hint: 'Most-downloaded LoRAs trained against ERNIE-Image.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.HIDREAM, label: 'Top for HiDream', cards: runners[RUNNER_FAMILIES.HIDREAM] || [], hint: 'Most-downloaded LoRAs trained against HiDream.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.QWEN,    label: 'Top for Qwen',    cards: runners[RUNNER_FAMILIES.QWEN] || [],    hint: 'Most-downloaded LoRAs trained against Qwen-Image.', alwaysShow: true },
   ];
   return (
     <div className="space-y-4">
@@ -305,13 +311,6 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, installedF
   );
 }
 
-const RUNNER_LABELS_SHORT = {
-  [RUNNER_FAMILIES.MFLUX]: 'Flux 1',
-  [RUNNER_FAMILIES.FLUX2]: 'Flux 2',
-  [RUNNER_FAMILIES.Z_IMAGE]: 'Z-Image',
-  [RUNNER_FAMILIES.ERNIE]: 'ERNIE',
-};
-
 function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onInstall }) {
   const installs = card.curated && card.installs && Object.keys(card.installs).length > 0 ? card.installs : null;
   // Badges: prefer the installs map's keys (per-family with versions), else
@@ -344,7 +343,7 @@ function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onI
           <div className="flex flex-wrap gap-1">
             {badgeFamilies.map((f) => (
               <span key={f} className={`text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${RUNNER_BADGE_CLASS[f] || 'bg-gray-600/20 text-gray-300 border-gray-500/30'}`}>
-                {RUNNER_LABELS_SHORT[f] || f}
+                {RUNNER_LABEL[f] || f}
               </span>
             ))}
           </div>
@@ -380,7 +379,7 @@ function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onI
                     className={`text-[11px] px-2 py-1 rounded border flex items-center gap-1 ${baseClass} hover:brightness-125 disabled:opacity-60 disabled:cursor-not-allowed`}
                   >
                     {installed ? <Check size={11} /> : null}
-                    {installing ? 'Installing…' : (RUNNER_LABELS_SHORT[family] || family)}
+                    {installing ? 'Installing…' : (RUNNER_LABEL[family] || family)}
                   </button>
                 );
               })}

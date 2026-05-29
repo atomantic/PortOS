@@ -71,6 +71,16 @@ describe('baseModelToRunner', () => {
     expect(baseModelToRunner('ERNIE-Image-Turbo')).toBe('ernie');
     expect(baseModelToRunner('ernieimage')).toBe('ernie');
   });
+  it('maps HiDream variants to hidream', () => {
+    expect(baseModelToRunner('HiDream')).toBe('hidream');
+    expect(baseModelToRunner('hidream')).toBe('hidream');
+    expect(baseModelToRunner('Hi-Dream')).toBe('hidream');
+  });
+  it('maps Qwen variants to qwen', () => {
+    expect(baseModelToRunner('Qwen')).toBe('qwen');
+    expect(baseModelToRunner('qwen-image')).toBe('qwen');
+    expect(baseModelToRunner('Qwen Image')).toBe('qwen');
+  });
   it('returns null for unsupported families', () => {
     expect(baseModelToRunner('SDXL 1.0')).toBe(null);
     expect(baseModelToRunner('SD 1.5')).toBe(null);

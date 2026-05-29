@@ -34,6 +34,8 @@ export const baseModelToRunner = (baseModel) => {
   if (b.startsWith('flux.2') || b.startsWith('flux 2') || b === 'flux2') return RUNNER_FAMILIES.FLUX2;
   if (b.startsWith('z-image') || b.startsWith('zimage') || b.startsWith('z image')) return RUNNER_FAMILIES.Z_IMAGE;
   if (b.startsWith('ernie-image') || b.startsWith('ernie image') || b.startsWith('ernieimage') || b === 'ernie') return RUNNER_FAMILIES.ERNIE;
+  if (b.startsWith('hidream') || b.startsWith('hi-dream') || b.startsWith('hi dream')) return RUNNER_FAMILIES.HIDREAM;
+  if (b === 'qwen' || b.startsWith('qwen-image') || b.startsWith('qwen image') || b.startsWith('qwenimage')) return RUNNER_FAMILIES.QWEN;
   // SDXL / SD1.5 / Pony / Illustrious / etc. — none currently supported by
   // any PortOS runner. Surfacing them in the UI as "incompatible" is more
   // useful than hiding them entirely.
@@ -310,6 +312,8 @@ const RUNNER_TO_BASE_MODELS = {
   [RUNNER_FAMILIES.FLUX2]: ['Flux.2 Klein 4B', 'Flux.2 Klein 9B'],
   [RUNNER_FAMILIES.Z_IMAGE]: ['ZImageBase', 'ZImageTurbo'],
   [RUNNER_FAMILIES.ERNIE]: ['Ernie'],
+  [RUNNER_FAMILIES.HIDREAM]: ['HiDream'],
+  [RUNNER_FAMILIES.QWEN]: ['Qwen'],
 };
 
 // Search Civitai for LoRA-family models targeting the given runner family.
