@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, isMflux, isFlux2, isZImage, isErnie, isHiDream } from './runners.js';
+import { RUNNER_FAMILIES, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -42,6 +42,7 @@ describe('RUNNER_FAMILIES', () => {
     expect(isZImage({ runner: 'z-image' })).toBe(true);
     expect(isErnie({ runner: 'ernie' })).toBe(true);
     expect(isHiDream({ runner: 'hidream' })).toBe(true);
+    expect(isQwen({ runner: 'qwen' })).toBe(true);
     expect(isFlux2({ runner: 'mflux' })).toBe(false);
     expect(isFlux2(null)).toBe(false);
     expect(isFlux2(undefined)).toBe(false);

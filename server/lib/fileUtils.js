@@ -183,11 +183,13 @@ export function dataPath(...segments) {
 }
 
 // `path.join(homedir(), '/.foo')` discards the homedir prefix because of
-// the leading slash, so strip the `~/` (or bare `~`) before joining.
+// the leading slash, so strip the leading `~/` (or `~\` on Windows) before
+// joining. Only expands a leading `~` — embedded `~` chars in path segments
+// (e.g. `iCloud~md~obsidian`) are preserved.
 export function expandHome(p) {
   if (typeof p !== 'string' || !p) return p;
   if (p === '~') return homedir();
-  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2));
   return p;
 }
 
