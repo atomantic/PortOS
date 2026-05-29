@@ -1811,7 +1811,7 @@ const TOOLS = [
   {
     name: 'dispatch_code_agent',
     description:
-      'Hand a software-engineering task to an autonomous coding agent that works in an isolated git worktree and opens a pull request for review. Use when the user asks you to write, fix, refactor, debug, or test CODE — e.g. "fix the failing test in X", "add a --dry-run flag to the backup script", "refactor the widget registry". Do NOT use for capturing notes/ideas (that is brain_capture) or for clicking/navigating the UI. The work runs in the background and the user is told when it finishes — do not wait for it. State the task in the user\'s own words with enough detail to act on it. The coding agent and model come from the user\'s configured default; never put a provider or model in this call.',
+      'Hand a software-engineering task to an autonomous coding agent that works in an isolated git worktree and opens a pull request for review. Use when the user asks you to write, fix, refactor, debug, or test CODE — e.g. "fix the failing test in X", "add a --dry-run flag to the backup script", "refactor the widget registry". Do NOT use for capturing notes/ideas (that is brain_capture) or for clicking/navigating the UI. The work runs in the background and the user is told when it finishes — do not wait for it. State the task in the user\'s own words with enough detail to act on it. When the user names a managed app to work in ("…in BookLoom", "fix the bug in the finance tracker"), pass that name as `app`; omit `app` for tasks on PortOS itself. The coding agent and model come from the user\'s configured default; never put a provider or model in this call.',
     parameters: {
       type: 'object',
       properties: {
@@ -1819,14 +1819,19 @@ const TOOLS = [
           type: 'string',
           description: 'The coding task to perform, phrased as a clear, self-contained instruction (file/feature names, the desired outcome). The agent reads this verbatim as its prompt.',
         },
+        app: {
+          type: 'string',
+          description: 'Optional managed-app target ("BookLoom", "finance tracker"). Server fuzzy-matches against the user\'s configured apps; omit to run against PortOS itself.',
+        },
       },
       required: ['task'],
     },
-    execute: async ({ task } = {}) => {
+    execute: async ({ task, app } = {}) => {
       const text = typeof task === 'string' ? task.trim() : '';
       if (!text) {
         return { ok: false, error: 'task is required', summary: "I didn't catch what you want the coding agent to do." };
       }
+      const appPhrase = typeof app === 'string' ? app.trim() : '';
 
       // Backstop for the palette path — pipeline.js already strips this tool
       // from the LLM's spec list when codeAgent is disabled, but the command
@@ -1835,6 +1840,31 @@ const TOOLS = [
       const codeAgent = cfg?.llm?.codeAgent || {};
       if (!codeAgent.enabled) {
         return { ok: false, error: 'code-agent disabled', summary: 'Coding-agent dispatch is off — turn it on under Settings, Voice, Coding agent.' };
+      }
+
+      // Optional spoken target: fuzzy-resolve "in BookLoom" to a managed-app
+      // id so the spawner runs the agent in that app's workspace (cos.js
+      // `metadata.app` → agentLifecycle prepareAgentWorkspace). Reject an
+      // explicit-but-unknown target rather than silently falling through to
+      // the PortOS workspace, so the user hears "I don't see that app."
+      let resolvedAppId = null;
+      let resolvedAppName = null;
+      if (appPhrase) {
+        const { getActiveApps } = await import('../apps.js');
+        const { resolveAppByPhrase } = await import('../../lib/appResolver.js');
+        const apps = await getActiveApps().catch(() => []);
+        const match = resolveAppByPhrase(appPhrase, apps);
+        if (!match) {
+          const names = (apps || []).map((a) => a?.name).filter(Boolean);
+          const hint = names.length ? ` Try one of: ${names.slice(0, 4).join(', ')}.` : '';
+          return {
+            ok: false,
+            error: `unknown app "${appPhrase}"`,
+            summary: `I don't see a managed app called ${appPhrase}.${hint}`,
+          };
+        }
+        resolvedAppId = match.id;
+        resolvedAppName = match.name || match.id;
       }
 
       // Dynamic import: cos.js is a large module with its own import graph;
@@ -1884,6 +1914,7 @@ const TOOLS = [
         priority: 'HIGH',
         position: 'top',
         voiceDispatch: true,
+        ...(resolvedAppId ? { app: resolvedAppId } : {}),
         // The promise of this tool (and the changelog / spoken copy) is
         // isolated work that opens a PR and never touches the user's working
         // tree. spawnAgentForTask only honors that when the task explicitly
@@ -1908,19 +1939,22 @@ const TOOLS = [
       const running = isRunning();
       const stoppedNote = ' — but the Chief-of-Staff runner is stopped, so start it to run it';
 
+      const appSuffix = resolvedAppName ? ` in ${resolvedAppName}` : '';
+
       if (created?.duplicate) {
         return {
           ok: true,
           taskId: created.id,
           duplicate: true,
-          summary: `That coding task is already queued${running ? ', so I left it as is.' : `${stoppedNote}.`}`,
+          app: resolvedAppId,
+          summary: `That coding task${appSuffix} is already queued${running ? ', so I left it as is.' : `${stoppedNote}.`}`,
         };
       }
 
       const summary = running
-        ? "Queued a coding task — I'll let you know when it's done."
-        : `Queued the coding task${stoppedNote}.`;
-      return { ok: true, taskId: created?.id, running, summary };
+        ? `Queued a coding task${appSuffix} — I'll let you know when it's done.`
+        : `Queued the coding task${appSuffix}${stoppedNote}.`;
+      return { ok: true, taskId: created?.id, running, app: resolvedAppId, summary };
     },
   },
 ];

@@ -143,6 +143,16 @@ vi.mock('../cos.js', () => ({
   addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
   isRunning: vi.fn(() => true),
 }));
+// dispatch_code_agent fuzzy-resolves the optional `app` parameter against the
+// user's configured managed apps; default to two apps so the resolve / not-
+// found branches can be exercised.
+const activeAppsRef = { value: [
+  { id: 'bookloom-abc', name: 'BookLoom' },
+  { id: 'portos-default', name: 'PortOS' },
+] };
+vi.mock('../apps.js', () => ({
+  getActiveApps: vi.fn(async () => activeAppsRef.value),
+}));
 // dispatch_code_agent resolves a code-capable provider when none is pinned.
 // Default the active provider to a code-capable (tui) one so the inherit path
 // is exercised; individual tests override for the API-default / substitution
@@ -279,6 +289,33 @@ describe('dispatch_code_agent', () => {
     const r = await dispatchTool('dispatch_code_agent', { task: 'refactor X' });
     expect(r.ok).toBe(true);
     expect(r.summary).toMatch(/stopped/i);
+  });
+
+  it('resolves a spoken `app` to a managed-app id and threads it through addTask', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'book loom' });
+    expect(r.ok).toBe(true);
+    expect(r.app).toBe('bookloom-abc');
+    expect(r.summary).toMatch(/in BookLoom/);
+    expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ app: 'bookloom-abc' });
+  });
+
+  it('omits the `app` field on addTask when no target is spoken (PortOS-self)', async () => {
+    await dispatchTool('dispatch_code_agent', { task: 'fix the test' });
+    expect(mockedAddTask.mock.calls[0][0]).not.toHaveProperty('app');
+  });
+
+  it('errors when the spoken app is unknown — does NOT silently fall through to PortOS', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'GhostApp' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/GhostApp/);
+    expect(r.summary).toMatch(/BookLoom/); // suggestion list pulled from active apps
+    expect(mockedAddTask).not.toHaveBeenCalled();
+  });
+
+  it('ignores an empty/whitespace `app` string (treats as omitted)', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: '   ' });
+    expect(r.ok).toBe(true);
+    expect(mockedAddTask.mock.calls[0][0]).not.toHaveProperty('app');
   });
 });
 
