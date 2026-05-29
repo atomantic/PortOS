@@ -711,10 +711,14 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
 // Mirrors GET /api/image-gen/active. Returns `{ activeJob: null }` when no
 // video render is in flight. Queued-but-not-yet-running jobs are returned
 // too so the user lands on a "Queued (position N)" state instead of an
-// empty form.
+// empty form. Selection order MUST match /cancel below: newest queued is
+// what cancelVideoGen() targets when nothing is running, so resuming the
+// oldest queued would leave the resumed page's Cancel button hitting a
+// different job.
 router.get('/active', (_req, res) => {
   const running = listJobs({ kind: 'video', status: 'running' })[0];
-  const queued = !running ? listJobs({ kind: 'video', status: 'queued' })[0] : null;
+  const queuedList = !running ? listJobs({ kind: 'video', status: 'queued' }) : [];
+  const queued = queuedList.length ? queuedList[queuedList.length - 1] : null;
   const job = running || queued;
   if (!job) return res.json({ activeJob: null });
   res.json({
