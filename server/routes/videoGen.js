@@ -11,6 +11,7 @@ import { existsSync } from 'fs';
 import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
+import { spawn } from 'child_process';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
@@ -22,6 +23,10 @@ import {
   listVideoModels,
   defaultVideoModelId,
   BYOV_VIDEO_RUNTIMES,
+  BYOV_RUNTIME_INFO,
+  isByovRuntimeInstalled,
+  isByovRuntimeReady,
+  invalidateByovReadyCache,
   loadHistory,
   deleteHistoryItem,
   setHistoryItemHidden,
@@ -159,6 +164,133 @@ router.get('/status', asyncHandler(async (_req, res) => {
     missingPackages: missing,
     models: listVideoModels(),
     defaultModel: defaultVideoModelId(),
+    // Authoritative list of bring-your-own-venv runtimes — lets the client
+    // gate the install-banner probe without hardcoding the same Set.
+    byovRuntimes: Object.keys(BYOV_RUNTIME_INFO),
+  });
+}));
+
+// `installed` here means "fully ready to render" — both the venv binary
+// exists AND its python packages are importable. The sync existsSync gate
+// alone is too permissive: a partial install (clone done, `uv pip install`
+// aborted) leaves a venv directory present but no torch, which would
+// hide the banner and make every render fail with a deep ImportError.
+router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const info = BYOV_RUNTIME_INFO[runtime];
+  if (!info) {
+    return failValidation(res, `Unknown runtime: ${runtime}. Expected one of: ${Object.keys(BYOV_RUNTIME_INFO).join(', ')}`);
+  }
+  const binaryPresent = isByovRuntimeInstalled(info.id);
+  const packagesReady = binaryPresent ? await isByovRuntimeReady(info.id) : false;
+  res.json({
+    runtime: info.id,
+    label: info.label,
+    installed: binaryPresent && packagesReady,
+    binaryPresent,
+    packagesReady,
+    venvPath: info.venvPython,
+    repoDir: info.repoDir,
+    repoUrl: info.repoUrl,
+    installEnvVar: info.installEnvVar,
+  });
+}));
+
+// In-flight singleton per runtime. A rapid double-click of the install
+// button would otherwise race two `bash setup-image-video.sh` processes
+// against the same target dir, both trying to git-clone or pip-install at
+// once. Existing existsSync gate doesn't help — the install hasn't created
+// the venv yet on the second click.
+const runtimeInstallInFlight = new Map();
+
+// Shells out to scripts/setup-image-video.sh with the runtime's INSTALL_X
+// env pre-set, so the in-app installer and the README's terminal recipe
+// invoke the exact same install path — no parallel Node-side implementation
+// per runtime to keep in sync.
+router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const info = BYOV_RUNTIME_INFO[runtime];
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  const send = (event) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+
+  if (!info) {
+    send({ type: 'error', message: `Unknown runtime: ${runtime}` });
+    return safeEnd();
+  }
+  // Skip ONLY when both the binary AND the import probe pass. A venv with a
+  // python binary but no torch is the partial-install case the user is
+  // explicitly re-triggering us to fix — short-circuiting would strand them.
+  if (isByovRuntimeInstalled(info.id) && await isByovRuntimeReady(info.id)) {
+    send({ type: 'log', message: `${info.label} already installed at ${info.venvPython}` });
+    send({ type: 'complete', message: 'Already installed — nothing to do.' });
+    return safeEnd();
+  }
+  if (runtimeInstallInFlight.has(info.id)) {
+    send({ type: 'error', message: `Another ${info.label} install is already running. Wait for it to finish or restart PortOS.` });
+    return safeEnd();
+  }
+  // The install may add/remove packages; drop any cached "ready" so the
+  // post-install /runtime-status response reflects the new state instead of
+  // a stale "true" from before a deliberate cleanup.
+  invalidateByovReadyCache(info.id);
+
+  const scriptPath = join(PATHS.root, 'scripts', 'setup-image-video.sh');
+  if (!existsSync(scriptPath)) {
+    send({ type: 'error', message: `Installer script not found at ${scriptPath}` });
+    return safeEnd();
+  }
+
+  send({ type: 'log', message: `▸ Starting ${info.label} install via ${info.installEnvVar}=1 bash scripts/setup-image-video.sh` });
+  const child = spawn('bash', [scriptPath], {
+    env: { ...process.env, [info.installEnvVar]: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  runtimeInstallInFlight.set(info.id, child);
+
+  const onChunk = (chunk) => {
+    for (const line of chunk.toString().split(/[\r\n]+/)) {
+      const t = line.trimEnd();
+      if (t) send({ type: 'log', message: t });
+    }
+  };
+  child.stdout.on('data', onChunk);
+  child.stderr.on('data', onChunk);
+  child.on('error', (err) => {
+    runtimeInstallInFlight.delete(info.id);
+    send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
+    safeEnd();
+  });
+  child.on('close', async (code) => {
+    runtimeInstallInFlight.delete(info.id);
+    // Re-probe rather than trusting exit code alone — partial installs
+    // (network drop mid-clone, missing requirements file, ctrl-c via
+    // SIGTERM) can exit 0 but leave the venv unable to import its core
+    // packages. Probe both the binary AND the import surface so the
+    // success message can't lie. The banner gate uses the same probe.
+    const binaryPresent = isByovRuntimeInstalled(info.id);
+    const packagesReady = binaryPresent && await isByovRuntimeReady(info.id);
+    if (code === 0 && binaryPresent && packagesReady) {
+      send({ type: 'complete', message: `${info.label} ready: ${info.venvPython}` });
+    } else if (code === 0 && !binaryPresent) {
+      send({ type: 'error', message: `Installer exited 0 but ${info.venvPython} is still missing. Re-run from a terminal to see what happened.` });
+    } else if (code === 0) {
+      send({ type: 'error', message: `Installer exited 0 but the venv can't import its core packages. Check the log above for pip errors; re-run from a terminal if needed.` });
+    } else {
+      send({ type: 'error', message: `Installer exited with code ${code}.` });
+    }
+    safeEnd();
+  });
+
+  req.on('close', () => {
+    if (!child.killed) child.kill('SIGTERM');
+    safeEnd();
   });
 }));
 

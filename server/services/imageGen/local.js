@@ -392,8 +392,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       // Sort by mtime, not filename. mflux names files like `step_1.png` …
       // `step_20.png` (no zero-padding), so alphabetical sort puts `step_2`
       // *after* `step_19` and we'd render an early-step latent (mostly noise)
-      // instead of the latest.
-      const names = (await readdir(stepwiseDir)).filter((f) => f.endsWith('.png'));
+      // instead of the latest. Also drop mflux's `seed_*_composite.png` —
+      // it writes that grid right after every step, so its mtime always wins
+      // the "latest" race and the user would see a growing thumbnail strip
+      // instead of the live diffusion frame.
+      const names = (await readdir(stepwiseDir)).filter((f) => f.endsWith('.png') && !f.includes('composite'));
       const stats = await Promise.all(names.map(async (n) => {
         const s = await stat(join(stepwiseDir, n)).catch(() => null);
         return s ? { n, mtimeMs: s.mtimeMs } : null;

@@ -57,13 +57,101 @@ const IS_WIN = process.platform === 'win32';
 // Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
 
-// "Bring-your-own-venv" video runtimes — runtimes that resolve their own
-// Python interpreter inside buildArgs (LTX2_VENV_PYTHON / WAN22_VENV_PYTHON
-// / HUNYUAN_VENV_PYTHON), so the legacy mlx_video `settings.imageGen.local.
-// pythonPath` is irrelevant. Used by BOTH services/videoGen/local.js and
-// routes/videoGen.js to decide when to enforce the pythonPath gate — keep
-// the two in sync via this single export.
-export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(['ltx2', 'wan22', 'hunyuan']));
+// Per-runtime metadata for "bring-your-own-venv" video runtimes — those that
+// resolve their own Python interpreter inside buildArgs (so the legacy
+// mlx_video `settings.imageGen.local.pythonPath` is irrelevant). Single
+// source of truth: the BYOV_VIDEO_RUNTIMES Set + the /setup/runtime-* routes
+// + the client install banner all derive from this map's keys.
+//
+// `importProbe` is a tiny Python expression run by isByovRuntimeReady() to
+// confirm the venv's *packages* are actually installed (not just the venv
+// binary). A partial install (e.g. setup script aborted after `uv venv`
+// before `uv pip install`) leaves the binary present but no torch — without
+// this probe the UI would hide the install banner and renders would fail
+// with a deep ImportError inside the runner script.
+export const BYOV_RUNTIME_INFO = Object.freeze({
+  hunyuan: {
+    id: 'hunyuan',
+    label: 'HunyuanVideo MLX',
+    venvPython: HUNYUAN_VENV_PYTHON,
+    repoDir: HUNYUAN_REPO_DIR,
+    installEnvVar: 'INSTALL_HUNYUAN',
+    repoUrl: 'https://github.com/gaurav-nelson/HunyuanVideo_MLX',
+    importProbe: 'import torch, huggingface_hub, transformers',
+  },
+  wan22: {
+    id: 'wan22',
+    label: 'Wan 2.2 MLX',
+    venvPython: WAN22_VENV_PYTHON,
+    repoDir: WAN22_REPO_DIR,
+    installEnvVar: 'INSTALL_WAN22',
+    repoUrl: 'https://github.com/osama-ata/Wan2.2-mlx',
+    importProbe: 'import torch, transformers, huggingface_hub',
+  },
+  ltx2: {
+    id: 'ltx2',
+    label: 'LTX-2 MLX',
+    venvPython: LTX2_VENV_PYTHON,
+    repoDir: join(homedir(), '.portos', 'ltx-2-mlx'),
+    installEnvVar: 'INSTALL_LTX2',
+    repoUrl: 'https://github.com/dgrauet/ltx-2-mlx',
+    // Matches the post-install check setup-image-video.sh runs after
+    // `uv sync` (`import ltx_pipelines_mlx` is the canonical health signal
+    // for this venv).
+    importProbe: 'import ltx_pipelines_mlx',
+  },
+});
+
+export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(Object.keys(BYOV_RUNTIME_INFO)));
+
+export function isByovRuntimeInstalled(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info) return false;
+  return existsSync(info.venvPython);
+}
+
+// Cache the import-probe result per runtime for the life of the server
+// process (or until invalidateByovReadyCache is called). The probe itself
+// spawns python + imports torch — measured ~500ms-2s warm, ~5s cold — so
+// repeating it on every status request is too slow. Positive results are
+// stable (you don't accidentally uninstall packages); negative results we
+// re-probe each request so a finished install reflects immediately. The
+// install-completion path in routes/videoGen.js explicitly invalidates
+// the entry for the runtime it just installed.
+const readyCache = new Map();
+export function invalidateByovReadyCache(runtimeId) {
+  if (runtimeId) readyCache.delete(runtimeId); else readyCache.clear();
+}
+export async function isByovRuntimeReady(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info) return false;
+  if (!existsSync(info.venvPython)) return false;
+  if (readyCache.get(runtimeId) === true) return true;
+  const probeOk = await new Promise((resolve) => {
+    const child = spawn(info.venvPython, ['-c', info.importProbe], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 30000);
+    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
+    child.on('error', () => { clearTimeout(timer); resolve(false); });
+  });
+  if (probeOk) readyCache.set(runtimeId, true);
+  return probeOk;
+}
+
+// Throws the same shape the per-runtime buildArgs used to throw inline — a
+// 500 with a stable runtime-specific code the route layer and tests already
+// match against. The error codes are LTX2_VENV_MISSING / WAN22_VENV_MISSING
+// / HUNYUAN_VENV_MISSING; keep `runtimeId.toUpperCase()` to preserve them.
+export function assertByovRuntimeInstalled(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info) return;
+  if (existsSync(info.venvPython)) return;
+  throw new ServerError(
+    `${info.label} venv not found at ${info.venvPython}. Run \`${info.installEnvVar}=1 bash scripts/setup-image-video.sh\` to install.`,
+    { status: 500, code: `${runtimeId.toUpperCase()}_VENV_MISSING` },
+  );
+}
 
 export const listVideoModels = () => getVideoModels();
 
@@ -113,12 +201,7 @@ export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
 const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
-  if (!existsSync(LTX2_VENV_PYTHON)) {
-    throw new ServerError(
-      `ltx-2-mlx venv not found at ${LTX2_VENV_PYTHON}. Run \`INSTALL_LTX2=1 bash scripts/setup-image-video.sh\` to install.`,
-      { status: 500, code: 'LTX2_VENV_MISSING' },
-    );
-  }
+  assertByovRuntimeInstalled('ltx2');
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
   // source video's latent (motion + visual content) rather than just the
@@ -273,12 +356,7 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
 // upstream's --task / --size / --ckpt_dir form so PortOS releases don't
 // fight upstream CLI changes.
 const buildWan22Args = ({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath }) => {
-  if (!existsSync(WAN22_VENV_PYTHON)) {
-    throw new ServerError(
-      `wan2.2-mlx venv not found at ${WAN22_VENV_PYTHON}. Run \`INSTALL_WAN22=1 bash scripts/setup-image-video.sh\` to install.`,
-      { status: 500, code: 'WAN22_VENV_MISSING' },
-    );
-  }
+  assertByovRuntimeInstalled('wan22');
   const args = [
     WAN22_HELPER_SCRIPT,
     '--repo-dir', WAN22_REPO_DIR,
@@ -305,12 +383,24 @@ const buildWan22Args = ({ model, prompt, width, height, numFrames, steps, guidan
   return { bin: WAN22_VENV_PYTHON, args };
 };
 
-// Build args for the HunyuanVideo MLX helper. Mirror of the Wan 2.2 path.
-const buildHunyuanArgs = ({ model, prompt, width, height, numFrames, steps, guidance, seed, outputPath }) => {
-  if (!existsSync(HUNYUAN_VENV_PYTHON)) {
+// Allowed precision tokens for runners that expose dtype as a CLI flag. The
+// Python side already gates argparse with `choices=`, but a bogus value in
+// data/media-models.json would otherwise reach the helper and surface as a
+// less-friendly "invalid choice" inside a Python traceback — failing here
+// gives a stable PortOS error code the route + client error path knows.
+const VIDEO_PRECISIONS = Object.freeze(['fp16', 'bf16', 'fp32']);
+
+// Build args for the HunyuanVideo MLX helper. Calls hyvideo.inference
+// directly (see scripts/generate_hunyuan.py) so the steps / guidance /
+// precision flags actually take effect — upstream's sample_video_mps.py
+// silently hardcoded them.
+const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFrames, steps, guidance, seed, outputPath }) => {
+  assertByovRuntimeInstalled('hunyuan');
+  const precision = model.precision || 'fp16';
+  if (!VIDEO_PRECISIONS.includes(precision)) {
     throw new ServerError(
-      `hunyuan-video-mlx venv not found at ${HUNYUAN_VENV_PYTHON}. Run \`INSTALL_HUNYUAN=1 bash scripts/setup-image-video.sh\` to install.`,
-      { status: 500, code: 'HUNYUAN_VENV_MISSING' },
+      `Invalid precision "${precision}" on model "${model.id}" — expected one of ${VIDEO_PRECISIONS.join(', ')}`,
+      { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
     );
   }
   const args = [
@@ -324,8 +414,10 @@ const buildHunyuanArgs = ({ model, prompt, width, height, numFrames, steps, guid
     '--steps', String(steps),
     '--guidance', String(guidance ?? 6.0),
     '--seed', String(seed),
+    '--precision', precision,
     '--output', outputPath,
   ];
+  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
@@ -340,7 +432,7 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     return buildWan22Args({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'hunyuan') {
-    return buildHunyuanArgs({ model, prompt, width, height, numFrames, steps, guidance, seed, outputPath });
+    return buildHunyuanArgs({ model, prompt, negativePrompt, width, height, numFrames, steps, guidance, seed, outputPath });
   }
   if (Array.isArray(keyframes) && keyframes.length >= 2) {
     throw new ServerError(
@@ -608,16 +700,22 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // a gated repo, but the merge is harmless when no token is configured.
   const childEnv = { ...process.env, ...(await hfTokenEnv()) };
   delete childEnv.PYTHONPATH;
+  // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
+  // immediately. Without this, child stdio is line-buffered against a pipe and
+  // long inference loops emit nothing to handleLine() for minutes — the UI
+  // looks dead even when the model is making progress.
+  childEnv.PYTHONUNBUFFERED = '1';
   const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
   // Hold a sleep-prevention lock for the lifetime of the python child, so a
-  // 90s+ render doesn't get aborted by display/system sleep on a laptop. -w
-  // makes caffeinate self-exit when our pid does, so no manual cleanup is
-  // needed and a server crash mid-render still releases the assertion.
-  // macOS-only — `caffeinate` is a darwin binary; gating on `!IS_WIN` would
-  // also fire on Linux and emit a pointless ENOENT every render.
+  // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
+  // sleep (lid-close / low-power), `-i` blocks idle sleep, `-d` blocks display
+  // sleep — together they survive everything short of the user forcing sleep
+  // from the Apple menu. `-w` makes caffeinate self-exit when our pid does, so
+  // no manual cleanup is needed and a server crash mid-render still releases
+  // the assertion. macOS-only — `caffeinate` is a darwin binary.
   if (process.platform === 'darwin' && proc.pid) {
-    spawn('caffeinate', ['-i', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
+    spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
   }
   // Without an 'error' handler, a missing/non-executable pythonPath would
   // crash the server with an unhandled error event.

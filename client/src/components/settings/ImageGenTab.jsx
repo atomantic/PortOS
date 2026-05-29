@@ -156,9 +156,9 @@ export function ImageGenTab() {
         const cxParallel = clampParallel(cx.parallelLimit, bounds);
         // Per-mode cleaner reads via the shared helper (mirrored from
         // server/lib/imageClean.js).
-        const codexClean = resolveCleanersFromConfig(cx);
-        const localClean = resolveCleanersFromConfig(ig.local);
-        const externalClean = resolveCleanersFromConfig(ig.external);
+        const codexClean = resolveCleanersFromConfig(cx, IMAGE_GEN_MODE.CODEX);
+        const localClean = resolveCleanersFromConfig(ig.local, IMAGE_GEN_MODE.LOCAL);
+        const externalClean = resolveCleanersFromConfig(ig.external, IMAGE_GEN_MODE.EXTERNAL);
         const c2 = { codex: codexClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
         const dn = { codex: codexClean.denoise, local: localClean.denoise, external: externalClean.denoise };
         setMode(m);

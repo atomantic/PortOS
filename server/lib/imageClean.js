@@ -23,19 +23,21 @@ import { tryReadFile, safeJSONParse, atomicWrite } from './fileUtils.js';
  * "what did the user save" rule that resolver + Settings UI + ImageGen
  * page + test mocks all need to agree on).
  *
- * Defaults: `cleanC2PA` defaults to true (safe, lossless); `denoise` defaults
- * to false (lossy, blurs text — must be explicitly opted into). Legacy
- * pre-split installs carrying `autoClean: true` keep `cleanC2PA` on (which
- * defaults on anyway) but do NOT silently inherit denoise — upgrading users
- * who never explicitly chose denoise get it off.
+ * Defaults are mode-aware: `cleanC2PA` defaults on only for backends that
+ * actually emit C2PA chunks today — `codex` (gpt-image-2) and `external`
+ * (A1111 / Forge proxies that may re-encode through ComfyUI's C2PA stamp
+ * node). Allow-list rather than deny-list: a future 4th backend defaults
+ * off until someone confirms it emits caBX. `denoise` defaults to false
+ * everywhere (lossy, blurs text — must be explicitly opted into).
  *
  * Mirrored verbatim in `client/src/lib/imageCleaners.js` — keep the two
  * copies in sync; the client tree can't import from server/lib.
  */
-export function resolveCleanersFromConfig(modeCfg) {
+export function resolveCleanersFromConfig(modeCfg, mode) {
   const cfg = modeCfg || {};
+  const cleanC2PADefault = mode === 'codex' || mode === 'external';
   return {
-    cleanC2PA: typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : true,
+    cleanC2PA: typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : cleanC2PADefault,
     denoise: typeof cfg.denoise === 'boolean' ? cfg.denoise : false,
   };
 }

@@ -34,6 +34,17 @@ vi.mock('../services/videoGen/local.js', () => ({
   // "accepts BYOV-runtime when pythonPath missing" case passes and the
   // negative case (legacy mlx_video model) still 400s.
   BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'wan22', 'hunyuan']),
+  // The route's /status response now surfaces the BYOV runtime list so the
+  // client can drop its hardcoded copy. Mirror the real shape — only the
+  // `id` and a couple of UI-display fields are read by /status.
+  BYOV_RUNTIME_INFO: {
+    ltx2: { id: 'ltx2', label: 'LTX-2 MLX', venvPython: '/tmp/ltx2.py', installEnvVar: 'INSTALL_LTX2', repoUrl: 'x', repoDir: '/tmp' },
+    wan22: { id: 'wan22', label: 'Wan 2.2 MLX', venvPython: '/tmp/wan22.py', installEnvVar: 'INSTALL_WAN22', repoUrl: 'x', repoDir: '/tmp' },
+    hunyuan: { id: 'hunyuan', label: 'HunyuanVideo MLX', venvPython: '/tmp/hunyuan.py', installEnvVar: 'INSTALL_HUNYUAN', repoUrl: 'x', repoDir: '/tmp' },
+  },
+  isByovRuntimeInstalled: vi.fn(() => false),
+  isByovRuntimeReady: vi.fn(async () => false),
+  invalidateByovReadyCache: vi.fn(),
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the

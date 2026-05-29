@@ -32,7 +32,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `universeStylePreset.js` | Build the client-side style preset that `composeStyledPrompt` layers on top. |
 | `bibleLimits.js` | Mirror of `server/lib/storyBible.js` `BIBLE_LIMITS`. |
 | `editorialRoadmap.js` | `projectAnalyzedPoints` (aggregate roadmap → analyzed chart points with arc-position `frac`) + `dominant` (most-frequent string). Shared by EditorialRoadmapPanel and the Reader Map page. |
-| `imageCleaners.js` | Mirror of `resolveCleanersFromConfig` from `server/lib/imageClean.js`. Reads `{cleanC2PA, denoise}` off a per-mode settings record; `cleanC2PA` defaults on, `denoise` defaults off (legacy `autoClean: true` no longer silently enables denoise). |
+| `imageCleaners.js` | Mirror of `resolveCleanersFromConfig` from `server/lib/imageClean.js`. Reads `{cleanC2PA, denoise}` off a per-mode settings record. `cleanC2PA` defaults are mode-aware (on for `codex` + `external` — the backends that emit C2PA chunks today — off otherwise, as an allow-list rather than a deny-list); `denoise` defaults off everywhere (lossy, opt-in only). |
 | `runnerFamilies.js` | Mirror of `server/lib/runners.js`. |
 | `issueLength.js` | Mirror of `server/lib/issueLength.js`. |
 

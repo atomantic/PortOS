@@ -29,6 +29,7 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
+import RuntimeInstallModal from '../components/videoGen/RuntimeInstallModal';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
@@ -472,6 +473,29 @@ export default function VideoGen() {
 
   const currentModel = models.find((m) => m.id === modelId);
 
+  // Probe the per-runtime status BEFORE the user hits Generate — without
+  // this they'd see the buildArgs-time "venv not found" 500 with no good way
+  // to recover. The set of "BYOV" runtimes comes from /status server-side so
+  // it can't drift from the server's BYOV_RUNTIME_INFO map.
+  const [byovStatus, setByovStatus] = useState(null);
+  const [installModalOpen, setInstallModalOpen] = useState(false);
+  const byovRuntime = currentModel?.runtime;
+  const needsByovProbe = byovRuntime && (status?.byovRuntimes || []).includes(byovRuntime);
+  const refreshByovStatus = useCallback((signal) => {
+    if (!needsByovProbe) { setByovStatus(null); return Promise.resolve(); }
+    return fetch(`/api/video-gen/setup/runtime-status?runtime=${encodeURIComponent(byovRuntime)}`, { signal })
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => { if (s) setByovStatus(s); })
+      .catch(() => {});
+  }, [byovRuntime, needsByovProbe]);
+  useEffect(() => {
+    if (!needsByovProbe) { setByovStatus(null); return; }
+    const controller = new AbortController();
+    refreshByovStatus(controller.signal);
+    return () => controller.abort();
+  }, [needsByovProbe, refreshByovStatus]);
+  const byovRuntimeMissing = !!byovStatus && byovStatus.installed === false;
+
   // Inline cache-status badge for the picked video model + the active text
   // encoder (a separate ~7-25 GB HF pull). Drives the "Available" / "Download"
   // affordance under the Model select, so users learn about the multi-GB
@@ -774,7 +798,7 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
+    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked || byovRuntimeMissing) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
@@ -1055,6 +1079,23 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          {byovRuntimeMissing && (
+            <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <strong className="font-semibold">{byovStatus.label}</strong> isn't installed yet.
+                PortOS can fetch and install it from {byovStatus.repoUrl?.replace('https://', '')} (~5-15 min, multi-GB on first run).
+              </div>
+              <button
+                type="button"
+                onClick={() => setInstallModalOpen(true)}
+                disabled={generating}
+                className="self-start sm:self-auto whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80 disabled:opacity-50"
+              >
+                <Sparkles size={14} />
+                Install {byovStatus.label}
+              </button>
+            </div>
+          )}
           <StylePresetPicker
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
@@ -1415,10 +1456,11 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovRuntimeMissing}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
-                  extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
+                  byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
+                    : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
                     : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
                       ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
                       : 'Pick an audio file before generating')
@@ -1592,6 +1634,14 @@ export default function VideoGen() {
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
         <ImageGenTab />
       </Drawer>
+
+      <RuntimeInstallModal
+        open={installModalOpen}
+        runtime={byovRuntime}
+        label={byovStatus?.label}
+        onClose={() => setInstallModalOpen(false)}
+        onComplete={() => refreshByovStatus()}
+      />
     </div>
   );
 }
