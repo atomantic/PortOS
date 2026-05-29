@@ -798,7 +798,14 @@ router.get('/setup/check', asyncHandler(async (req, res) => {
   }
   const result = await buildSetupCheck(pythonPath);
   if (key) {
-    setupCheckCache.set(key, { result, expiresAt: Date.now() + SETUP_CHECK_TTL_MS });
+    // Sweep expired entries on every write so a long-running process doesn't
+    // accumulate stale (path, mtime) combos from intermediate keystrokes
+    // (each typed character of a path string lands a unique key here).
+    const now = Date.now();
+    for (const [k, v] of setupCheckCache) {
+      if (v.expiresAt <= now) setupCheckCache.delete(k);
+    }
+    setupCheckCache.set(key, { result, expiresAt: now + SETUP_CHECK_TTL_MS });
   }
   res.json(result);
 }));

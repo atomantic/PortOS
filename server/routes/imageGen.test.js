@@ -643,5 +643,42 @@ describe('Image Gen Routes', () => {
       await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(base)}`);
       expect(probePythonHealth).toHaveBeenCalledTimes(2);
     });
+
+    it('GET /setup/install completion invalidates the cache for that pythonPath', async () => {
+      const p = '/usr/bin/python3-install-bust-test';
+      // Warm cache.
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+
+      // Run install (mocked installPackages resolves immediately).
+      const installRes = await request(app).get(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=mflux`);
+      expect(installRes.status).toBe(200);
+
+      // The next /setup/check must re-probe — the install just changed the
+      // missing-packages list, and the SSE consumer re-runs /setup/check on
+      // `complete` expecting fresh data.
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('write path sweeps expired entries so long-running processes do not accumulate', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const stale = '/usr/bin/python3-sweep-stale';
+        const fresh = '/usr/bin/python3-sweep-fresh';
+        // Warm the cache with one entry, then advance past the TTL.
+        await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(stale)}`);
+        vi.advanceTimersByTime(31_000);
+        // A write for a different path triggers the sweep — stale entry drops.
+        await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(fresh)}`);
+        // A subsequent probe of the stale path re-spawns, confirming the entry
+        // was actually removed (not merely TTL-bypassed).
+        await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(stale)}`);
+        // 3 spawns total: initial stale, fresh, post-sweep stale.
+        expect(probePythonHealth).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
