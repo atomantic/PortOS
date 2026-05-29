@@ -207,10 +207,7 @@ export default function Loras() {
         <h2 className="text-lg font-semibold text-white mb-3">Installed</h2>
         {loading && <div className="text-sm text-gray-500">Loading…</div>}
         {error && (
-          <div className="bg-port-error/10 border border-port-error/30 rounded p-3 text-sm text-port-error flex items-center gap-2">
-            <AlertTriangle size={16} />
-            {error}
-          </div>
+          <Banner tone="error" size="md" icon={AlertTriangle} align="center">{error}</Banner>
         )}
         {!loading && !error && loras.length === 0 && (
           <div className="text-sm text-gray-500 italic">

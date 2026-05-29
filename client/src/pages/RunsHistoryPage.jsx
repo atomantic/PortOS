@@ -4,6 +4,7 @@ import { Trash2, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
+import Banner from '../components/ui/Banner';
 import { writeClipboardSilently } from '../lib/clipboard';
 
 export function RunsHistoryPage() {
@@ -395,11 +396,11 @@ export function RunsHistoryPage() {
                                 </span>
                               )}
                             </div>
-                            <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3">
-                              <pre className="text-sm text-port-error font-mono whitespace-pre-wrap break-all">
+                            <Banner tone="error" size="md">
+                              <pre className="text-sm font-mono whitespace-pre-wrap break-all">
                                 {run.error || exitInfo.description}
                               </pre>
-                            </div>
+                            </Banner>
                             {/* Show additional error details if available and different from error */}
                             {run.errorDetails && run.errorDetails !== run.error && (
                               <div className="mt-2 bg-port-error/5 border border-port-error/20 rounded-lg p-3">
@@ -411,12 +412,12 @@ export function RunsHistoryPage() {
                             )}
                             {/* Show suggested fix if available, or fallback to exit code info */}
                             {(run.suggestedFix || (!run.error && exitInfo.description)) && (
-                              <div className="mt-2 bg-port-warning/10 border border-port-warning/30 rounded-lg p-3">
-                                <div className="text-xs text-port-warning mb-1 font-medium">Suggested Fix</div>
+                              <Banner tone="warning" size="md" className="mt-2">
+                                <div className="text-xs font-medium mb-1">Suggested Fix</div>
                                 <div className="text-sm text-gray-300">
                                   {run.suggestedFix || 'Check the output above for specific error details. If the output is empty, the process may have been terminated before producing output.'}
                                 </div>
-                              </div>
+                              </Banner>
                             )}
                           </div>
                         );

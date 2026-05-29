@@ -12,6 +12,7 @@ import {
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
@@ -852,9 +853,9 @@ function StoryBuilderDetail({ storyId, stepParam }) {
             </div>
 
             {isStale && (
-              <div className="flex items-center gap-2 text-sm text-port-warning bg-port-warning/10 border border-port-warning/30 rounded px-3 py-2">
-                <AlertTriangle className="w-4 h-4" /> An earlier step changed after you locked this — re-review and re-lock to continue.
-              </div>
+              <Banner tone="warning" size="md" icon={AlertTriangle} align="center">
+                An earlier step changed after you locked this — re-review and re-lock to continue.
+              </Banner>
             )}
 
             <StepPanel

@@ -334,9 +334,8 @@ export default function MemoryTab({ apps = [] }) {
                 <div className="space-y-4">
                   <p>No memories yet.</p>
                   {!embeddingStatus?.available && (
-                    <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4 text-left max-w-md mx-auto">
-                      <p className="text-port-warning font-medium mb-2">Embedding Service Unavailable</p>
-                      <p className="text-sm text-gray-400">
+                    <Banner tone="warning" size="lg" title="Embedding Service Unavailable" className="text-left max-w-md mx-auto">
+                      <p className="text-sm text-gray-400 mt-2">
                         Cannot connect to embedding service{embeddingStatus?.endpoint && (
                           <span>: <code className="text-port-accent">{embeddingStatus.endpoint}</code></span>
                         )}
@@ -373,7 +372,7 @@ export default function MemoryTab({ apps = [] }) {
                       >
                         Save &amp; Retry
                       </button>
-                    </div>
+                    </Banner>
                   )}
                   {embeddingStatus?.available && (
                     <p className="text-sm">

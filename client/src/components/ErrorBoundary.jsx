@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import Banner from './ui/Banner';
 import { isStaleChunkError, reloadOnceForStaleChunk } from '../utils/staleChunkReload';
 
 export default class ErrorBoundary extends Component {
@@ -30,11 +31,11 @@ export default class ErrorBoundary extends Component {
               An unexpected error occurred. Please try refreshing the page.
             </p>
             {this.state.error && (
-              <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3 mb-4">
-                <p className="text-xs text-port-error font-mono break-all">
+              <Banner tone="error" size="md" className="mb-4">
+                <p className="text-xs font-mono break-all">
                   {this.state.error.message}
                 </p>
-              </div>
+              </Banner>
             )}
             <button
               onClick={() => window.location.reload()}

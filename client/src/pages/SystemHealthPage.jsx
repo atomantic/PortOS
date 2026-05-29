@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
+import Banner from '../components/ui/Banner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 const HEALTH_STYLE = {
@@ -108,10 +109,7 @@ export default function SystemHealthPage() {
         {health.warnings.length > 0 && (
           <section className="space-y-2">
             {health.warnings.map((w, i) => (
-              <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-port-warning text-sm">
-                <AlertTriangle size={14} />
-                <span>{w.message}</span>
-              </div>
+              <Banner key={i} tone="warning" size="md" icon={AlertTriangle} align="center">{w.message}</Banner>
             ))}
           </section>
         )}

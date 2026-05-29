@@ -6,6 +6,7 @@ import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
+import Banner from '../ui/Banner';
 import { copyToClipboard } from '../../lib/clipboard';
 
 export default function EditAppModal({ app, onClose, onSave }) {
@@ -405,9 +406,9 @@ export default function EditAppModal({ app, onClose, onSave }) {
                 {formData.jiraEnabled && (
                   <>
                     {jiraInstances.length === 0 ? (
-                      <div className="p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg text-sm text-port-warning">
+                      <Banner tone="warning" size="md">
                         No JIRA instances configured. <Link to="/devtools/jira" className="underline hover:text-white">Configure JIRA</Link> first.
-                      </div>
+                      </Banner>
                     ) : (
                       <>
                         <div>
@@ -612,9 +613,9 @@ export default function EditAppModal({ app, onClose, onSave }) {
                 {formData.datadogEnabled && (
                   <>
                     {datadogInstances.length === 0 ? (
-                      <div className="p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg text-sm text-port-warning">
+                      <Banner tone="warning" size="md">
                         No DataDog instances configured. <Link to="/devtools/datadog" className="underline hover:text-white">Configure DataDog</Link> first.
-                      </div>
+                      </Banner>
                     ) : (
                       <>
                         <div>

@@ -270,9 +270,7 @@ export default function Security() {
 
       {/* Error display */}
       {error && (
-        <div className="mb-6 p-4 bg-port-error/10 border border-port-error/30 rounded-lg text-port-error">
-          {error}
-        </div>
+        <Banner tone="error" size="lg" className="mb-6">{error}</Banner>
       )}
 
       {/* Audio interaction prompt for mobile browsers */}

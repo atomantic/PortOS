@@ -1126,16 +1126,15 @@ export default function ScheduleTab({ apps }) {
       )}
 
       {schedule.onDemandRequests?.length > 0 && (
-        <div className="bg-port-accent/10 border border-port-accent/30 rounded-lg p-4">
-          <h4 className="text-sm font-medium text-port-accent mb-2">Pending On-Demand Tasks</h4>
-          <div className="space-y-1">
+        <Banner tone="info" size="lg" title="Pending On-Demand Tasks">
+          <div className="space-y-1 mt-2">
             {schedule.onDemandRequests.map(req => (
               <div key={req.id} className="text-sm text-gray-300">
                 {req.taskType}{req.appId ? ` (${req.appId})` : ''} - requested {new Date(req.requestedAt).toLocaleTimeString()}
               </div>
             ))}
           </div>
-        </div>
+        </Banner>
       )}
 
       <AppTaskTypeSection

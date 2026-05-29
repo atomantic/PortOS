@@ -7,6 +7,7 @@ import KanbanBoard from '../../KanbanBoard';
 import EditAppModal from '../EditAppModal';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
+import Banner from '../../ui/Banner';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import * as api from '../../../services/api';
 
@@ -131,47 +132,44 @@ export default function OverviewTab({ app, onRefresh }) {
 
       {/* Missing Xcode Scripts Banner */}
       {missingScripts.length > 0 && (
-        <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="text-sm font-medium text-port-warning mb-2">
-                Missing management scripts
-              </div>
-              <div className="flex flex-wrap gap-2 mb-3">
-                {missingScripts.map(s => {
-                  const Icon = SCRIPT_ICONS[s.name] || Terminal;
-                  return (
-                    <span key={s.name} className="inline-flex items-center gap-1.5 px-2 py-1 bg-port-card border border-port-border rounded text-xs text-gray-300">
-                      <Icon size={12} />
-                      <span className="font-mono">{s.name}</span>
-                      <span className="text-gray-500">— {s.description}</span>
-                    </span>
-                  );
-                })}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleInstallScripts(missingScripts.map(s => s.name))}
-                  disabled={installingScripts}
-                  className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded text-xs font-medium disabled:opacity-50"
-                >
-                  {installingScripts ? 'Installing...' : 'Install All'}
-                </button>
-                {missingScripts.length > 1 && missingScripts.map(s => (
-                  <button
-                    key={s.name}
-                    onClick={() => handleInstallScripts([s.name])}
-                    disabled={installingScripts}
-                    className="px-2 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-300 rounded text-xs disabled:opacity-50"
-                  >
-                    Install {s.name}
-                  </button>
-                ))}
-              </div>
-            </div>
+        <Banner
+          tone="warning"
+          size="lg"
+          icon={AlertTriangle}
+          title="Missing management scripts"
+        >
+          <div className="flex flex-wrap gap-2 mb-3 mt-2">
+            {missingScripts.map(s => {
+              const Icon = SCRIPT_ICONS[s.name] || Terminal;
+              return (
+                <span key={s.name} className="inline-flex items-center gap-1.5 px-2 py-1 bg-port-card border border-port-border rounded text-xs text-gray-300">
+                  <Icon size={12} />
+                  <span className="font-mono">{s.name}</span>
+                  <span className="text-gray-500">— {s.description}</span>
+                </span>
+              );
+            })}
           </div>
-        </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleInstallScripts(missingScripts.map(s => s.name))}
+              disabled={installingScripts}
+              className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded text-xs font-medium disabled:opacity-50"
+            >
+              {installingScripts ? 'Installing...' : 'Install All'}
+            </button>
+            {missingScripts.length > 1 && missingScripts.map(s => (
+              <button
+                key={s.name}
+                onClick={() => handleInstallScripts([s.name])}
+                disabled={installingScripts}
+                className="px-2 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-300 rounded text-xs disabled:opacity-50"
+              >
+                Install {s.name}
+              </button>
+            ))}
+          </div>
+        </Banner>
       )}
 
       {/* Start Commands */}
