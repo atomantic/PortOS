@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { logAction } from './history.js';
-import { ALLOWED_COMMANDS, DANGEROUS_SHELL_CHARS } from '../lib/commandSecurity.js';
+import { ALLOWED_COMMANDS, validateCommand } from '../lib/commandSecurity.js';
 
 // Track active commands
 const activeCommands = new Map();
@@ -16,40 +16,24 @@ const activeCommands = new Map();
 export function executeCommand(command, workspacePath, onData, onComplete) {
   const commandId = Date.now().toString(36) + Math.random().toString(36).substr(2);
 
-  // Security: Reject empty or whitespace-only commands
-  const trimmedCommand = command?.trim();
-  if (!trimmedCommand) {
-    const error = 'Empty command provided';
-    onComplete?.({ success: false, error, exitCode: 1 });
+  const validation = validateCommand(command);
+  if (!validation.valid) {
+    const trimmedForLog = (command || '').trim();
+    onComplete?.({ success: false, error: validation.error, exitCode: 1 });
+    if (trimmedForLog) {
+      logAction('command', null, trimmedForLog.substring(0, 50), { command: trimmedForLog, workspacePath }, false, validation.error);
+    }
     return null;
   }
 
-  // Parse command to check allowlist
-  const parts = trimmedCommand.split(/\s+/);
-  const baseCommand = parts[0];
-
-  if (!ALLOWED_COMMANDS.has(baseCommand)) {
-    const error = `Command '${baseCommand}' is not in the allowlist`;
-    onComplete?.({ success: false, error, exitCode: 1 });
-    logAction('command', null, trimmedCommand.substring(0, 50), { command: trimmedCommand, workspacePath }, false, error);
-    return null;
-  }
-
-  // Security: Check for dangerous shell metacharacters that could enable command injection
-  // This prevents attacks like: npm; rm -rf / or npm && malicious_cmd or npm | cat /etc/passwd
-  if (DANGEROUS_SHELL_CHARS.test(trimmedCommand)) {
-    const error = 'Command contains disallowed shell characters (security restriction)';
-    onComplete?.({ success: false, error, exitCode: 1 });
-    logAction('command', null, trimmedCommand.substring(0, 50), { command: trimmedCommand, workspacePath }, false, error);
-    return null;
-  }
-
+  const { baseCommand, args } = validation;
   const startTime = Date.now();
   let output = '';
 
-  // Security: Use spawn with array of args (shell:false) to prevent shell injection
-  // The DANGEROUS_SHELL_CHARS check above ensures no metacharacters slip through
-  const child = spawn(baseCommand, parts.slice(1), {
+  // Security: Use spawn with array of args (shell:false) to prevent shell injection.
+  // validateCommand has already rejected shell metacharacters AND parsed quoted args
+  // correctly (e.g. 'git commit -m "msg with spaces"' becomes 4 args, not 5).
+  const child = spawn(baseCommand, args, {
     cwd: workspacePath || process.cwd(),
     env: { ...process.env, FORCE_COLOR: '1' },
     shell: false,

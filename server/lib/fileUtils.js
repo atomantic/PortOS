@@ -482,8 +482,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   };
 
   const save = async (data) => {
-    await ensureDir(dir);
-    await writeFile(filePath, JSON.stringify(data, null, 2));
+    await atomicWrite(filePath, data);
     cache = data;
     cacheTimestamp = Date.now();
   };

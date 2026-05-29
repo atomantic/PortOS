@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
-import { ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
@@ -50,19 +50,15 @@ export async function loadAgentIndex() {
   return agentIndexPromise;
 }
 
-// Persist agent index to disk (atomic write via temp file + rename)
+// Persist agent index to disk via the shared atomicWrite helper (temp file + rename,
+// with Windows backup-swap fallback). Without atomic semantics a mid-write crash
+// truncates index.json and on next boot the date-bucket migration would silently
+// re-run (or worse, drop already-archived agents from the lookup).
 async function saveAgentIndex() {
   if (!agentIndex) return;
   const obj = Object.fromEntries(agentIndex);
-  const tmpFile = `${INDEX_FILE}.tmp`;
-  const written = await writeFile(tmpFile, JSON.stringify(obj)).then(() => true).catch(err => {
+  await atomicWrite(INDEX_FILE, obj).catch(err => {
     console.error(`❌ Failed to save agent index: ${err.message}`);
-    return false;
-  });
-  if (!written) return;
-  await rename(tmpFile, INDEX_FILE).catch(err => {
-    console.error(`❌ Failed to rename agent index: ${err.message}`);
-    rm(tmpFile, { force: true }).catch(() => {});
   });
 }
 
@@ -83,7 +79,7 @@ async function migrateAgentsToDateBuckets() {
 
   if (!existsSync(AGENTS_DIR)) {
     await ensureDir(AGENTS_DIR);
-    await writeFile(INDEX_FILE, '{}');
+    await atomicWrite(INDEX_FILE, {});
     console.log('📂 Created empty agent index (no agents to migrate)');
     return index;
   }
@@ -108,7 +104,7 @@ async function migrateAgentsToDateBuckets() {
   const flatAgentDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('agent-'));
 
   if (flatAgentDirs.length === 0) {
-    await writeFile(INDEX_FILE, JSON.stringify(Object.fromEntries(index)));
+    await atomicWrite(INDEX_FILE, Object.fromEntries(index));
     console.log(`📂 Agent index built: ${index.size} entries (no flat dirs to migrate)`);
     return index;
   }
@@ -185,7 +181,7 @@ async function migrateAgentsToDateBuckets() {
   }
 
   // Persist index
-  await writeFile(INDEX_FILE, JSON.stringify(Object.fromEntries(index)));
+  await atomicWrite(INDEX_FILE, Object.fromEntries(index));
   const uniqueDates = new Set(index.values()).size;
   const parts = [`📦 Migrated ${migrated} agents into date buckets (${uniqueDates} unique dates)`];
   if (skipped > 0) parts.push(`skipped ${skipped} undatable`);
@@ -309,7 +305,7 @@ export async function completeAgent(agentId, result = {}) {
       await ensureDir(flatDir);
     }
     const { output: _output, ...agentWithoutOutput } = state.agents[agentId];
-    await writeFile(join(flatDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2));
+    await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
 
     // Move entire agent dir into date bucket (atomic on same filesystem)
     const targetDir = join(bucketDir, agentId);
@@ -663,7 +659,7 @@ export async function cleanupZombieAgents() {
 
         // Ensure metadata is written before move
         if (!existsSync(flatDir)) await ensureDir(flatDir);
-        await writeFile(join(flatDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+        await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
 
         // Move to date bucket
         const targetDir = join(bucketDir, agentId);
@@ -750,7 +746,7 @@ export async function submitAgentFeedback(agentId, feedback) {
           const raw = safeJSONParse(content, null);
           if (raw) {
             raw.feedback = feedbackData;
-            await writeFile(metaPath, JSON.stringify(raw, null, 2)).catch(() => {});
+            await atomicWrite(metaPath, raw).catch(() => {});
           }
         }
       }
@@ -773,7 +769,7 @@ export async function submitAgentFeedback(agentId, feedback) {
     if (!raw) return { error: 'Agent not found' };
 
     raw.feedback = feedbackData;
-    await writeFile(metaPath, JSON.stringify(raw, null, 2));
+    await atomicWrite(metaPath, raw);
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
     cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
@@ -887,7 +883,7 @@ export async function archiveStaleAgents() {
 
         if (existsSync(flatDir) && !existsSync(targetDir)) {
           // Write metadata then move (with cross-filesystem fallback)
-          await writeFile(join(flatDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+          await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
           await rename(flatDir, targetDir).catch(async () => {
             await ensureDir(targetDir);
             const files = await readdir(flatDir).catch(() => []);
@@ -900,7 +896,7 @@ export async function archiveStaleAgents() {
           if (!existsSync(targetDir)) continue; // Skip index update if move failed
         } else if (!existsSync(targetDir)) {
           await ensureDir(targetDir);
-          await writeFile(join(targetDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+          await atomicWrite(join(targetDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
         }
 
         idx.set(id, dateStr);
