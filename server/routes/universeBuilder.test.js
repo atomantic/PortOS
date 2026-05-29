@@ -3,6 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
+import { mockNoPeers, mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 
@@ -13,6 +14,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));
+
+// Both mocks needed: vitest.setup.js's global `instances.js` mock uses importOriginal, which leaves the per-file `peerSync.js` mock unable to suppress the createUniverse dynamic-import hoist error alone.
+vi.mock('../services/instances.js', () => mockNoPeers());
+vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {

@@ -461,5 +461,31 @@ describe('pipeline series service', () => {
       await expect(svc.setArcFieldLock(s.id, 'bogus', true))
         .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
     });
+
+    it('setArcFieldLock accepts readerMap as a lockable arc field', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      const locked = await svc.setArcFieldLock(s.id, 'readerMap', true);
+      expect(locked.locked.arcFields).toEqual({ readerMap: true });
+      const cleared = await svc.setArcFieldLock(s.id, 'readerMap', false);
+      expect(cleared.locked.arcFields).toBeUndefined();
+    });
+  });
+
+  describe('arc.readerMap', () => {
+    it('persists a reader map through an arc-replace update and re-read', async () => {
+      const s = await svc.createSeries({ name: 'X', arc: { logline: 'spine' } });
+      const updated = await svc.updateSeries(s.id, {
+        arc: { logline: 'spine', readerMap: { hooks: [{ label: 'who?' }], beats: [{ kind: 'reveal', intensity: 0.6 }] } },
+      });
+      expect(updated.arc.readerMap.hooks).toHaveLength(1);
+      expect(updated.arc.readerMap.beats[0].kind).toBe('reveal');
+      const fresh = await svc.getSeries(s.id);
+      expect(fresh.arc.readerMap.hooks[0].label).toBe('who?');
+    });
+
+    it('arc is null and readerMap absent on a fresh series with no arc', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      expect(s.arc).toBe(null);
+    });
   });
 });

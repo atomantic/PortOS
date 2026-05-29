@@ -5,6 +5,7 @@ import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
+import { STEP_IDS as STORY_STEP_IDS } from './storyBuilderSteps.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -1103,6 +1104,11 @@ export const localLlmInstallSchema = z.object({
   modelId: localLlmModelIdSchema,
 });
 export const localLlmDeleteSchema = localLlmInstallSchema;
+// Memory-management unload: same `backend` + `modelId` shape as install/delete
+// so the validator catches the same set of malformed ids (no leading dash,
+// no control chars) — those reach Ollama via `/api/generate` body fields and
+// then echo into PortOS's emoji-prefixed unload log line.
+export const localLlmUnloadSchema = localLlmInstallSchema;
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
 // Migrate moves models from the OTHER backend onto `to` (bidirectional, never
 // flips the default marker). `mode` picks how the GGUF lands on disk: 'link'
@@ -1769,3 +1775,55 @@ export const issuesListQuerySchema = z.object({
   offset: z.preprocess((v) => (v === undefined ? 0 : Number(v)), z.number().int().min(0)).default(0),
   limit: z.preprocess((v) => (v === undefined ? 1000 : Number(v)), z.number().int().min(1).max(1000)).default(1000),
 });
+
+// =============================================================================
+// UNIFIED STORY BUILDER SCHEMAS
+// =============================================================================
+
+const storyProviderField = z.preprocess(emptyToUndefined, z.string().trim().max(120).optional());
+const storyModelField = z.preprocess(emptyToUndefined, z.string().trim().max(200).optional());
+
+export const storySessionCreateSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  intakeMode: z.enum(['seed', 'import']).optional().default('seed'),
+  seedIdea: z.string().trim().max(4000).optional().default(''),
+  // Import mode supplies pre-created ids; seed mode mints shells server-side.
+  universeId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
+  seriesId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
+  // Picker choice that drives every Story Builder operation; nullable so the
+  // UI can send "use the stage default" explicitly.
+  llm: z.object({
+    provider: z.string().trim().max(80).nullable().optional(),
+    model: z.string().trim().max(200).nullable().optional(),
+  }).optional(),
+}).strict();
+
+export const storySessionUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  seedIdea: z.string().trim().max(4000).optional(),
+  // Reject removed/unknown step ids loudly — the sanitizer would otherwise
+  // silently coerce them to STEP_IDS[0], landing a stale client on the first
+  // step with no error.
+  currentStep: z.enum(STORY_STEP_IDS).optional(),
+  llm: z.object({
+    provider: z.string().trim().max(80).nullable().optional(),
+    model: z.string().trim().max(200).nullable().optional(),
+  }).optional(),
+}).strict();
+
+export const storyStepGenerateSchema = z.object({
+  providerId: storyProviderField,
+  model: storyModelField,
+}).strict();
+
+export const storyStepRefineSchema = z.object({
+  feedback: z.string().trim().max(4000).optional().default(''),
+  // For per-entry refine (e.g. a single character on the characters step).
+  entryId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
+  providerId: storyProviderField,
+  model: storyModelField,
+}).strict();
+
+export const storyIssueLockSchema = z.object({
+  locked: z.boolean(),
+}).strict();

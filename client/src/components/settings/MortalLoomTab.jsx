@@ -2,6 +2,7 @@ import { useState, useEffect, useId } from 'react';
 import { Save, Download, ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import ToggleSwitch from '../ToggleSwitch';
 import {
   getSettings,
   updateSettings,
@@ -103,13 +104,12 @@ export function MortalLoomTab() {
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <label className="text-sm text-gray-400">Enabled</label>
-          <button
-            onClick={() => setEnabled(!enabled)}
-            aria-pressed={enabled}
-            className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
-          >
-            <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : ''}`} />
-          </button>
+          <ToggleSwitch
+            enabled={enabled}
+            onChange={() => setEnabled(!enabled)}
+            size="sm"
+            ariaLabel={enabled ? 'Disable MortalLoom sync' : 'Enable MortalLoom sync'}
+          />
           <span className="basis-full sm:basis-auto text-xs text-gray-500">
             When enabled, Goals and Meatspace views surface MortalLoom data.
           </span>

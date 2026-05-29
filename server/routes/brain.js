@@ -30,6 +30,9 @@ import {
   linkInputSchema,
   linkUpdateInputSchema,
   linksQuerySchema,
+  bucketInputSchema,
+  bucketUpdateInputSchema,
+  bucketReorderSchema,
   brainSyncQuerySchema,
   brainSyncPushSchema,
   dailyLogSettingsSchema
@@ -486,6 +489,17 @@ router.get('/summary', asyncHandler(async (req, res) => {
   res.json(summary);
 }));
 
+/**
+ * Extract a clean hostname from a URL (strip a leading www.), or null if unparseable.
+ */
+function hostnameFromUrl(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
 // =============================================================================
 // LINKS CRUD
 // =============================================================================
@@ -533,7 +547,7 @@ router.get('/links/:id', asyncHandler(async (req, res) => {
  * Create a new link (quick-add with URL)
  */
 router.post('/links', asyncHandler(async (req, res) => {
-  const { url, title, description, linkType, tags, autoClone } = validateRequest(linkInputSchema, req.body);
+  const { url, title, description, linkType, tags, bucketId, bucketOrder, autoClone } = validateRequest(linkInputSchema, req.body);
 
   // Check if URL already exists
   const existing = await brainService.getLinkByUrl(url);
@@ -549,10 +563,16 @@ router.post('/links', asyncHandler(async (req, res) => {
   const parsed = githubCloner.parseGitHubUrl(url);
   const isGitHubRepo = !!parsed;
 
+  // Derive a readable default title: repo slug for GitHub, hostname for plain
+  // URLs (so quick-added bucket chips read "example.com" instead of the full URL).
+  const defaultTitle = parsed
+    ? `${parsed.owner}/${parsed.repo}`
+    : (hostnameFromUrl(url) || url);
+
   // Create initial link record
   const linkData = {
     url,
-    title: title || (parsed ? `${parsed.owner}/${parsed.repo}` : url),
+    title: title || defaultTitle,
     description: description || '',
     linkType: linkType || (isGitHubRepo ? 'github' : 'other'),
     tags: tags || [],
@@ -561,7 +581,9 @@ router.post('/links', asyncHandler(async (req, res) => {
     gitHubRepo: parsed?.repo,
     localPath: null,
     cloneStatus: isGitHubRepo && autoClone !== false ? 'pending' : 'none',
-    cloneError: null
+    cloneError: null,
+    ...(bucketId !== undefined ? { bucketId } : {}),
+    ...(bucketOrder !== undefined ? { bucketOrder } : {})
   };
 
   const link = await brainService.createLink(linkData);
@@ -608,10 +630,37 @@ async function cloneRepoInBackground(linkId, url) {
  */
 router.put('/links/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(linkUpdateInputSchema, req.body);
-  const link = await brainService.updateLink(req.params.id, data);
-  if (!link) {
+
+  const existing = await brainService.getLinkById(req.params.id);
+  if (!existing) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
+
+  // When the URL changes, re-derive the GitHub-specific fields so the link
+  // type / repo metadata stay consistent with the new target.
+  if (data.url && data.url !== existing.url) {
+    const duplicate = await brainService.getLinkByUrl(data.url);
+    if (duplicate && duplicate.id !== existing.id) {
+      throw new ServerError('Link with this URL already exists', {
+        status: 409,
+        code: 'DUPLICATE_URL',
+        context: { existingId: duplicate.id }
+      });
+    }
+
+    const parsed = githubCloner.parseGitHubUrl(data.url);
+    data.isGitHubRepo = !!parsed;
+    data.gitHubOwner = parsed?.owner || null;
+    data.gitHubRepo = parsed?.repo || null;
+
+    // The previous clone (if any) belongs to the old URL — reset clone state so
+    // it doesn't point at the wrong repo. The user can re-clone the new target.
+    data.localPath = null;
+    data.cloneStatus = 'none';
+    data.cloneError = null;
+  }
+
+  const link = await brainService.updateLink(req.params.id, data);
   res.json(link);
 }));
 
@@ -779,6 +828,92 @@ ${scanCommand}`;
 
   console.log(`🛡️ Queued malware scan: link=${link.id} path=${link.localPath} task=${result.id}`);
   res.json({ message: 'Scan queued', taskId: result.id, linkId: link.id, scanPath: link.localPath });
+}));
+
+// =============================================================================
+// BUCKETS (bookmark groups for links)
+// =============================================================================
+
+/**
+ * GET /api/brain/buckets
+ * List buckets sorted by their display order.
+ */
+router.get('/buckets', asyncHandler(async (req, res) => {
+  const buckets = await brainService.getBuckets();
+  buckets.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  res.json({ buckets });
+}));
+
+/**
+ * POST /api/brain/buckets
+ * Create a bucket. New buckets are appended after the existing ones.
+ */
+router.post('/buckets', asyncHandler(async (req, res) => {
+  const { name, color, icon } = validateRequest(bucketInputSchema, req.body);
+  const existing = await brainService.getBuckets();
+  const nextOrder = existing.reduce((max, b) => Math.max(max, b.order ?? 0), -1) + 1;
+  const bucket = await brainService.createBucket({
+    name,
+    color: color || 'accent',
+    icon: icon || '',
+    order: nextOrder
+  });
+  console.log(`🗂️ Created bucket: ${bucket.id} (${bucket.name})`);
+  res.status(201).json(bucket);
+}));
+
+/**
+ * POST /api/brain/buckets/reorder
+ * Persist a new display order for buckets in a single call.
+ * (Registered before /buckets/:id so "reorder" isn't captured as an :id.)
+ */
+router.post('/buckets/reorder', asyncHandler(async (req, res) => {
+  const { ids } = validateRequest(bucketReorderSchema, req.body);
+  for (let i = 0; i < ids.length; i++) {
+    await brainService.updateBucket(ids[i], { order: i });
+  }
+  const buckets = await brainService.getBuckets();
+  buckets.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  res.json({ buckets });
+}));
+
+/**
+ * PUT /api/brain/buckets/:id
+ * Update a bucket's name / color / icon / order.
+ */
+router.put('/buckets/:id', asyncHandler(async (req, res) => {
+  const data = validateRequest(bucketUpdateInputSchema, req.body);
+  const existing = await brainService.getBucketById(req.params.id);
+  if (!existing) {
+    throw new ServerError('Bucket not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  const bucket = await brainService.updateBucket(req.params.id, data);
+  res.json(bucket);
+}));
+
+/**
+ * DELETE /api/brain/buckets/:id
+ * Delete a bucket. Its links survive — they're unassigned (bucketId -> null)
+ * so they fall back to the ungrouped list rather than being orphaned.
+ */
+router.delete('/buckets/:id', asyncHandler(async (req, res) => {
+  const existing = await brainService.getBucketById(req.params.id);
+  if (!existing) {
+    throw new ServerError('Bucket not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  const links = await brainService.getLinks();
+  let unassigned = 0;
+  for (const link of links) {
+    if (link.bucketId === req.params.id) {
+      await brainService.updateLink(link.id, { bucketId: null });
+      unassigned++;
+    }
+  }
+
+  await brainService.deleteBucket(req.params.id);
+  console.log(`🗂️ Deleted bucket: ${req.params.id} (unassigned ${unassigned} links)`);
+  res.json({ deleted: true, unassigned });
 }));
 
 // =============================================================================

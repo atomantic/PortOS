@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { CheckCircle2, XCircle, Wand2, RefreshCw, Terminal, AlertTriangle, Box } from 'lucide-react';
+import { CheckCircle2, XCircle, Wand2, RefreshCw, Terminal, AlertTriangle, Box, Cpu } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 
-export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
+export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
   const [check, setCheck] = useState(null); // { required, installed, missing, missingPip }
   const [checking, setChecking] = useState(false);
@@ -12,6 +12,25 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
   const [creatingVenv, setCreatingVenv] = useState(false);
   const logRef = useRef(null);
   const installEsRef = useRef(null);
+  // Decouple the input from the parent's persisted path. The VideoGen
+  // consumer saves on every onPythonPathChange, so wiring the input to the
+  // prop directly fires a settings PATCH + ~1-2s status re-probe per
+  // keystroke. Typed edits commit on debounce/blur; programmatic updates
+  // (Detect, Switch-to-arm64, Create-venv) still call onPythonPathChange
+  // directly so they take effect immediately.
+  const [draftPath, setDraftPath] = useState(pythonPath || '');
+  const commitTimerRef = useRef(null);
+  useEffect(() => { setDraftPath(pythonPath || ''); }, [pythonPath]);
+  useEffect(() => () => clearTimeout(commitTimerRef.current), []);
+  const commitDraft = (value) => {
+    clearTimeout(commitTimerRef.current);
+    if (value !== (pythonPath || '')) onPythonPathChange(value);
+  };
+  const handleDraftChange = (value) => {
+    setDraftPath(value);
+    clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = setTimeout(() => commitDraft(value), 800);
+  };
 
   // Closing the install EventSource on unmount stops setInstalling /
   // setInstallLog calls firing on a torn-down component if the user
@@ -45,6 +64,17 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [installLog]);
+
+  // Notify the parent whenever local check transitions from "had missing
+  // packages" to "all installed" — covers manual refresh, terminal installs,
+  // and the SSE-complete path. Without this, parent state (e.g. VideoGen's
+  // status pill) stays stale until the user manually clicks its own refresh.
+  const prevHadMissingRef = useRef(false);
+  useEffect(() => {
+    const allInstalled = !!check && Array.isArray(check.missing) && check.missing.length === 0;
+    if (allInstalled && prevHadMissingRef.current) onPackagesChanged?.();
+    prevHadMissingRef.current = !!check && Array.isArray(check.missing) && check.missing.length > 0;
+  }, [check, onPackagesChanged]);
 
   const handleDetect = async () => {
     setDetecting(true);
@@ -132,8 +162,9 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
       <div className="flex items-center gap-2">
         <input
           type="text"
-          value={pythonPath || ''}
-          onChange={(e) => onPythonPathChange(e.target.value)}
+          value={draftPath}
+          onChange={(e) => handleDraftChange(e.target.value)}
+          onBlur={() => commitDraft(draftPath)}
           className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
           placeholder="/usr/local/bin/python3"
         />
@@ -167,6 +198,26 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
             <p className="text-xs text-gray-500">{checking ? 'Checking…' : 'Set a Python path to check installed packages.'}</p>
           ) : (
             <>
+              {check.archMismatch && (
+                <div className="flex items-start gap-2 text-xs text-port-warning bg-port-warning/10 border border-port-warning/30 rounded p-2 mb-3">
+                  <Cpu size={14} className="shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div>
+                      This Python reports <code>{check.interpreterArch}</code> but your Mac is <code>{check.hostArch}</code>.
+                      <code>mlx</code> ships arm64-only wheels — installing it here will fail.
+                    </div>
+                    {check.suggestedArm64Python && (
+                      <button
+                        type="button"
+                        onClick={() => onPythonPathChange(check.suggestedArm64Python)}
+                        className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs bg-port-accent hover:bg-port-accent/80 text-white rounded"
+                      >
+                        <Wand2 size={12} /> Switch to {check.suggestedArm64Python}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               <ul className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
                 {check.required.map(pkg => {
                   const ok = check.installed.includes(pkg);

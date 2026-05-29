@@ -19,14 +19,18 @@ walker that turns a buried `GatedRepoError` into a friendly link — belongs her
 """
 
 import json
+import logging
 import sys
 import threading
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 
-import torch
-from PIL import Image
+# Lazy heavy-import note: `torch` and `PIL` are deferred into the functions
+# that actually need them (pick_device, make_generator, make_stepwise_callback).
+# Lightweight helpers — heartbeat, install_hf_error_handler, write_sidecar —
+# stay usable from venvs that haven't pip-installed torch yet (e.g. the
+# Hunyuan venv during a partial bootstrap).
 
 
 @contextmanager
@@ -58,10 +62,40 @@ def heartbeat(stage: str, interval: float = 20.0):
         t.join(timeout=interval + 1)
 
 
+class _ClipTruncationFilter(logging.Filter):
+    _MARKER = "input was truncated because CLIP can only handle"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return self._MARKER not in record.getMessage()
+
+
+def suppress_cosmetic_clip_truncation() -> None:
+    """Hide the "CLIP can only handle N tokens" warning on multi-encoder
+    pipelines (FLUX.2, HiDream, Qwen-Image, Z-Image, ERNIE).
+
+    Every pipeline in this runner stack runs CLIP alongside a high-context
+    encoder (T5 / Llama-3.1-8B / Qwen2-VL); CLIP only contributes pooled
+    style/color vectors derived from the first ~77 tokens, while the long
+    encoder reads the full prompt. The diffusers warning fires anyway and
+    bleeds red into PortOS server logs as if the prompt were being damaged.
+    Filter just that one message — every other diffusers warning still flows.
+
+    Logger-level filters don't apply to propagated child records, so the
+    filter has to be on the handlers. Idempotent (skips handlers it's
+    already attached to) so callers don't need to track first-run state.
+    """
+    f = _ClipTruncationFilter()
+    for name in ("diffusers", "transformers"):
+        for handler in logging.getLogger(name).handlers:
+            if not any(isinstance(existing, _ClipTruncationFilter) for existing in handler.filters):
+                handler.addFilter(f)
+
+
 def pick_device(requested: str) -> str:
     """Resolve `auto`/`mps`/`cuda`/`cpu` against what torch actually has.
     Falls back to CPU with a warning when the requested accelerator isn't
     available — never silently downgrades without telling the user."""
+    import torch
     if requested == "auto":
         if torch.backends.mps.is_available():
             return "mps"
@@ -77,10 +111,11 @@ def pick_device(requested: str) -> str:
     return requested
 
 
-def make_generator(device: str, seed: int) -> torch.Generator:
+def make_generator(device: str, seed: int) -> "torch.Generator":
     """Seed a torch Generator on the right device. Accelerator generators
     must be initialised with the device string; the CPU fallback uses the
     no-arg form."""
+    import torch
     if device in ("cuda", "mps"):
         return torch.Generator(device).manual_seed(int(seed))
     return torch.Generator().manual_seed(int(seed))
@@ -139,6 +174,8 @@ def make_stepwise_callback(
     """
     if not stepwise_dir:
         return None
+    import torch
+    from PIL import Image
     out = Path(stepwise_dir)
     out.mkdir(parents=True, exist_ok=True)
     vae = pipe.vae

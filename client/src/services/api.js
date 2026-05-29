@@ -48,6 +48,7 @@ export * from './apiPeerSync.js';
 export * from './apiSyncReview.js';
 export * from './apiCreativeDirector.js';
 export * from './apiImporter.js';
+export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)

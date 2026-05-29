@@ -15,9 +15,12 @@ const {
   sanitizeSeason,
   sanitizeSeasonList,
   buildSeason,
+  sanitizeReaderMap,
   ARC_LIMITS,
   ARC_SHAPES,
   ARC_SHAPE_IDS,
+  READER_MAP_LIMITS,
+  READER_MAP_BEAT_KINDS,
   getArcShape,
   renderArcShapeGuidance,
   describeArcShapePositionForSeason,
@@ -45,6 +48,7 @@ describe('storyArc — sanitizeArc', () => {
       protagonistArc: '',
       themes: [],
       shape: null,
+      readerMap: null,
       status: 'draft',
     });
   });
@@ -83,6 +87,77 @@ describe('storyArc — sanitizeArc', () => {
   it('caps themes at THEMES_PER_ARC_MAX', () => {
     const many = Array.from({ length: ARC_LIMITS.THEMES_PER_ARC_MAX + 5 }, (_, i) => `t${i}`);
     expect(sanitizeArc({ logline: 'x', themes: many }).themes).toHaveLength(ARC_LIMITS.THEMES_PER_ARC_MAX);
+  });
+
+  it('includes readerMap (null when absent) and survives an arc with only a reader map', () => {
+    expect(sanitizeArc({ logline: 'x' }).readerMap).toBe(null);
+    const arc = sanitizeArc({ readerMap: { hooks: [{ label: 'Who is the masked figure?' }] } });
+    expect(arc).not.toBe(null);
+    expect(arc.logline).toBe('');
+    expect(arc.readerMap.hooks).toHaveLength(1);
+    // An empty reader map alone is NOT identifying content.
+    expect(sanitizeArc({ readerMap: { hooks: [], payoffs: [], beats: [], cliffhangers: [] } })).toBe(null);
+  });
+});
+
+describe('storyArc — sanitizeReaderMap', () => {
+  it('returns null for non-objects and empty maps', () => {
+    expect(sanitizeReaderMap(null)).toBe(null);
+    expect(sanitizeReaderMap('x')).toBe(null);
+    expect(sanitizeReaderMap({})).toBe(null);
+    expect(sanitizeReaderMap({ hooks: [], payoffs: [], beats: [], cliffhangers: [] })).toBe(null);
+  });
+
+  it('round-trips hooks/payoffs/beats/cliffhangers with minted ids', () => {
+    const map = sanitizeReaderMap({
+      hooks: [{ label: 'Why did the city fall?', atArcPosition: 0, note: 'opening mystery' }],
+      payoffs: [{ label: 'The fall was an inside job', atArcPosition: 5 }],
+      beats: [{ kind: 'reveal', atArcPosition: 3, intensity: 0.8, note: 'midpoint twist' }],
+      cliffhangers: [{ atIssueBoundary: 1, note: 'the door opens' }],
+    });
+    expect(map.status).toBe('draft');
+    expect(map.hooks[0].id).toMatch(/^rm-/);
+    expect(map.payoffs[0].atArcPosition).toBe(5);
+    expect(map.payoffs[0].resolvesHookId).toBe(null);
+    expect(map.beats[0].kind).toBe('reveal');
+    expect(map.cliffhangers[0].atIssueBoundary).toBe(1);
+  });
+
+  it('drops beats with an unknown kind and clamps intensity to [0,1]', () => {
+    const map = sanitizeReaderMap({
+      beats: [
+        { kind: 'bogus', note: 'dropped' },
+        { kind: 'emotional', intensity: 5, note: 'over' },
+        { kind: 'hook', intensity: -2, note: 'under' },
+        { kind: 'payoff', note: 'no intensity' },
+      ],
+    });
+    expect(map.beats).toHaveLength(3);
+    expect(map.beats.find((b) => b.note === 'over').intensity).toBe(1);
+    expect(map.beats.find((b) => b.note === 'under').intensity).toBe(0);
+    expect(map.beats.find((b) => b.note === 'no intensity').intensity).toBe(null);
+  });
+
+  it('preserves valid status and falls back to draft otherwise', () => {
+    expect(sanitizeReaderMap({ hooks: [{ label: 'x' }], status: 'verified' }).status).toBe('verified');
+    expect(sanitizeReaderMap({ hooks: [{ label: 'x' }], status: 'bogus' }).status).toBe('draft');
+  });
+
+  it('caps each list at its limit', () => {
+    const manyHooks = Array.from({ length: READER_MAP_LIMITS.HOOKS_MAX + 10 }, (_, i) => ({ label: `h${i}` }));
+    expect(sanitizeReaderMap({ hooks: manyHooks }).hooks).toHaveLength(READER_MAP_LIMITS.HOOKS_MAX);
+  });
+
+  it('keeps resolvesHookId only when it is an rm- id', () => {
+    const ok = sanitizeReaderMap({ payoffs: [{ label: 'p', resolvesHookId: 'rm-abc' }] });
+    expect(ok.payoffs[0].resolvesHookId).toBe('rm-abc');
+    const bad = sanitizeReaderMap({ payoffs: [{ label: 'p', resolvesHookId: 'hook-1' }] });
+    expect(bad.payoffs[0].resolvesHookId).toBe(null);
+  });
+
+  it('exposes a non-empty beat-kind vocabulary', () => {
+    expect(READER_MAP_BEAT_KINDS).toContain('hook');
+    expect(READER_MAP_BEAT_KINDS).toContain('cliffhanger');
   });
 });
 

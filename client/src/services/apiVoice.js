@@ -1,6 +1,10 @@
 import api from './apiCore';
 
-export const getVoiceStatus = () => api.get('/voice/status');
+// `options` lets callers pass `{ silent: true }` so apiCore's default toast
+// doesn't fire when the caller owns its own error UI (custom catch /
+// useAsyncAction). Without it the user sees a stacked toast for every
+// failure — and the Memory Management panel polls every 5s.
+export const getVoiceStatus = (options) => api.get('/voice/status', options);
 export const getVoiceConfig = () => api.get('/voice/config');
 export const updateVoiceConfig = (patch) => api.put('/voice/config', patch);
 export const listVoices = (engine) => api.get(`/voice/voices${engine ? `?engine=${engine}` : ''}`);
@@ -16,3 +20,10 @@ export const testTts = (text, voice, engine) => {
   if (engine) body.engine = engine;
   return api.post('/voice/test', body, { responseType: 'arraybuffer', silent: true });
 };
+
+// Memory-management — Kokoro residency + unload, Whisper transient stop/start.
+// See MemoryManagement.jsx for the only consumer; it owns its own toast,
+// hence the `options` parameter / `silent: true` plumbing.
+export const getTtsStatus = (options) => api.get('/voice/tts/status', options);
+export const unloadKokoroTts = (options) => api.post('/voice/tts/unload', {}, options);
+export const controlWhisper = (action, options) => api.post('/voice/whisper', { action }, options);

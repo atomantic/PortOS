@@ -166,6 +166,22 @@ export const pullBrainLink = (id) => request(`/brain/links/${id}/pull`, { method
 export const openBrainLinkFolder = (id) => request(`/brain/links/${id}/open-folder`, { method: 'POST' });
 export const scanBrainLink = (id) => request(`/brain/links/${id}/scan`, { method: 'POST' });
 
+// Brain - Buckets (bookmark groups for links)
+export const getBrainBuckets = (options = {}) => request('/brain/buckets', options);
+export const createBrainBucket = (data) => request('/brain/buckets', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateBrainBucket = (id, data) => request(`/brain/buckets/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteBrainBucket = (id) => request(`/brain/buckets/${id}`, { method: 'DELETE' });
+export const reorderBrainBuckets = (ids) => request('/brain/buckets/reorder', {
+  method: 'POST',
+  body: JSON.stringify({ ids })
+});
+
 // Brain - Graph
 export const getBrainGraph = () => request('/brain/graph');
 

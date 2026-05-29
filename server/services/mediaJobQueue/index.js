@@ -603,6 +603,18 @@ async function runJob(job) {
   // to an out-of-range value, bypassing the route-layer Zod validation.
   safeParams.chunks = Math.min(8, Math.max(1, Math.trunc(Number(safeParams.chunks) || 1)));
 
+  // Drop the params snapshot of pythonPath; live settings always win for
+  // local-Python jobs so a stale persisted snapshot can't poison the spawn.
+  const usesLocalPython = job.kind === 'video' || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX);
+  if (usesLocalPython) {
+    const live = await getSettings().catch(() => null);
+    const livePythonPath = live?.imageGen?.local?.pythonPath || null;
+    if (livePythonPath && livePythonPath !== safeParams.pythonPath) {
+      console.log(`🐍 media-job [${job.id.slice(0, 8)}] pythonPath re-resolved from settings: ${safeParams.pythonPath} → ${livePythonPath}`);
+    }
+    safeParams.pythonPath = livePythonPath;
+  }
+
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();

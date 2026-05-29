@@ -200,6 +200,7 @@ const navItems = [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
+      { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
       { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
@@ -1039,6 +1040,10 @@ export default function Layout() {
             // (list/table) takes the normal padded+scrolling main, mirroring
             // the Series Pipeline index (/pipeline is not full-width either).
             location.pathname.startsWith('/universes/') ||
+            // Story Builder DETAIL (/story-builder/:id/:step) is a full-width
+            // stepper that owns its own scroll; the bare /story-builder index
+            // (list + create form) takes the normal padded+scrolling main.
+            location.pathname.startsWith('/story-builder/') ||
             location.pathname.startsWith('/writers-room') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||

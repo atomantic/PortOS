@@ -144,6 +144,12 @@ const arcSchema = z.object({
   themes: z.array(z.string().trim().min(1).max(ARC_LIMITS.THEME_MAX))
     .max(ARC_LIMITS.THEMES_PER_ARC_MAX).optional(),
   shape: z.enum(ARC_SHAPE_IDS).nullable().optional(),
+  // Reader map (audience-experience roadmap). Accepted as an opaque object and
+  // validated/sanitized server-side by sanitizeReaderMap (storyArc.js) — mirrors
+  // how visualStageInputSchema defers artifact validation to the service. Must
+  // be listed here or Zod's default key-stripping would silently drop it on any
+  // arc PATCH, and updateSeries's wholesale arc replace would then wipe it.
+  readerMap: z.object({}).passthrough().nullable().optional(),
   status: z.enum(ARC_STATUSES).optional(),
 });
 

@@ -21,6 +21,8 @@ export const RUNNER_FAMILIES = Object.freeze({
   FLUX2: 'flux2',
   Z_IMAGE: 'z-image',
   ERNIE: 'ernie',
+  HIDREAM: 'hidream',
+  QWEN: 'qwen',
 });
 
 // Convenience predicate helpers — match the semantics of the existing
@@ -31,3 +33,14 @@ export const isMflux = (model) => model?.runner === RUNNER_FAMILIES.MFLUX;
 export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
 export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
+export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
+export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
+
+// Predicate: model runs through the generic diffusers runner script
+// (`scripts/z_image_turbo.py`). Z-Image, ERNIE, HiDream, and Qwen all
+// dispatch through the same Python entry point — the runner script branches
+// on `--pipeline-class` and `--text-encoder-repo` rather than having a
+// dedicated script per family. Keep this list aligned with the dispatch in
+// `server/services/imageGen/local.js`.
+export const usesDiffusersRunner = (model) =>
+  isZImage(model) || isErnie(model) || isHiDream(model) || isQwen(model);

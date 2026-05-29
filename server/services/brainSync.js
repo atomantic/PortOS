@@ -13,7 +13,7 @@ import * as brainStorage from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
 // Entity types stored as JSON (have records with IDs)
-const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'links'];
+const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets'];
 
 /**
  * Apply remote changes from a peer instance.

@@ -42,6 +42,7 @@ from _runner_common import (  # noqa: E402
     make_generator,
     make_stepwise_callback,
     pick_device,
+    suppress_cosmetic_clip_truncation,
     write_sidecar,
 )
 from lora_utils import apply_loras  # noqa: E402
@@ -77,13 +78,58 @@ def probe_hf_auth(repo: str) -> None:
         print(f"⚠️ HF probe non-fatal error: {err}", file=sys.stderr)
 
 
-def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
-    # `sdnq` registers a custom config type at import-time. The Flux2KleinPipeline
+def _resolve_pipeline_cls(use_kv: bool):
+    """Pick the diffusers pipeline class. `Flux2KleinKVPipeline` uses K/V-cached
+    reference-token attention for multi-reference editing; both classes share
+    the same component init signature (scheduler/vae/text_encoder/tokenizer/
+    transformer/is_distilled), so any flux2-klein repo loads into either.
+
+    Imports are lazy + branch-specific so a venv whose diffusers pin predates
+    the KV pipeline (i.e. before `Flux2KleinKVPipeline` was added upstream)
+    still serves single-image renders. The KV branch fails loudly with a clear
+    upgrade hint instead of an opaque ImportError mid-load."""
+    if use_kv:
+        try:
+            from diffusers import Flux2KleinKVPipeline
+        except ImportError:
+            print(
+                "❌ Multi-reference editing requires diffusers with "
+                "Flux2KleinKVPipeline. Re-run "
+                "`INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh` "
+                "to pick up the latest diffusers HEAD.",
+                file=sys.stderr,
+            )
+            sys.exit(65)
+        return Flux2KleinKVPipeline
+    from diffusers import Flux2KleinPipeline
+
+    return Flux2KleinPipeline
+
+
+def load_pipeline_bf16(repo: str, device: str, dtype, pipeline_cls):
+    """Native bf16 load — no SDNQ, no Int8. Pipeline + tokenizer come from
+    the gated base repo (e.g. black-forest-labs/FLUX.2-klein-9B). Practical
+    only with ~64+ GB unified memory for the 9B variant."""
+    print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
+    print(f"🔧 bf16: pipeline ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
+    with heartbeat("loading-pipeline"):
+        pipe = pipeline_cls.from_pretrained(
+            repo,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
+    print("STAGE:move-to-device", file=sys.stderr, flush=True)
+    with heartbeat("move-to-device"):
+        pipe.to(device)
+    return pipe
+
+
+def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype, pipeline_cls):
+    # `sdnq` registers a custom config type at import-time. The pipeline
     # `from_pretrained` call below pulls a config that references it, so the
     # import has to happen first. Keep it inside the function so the runner
     # also works for the int8 branch on systems without sdnq installed.
     import sdnq  # noqa: F401  (registration side-effect)
-    from diffusers import Flux2KleinPipeline
     from transformers import AutoTokenizer
 
     # STAGE markers are parsed by server/services/imageGen/local.js#handleLine
@@ -96,9 +142,9 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
     with heartbeat("loading-tokenizer"):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False)
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
-    print(f"🔧 sdnq: pipeline ← {repo}", file=sys.stderr)
+    print(f"🔧 sdnq: pipeline ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("loading-pipeline"):
-        pipe = Flux2KleinPipeline.from_pretrained(
+        pipe = pipeline_cls.from_pretrained(
             repo,
             tokenizer=tokenizer,
             torch_dtype=dtype,
@@ -110,9 +156,8 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
     return pipe
 
 
-def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
+def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype, pipeline_cls):
     from accelerate import init_empty_weights
-    from diffusers import Flux2KleinPipeline
     from huggingface_hub import snapshot_download
     from optimum.quanto import requantize
     from safetensors.torch import load_file
@@ -122,7 +167,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
     from flux2_quantized import QuantizedFlux2Transformer2DModel
 
     print(f"STAGE:download-int8-snapshot:{repo}", file=sys.stderr, flush=True)
-    print(f"🔧 int8: snapshot ← {repo}", file=sys.stderr)
+    print(f"🔧 int8: snapshot ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("downloading-snapshot"):
         model_path = snapshot_download(repo)
 
@@ -153,7 +198,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
 
     print(f"🔧 int8: VAE/scheduler ← {base_repo}", file=sys.stderr)
     with heartbeat("loading-vae-scheduler"):
-        pipe = Flux2KleinPipeline.from_pretrained(
+        pipe = pipeline_cls.from_pretrained(
             base_repo,
             transformer=None,
             text_encoder=None,
@@ -193,7 +238,7 @@ def _unpack_flux2_latents(latents, height: int, width: int, vae_scale: int = 8, 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS FLUX.2-klein runner")
     p.add_argument("--model", required=True, help="model id (e.g. flux2-klein-4b)")
-    p.add_argument("--quantization", required=True, choices=["sdnq", "int8"])
+    p.add_argument("--quantization", required=True, choices=["sdnq", "int8", "none"])
     p.add_argument("--repo", required=True, help="HF repo for the quantized weights")
     p.add_argument("--tokenizer-repo", default=None, help="HF repo for tokenizer (sdnq variants)")
     p.add_argument("--base-pipeline-repo", default=None, help="HF repo for VAE/scheduler (int8 variant)")
@@ -212,15 +257,103 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
     p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
-    # Multi-reference editing — accepted but currently ignored. The Node side
-    # already plumbs these end-to-end so the UI + server contract is shippable;
-    # the diffusers multi-reference pipeline wiring lands with the
-    # FLUX.2-klein-9B-kv model swap (see PLAN.md `flux2-multi-reference-python-runner`).
-    # Without these stubs argparse would reject the args with "unrecognized
-    # arguments" and break every single-init FLUX.2 render once the route is live.
-    p.add_argument("--reference-images", nargs="*", default=[], help="(reserved) absolute paths to reference images")
-    p.add_argument("--reference-strengths", nargs="*", default=[], help="(reserved) 0..1 strength per reference image, parallel to --reference-images")
+    # Multi-reference editing. When at least one reference image is provided,
+    # the runner loads `Flux2KleinKVPipeline` instead of `Flux2KleinPipeline`
+    # and forwards the list of PIL refs as the pipeline's `image=` kwarg.
+    # `--reference-strengths` is honored per-reference via a runtime patch on
+    # Flux2KVLayerCache.store + the extract-mode causal-attention helper — see
+    # `_install_per_ref_strength_patch` below. Up to 4 references (route-side cap).
+    p.add_argument("--reference-images", nargs="*", default=[], help="absolute paths to reference images (multi-reference KV editing)")
+    p.add_argument("--reference-strengths", nargs="*", default=[], help="0..1 strength per reference image, parallel to --reference-images (1.0 = full influence, 0.0 = ignore)")
     return p.parse_args()
+
+
+# Per-call config consumed by the monkey-patched KV-cache + attention helper.
+# Populated immediately before `pipe(...)` and cleared in `finally` so that a
+# subsequent generation without reference strengths runs unscaled. The patch
+# itself is installed once per process (idempotent).
+_PORTOS_KV_REF_STRENGTHS: list[float] = []
+
+
+def _install_per_ref_strength_patch() -> None:
+    """Monkey-patch diffusers' Flux2 KV path to honor per-reference strengths.
+
+    The upstream `Flux2KleinKVPipeline` concatenates all reference latents into
+    a single token sequence and caches their attention K/V on step 0; subsequent
+    steps reuse the cached tensors. Upstream does not expose per-reference
+    weighting, so this patch scales each reference's V slice by its strength —
+    in both (a) the step-0 extract-mode attention (`_flux2_kv_causal_attention`,
+    txt/img → ref path) and (b) the cache that feeds steps 1+
+    (`Flux2KVLayerCache.store`). K is left unscaled so softmax still allocates
+    attention budget across all reference tokens; only the per-token V
+    contribution is attenuated. This matches the IP-Adapter-style "ref scale"
+    convention: 1.0 reproduces upstream behavior, 0.0 zeros that reference's
+    contribution.
+    """
+    from diffusers.models.transformers import transformer_flux2 as _t2
+
+    if getattr(_t2.Flux2KVLayerCache, "_portos_per_ref_patched", False):
+        return
+
+    # One-shot warning gate — divisibility mismatch is a misuse signal
+    # (the route always sends a parallel array; only a curl caller would
+    # land here), so log once instead of spamming per-layer per-step.
+    _warned = {"divisibility": False}
+
+    def _scale_v_inplace(v_tensor, num_ref_tokens: int, offset: int):
+        """Scale `v_tensor[:, offset:offset+num_ref_tokens]` in-place per ref.
+
+        Caller is responsible for owning the tensor (either fresh via `.clone()`
+        or an already-cloned view from upstream). All-1.0 strengths short-
+        circuit before touching the tensor.
+        """
+        strengths = _PORTOS_KV_REF_STRENGTHS
+        num_refs = len(strengths)
+        if num_ref_tokens % num_refs != 0:
+            if not _warned["divisibility"]:
+                print(
+                    f"⚠️ --reference-strengths count ({num_refs}) doesn't divide "
+                    f"ref-token count ({num_ref_tokens}); applying full influence.",
+                    file=sys.stderr,
+                )
+                _warned["divisibility"] = True
+            return
+        if all(float(s) == 1.0 for s in strengths):
+            return
+        tokens_per_ref = num_ref_tokens // num_refs
+        for i, s in enumerate(strengths):
+            sf = float(s)
+            if sf == 1.0:
+                continue
+            start = offset + i * tokens_per_ref
+            end = start + tokens_per_ref
+            v_tensor[:, start:end].mul_(sf)
+
+    # Cache patch — upstream already passes a fresh clone (see
+    # `Flux2KVAttnProcessor` / `Flux2KVParallelSelfAttnProcessor`), so we
+    # mutate it directly instead of cloning a second time per layer.
+    _original_store = _t2.Flux2KVLayerCache.store
+
+    def _store_scaled(self, k_ref, v_ref):
+        if _PORTOS_KV_REF_STRENGTHS and v_ref.shape[1] > 0:
+            _scale_v_inplace(v_ref, v_ref.shape[1], offset=0)
+        _original_store(self, k_ref, v_ref)
+
+    _t2.Flux2KVLayerCache.store = _store_scaled
+
+    # Attention patch — extract mode only (cached mode reuses the already-
+    # scaled cache). `value` here is the live combined sequence used by
+    # other tokens' attention downstream, so clone before mutating.
+    _original_attn = _t2._flux2_kv_causal_attention
+
+    def _attn_scaled(query, key, value, num_txt_tokens, num_ref_tokens, kv_cache=None, backend=None):
+        if num_ref_tokens > 0 and kv_cache is None and _PORTOS_KV_REF_STRENGTHS:
+            value = value.clone()
+            _scale_v_inplace(value, num_ref_tokens, offset=num_txt_tokens)
+        return _original_attn(query, key, value, num_txt_tokens, num_ref_tokens, kv_cache=kv_cache, backend=backend)
+
+    _t2._flux2_kv_causal_attention = _attn_scaled
+    _t2.Flux2KVLayerCache._portos_per_ref_patched = True
 
 
 @install_hf_error_handler
@@ -230,21 +363,53 @@ def main() -> None:
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
+    use_kv = bool(args.reference_images)
+    # Multi-reference editing is gated to the SDNQ Disty0 quantization today.
+    # The int8 path attaches a quanto-rehydrated transformer directly and the
+    # KV pipeline's reference-token attention hooks don't compose through that
+    # wrapper. The bf16 path loads from the gated base 9B repo (not the kv
+    # variant) whose transformer wasn't tuned for the reference-editing task,
+    # so the KV pipeline would run but produce off-task output. Both paths
+    # should refuse early with a clear message rather than mislead. Lift this
+    # gate per quantization once the corresponding KV pipeline is validated.
+    if use_kv and args.quantization in ("int8", "none"):
+        print(
+            f"❌ Multi-reference editing (--reference-images) is not supported on "
+            f"{args.quantization} quantization yet. Use the SDNQ variant "
+            f"(flux2-klein-9b / flux2-klein-4b) for multi-reference renders; "
+            f"PLAN tracks the bf16 + KV pin as a follow-up.",
+            file=sys.stderr,
+        )
+        sys.exit(64)
+    pipeline_cls = _resolve_pipeline_cls(use_kv)
+    if use_kv:
+        if args.image_path:
+            print(
+                "⚠️ --image-path supplied alongside --reference-images; the KV pipeline "
+                "doesn't support i2i strength, so the init image will be ignored.",
+                file=sys.stderr,
+            )
+
     if args.quantization == "sdnq":
         if not args.tokenizer_repo:
             print("❌ --tokenizer-repo is required for sdnq variants", file=sys.stderr)
             sys.exit(64)
         probe_hf_auth(args.tokenizer_repo)
-        pipe = load_pipeline_sdnq(args.repo, args.tokenizer_repo, device, dtype)
+        pipe = load_pipeline_sdnq(args.repo, args.tokenizer_repo, device, dtype, pipeline_cls)
     elif args.quantization == "int8":
         if not args.base_pipeline_repo:
             print("❌ --base-pipeline-repo is required for int8 variants", file=sys.stderr)
             sys.exit(64)
         probe_hf_auth(args.base_pipeline_repo)
-        pipe = load_pipeline_int8(args.repo, args.base_pipeline_repo, device, dtype)
+        pipe = load_pipeline_int8(args.repo, args.base_pipeline_repo, device, dtype, pipeline_cls)
+    elif args.quantization == "none":
+        # Native bf16 — `repo` is the gated base repo itself.
+        probe_hf_auth(args.repo)
+        pipe = load_pipeline_bf16(args.repo, device, dtype, pipeline_cls)
     else:
         print(f"❌ unknown quantization: {args.quantization}", file=sys.stderr)
         sys.exit(64)
+    suppress_cosmetic_clip_truncation()
 
     apply_memory_optimizations(pipe)
     apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
@@ -252,10 +417,36 @@ def main() -> None:
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)
 
+    # `formats=` pins PIL's decoder dispatch to the route layer's allowed-mime
+    # set — defense in depth against a Ghostscript-pipeline invocation via a
+    # spoofed EPS/PDF magic in a file the upload filter validated only by
+    # browser-supplied mimetype. The route already enforces .png/.jpg/.webp
+    # extensions and copies bytes through, so a malformed file just fails the
+    # decode cleanly here instead of routing into another format handler.
+    PIL_FORMATS_ALLOWED = ["PNG", "JPEG", "WEBP"]
+
     init_image = None
-    if args.image_path:
-        init_image = Image.open(args.image_path).convert("RGB").resize(
+    if args.image_path and not use_kv:
+        init_image = Image.open(args.image_path, formats=PIL_FORMATS_ALLOWED).convert("RGB").resize(
             (int(args.width), int(args.height)), Image.LANCZOS
+        )
+
+    # Multi-reference editing — load each reference at the output resolution.
+    # The KV pipeline encodes refs through the VAE then caches their attention
+    # K/V on step 0; mismatched aspect ratios get LANCZOS-resized so the
+    # transformer sees a uniform patch grid across all references.
+    reference_pils = None
+    if use_kv:
+        reference_pils = [
+            Image.open(p, formats=PIL_FORMATS_ALLOWED).convert("RGB").resize(
+                (int(args.width), int(args.height)), Image.LANCZOS
+            )
+            for p in args.reference_images
+        ]
+        print(
+            f"🔗 multi-reference KV: {len(reference_pils)} reference image(s) at "
+            f"{int(args.width)}x{int(args.height)}",
+            file=sys.stderr,
         )
 
     callback = make_stepwise_callback(
@@ -285,7 +476,16 @@ def main() -> None:
         # only set when supported.
         if "callback_on_step_end_tensor_inputs" in accepted:
             pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
-    if init_image is not None and "image" in accepted:
+    if reference_pils is not None and "image" in accepted:
+        # Flux2KleinKVPipeline accepts `image` as a single PIL or List[PIL].
+        # Pass the list verbatim so it routes through the multi-reference
+        # K/V-cache code path. The signature filter above guarantees the kwarg
+        # is supported by the live pipeline.
+        pipe_kwargs["image"] = reference_pils
+        vae = getattr(pipe, "vae", None)
+        if vae is not None and hasattr(vae, "disable_tiling"):
+            vae.disable_tiling()
+    elif init_image is not None and "image" in accepted:
         pipe_kwargs["image"] = init_image
         # Disable VAE tiling for i2i — tiled encode of a small image
         # produces seams on the output (matches the reference impl).
@@ -302,8 +502,25 @@ def main() -> None:
         file=sys.stderr,
     )
 
-    with torch.inference_mode():
-        result = pipe(**pipe_kwargs)
+    # Activate per-reference V-scaling for the duration of this pipe call.
+    # Padded to len(reference_pils) with 1.0 (the route always sends a full
+    # parallel array, but a curl/test caller might omit trailing slots).
+    honored_strengths: list[float] = []
+    if use_kv and reference_pils:
+        _install_per_ref_strength_patch()
+        honored_strengths = [float(s) for s in (args.reference_strengths or [])][: len(reference_pils)]
+        while len(honored_strengths) < len(reference_pils):
+            honored_strengths.append(1.0)
+        if any(s != 1.0 for s in honored_strengths):
+            entries = ", ".join(f"ref{i + 1}={s:.2f}" for i, s in enumerate(honored_strengths))
+            print(f"🎚️ per-ref strengths honored: {entries}", file=sys.stderr)
+        _PORTOS_KV_REF_STRENGTHS[:] = honored_strengths
+
+    try:
+        with torch.inference_mode():
+            result = pipe(**pipe_kwargs)
+    finally:
+        _PORTOS_KV_REF_STRENGTHS.clear()
     image = result.images[0]
     image.save(args.output)
 
@@ -312,24 +529,29 @@ def main() -> None:
         print(f"🖼️  stepwise summary: callback fired {s['count']} times, saved {s['saved']} previews", file=sys.stderr)
 
     if args.metadata:
-        write_sidecar(
-            args.output,
-            {
-                "id": Path(args.output).stem,
-                "prompt": args.prompt,
-                "negativePrompt": args.negative_prompt,
-                "modelId": args.model,
-                "seed": seed,
-                "width": int(args.width),
-                "height": int(args.height),
-                "steps": int(args.steps),
-                "guidance": float(args.guidance),
-                "quantization": args.quantization,
-                "filename": Path(args.output).name,
-                "initImageFilename": Path(args.image_path).name if args.image_path else None,
-                "initImageStrength": float(args.image_strength) if args.image_strength is not None else None,
-            },
-        )
+        sidecar = {
+            "id": Path(args.output).stem,
+            "prompt": args.prompt,
+            "negativePrompt": args.negative_prompt,
+            "modelId": args.model,
+            "seed": seed,
+            "width": int(args.width),
+            "height": int(args.height),
+            "steps": int(args.steps),
+            "guidance": float(args.guidance),
+            "quantization": args.quantization,
+            "filename": Path(args.output).name,
+            "initImageFilename": Path(args.image_path).name if (args.image_path and not use_kv) else None,
+            "initImageStrength": float(args.image_strength) if (args.image_strength is not None and not use_kv) else None,
+        }
+        if use_kv:
+            sidecar["pipelineClass"] = pipeline_cls.__name__
+            sidecar["referenceImageFilenames"] = [Path(p).name for p in args.reference_images]
+            # Honored end-to-end: the runtime patch on Flux2KVLayerCache.store +
+            # _flux2_kv_causal_attention scales each reference's V slice by the
+            # corresponding strength (1.0 = upstream baseline, 0.0 = ignored).
+            sidecar["referenceStrengths"] = honored_strengths
+        write_sidecar(args.output, sidecar)
 
     # Free VRAM eagerly so a back-to-back generation in the same process
     # doesn't OOM. The PortOS runner respawns per request right now, so this

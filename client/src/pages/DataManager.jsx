@@ -3,6 +3,115 @@ import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, Folde
 import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
+import toast from '../components/ui/Toast';
+import socket from '../services/socket';
+import { useAsyncAction } from '../hooks/useAsyncAction';
+
+// Plural labels for tombstone record kinds — shared between the in-page
+// TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
+// echoes the same wording). The dedupe in the rendering call sites handles
+// the series/issue cohort coupling.
+const TOMBSTONE_KIND_PLURAL = { universe: 'universes', series: 'series', issue: 'issues', mediaCollection: 'media collections' };
+
+// Manual "GC tombstones now" trigger. The 60s orchestrator sweep keeps its
+// 24h grace — this button passes graceMs:0 so a user who just mass-deleted
+// doesn't wait a day for the bytes to leave disk. The button disables only
+// when every cohort is refused (snapshot-mode peer with no per-record sub
+// in both `universe` and `pipeline`): partial progress is still useful.
+function TombstoneGcSection() {
+  const [refused, setRefused] = useState(null); // null = still loading
+
+  // Subscribe to peer-state changes so toggling a snapshot-mode peer's
+  // sync category (or disabling it) re-evaluates the refusal status
+  // without a page reload — otherwise the button stays stuck disabled
+  // even after the user has resolved the underlying refusal condition.
+  //
+  // `instances:peers:updated` fires from `updatePeer` BEFORE the async
+  // `autoSubscribePeerToAllRecords` backfill creates per-record subs, so an
+  // immediate fetch sees the pre-backfill state. Schedule a follow-up fetch
+  // after a short delay to capture the post-backfill subs; debounce so a
+  // rapid burst of peer updates collapses to one delayed fetch.
+  useEffect(() => {
+    let cancelled = false;
+    let backfillTimer = null;
+    const fetchStatus = () => {
+      api.getTombstoneSweepStatus({ silent: true })
+        .then((r) => { if (!cancelled && Array.isArray(r?.refused)) setRefused(r.refused); })
+        .catch(() => { if (!cancelled) setRefused((prev) => prev ?? []); });
+    };
+    const refreshAfterPeerChange = () => {
+      fetchStatus();
+      if (backfillTimer) clearTimeout(backfillTimer);
+      backfillTimer = setTimeout(() => {
+        backfillTimer = null;
+        if (!cancelled) fetchStatus();
+      }, 1500);
+    };
+    fetchStatus();
+    socket.on('instances:peers:updated', refreshAfterPeerChange);
+    return () => {
+      cancelled = true;
+      if (backfillTimer) clearTimeout(backfillTimer);
+      socket.off('instances:peers:updated', refreshAfterPeerChange);
+    };
+  }, []);
+
+  const [runSweep, sweeping] = useAsyncAction(async () => {
+    const result = await api.sweepTombstonesNow({ graceMs: 0 }, { silent: true });
+    if (!result) return null;
+    const { universes = 0, series = 0, issues = 0, collections = 0, refused: refusedKinds = [] } = result;
+    const totalPruned = universes + series + issues + collections;
+    if (totalPruned > 0) {
+      const parts = [];
+      if (universes) parts.push(`${universes} universe${universes === 1 ? '' : 's'}`);
+      if (series) parts.push(`${series} series`);
+      if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
+      if (collections) parts.push(`${collections} collection${collections === 1 ? '' : 's'}`);
+      toast.success(`Pruned ${parts.join(' / ')}`);
+    } else if (refusedKinds.length === 0) {
+      toast('No tombstones eligible for pruning');
+    }
+    if (refusedKinds.length > 0) {
+      const refusedLabel = [...new Set(refusedKinds.map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
+      toast.warning(`Refused: ${refusedLabel} — a snapshot-mode peer has no per-record subscription for this kind. Resolve to enable pruning.`);
+    }
+    setRefused(refusedKinds);
+    return result;
+  }, { errorMessage: 'Tombstone sweep failed' });
+
+  // Every cohort refused iff `universe` (its own cohort), `series` (the
+  // pipeline cohort representative — issues always travel with series), AND
+  // `mediaCollection` (its own cohort) are all in the refused set.
+  const allRefused = refused != null
+    && refused.includes('universe')
+    && refused.includes('series')
+    && refused.includes('mediaCollection');
+  const disabled = sweeping || refused == null || allRefused;
+  const title = allRefused
+    ? 'Every kind has an enabled snapshot-mode peer with no per-record subscription — pruning would risk resurrection. Subscribe the peer or disable it to enable GC.'
+    : 'Prune tombstones acked by every subscribed peer (skips the 24h grace).';
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-xl p-4 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-sm text-gray-300">
+        <Trash2 size={14} className="text-gray-500" />
+        <span className="text-gray-400 uppercase tracking-wider text-xs font-medium">Tombstone GC</span>
+        <span className="text-gray-500 text-xs">
+          Run on demand instead of waiting for the 24h orchestrator sweep.
+        </span>
+      </div>
+      <button
+        onClick={runSweep}
+        disabled={disabled}
+        title={title}
+        className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1.5"
+      >
+        <Trash2 size={12} />
+        {sweeping ? 'Pruning…' : 'GC tombstones now'}
+      </button>
+    </div>
+  );
+}
 
 function SizeBar({ size, maxSize }) {
   const pct = maxSize > 0 ? Math.max(1, (size / maxSize) * 100) : 0;
@@ -279,6 +388,11 @@ export default function DataManager() {
             <div className="text-xs text-gray-500 mb-1">Backups</div>
             <div className="text-lg font-bold text-white">{backups.length}</div>
           </div>
+        </div>
+
+        {/* Tombstone GC */}
+        <div className="mb-4">
+          <TombstoneGcSection />
         </div>
 
         {/* Category list */}

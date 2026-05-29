@@ -37,6 +37,7 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: 5554,
       open: false,
+      allowedHosts: ['.ts.net', 'localhost'],
       proxy: {
         '/api': {
           target: API_TARGET,

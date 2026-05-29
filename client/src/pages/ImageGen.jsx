@@ -39,6 +39,7 @@ import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
+import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
   getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
@@ -193,6 +194,12 @@ export default function ImageGen() {
   // via imageGenEvents so the same UI bits light up).
   const { progress: externalProgress, begin: beginGenerate, end: endGenerate, resume: resumeGenerate } = useImageGenProgress();
 
+  // Per-model cache status drives the inline "Available / Download" badge
+  // under the model picker. Only meaningful for the local backend (external
+  // SD-API and Codex don't use HF cache), so we conditionally pass the
+  // status through to ImageGenControls below.
+  const modelDownload = useModelDownloadStatus({ kind: 'image' });
+
   // selectedMode is null until settings load — fall back to status.mode
   // so the form doesn't flicker between defaults.
   const effectiveMode = selectedMode || status?.mode || IMAGE_GEN_MODE.EXTERNAL;
@@ -245,9 +252,9 @@ export default function ImageGen() {
       // server/lib/imageClean.js). One pass per mode, then split into the
       // parallel cleanC2PA / denoise maps the UI binds to.
       const perMode = {
-        external: resolveCleanersFromConfig(s?.imageGen?.external),
-        local: resolveCleanersFromConfig(s?.imageGen?.local),
-        codex: resolveCleanersFromConfig(s?.imageGen?.codex),
+        external: resolveCleanersFromConfig(s?.imageGen?.external, IMAGE_GEN_MODE.EXTERNAL),
+        local: resolveCleanersFromConfig(s?.imageGen?.local, IMAGE_GEN_MODE.LOCAL),
+        codex: resolveCleanersFromConfig(s?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
       };
       const c2 = { external: perMode.external.cleanC2PA, local: perMode.local.cleanC2PA, codex: perMode.codex.cleanC2PA };
       const dn = { external: perMode.external.denoise, local: perMode.local.denoise, codex: perMode.codex.denoise };
@@ -491,11 +498,12 @@ export default function ImageGen() {
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
 
   const refreshFlux2Status = useCallback((signal) => {
-    return fetch('/api/image-gen/setup/flux2-status', { signal })
+    const qs = modelId ? `?modelId=${encodeURIComponent(modelId)}` : '';
+    return fetch(`/api/image-gen/setup/flux2-status${qs}`, { signal })
       .then((r) => r.ok ? r.json() : null)
       .then((s) => { if (s) setFlux2Status(s); })
       .catch(() => {});
-  }, []);
+  }, [modelId]);
 
   const refreshHfTokenStatus = useCallback((signal) => {
     return fetch('/api/image-gen/setup/hf-token-status', { signal })
@@ -993,6 +1001,9 @@ export default function ImageGen() {
             seed={seed} onSeedChange={setSeed}
             showSeed
             disabled={statusLoading}
+            modelStatus={isLocalMode ? modelDownload.getStatus(modelId) : null}
+            onModelDownload={isLocalMode ? modelDownload.start : undefined}
+            onModelDownloadCancel={modelDownload.cancel}
           />
 
           {isLocalMode && (
@@ -1059,19 +1070,15 @@ export default function ImageGen() {
                 Reference images <span className="text-gray-500 font-normal">(up to 4 images for FLUX.2 multi-reference edit)</span>
               </label>
               {/*
-                Experimental: the server contract (upload slots, packing, sidecar
-                metadata, CLI flag emission) is wired end-to-end, but the bundled
-                FLUX.2 Python runner currently accepts `--reference-images` /
-                `--reference-strengths` as no-op argparse stubs — the references
-                are NOT yet conditioned into the diffusion graph. Full multi-ref
-                inference is tracked as `[flux2-multi-reference-python-runner]`
-                in PLAN.md (gated on the FLUX.2-klein-9B-kv HF license).
+                FLUX.2 multi-reference editing — references are conditioned via
+                diffusers' Flux2KleinKVPipeline (K/V-cache reference-token
+                attention). First-time use prompts the user to accept the
+                FLUX.2-klein-9B-kv license on Hugging Face. Per-reference
+                strengths are honored end-to-end: scripts/flux2_macos.py
+                patches Flux2KVLayerCache.store + _flux2_kv_causal_attention
+                so each reference's V slice is scaled by its strength
+                (1.0 = full influence, 0.0 = ignored).
               */}
-              <div className="mb-2 px-2 py-1.5 text-[11px] text-port-warning/90 bg-port-warning/10 border border-port-warning/30 rounded">
-                <strong className="font-semibold">Experimental — no-op today:</strong> Uploads + strengths are
-                staged and forwarded to the runner, but the FLUX.2 Python script ignores them. Final inference wiring
-                is pending the multi-reference runner upgrade.
-              </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {referenceImages.map((slot, i) => {
                   const slotId = `ref-image-${i}`;
@@ -1279,6 +1286,14 @@ export default function ImageGen() {
               </div>
             )}
           </div>
+
+          {generating && progress?.totalSteps != null && (
+            <div className="flex items-center justify-center gap-2 text-[11px] text-gray-400 tabular-nums">
+              <span>step {progress.step ?? 0}/{progress.totalSteps}</span>
+              {progressPct != null && <span className="text-gray-600">·</span>}
+              {progressPct != null && <span>{progressPct}%</span>}
+            </div>
+          )}
 
           {result && !generating && (
             <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">

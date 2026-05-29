@@ -269,5 +269,6 @@ port-error: #ef4444
 - After each feature or bug fix, run `/simplify` and then commit and push code
 - **Capture deferred work before finishing.** If during a task you identify a refactor, cleanup, abstraction, or enhancement that you decide *not* to do (out of scope, risk, time), append it to `PLAN.md` as a `- [ ]` item under the most relevant section (or a new sub-heading) with enough specificity that it can be picked up cold — file paths, line numbers, why it was skipped. Examples: code-review findings rated "skip for this PR," `/simplify` items deferred for scope, "we should also do X but later." Don't end a session with these living only in chat — they evaporate.
 - If we have created enough commits to wrap up a feature or issue to warrant a production release, pull the latest main and release branches and then run `/do:release` from main
+- **Archive approved design plans.** When a plan is approved out of plan mode, copy the finalized plan from `~/.claude/plans/` to `./docs/plans/YYYY-MM-DD-<slug>.md` (date of approval) as a design record before implementing. See `docs/plans/README.md`.
 
 See `.changelog/README.md` for detailed format and best practices.

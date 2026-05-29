@@ -678,6 +678,42 @@ describe('chunks dispatch', () => {
   });
 });
 
+describe('live pythonPath re-resolution', () => {
+  it('video job spawn uses the pythonPath currently in settings, not the snapshot at enqueue', async () => {
+    // Job was enqueued with a stale pythonPath (e.g. user fixed their config
+    // after submission, or the persisted file from a previous session is
+    // being replayed). The worker must overwrite from live settings before
+    // calling generateVideo so the stale snapshot can't poison the spawn.
+    writeFileSync(
+      join(tempDataDir, 'settings.json'),
+      JSON.stringify({ imageGen: { local: { pythonPath: '/live/path/python3' } } }),
+    );
+    const job = mediaJobQueue.enqueueJob({
+      kind: 'video',
+      params: { prompt: 'stale-snapshot', pythonPath: '/stale/anaconda/python3' },
+    });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    expect(stubs.generateVideo.mock.calls[0][0].pythonPath).toBe('/live/path/python3');
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('codex image job leaves params.pythonPath untouched', async () => {
+    writeFileSync(
+      join(tempDataDir, 'settings.json'),
+      JSON.stringify({ imageGen: { local: { pythonPath: '/live/path/python3' } } }),
+    );
+    const job = mediaJobQueue.enqueueJob({
+      kind: 'image',
+      params: { prompt: 'codex', mode: 'codex' },
+    });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    expect(stubs.generateImageCodex.mock.calls[0][0].pythonPath).toBeUndefined();
+    imageGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.png` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+});
+
 describe('cancelJob running-Codex branch', () => {
   it('canceling a running Codex job calls imageGen/codex.js#cancel, not the local cancel', async () => {
     // Codex job hangs indefinitely so it stays in 'running' for the cancel.

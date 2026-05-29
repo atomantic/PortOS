@@ -41,7 +41,9 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `storyBible.js` | Canonical Character / Place / Object shapes + `BIBLE_LIMITS`. |
-| `storyArc.js` | Canonical Arc + Season shapes for pipeline arc planning. |
+| `storyArc.js` | Canonical Arc + Season + Reader-Map shapes for pipeline arc planning. |
+| `storyBuilderSteps.js` | Unified Story Builder ordered step definitions + helpers (`STEPS`, `STEP_IDS`, `STEP_STATUSES`, `isValidStepId`, `stepIndex`). |
+| `storyBuilderIntegrity.js` | Pure staleness hashing for the Story Builder (`hashUpstream`, `computeStaleSteps`). |
 | `canonPrompt.js` | Per-kind field-precedence rules; SHORT/RICH/PREVIEW spec tables; `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` / `descriptorForCanonEntry`. |
 | `scenePrompt.js` | Scene-prompt composer + bible matchers (chars/places/objects in text). |
 | `sceneExtractor.js` | Split prose or teleplay into scene list via LLM. |
@@ -77,6 +79,9 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |
 | `ansiStrip.js` | Streaming ANSI / control-byte stripper. |
 | `hfToken.js` | HuggingFace token resolution (settings > env > CLI). |
+| `hfCache.js` | HuggingFace Hub cache inspection (`inspectModelCache(repoId)` → `{cached,sizeBytes,snapshotPath}`, `isModelCached`, `getHfCacheRoot`). Drives the inline "Available / Download" badge on the image + video gen forms. |
+| `hfDownload.js` | `downloadHfRepo({repo,onEvent})` returning `{promise,kill}` — spawns `scripts/hf_download_repo.py` in the FLUX.2 venv (fallback: mflux pythonPath) and emits SSE-friendly stage/progress/complete events. Powers the inline "Download" button next to the model picker. |
+| `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})` — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
 
 ## File & I/O
 
@@ -85,7 +90,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `collectionStore.js` | Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type, schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` / `loadAll` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` / `verifySchemaVersion`. Per-id write queue means writes to different records don't serialize; `saveOneNow` is for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store, ...])` logs schema-version mismatches. |
 | `conflictJournal.js` | Non-blocking edit-conflict journal for cross-install LWW merges. `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite) archives the losing local version when a true 3-way divergence is detected (`detectConflict` via per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash; `flushBaseHashes()` persists the batched base-hash side store. `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned (called from `pruneTombstonedUniverses`/`pruneTombstonedSeries`) so the side store doesn't grow without bound. `conflictJournalStore()` is the `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no `dismissed` status). Local-only — never crosses the wire. |
 | `schemaVersions.js` | Cross-instance sync version contract. `PORTOS_SCHEMA_VERSIONS` (frozen map of `{ category: layoutVersion }`), `RECORD_KIND_SCHEMA_CATEGORIES` (frozen map of federated record kind → the schema categories it writes), `buildPortosMeta()` (envelope for every outbound sync payload), `compareSchemaVersions(sender, receiver)` returning `{ ahead, behind, compatible }`, `scopeVersionDiff(diff, categories)` (restrict that diff to the categories a specific transfer touches), and `formatVersionGap()` for UI/log lines. Receivers gate `applyIncomingPush` / share-bucket import / snapshot apply per-category on the scoped comparator result so an upgraded sender can't corrupt a downstream peer — and a bump to one category doesn't sever sync of the others. |
-| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
+| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, `expandHome` (`~/foo` → absolute), JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
 | `imageClean.js` | `cleanImageBuffer` (sharp-based denoise + C2PA strip) + `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in `routes/imageClean.js` wraps `cleanImageBuffer`. |
 | `multipart.js` | Streaming multipart/form-data parser. |

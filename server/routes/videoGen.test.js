@@ -6,6 +6,11 @@ vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } })),
 }));
 
+vi.mock('../lib/pythonSetup.js', () => ({
+  checkPackages: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [] })),
+  isAllowedPython: vi.fn(() => true),
+}));
+
 vi.mock('../services/videoGen/local.js', () => ({
   // The route checks `runtime` on the default model when validating a2v —
   // include it so the a2v happy-path tests don't trip the A2V_REQUIRES_LTX2
@@ -24,6 +29,22 @@ vi.mock('../services/videoGen/local.js', () => ({
   // Mirrors the real export — keeps the route's keyframe-range check in
   // sync with whatever the service actually defaults to.
   DEFAULT_NUM_FRAMES: 121,
+  // The route gates pythonPath enforcement on this allowlist (ltx2/wan22/
+  // hunyuan bring their own venv). Mirror the real export so the
+  // "accepts BYOV-runtime when pythonPath missing" case passes and the
+  // negative case (legacy mlx_video model) still 400s.
+  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'wan22', 'hunyuan']),
+  // The route's /status response now surfaces the BYOV runtime list so the
+  // client can drop its hardcoded copy. Mirror the real shape — only the
+  // `id` and a couple of UI-display fields are read by /status.
+  BYOV_RUNTIME_INFO: {
+    ltx2: { id: 'ltx2', label: 'LTX-2 MLX', venvPython: '/tmp/ltx2.py', installEnvVar: 'INSTALL_LTX2', repoUrl: 'x', repoDir: '/tmp' },
+    wan22: { id: 'wan22', label: 'Wan 2.2 MLX', venvPython: '/tmp/wan22.py', installEnvVar: 'INSTALL_WAN22', repoUrl: 'x', repoDir: '/tmp' },
+    hunyuan: { id: 'hunyuan', label: 'HunyuanVideo MLX', venvPython: '/tmp/hunyuan.py', installEnvVar: 'INSTALL_HUNYUAN', repoUrl: 'x', repoDir: '/tmp' },
+  },
+  isByovRuntimeInstalled: vi.fn(() => false),
+  isByovRuntimeReady: vi.fn(async () => false),
+  invalidateByovReadyCache: vi.fn(),
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the
@@ -59,7 +80,7 @@ vi.mock('../lib/multipart.js', () => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
+  PATHS: { root: '/mock', data: '/mock/data', images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
   // Route awaits ensureDir before staging the upload; no-op for tests since
   // we mock copyFile too.
   ensureDir: vi.fn(async () => {}),
@@ -154,12 +175,33 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /status', () => {
-    it('reports connected when pythonPath is set', async () => {
+    it('reports connected when pythonPath is set AND required packages all import', async () => {
       const r = await request(app).get('/api/video-gen/status');
       expect(r.status).toBe(200);
       expect(r.body.connected).toBe(true);
       expect(r.body.pythonPath).toBe('/usr/bin/python3');
+      expect(r.body.missingPackages).toEqual([]);
       expect(r.body.defaultModel).toBe('ltx2_unified');
+      // systemMemoryGb drives the client's a2v auto-select (largest model
+      // that fits in `systemMemoryGb - 16 GB` headroom). Pin the field's
+      // presence + type so a future accidental removal is caught here.
+      expect(typeof r.body.systemMemoryGb).toBe('number');
+      expect(r.body.systemMemoryGb).toBeGreaterThan(0);
+    });
+
+    it('reports disconnected with reason + missingPackages when packages fail to import', async () => {
+      const { checkPackages } = await import('../lib/pythonSetup.js');
+      checkPackages.mockResolvedValueOnce({
+        installed: ['numpy', 'tqdm'],
+        missing: ['mflux', 'mlx', 'mlx_video'],
+        missingPip: ['mflux', 'mlx', 'mlx_video'],
+      });
+      const r = await request(app).get('/api/video-gen/status');
+      expect(r.status).toBe(200);
+      expect(r.body.connected).toBe(false);
+      expect(r.body.pythonPath).toBe('/usr/bin/python3');
+      expect(r.body.missingPackages).toEqual(['mflux', 'mlx', 'mlx_video']);
+      expect(r.body.reason).toMatch(/3 python packages missing/);
     });
   });
 
@@ -632,14 +674,107 @@ describe('videoGen routes', () => {
 
     // Pre-enqueue config validation: without pythonPath the queue would
     // accept the job, return 200/queued, then fail asynchronously over SSE
-    // and pollute the persisted queue with a doomed entry.
-    it('rejects 400 VIDEO_GEN_NOT_CONFIGURED when pythonPath is missing', async () => {
+    // and pollute the persisted queue with a doomed entry. Skipped for
+    // ltx2/wan22/hunyuan runtimes which bring their own venv (see the
+    // BYOV_RUNTIMES allowlist mirrored in services/videoGen/local.js).
+    it('rejects 400 VIDEO_GEN_NOT_CONFIGURED when pythonPath is missing and the model needs it', async () => {
       const settingsMock = await import('../services/settings.js');
       settingsMock.getSettings.mockResolvedValueOnce({ imageGen: { local: {} } });
-      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat' });
+      // Override the default `ltx2` mock with a legacy mlx_video runtime so
+      // the pythonPath gate actually fires — ltx2/wan22/hunyuan are exempt.
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'legacy_mlx', name: 'legacy mlx_video', runtime: 'mlx_video' },
+      ]);
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat', modelId: 'legacy_mlx' });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/not configured/i);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    // The matching positive case: an ltx2/wan22/hunyuan model bypasses the
+    // pythonPath gate because buildArgs resolves its own venv.
+    it('accepts a BYOV-runtime model (ltx2) when pythonPath is missing', async () => {
+      const settingsMock = await import('../services/settings.js');
+      settingsMock.getSettings.mockResolvedValueOnce({ imageGen: { local: {} } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat', modelId: 'ltx2_unified' });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('GET /active', () => {
+    const listJobsByFilter = (jobs) => ({ status, kind } = {}) => jobs.filter((j) => {
+      if (status && j.status !== status) return false;
+      if (kind && j.kind !== kind) return false;
+      return true;
+    });
+
+    it('returns { activeJob: null } when no video jobs exist', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([]);
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ activeJob: null });
+    });
+
+    it('prefers the running job over queued jobs', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'running-1', kind: 'video', status: 'running', position: 1, params: { prompt: 'P running' } },
+        { id: 'queued-1',  kind: 'video', status: 'queued',  position: 2, params: { prompt: 'P queued' } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.jobId).toBe('running-1');
+      expect(r.body.activeJob.status).toBe('running');
+      expect(r.body.activeJob.params.prompt).toBe('P running');
+    });
+
+    // Selection of the newest queued (not oldest) matches /cancel's fallback
+    // selection — see the surrounding comment in routes/videoGen.js. Diverging
+    // would mean Cancel from a resumed-queued page targets a different job.
+    it('returns newest queued when nothing is running (matches /cancel order)', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'queued-old', kind: 'video', status: 'queued', position: 1, params: { prompt: 'P old' } },
+        { id: 'queued-new', kind: 'video', status: 'queued', position: 2, params: { prompt: 'P new' } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.jobId).toBe('queued-new');
+      expect(r.body.activeJob.status).toBe('queued');
+    });
+
+    // params is a whitelist — never leak server-internal absolute file paths
+    // (sourceImagePath, audioFilePath, uploadedTempPath(s), extendFromVideoPath)
+    // or the resolved pythonPath to the browser.
+    it('whitelists params and never leaks server-internal file paths', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'running-1', kind: 'video', status: 'running', position: 1, params: {
+          prompt: 'safe prompt',
+          modelId: 'ltx2_unified',
+          width: 768, height: 512,
+          numFrames: 121, fps: 24,
+          steps: 25, guidanceScale: 3, seed: 42,
+          tiling: 'auto', disableAudio: false, mode: 'text', chunks: 1,
+          // sensitive fields that must NOT round-trip:
+          pythonPath: '/Users/secret/venv/bin/python',
+          sourceImagePath: '/Users/secret/data/uploads/source.png',
+          audioFilePath: '/Users/secret/data/uploads/voice.wav',
+          uploadedTempPath: '/tmp/upload-xyz',
+          uploadedTempPaths: ['/tmp/last-abc'],
+          extendFromVideoPath: '/Users/secret/data/videos/prev.mp4',
+        } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      const p = r.body.activeJob.params;
+      expect(p.prompt).toBe('safe prompt');
+      expect(p.modelId).toBe('ltx2_unified');
+      expect(p.width).toBe(768);
+      expect(p.pythonPath).toBeUndefined();
+      expect(p.sourceImagePath).toBeUndefined();
+      expect(p.audioFilePath).toBeUndefined();
+      expect(p.uploadedTempPath).toBeUndefined();
+      expect(p.uploadedTempPaths).toBeUndefined();
+      expect(p.extendFromVideoPath).toBeUndefined();
     });
   });
 

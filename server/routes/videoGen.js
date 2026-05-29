@@ -11,15 +11,23 @@ import { existsSync } from 'fs';
 import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
+import { spawn } from 'child_process';
+import os from 'os';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { getSettings } from '../services/settings.js';
+import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import {
   listVideoModels,
   defaultVideoModelId,
+  BYOV_VIDEO_RUNTIMES,
+  BYOV_RUNTIME_INFO,
+  isByovRuntimeInstalled,
+  isByovRuntimeReady,
+  invalidateByovReadyCache,
   loadHistory,
   deleteHistoryItem,
   setHistoryItemHidden,
@@ -29,6 +37,9 @@ import {
   DEFAULT_NUM_FRAMES,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
+import { inspectModelCache } from '../lib/hfCache.js';
+import { startHfDownloadStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
@@ -140,20 +151,249 @@ const generateBodySchema = z.object({
   ),
 });
 
+// Probes required-package imports on each call so a half-installed Python
+// can't masquerade as connected. /status isn't polled (mount + manual
+// refresh only), so the ~1-2s subprocess cost is acceptable.
 router.get('/status', asyncHandler(async (_req, res) => {
   const s = await getSettings();
   const py = s.imageGen?.local?.pythonPath || null;
+  const { connected, reason, missing } = await resolveLocalPythonHealth(py);
   res.json({
-    connected: !!py,
+    connected,
     pythonPath: py,
+    reason,
+    missingPackages: missing,
     models: listVideoModels(),
     defaultModel: defaultVideoModelId(),
+    // Authoritative list of bring-your-own-venv runtimes — lets the client
+    // gate the install-banner probe without hardcoding the same Set.
+    byovRuntimes: Object.keys(BYOV_RUNTIME_INFO),
+    // Total system memory in GB — the client uses this to auto-select the
+    // highest-memory mode-compatible model that fits on this machine.
+    // Rounded to nearest GB; sub-GB precision isn't useful for the
+    // model-size comparison and reads more cleanly in the UI.
+    systemMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
   });
 }));
+
+// `installed` here means "fully ready to render" — both the venv binary
+// exists AND its python packages are importable. The sync existsSync gate
+// alone is too permissive: a partial install (clone done, `uv pip install`
+// aborted) leaves a venv directory present but no torch, which would
+// hide the banner and make every render fail with a deep ImportError.
+router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const info = BYOV_RUNTIME_INFO[runtime];
+  if (!info) {
+    // `failValidation` only accepts a Zod safeParse result — calling it with
+    // (res, string) would TypeError on `parsed.error.issues.map(...)` and
+    // bubble as a 500 instead of the intended 400.
+    throw new ServerError(
+      `Unknown runtime: ${runtime}. Expected one of: ${Object.keys(BYOV_RUNTIME_INFO).join(', ')}`,
+      { status: 400, code: 'UNKNOWN_BYOV_RUNTIME' },
+    );
+  }
+  const binaryPresent = isByovRuntimeInstalled(info.id);
+  const packagesReady = binaryPresent ? await isByovRuntimeReady(info.id) : false;
+  res.json({
+    runtime: info.id,
+    label: info.label,
+    installed: binaryPresent && packagesReady,
+    binaryPresent,
+    packagesReady,
+    venvPath: info.venvPython,
+    repoDir: info.repoDir,
+    repoUrl: info.repoUrl,
+    installEnvVar: info.installEnvVar,
+  });
+}));
+
+// In-flight singleton per runtime. A rapid double-click of the install
+// button would otherwise race two `bash setup-image-video.sh` processes
+// against the same target dir, both trying to git-clone or pip-install at
+// once. Existing existsSync gate doesn't help — the install hasn't created
+// the venv yet on the second click.
+const runtimeInstallInFlight = new Map();
+
+// Shells out to scripts/setup-image-video.sh with the runtime's INSTALL_X
+// env pre-set, so the in-app installer and the README's terminal recipe
+// invoke the exact same install path — no parallel Node-side implementation
+// per runtime to keep in sync.
+router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const info = BYOV_RUNTIME_INFO[runtime];
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  const send = (event) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+
+  if (!info) {
+    send({ type: 'error', message: `Unknown runtime: ${runtime}` });
+    return safeEnd();
+  }
+  // Claim the in-flight slot SYNCHRONOUSLY, before any await. Two near-
+  // simultaneous SSE requests would otherwise both reach the readiness await
+  // on line below, both observe `!ready`, and both spawn `setup-image-video.sh`
+  // against the same target dir — racing two git clones / pip installs.
+  // Placeholder (`null`) gets replaced with the real child handle once spawned;
+  // every early-return path below releases the slot.
+  if (runtimeInstallInFlight.has(info.id)) {
+    send({ type: 'error', message: `Another ${info.label} install is already running. Wait for it to finish or restart PortOS.` });
+    return safeEnd();
+  }
+  runtimeInstallInFlight.set(info.id, null);
+  // Skip ONLY when both the binary AND the import probe pass. A venv with a
+  // python binary but no torch is the partial-install case the user is
+  // explicitly re-triggering us to fix — short-circuiting would strand them.
+  if (isByovRuntimeInstalled(info.id) && await isByovRuntimeReady(info.id)) {
+    runtimeInstallInFlight.delete(info.id);
+    send({ type: 'log', message: `${info.label} already installed at ${info.venvPython}` });
+    send({ type: 'complete', message: 'Already installed — nothing to do.' });
+    return safeEnd();
+  }
+  // The install may add/remove packages; drop any cached "ready" so the
+  // post-install /runtime-status response reflects the new state instead of
+  // a stale "true" from before a deliberate cleanup.
+  invalidateByovReadyCache(info.id);
+
+  const scriptPath = join(PATHS.root, 'scripts', 'setup-image-video.sh');
+  if (!existsSync(scriptPath)) {
+    runtimeInstallInFlight.delete(info.id);
+    send({ type: 'error', message: `Installer script not found at ${scriptPath}` });
+    return safeEnd();
+  }
+
+  send({ type: 'log', message: `▸ Starting ${info.label} install via ${info.installEnvVar}=1 bash scripts/setup-image-video.sh` });
+  // `detached: true` puts bash in its own process group so a cancel from the
+  // client can take down uv / pip / git children too. Without it, SIGTERM on
+  // bash leaves a multi-GB `git clone` (and any subsequent pip downloads)
+  // orphaned to init — the user sees the modal close but the bandwidth keeps
+  // burning until the network drops or the snapshot completes.
+  const child = spawn('bash', [scriptPath], {
+    env: { ...process.env, [info.installEnvVar]: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
+  runtimeInstallInFlight.set(info.id, child);
+
+  const onChunk = (chunk) => {
+    for (const line of chunk.toString().split(/[\r\n]+/)) {
+      const t = line.trimEnd();
+      if (t) send({ type: 'log', message: t });
+    }
+  };
+  child.stdout.on('data', onChunk);
+  child.stderr.on('data', onChunk);
+  child.on('error', (err) => {
+    runtimeInstallInFlight.delete(info.id);
+    send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
+    safeEnd();
+  });
+  child.on('close', async (code) => {
+    runtimeInstallInFlight.delete(info.id);
+    // Re-probe rather than trusting exit code alone — partial installs
+    // (network drop mid-clone, missing requirements file, ctrl-c via
+    // SIGTERM) can exit 0 but leave the venv unable to import its core
+    // packages. Probe both the binary AND the import surface so the
+    // success message can't lie. The banner gate uses the same probe.
+    const binaryPresent = isByovRuntimeInstalled(info.id);
+    const packagesReady = binaryPresent && await isByovRuntimeReady(info.id);
+    if (code === 0 && binaryPresent && packagesReady) {
+      send({ type: 'complete', message: `${info.label} ready: ${info.venvPython}` });
+    } else if (code === 0 && !binaryPresent) {
+      send({ type: 'error', message: `Installer exited 0 but ${info.venvPython} is still missing. Re-run from a terminal to see what happened.` });
+    } else if (code === 0) {
+      send({ type: 'error', message: `Installer exited 0 but the venv can't import its core packages. Check the log above for pip errors; re-run from a terminal if needed.` });
+    } else {
+      send({ type: 'error', message: `Installer exited with code ${code}.` });
+    }
+    safeEnd();
+  });
+
+  req.on('close', () => {
+    if (!child.killed && child.pid) {
+      // Negative pid signals the whole process group — required because
+      // `setup-image-video.sh` shells out to `uv pip install` / `git clone`,
+      // and a plain `child.kill('SIGTERM')` only signals bash itself, leaving
+      // the slow children running in the background. Wrap in try/catch so an
+      // already-dead group (race with the close handler) doesn't crash the
+      // server with ESRCH.
+      try { process.kill(-child.pid, 'SIGTERM'); }
+      catch { child.kill('SIGTERM'); }
+    }
+    safeEnd();
+  });
+}));
+
+async function resolveLocalPythonHealth(py) {
+  if (!py) return { connected: false, reason: 'Local Python not configured', missing: [] };
+  if (!isAllowedPython(py)) return { connected: false, reason: 'Saved pythonPath is not a python interpreter', missing: [] };
+  try {
+    const { missing } = await checkPackages(py);
+    if (missing.length === 0) return { connected: true, reason: null, missing };
+    return {
+      connected: false,
+      reason: `${missing.length} python package${missing.length === 1 ? '' : 's'} missing: ${missing.join(', ')}`,
+      missing,
+    };
+  } catch (err) {
+    return { connected: false, reason: `Python probe failed: ${err.message || err}`, missing: [] };
+  }
+}
 
 router.get('/models', (_req, res) => {
   res.json(listVideoModels());
 });
+
+// Per-model download status — see /api/image-gen/models/status for the
+// shape contract. We also surface the active text-encoder repo so the
+// video form can warn when the Gemma encoder isn't downloaded yet (a
+// surprise multi-GB pull on top of the model itself).
+router.get('/models/status', asyncHandler(async (_req, res) => {
+  // Text encoder is shared across all video renders. A registry entry with
+  // `localPath` (e.g. an LM Studio install) trumps the HF cache check, so
+  // surface both the repo-cache status and the resolved local path so the UI
+  // can distinguish "not downloaded" from "served from LM Studio".
+  const encoderRepo = getTextEncoderRepo();
+  const [models, encoderInspection] = await Promise.all([
+    Promise.all(listVideoModels().map(async (m) => {
+      const repo = repoForModel(m);
+      if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+      const { cached, sizeBytes } = await inspectModelCache(repo);
+      return { id: m.id, repo, cached, sizeBytes };
+    })),
+    isHfRepoId(encoderRepo) ? inspectModelCache(encoderRepo) : Promise.resolve(null),
+  ]);
+  const textEncoder = encoderInspection
+    ? { repo: encoderRepo, ...encoderInspection }
+    : { repo: encoderRepo, cached: true, sizeBytes: 0 };
+  res.json({ models, textEncoder });
+}));
+
+router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
+  const model = listVideoModels().find((m) => m.id === req.params.modelId);
+  if (!model) return res.status(404).json({ error: `Unknown video model: ${req.params.modelId}` });
+  const repo = repoForModel(model);
+  if (!repo) return res.status(400).json({ error: `Model "${model.id}" has no HuggingFace repo on file.`, code: 'NO_REPO_FOR_MODEL' });
+  await startHfDownloadStream({ req, res, repo });
+}));
+
+// Text encoder pre-fetch. The Gemma encoder is a separate ~7-25 GB pull from
+// the video model itself, so it gets its own button on the video form.
+router.get('/text-encoder/download', asyncHandler(async (req, res) => {
+  const repo = getTextEncoderRepo();
+  // Local-path encoders (LM Studio) are not downloadable — they're served
+  // off disk and the status endpoint already reports cached: true for them.
+  if (!isHfRepoId(repo)) {
+    return res.status(400).json({ error: 'Active text encoder is a local-path entry, not an HF repo.', code: 'NOT_DOWNLOADABLE' });
+  }
+  await startHfDownloadStream({ req, res, repo });
+}));
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // Pre-enqueue cleanup hook: every throw path below MUST drop ALL multipart
@@ -173,17 +413,6 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   const body = parsed.data;
   const s = await getSettings();
   const pythonPath = s.imageGen?.local?.pythonPath || null;
-  // Reject up-front when the local python isn't configured. Without this,
-  // the queue would happily accept the job, return 200/queued, and only
-  // surface the failure asynchronously on SSE — which then pollutes the
-  // persisted queue with a doomed entry.
-  if (!pythonPath) {
-    await cleanupTempUploads();
-    throw new ServerError(
-      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
-      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
-    );
-  }
   // Resolve the effective model up front — both the modelId-exists check
   // below AND the a2v runtime guard further down need the model entry,
   // and listVideoModels() is the kind of thing test mocks easily get out
@@ -199,6 +428,22 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     throw new ServerError(
       `Unknown modelId: ${body.modelId}`,
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+    );
+  }
+  // Reject up-front when the local python isn't configured AND the model's
+  // runtime needs it. ltx2/wan22/hunyuan bring their own venv (resolved
+  // inside buildArgs), so they must NOT be blocked by the legacy mlx_video
+  // pythonPath setting. Without this gate, the queue would happily accept
+  // a job that's known to fail and only surface it asynchronously on SSE,
+  // polluting the persisted queue with a doomed entry. The allowlist is
+  // shared with services/videoGen/local.js so the route and worker stay
+  // in sync.
+  const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
+  if (!pythonPath && !runtimeBringsOwnVenv) {
+    await cleanupTempUploads();
+    throw new ServerError(
+      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
+      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
 
@@ -475,6 +720,52 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // the queue. effectiveModelId was resolved at the top of the handler.
   res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModelId, mode: 'local', status, position });
 }));
+
+// Currently-running video job (if any) so the page can re-attach after a
+// reload — the SSE replay of `lastPayload` then resumes progress display.
+// Mirrors GET /api/image-gen/active. Returns `{ activeJob: null }` when no
+// video render is in flight. Queued-but-not-yet-running jobs are returned
+// too so the user lands on a "Queued (position N)" state instead of an
+// empty form. Selection order MUST match /cancel below: newest queued is
+// what cancelVideoGen() targets when nothing is running, so resuming the
+// oldest queued would leave the resumed page's Cancel button hitting a
+// different job.
+//
+// Whitelist the params the UI form actually consumes — `job.params`
+// carries server-internal absolute file paths (sourceImagePath,
+// audioFilePath, uploadedTempPath(s), extendFromVideoPath) and the
+// resolved pythonPath, none of which belong on a client surface.
+const ACTIVE_JOB_PARAM_FIELDS = [
+  'prompt', 'negativePrompt', 'modelId',
+  'width', 'height', 'numFrames', 'fps',
+  'steps', 'guidanceScale', 'seed',
+  'tiling', 'disableAudio', 'mode', 'chunks', 'imageStrength',
+];
+const pickJobParams = (params) => {
+  if (!params || typeof params !== 'object') return {};
+  const out = {};
+  for (const k of ACTIVE_JOB_PARAM_FIELDS) {
+    if (params[k] !== undefined) out[k] = params[k];
+  }
+  return out;
+};
+
+router.get('/active', (_req, res) => {
+  const running = listJobs({ kind: 'video', status: 'running' })[0];
+  const queuedList = !running ? listJobs({ kind: 'video', status: 'queued' }) : [];
+  const queued = queuedList.length ? queuedList[queuedList.length - 1] : null;
+  const job = running || queued;
+  if (!job) return res.json({ activeJob: null });
+  res.json({
+    activeJob: {
+      jobId: job.id,
+      generationId: job.id,
+      status: job.status,
+      position: job.position,
+      params: pickJobParams(job.params),
+    },
+  });
+});
 
 router.get('/:jobId/events', (req, res) => {
   const ok = attachSseClient(req.params.jobId, res);

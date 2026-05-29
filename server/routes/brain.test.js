@@ -53,7 +53,20 @@ vi.mock('../services/brain.js', () => ({
   // Settings & Summary
   loadMeta: vi.fn(),
   updateMeta: vi.fn(),
-  getSummary: vi.fn()
+  getSummary: vi.fn(),
+  // Links
+  getLinks: vi.fn(),
+  getLinkById: vi.fn(),
+  getLinkByUrl: vi.fn(),
+  createLink: vi.fn(),
+  updateLink: vi.fn(),
+  deleteLink: vi.fn(),
+  // Buckets
+  getBuckets: vi.fn(),
+  getBucketById: vi.fn(),
+  createBucket: vi.fn(),
+  updateBucket: vi.fn(),
+  deleteBucket: vi.fn()
 }));
 
 // Mock the brain graph service
@@ -1175,6 +1188,119 @@ describe('Brain Routes', () => {
     it('rejects impossible calendar days (2026-02-30)', async () => {
       const res = await request(app).get('/api/brain/daily-log/2026-02-30');
       expect(res.status).toBe(400);
+    });
+  });
+
+  // ===========================================================================
+  // BUCKETS
+  // ===========================================================================
+
+  describe('GET /api/brain/buckets', () => {
+    it('returns buckets sorted by order', async () => {
+      brainService.getBuckets.mockResolvedValue([
+        { id: 'b2', name: 'Second', order: 1 },
+        { id: 'b1', name: 'First', order: 0 }
+      ]);
+      const res = await request(app).get('/api/brain/buckets');
+      expect(res.status).toBe(200);
+      expect(res.body.buckets.map(b => b.id)).toEqual(['b1', 'b2']);
+    });
+  });
+
+  describe('POST /api/brain/buckets', () => {
+    it('creates a bucket appended after existing ones', async () => {
+      brainService.getBuckets.mockResolvedValue([{ id: 'b1', order: 0 }, { id: 'b2', order: 1 }]);
+      brainService.createBucket.mockImplementation(async (data) => ({ id: 'b3', ...data }));
+      const res = await request(app).post('/api/brain/buckets').send({ name: 'Disney' });
+      expect(res.status).toBe(201);
+      expect(brainService.createBucket).toHaveBeenCalledWith(expect.objectContaining({ name: 'Disney', order: 2 }));
+    });
+
+    it('rejects an empty name with 400', async () => {
+      const res = await request(app).post('/api/brain/buckets').send({ name: '' });
+      expect(res.status).toBe(400);
+      expect(brainService.createBucket).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid color with 400', async () => {
+      const res = await request(app).post('/api/brain/buckets').send({ name: 'X', color: 'neon' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/brain/buckets/reorder', () => {
+    it('persists order for each id in the given sequence', async () => {
+      const id3 = '33333333-3333-4333-8333-333333333333';
+      const id1 = '11111111-1111-4111-8111-111111111111';
+      const id2 = '22222222-2222-4222-8222-222222222222';
+      brainService.updateBucket.mockResolvedValue({});
+      brainService.getBuckets.mockResolvedValue([]);
+      const res = await request(app)
+        .post('/api/brain/buckets/reorder')
+        .send({ ids: [id3, id1, id2] });
+      expect(res.status).toBe(200);
+      expect(brainService.updateBucket).toHaveBeenNthCalledWith(1, id3, { order: 0 });
+      expect(brainService.updateBucket).toHaveBeenNthCalledWith(2, id1, { order: 1 });
+      expect(brainService.updateBucket).toHaveBeenNthCalledWith(3, id2, { order: 2 });
+    });
+  });
+
+  describe('PUT /api/brain/buckets/:id', () => {
+    it('updates an existing bucket', async () => {
+      brainService.getBucketById.mockResolvedValue({ id: 'b1', name: 'Old' });
+      brainService.updateBucket.mockResolvedValue({ id: 'b1', name: 'New' });
+      const res = await request(app).put('/api/brain/buckets/b1').send({ name: 'New' });
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('New');
+    });
+
+    it('returns 404 for an unknown bucket', async () => {
+      brainService.getBucketById.mockResolvedValue(null);
+      const res = await request(app).put('/api/brain/buckets/missing').send({ name: 'X' });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('DELETE /api/brain/buckets/:id', () => {
+    it('deletes the bucket and unassigns its links', async () => {
+      brainService.getBucketById.mockResolvedValue({ id: 'b1', name: 'Disney' });
+      brainService.getLinks.mockResolvedValue([
+        { id: 'l1', bucketId: 'b1' },
+        { id: 'l2', bucketId: 'b2' },
+        { id: 'l3', bucketId: 'b1' }
+      ]);
+      brainService.updateLink.mockResolvedValue({});
+      brainService.deleteBucket.mockResolvedValue(true);
+
+      const res = await request(app).delete('/api/brain/buckets/b1');
+      expect(res.status).toBe(200);
+      expect(res.body.unassigned).toBe(2);
+      expect(brainService.updateLink).toHaveBeenCalledWith('l1', { bucketId: null });
+      expect(brainService.updateLink).toHaveBeenCalledWith('l3', { bucketId: null });
+      expect(brainService.updateLink).not.toHaveBeenCalledWith('l2', { bucketId: null });
+      expect(brainService.deleteBucket).toHaveBeenCalledWith('b1');
+    });
+
+    it('returns 404 for an unknown bucket', async () => {
+      brainService.getBucketById.mockResolvedValue(null);
+      const res = await request(app).delete('/api/brain/buckets/missing');
+      expect(res.status).toBe(404);
+      expect(brainService.deleteBucket).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/brain/links (bucket + title derivation)', () => {
+    it('derives a hostname title for a plain URL and stores bucketId', async () => {
+      brainService.getLinkByUrl.mockResolvedValue(null);
+      brainService.createLink.mockImplementation(async (data) => ({ id: 'l9', ...data }));
+      const res = await request(app)
+        .post('/api/brain/links')
+        .send({ url: 'https://www.example.com/parks', bucketId: '11111111-1111-4111-8111-111111111111' });
+      expect(res.status).toBe(201);
+      expect(brainService.createLink).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'example.com',
+        bucketId: '11111111-1111-4111-8111-111111111111'
+      }));
     });
   });
 });

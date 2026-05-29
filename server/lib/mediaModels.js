@@ -16,9 +16,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
 import { join, dirname } from 'path';
-import { PATHS } from './fileUtils.js';
+import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import { RUNNER_FAMILIES } from './runners.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
@@ -36,14 +35,63 @@ const DEFAULT_REGISTRY = {
     macos: [
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
+      // LTX-2 (the older 42 GB model) stays deprecated — superseded by 2.3.
+      // The 2.3 Unified Beta and Distilled Q4 are no longer deprecated:
+      // 2.3 Unified bf16 is the quality ceiling for the mlx_video runtime, and
+      // is now practical on 128 GB unified-memory hardware. Distilled Q4 is
+      // still the shipped default because it works on smaller boxes.
       { id: 'ltx2_unified',       name: 'LTX-2 Unified (~42 GB)',          repo: 'notapalindrome/ltx2-mlx-av',     runtime: 'mlx_video', steps: 30, guidance: 3.0, deprecated: true },
-      { id: 'ltx23_unified',      name: 'LTX-2.3 Unified Beta (~48 GB)',   repo: 'notapalindrome/ltx23-mlx-av',    runtime: 'mlx_video', steps: 25, guidance: 3.0, deprecated: true },
-      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4 (~22 GB)',   repo: 'notapalindrome/ltx23-mlx-av-q4', runtime: 'mlx_video', steps: 25, guidance: 3.0, deprecated: true },
+      { id: 'ltx23_unified',      name: 'LTX-2.3 Unified Beta (~48 GB, bf16 quality ceiling)', repo: 'notapalindrome/ltx23-mlx-av',    runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4 (~22 GB)',   repo: 'notapalindrome/ltx23-mlx-av-q4', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
       // dgrauet's ltx-2-mlx runtime — true KeyframeInterpolationPipeline,
       // native video Extend, audio→video. Requires a separate venv synced
       // via `INSTALL_LTX2=1 bash scripts/setup-image-video.sh`.
       { id: 'ltx23_dgrauet_q4',   name: 'LTX-2.3 dgrauet Q4 (~16 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
       { id: 'ltx23_dgrauet_q8',   name: 'LTX-2.3 dgrauet Q8 (~25 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q8', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+      // Wan 2.2 (Alibaba) — pure-MLX port at osama-ata/Wan2.2-mlx, weights
+      // at Wan-AI/Wan2.2-T2V-A14B. Requires a dedicated venv synced via
+      // `INSTALL_WAN22=1 bash scripts/setup-image-video.sh` (clones the
+      // runtime repo into ~/.portos/wan2.2-mlx). MoE-A14B = 14B active
+      // params at inference, ~28 GB resident at bf16.
+      {
+        id: 'wan22_t2v_a14b',
+        name: 'Wan 2.2 T2V A14B (~28 GB, MoE-14B-active)',
+        repo: 'Wan-AI/Wan2.2-T2V-A14B',
+        runtime: 'wan22',
+        mode: 't2v',
+        steps: 25,
+        guidance: 5.0,
+      },
+      {
+        id: 'wan22_i2v_a14b',
+        name: 'Wan 2.2 I2V A14B (~28 GB, image-to-video)',
+        repo: 'Wan-AI/Wan2.2-I2V-A14B',
+        runtime: 'wan22',
+        mode: 'i2v',
+        steps: 25,
+        guidance: 5.0,
+      },
+      // HunyuanVideo (Tencent) — MLX port at gaurav-nelson/HunyuanVideo_MLX,
+      // weights at tencent/HunyuanVideo. 13B params, ~60 GB resident at bf16.
+      // Practical only with Gemma 4-bit text encoder (not bf16) + nothing else
+      // in unified memory. Provisioned via `INSTALL_HUNYUAN=1 bash
+      // scripts/setup-image-video.sh`.
+      {
+        id: 'hunyuan_video',
+        // fp32-only on MPS: fp16/bf16 trip an MPS matmul accumulator-dtype
+        // assertion within ~2s of the first forward pass. At 576×1024×121
+        // frames × 30 steps that's a 4-8 hr render — marked `deprecated`
+        // so it lands in the "Legacy" optgroup. Migration 044 patches
+        // existing installs that still have the pre-fix shape.
+        name: 'HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)',
+        repo: 'tencent/HunyuanVideo',
+        runtime: 'hunyuan',
+        mode: 't2v',
+        steps: 30,
+        guidance: 6.0,
+        precision: 'fp32',
+        deprecated: true,
+      },
     ],
     windows: [
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
@@ -76,7 +124,11 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
-      tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B',
+      // KV repo's tokenizer is the same Qwen3 tokenizer as the base 9B repo,
+      // but the multi-reference editing path in scripts/flux2_macos.py probes
+      // HF auth against this value — pinning to the KV repo means accepting
+      // its license once enables both single-ref + multi-ref renders.
+      tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -91,6 +143,79 @@ const DEFAULT_REGISTRY = {
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
+    },
+    // FLUX.2 9B at native bf16 — no quantization, full quality. Needs ~36 GB
+    // resident for the transformer alone, plus ~8 GB for the text encoder.
+    // Practical on 128GB unified-memory hardware; will OOM on smaller boxes.
+    // Uses the gated black-forest-labs/FLUX.2-klein-9B repo directly (same
+    // license as flux2-klein-9b SDNQ variant — accept once at huggingface.co).
+    {
+      id: 'flux2-klein-9b-bf16',
+      name: 'Flux 2 Klein 9B (bf16, ~36 GB — 64+ GB RAM)',
+      runner: 'flux2',
+      quantization: 'none',
+      repo: 'black-forest-labs/FLUX.2-klein-9B',
+      steps: 20,
+      guidance: 3.5,
+      cfgDisabled: true,
+      requiresHfToken: true,
+      licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.2-klein-9B',
+    },
+    // hidream runner — HiDream-I1 17B MoE DiT, Apache 2.0 weights but needs
+    // meta-llama/Meta-Llama-3.1-8B-Instruct (gated) as text-encoder-4.
+    // Pipeline class isn't auto-detected so passed explicitly. Reuses the
+    // FLUX.2 venv (diffusers >= 0.32 has HiDreamImagePipeline).
+    {
+      id: 'hidream-i1-full',
+      name: 'HiDream-I1 Full (17B, ~34 GB @ bf16, 50 steps)',
+      runner: 'hidream',
+      repo: 'HiDream-ai/HiDream-I1-Full',
+      pipelineClass: 'HiDreamImagePipeline',
+      textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderClass: 'LlamaForCausalLM',
+      tokenizerClass: 'PreTrainedTokenizerFast',
+      steps: 50,
+      guidance: 5.0,
+      requiresHfToken: true,
+      licenseUrl: 'https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct',
+    },
+    {
+      id: 'hidream-i1-fast',
+      name: 'HiDream-I1 Fast (17B distilled, ~34 GB, 16 steps)',
+      runner: 'hidream',
+      repo: 'HiDream-ai/HiDream-I1-Fast',
+      pipelineClass: 'HiDreamImagePipeline',
+      textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderClass: 'LlamaForCausalLM',
+      tokenizerClass: 'PreTrainedTokenizerFast',
+      steps: 16,
+      guidance: 0,
+      cfgDisabled: true,
+      requiresHfToken: true,
+      licenseUrl: 'https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct',
+    },
+    // qwen runner — Qwen-Image 20B MMDiT, Apache 2.0, ungated. Uses
+    // Qwen/Qwen2.5-VL-7B-Instruct as the bundled text encoder (also Apache).
+    // Diffusers >= 0.31 ships QwenImagePipeline (autodetectable via
+    // AutoPipelineForText2Image, but pinned explicitly so registry edits
+    // don't fight pipeline-class auto-resolution).
+    {
+      id: 'qwen-image',
+      name: 'Qwen-Image (20B MMDiT, ~40 GB @ bf16, best text rendering)',
+      runner: 'qwen',
+      repo: 'Qwen/Qwen-Image',
+      pipelineClass: 'QwenImagePipeline',
+      steps: 30,
+      guidance: 4.0,
+    },
+    {
+      id: 'qwen-image-edit',
+      name: 'Qwen-Image-Edit (20B, image-to-image + text-rewrite)',
+      runner: 'qwen',
+      repo: 'Qwen/Qwen-Image-Edit',
+      pipelineClass: 'QwenImageEditPipeline',
+      steps: 30,
+      guidance: 4.0,
     },
     // z-image runner — Apache 2.0, ungated, reuses the FLUX.2 venv. Turbo
     // distillation runs ~8 steps with CFG disabled (guidance 1.0).
@@ -148,15 +273,6 @@ const DEFAULT_REGISTRY = {
     { id: 'gemma-bf16',     label: 'Gemma 3 12B bf16 (default, best quality, ~24 GB)',   repo: 'mlx-community/gemma-3-12b-it-bf16' },
   ],
   selectedTextEncoder: 'gemma-bf16',
-};
-
-// `path.join(homedir(), '/.foo')` discards the homedir because of the
-// leading slash, so we have to strip the `~/` prefix (or `~`) before joining.
-const expandHome = (p) => {
-  if (!p || !p.startsWith('~')) return p;
-  if (p === '~') return homedir();
-  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
-  return p;
 };
 
 let cached = null;
@@ -221,10 +337,12 @@ const CFG_DISABLED_IDS = new Set([
   'schnell',
   'flux2-klein-4b',
   'flux2-klein-9b',
+  'flux2-klein-9b-bf16',
   'flux2-klein-4b-int8',
   'z-image-turbo-bf16',
   'z-image-turbo-quant',
   'ernie-image-turbo',
+  'hidream-i1-fast',
 ]);
 
 const backfillCfgDisabled = (list) => {
@@ -240,6 +358,8 @@ const backfillCfgDisabled = (list) => {
 export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
 export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
+export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
+export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
 export const isCfgDisabled = (model) => model?.cfgDisabled === true;
 
 // Append models that are genuinely new in this release (not in
@@ -549,6 +669,64 @@ export const getDefaultVideoModelId = () => {
 export const getImageModels = () => {
   const reg = loadMediaModels();
   return (reg.image || []).filter((m) => !platformBroken(m.broken));
+};
+
+// Map a registry entry to the HuggingFace repo id whose weights need to be
+// resident on disk before generation can run. Used by the download-status
+// badge on the image/video gen forms.
+//
+// Most entries already carry `repo` directly. mflux's legacy `dev` / `schnell`
+// ids predate the field and resolve to the canonical Black Forest Labs repos
+// at runtime via the `mflux-generate` CLI — hardcode those two so the badge
+// can probe their HF cache the same way as every other model.
+const MFLUX_LEGACY_REPOS = {
+  dev: 'black-forest-labs/FLUX.1-dev',
+  schnell: 'black-forest-labs/FLUX.1-schnell',
+};
+
+export const repoForModel = (model) => {
+  if (!model || typeof model !== 'object') return null;
+  if (isNonEmptyString(model.repo)) return model.repo;
+  if (MFLUX_LEGACY_REPOS[model.id]) return MFLUX_LEGACY_REPOS[model.id];
+  return null;
+};
+
+// Full list of HF repos a model needs cached on disk before the runner can
+// inference. For HiDream entries this includes the separate Llama-3.1 text
+// encoder (`textEncoderRepo`) the Diffusers pipeline loads as `text_encoder_4`
+// — otherwise the cache-status badge says "Available" while the renderer
+// silently kicks off a second multi-GB gated download at start-up. Result is
+// `null` when the main repo itself isn't known (model is misconfigured / a
+// custom mflux third-party entry).
+export const requiredReposForModel = (model) => {
+  const main = repoForModel(model);
+  if (!main) return null;
+  const aux = [];
+  if (isNonEmptyString(model?.textEncoderRepo)) aux.push(model.textEncoderRepo);
+  return [main, ...aux];
+};
+
+// `getTextEncoderRepo()` can return either an HF repo id (`org/name`) or a
+// resolved local filesystem path when the registry entry has a `localPath`
+// override. Only `org/name` is a valid input to HF-cache inspection /
+// download endpoints.
+//
+// Reject local-path shapes across platforms:
+//  - POSIX absolute / home-relative: `/foo/bar`, `~/foo`
+//  - Windows drive paths (both backslash and forward-slash style): `C:\…`,
+//    `C:/Users/…` — without this check, a Windows install with a
+//    forward-slash-style localPath text encoder would be misclassified as
+//    an HF repo, triggering bogus cache inspection / download requests.
+//  - Windows UNC paths: `\\server\share\…`
+//  - Any path containing a backslash (Windows separator)
+// Then require exactly one `/` separator — standard HF repo ids are the
+// `org/name` shape; zero (`legacy-bare-name`) and multiple (a path) are not.
+export const isHfRepoId = (value) => {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (value.startsWith('/') || value.startsWith('~')) return false;
+  if (value.includes('\\')) return false;
+  if (/^[A-Za-z]:/.test(value)) return false;
+  return (value.match(/\//g) || []).length === 1;
 };
 
 // Resolve the active text encoder to a path mlx_video can pass via

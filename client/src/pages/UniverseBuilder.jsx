@@ -36,6 +36,7 @@ import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
+import StyleProbeImage from '../components/universe/StyleProbeImage';
 import EntryCard from '../components/universe/EntryCard';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
@@ -712,6 +713,10 @@ export default function UniverseBuilder() {
       const refs = Array.isArray(s?.imageRefs) ? s.imageRefs : [];
       for (const f of refs) pushFilename(f, `Composite · ${s.label}`);
     }
+    // Base style probe renders — same `image:<filename>` namespace so the
+    // lightbox finds them and reuses the gallery sidecar metadata.
+    const styleRefs = Array.isArray(draft?.styleImageRefs) ? draft.styleImageRefs : [];
+    for (const f of styleRefs) pushFilename(f, 'Base style');
     // Canon refs — characters / places / objects. Hydrate from the gallery
     // sidecar so the modal shows the ACTUAL render prompt (the same one the
     // History page sees), not just the character description. The descriptor
@@ -1844,6 +1849,8 @@ export default function UniverseBuilder() {
             totalVariations={totalVariations}
             categoryKeyCount={categoryKeys.length}
             totalSheets={totalSheets}
+            onPreview={openPreviewByFilename}
+            onStyleProbeRenderComplete={bumpGalleryRefresh}
           />
         )}
 
@@ -2941,6 +2948,8 @@ function BibleTab({
   handleExpand, expanding, saving,
   refine,
   totalVariations, categoryKeyCount, totalSheets,
+  onPreview,
+  onStyleProbeRenderComplete = null,
 }) {
   const { providers, providerModels, providerLabel, activeProviderId } = llm;
   const {
@@ -3130,6 +3139,16 @@ function BibleTab({
           locked={draft.locked}
           onToggleLock={toggleLock}
         />
+        <div className="mt-4 pt-4 border-t border-port-border">
+          {/* StyleProbeImage persists styleImageRefs server-side itself; merge
+              only that field into the draft so unsaved style edits aren't lost. */}
+          <StyleProbeImage
+            universe={draft}
+            onUniverseChange={(updated) => updateDraft({ styleImageRefs: updated?.styleImageRefs || [] })}
+            onPreview={onPreview}
+            onRenderComplete={() => onStyleProbeRenderComplete?.()}
+          />
+        </div>
       </section>
     </>
   );

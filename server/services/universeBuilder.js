@@ -775,6 +775,12 @@ const sanitizeTemplate = (raw) => {
     categories,
     compositeSheets,
     influences,
+    // Base "style probe" renders — images generated from the raw style preset
+    // (influences embrace/avoid + styleNotes) with NO subject, so the user can
+    // see the world's base visual emphasis. Additive + regenerable; sanitized
+    // like canon imageRefs (dedupe + cap). Not wire-version-gated (low-stakes,
+    // one-click to regenerate if an older peer round-trips and strips it).
+    styleImageRefs: sanitizeEntryImageRefs(raw.styleImageRefs),
     locked,
     characters,
     places,
@@ -911,6 +917,7 @@ export async function createUniverse(input = {}) {
       categories: input.categories || {},
       compositeSheets: input.compositeSheets || [],
       influences: input.influences || {},
+      styleImageRefs: input.styleImageRefs || [],
       locked: input.locked || {},
       // Canon registries — let callers seed a universe at creation time
       // (writers-room promote, share-bucket import). sanitizeTemplate runs
@@ -1069,6 +1076,8 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     const PATCHABLE_SCALARS = [
       'name', 'starterPrompt',
       'logline', 'premise', 'styleNotes', 'compositeSheets',
+      // Base style-probe render refs — patched wholesale (sanitizer re-caps).
+      'styleImageRefs',
       // Canon entity arrays — patched wholesale (the sanitizer reruns
       // sanitizeBibleList so per-entry shape is enforced on every save).
       'characters', 'places', 'objects',

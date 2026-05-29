@@ -15,6 +15,7 @@ import {
   localLlmInstallSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
+  localLlmUnloadSchema,
   localLlmMigrateSchema,
   localLlmInstallBackendSchema,
   localLlmOllamaServiceSchema,
@@ -23,8 +24,9 @@ import {
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { searchHuggingFaceModels } from '../services/huggingFaceCatalog.js'
 import {
-  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, controlOllamaServer
+  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
 } from '../services/localLlm.js'
+import { getLoadedModels as getLoadedOllamaModels, unloadModel as unloadOllamaModel } from '../services/ollamaManager.js'
 
 const router = Router()
 
@@ -120,12 +122,34 @@ router.post('/install', asyncHandler(async (req, res) => {
   })
   if (!result.success) {
     emit('error', result.error || 'Install failed')
-    return res.status(502).json({ error: result.error || 'Install failed', modelId })
+    // Forward structured `code` (e.g. OLLAMA_OUTDATED) so the client can offer
+    // a recovery action — like prompting to upgrade Ollama — instead of just
+    // surfacing the raw error string in a toast.
+    return res.status(502).json({ error: result.error || 'Install failed', modelId, ...(result.code ? { code: result.code } : {}) })
   }
   emit('complete', result.pending
     ? `${modelId} download started in LM Studio — it'll finish in the background`
     : `${modelId} installed on ${backend}`)
   res.json({ success: true, ...result })
+}))
+
+// POST /api/local-llm/upgrade-backend — upgrade an existing backend install
+// (Homebrew on macOS, official script for Ollama on Linux). Streams progress
+// over the same `localLlm:progress` socket event the install/pull paths use.
+router.post('/upgrade-backend', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(localLlmInstallBackendSchema, req.body)
+  const emit = emitter(req)
+  const result = await upgradeBackend(backend, ({ event, message }) => emit(event, message))
+    .catch((err) => {
+      emit('error', `Upgrade failed: ${err.message}`)
+      throw err
+    })
+  if (!result.success) {
+    emit('error', result.error || 'Upgrade failed')
+    return res.status(502).json({ error: result.error || 'Upgrade failed', backend })
+  }
+  emit('complete', `${backend === 'ollama' ? 'Ollama' : 'LM Studio'} upgraded${result.note ? ` — ${result.note}` : ''}`)
+  res.json(result)
 }))
 
 // POST /api/local-llm/delete — remove an installed model
@@ -162,6 +186,37 @@ router.post('/migrate', asyncHandler(async (req, res) => {
     return res.status(500).json({ error: result.error || 'Migration failed' })
   }
   res.json(result)
+}))
+
+// GET /api/local-llm/loaded — models currently resident in memory.
+// Distinct from /catalog (disk-installed) — only flags what's eating VRAM
+// right now so the Memory Management panel can show what to unload before
+// kicking off a big diffusion render.
+router.get('/loaded', asyncHandler(async (req, res) => {
+  const loaded = await getLoadedOllamaModels()
+  res.json({ ollama: loaded })
+}))
+
+// POST /api/local-llm/unload — body: { backend: 'ollama', modelId }.
+// Forces Ollama to evict the named model immediately (`keep_alive: 0`).
+// LM Studio's unload lives at POST /api/lmstudio/unload — we don't proxy
+// it here to keep each backend's quirks behind its own router.
+router.post('/unload', asyncHandler(async (req, res) => {
+  const { backend, modelId } = validateRequest(localLlmUnloadSchema, req.body)
+  if (backend !== 'ollama') return res.status(400).json({ error: 'backend must be "ollama" (use /api/lmstudio/unload for LM Studio)' })
+  const result = await unloadOllamaModel(modelId)
+  // "not loaded" is an idempotent no-op (the model already isn't resident
+  // — between the panel's last poll and this click it may have hit Ollama's
+  // keep_alive idle timer). Return 200 so the client sees a clean outcome
+  // and doesn't surface a red error toast. 502 stays reserved for genuine
+  // failures (Ollama unreachable / request errored / non-2xx from /api/generate).
+  if (!result.unloaded) {
+    if (result.reason === 'not loaded') {
+      return res.json({ success: true, unloaded: false, reason: result.reason, modelId })
+    }
+    return res.status(502).json({ error: result.reason || 'unload failed', modelId })
+  }
+  res.json({ success: true, ...result })
 }))
 
 export default router

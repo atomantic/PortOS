@@ -17,7 +17,7 @@ export const WORLD_INFLUENCES_PER_LIST_MAX = 30;
 // `options` lets a caller that owns its own error toast pass `{ silent: true }`
 // so request() doesn't also toast — see CLAUDE.md "Custom catch ⇒ silent: true".
 export const listUniverses = (options = {}) => request('/universe-builder', options);
-export const getUniverse = (id) => request(`/universe-builder/${encodeURIComponent(id)}`);
+export const getUniverse = (id, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, options);
 
 export const createUniverse = (data) => request('/universe-builder', {
   method: 'POST',

@@ -77,6 +77,7 @@ const WritersRoomGuide = lazyWithReload(() => import('./pages/WritersRoomGuide')
 const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
 const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const Importer = lazyWithReload(() => import('./pages/Importer'));
+const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
@@ -266,6 +267,9 @@ export default function App() {
           <Route path="sharing" element={<Sharing />} />
           <Route path="sharing/:section" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
+          <Route path="story-builder" element={<StoryBuilder />} />
+          <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
+          <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />

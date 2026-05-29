@@ -182,6 +182,17 @@ export function dataPath(...segments) {
   return join(PATHS.data, ...segments);
 }
 
+// `path.join(homedir(), '/.foo')` discards the homedir prefix because of
+// the leading slash, so strip the leading `~/` (or `~\` on Windows) before
+// joining. Only expands a leading `~` — embedded `~` chars in path segments
+// (e.g. `iCloud~md~obsidian`) are preserved.
+export function expandHome(p) {
+  if (typeof p !== 'string' || !p) return p;
+  if (p === '~') return homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2));
+  return p;
+}
+
 /**
  * Check if a string is potentially valid JSON.
  * Performs quick structural validation before parsing.
@@ -482,8 +493,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   };
 
   const save = async (data) => {
-    await ensureDir(dir);
-    await writeFile(filePath, JSON.stringify(data, null, 2));
+    await atomicWrite(filePath, data);
     cache = data;
     cacheTimestamp = Date.now();
   };

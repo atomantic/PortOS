@@ -23,6 +23,7 @@ import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
+import { hfTokenEnv } from '../../lib/hfToken.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -32,13 +33,132 @@ import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscale
 const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
 const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
 
+// Wan 2.2 MLX runtime — osama-ata/Wan2.2-mlx cloned at
+// ~/.portos/wan2.2-mlx/. The wrapper at scripts/generate_wan22.py
+// subprocesses upstream generate.py so PortOS releases don't drift from
+// upstream's CLI. Provisioned via `INSTALL_WAN22=1 bash scripts/setup-image-video.sh`.
+const WAN22_VENV_PYTHON = join(homedir(), '.portos', 'wan2.2-mlx', '.venv', 'bin', 'python3');
+const WAN22_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wan22.py');
+const WAN22_REPO_DIR = join(homedir(), '.portos', 'wan2.2-mlx');
+
+// HunyuanVideo MLX runtime — gaurav-nelson/HunyuanVideo_MLX cloned at
+// ~/.portos/hunyuan-video-mlx/. ~60 GB resident at bf16 so practical only
+// with the 4-bit Gemma text encoder + everything else evicted. Provisioned
+// via `INSTALL_HUNYUAN=1 bash scripts/setup-image-video.sh`.
+const HUNYUAN_VENV_PYTHON = join(homedir(), '.portos', 'hunyuan-video-mlx', '.venv', 'bin', 'python3');
+const HUNYUAN_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_hunyuan.py');
+const HUNYUAN_REPO_DIR = join(homedir(), '.portos', 'hunyuan-video-mlx');
+
 const execFileAsync = promisify(execFile);
 
 const IS_WIN = process.platform === 'win32';
 
+const MODULE_NOT_FOUND_RE = /ModuleNotFoundError: No module named ['"]([^'"]+)['"]/;
+
 // Catalog comes from data/media-models.json (see server/lib/mediaModels.js).
 // Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
+
+// Per-runtime metadata for "bring-your-own-venv" video runtimes — those that
+// resolve their own Python interpreter inside buildArgs (so the legacy
+// mlx_video `settings.imageGen.local.pythonPath` is irrelevant). Single
+// source of truth: the BYOV_VIDEO_RUNTIMES Set + the /setup/runtime-* routes
+// + the client install banner all derive from this map's keys.
+//
+// `importProbe` is a tiny Python expression run by isByovRuntimeReady() to
+// confirm the venv's *packages* are actually installed (not just the venv
+// binary). A partial install (e.g. setup script aborted after `uv venv`
+// before `uv pip install`) leaves the binary present but no torch — without
+// this probe the UI would hide the install banner and renders would fail
+// with a deep ImportError inside the runner script.
+export const BYOV_RUNTIME_INFO = Object.freeze({
+  hunyuan: {
+    id: 'hunyuan',
+    label: 'HunyuanVideo MLX',
+    venvPython: HUNYUAN_VENV_PYTHON,
+    repoDir: HUNYUAN_REPO_DIR,
+    installEnvVar: 'INSTALL_HUNYUAN',
+    repoUrl: 'https://github.com/gaurav-nelson/HunyuanVideo_MLX',
+    // `hyvideo` isn't pip-installed — mirror the runner's sys.path prepend so
+    // the probe walks the same transitive import chain (loguru, diffusers, …).
+    importProbe: `import sys; sys.path.insert(0, ${JSON.stringify(HUNYUAN_REPO_DIR)}); import hyvideo.inference`,
+  },
+  wan22: {
+    id: 'wan22',
+    label: 'Wan 2.2 MLX',
+    venvPython: WAN22_VENV_PYTHON,
+    repoDir: WAN22_REPO_DIR,
+    installEnvVar: 'INSTALL_WAN22',
+    repoUrl: 'https://github.com/osama-ata/Wan2.2-mlx',
+    // Walks the package's __init__ chain so transitive deps absent from
+    // upstream's pyproject.toml (e.g. einops, imported by wan/modules/vae2_1.py)
+    // fail the probe instead of slipping past a flat torch/transformers check.
+    importProbe: 'import wan',
+  },
+  ltx2: {
+    id: 'ltx2',
+    label: 'LTX-2 MLX',
+    venvPython: LTX2_VENV_PYTHON,
+    repoDir: join(homedir(), '.portos', 'ltx-2-mlx'),
+    installEnvVar: 'INSTALL_LTX2',
+    repoUrl: 'https://github.com/dgrauet/ltx-2-mlx',
+    // Matches the post-install check setup-image-video.sh runs after
+    // `uv sync` (`import ltx_pipelines_mlx` is the canonical health signal
+    // for this venv).
+    importProbe: 'import ltx_pipelines_mlx',
+  },
+});
+
+export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(Object.keys(BYOV_RUNTIME_INFO)));
+
+export function isByovRuntimeInstalled(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info) return false;
+  return existsSync(info.venvPython);
+}
+
+// Cache the import-probe result per runtime for the life of the server
+// process (or until invalidateByovReadyCache is called). The probe itself
+// spawns python + imports torch — measured ~500ms-2s warm, ~5s cold — so
+// repeating it on every status request is too slow. Positive results are
+// stable (you don't accidentally uninstall packages); negative results we
+// re-probe each request so a finished install reflects immediately. The
+// install-completion path in routes/videoGen.js explicitly invalidates
+// the entry for the runtime it just installed.
+const readyCache = new Map();
+export function invalidateByovReadyCache(runtimeId) {
+  if (runtimeId) readyCache.delete(runtimeId); else readyCache.clear();
+}
+export async function isByovRuntimeReady(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info) return false;
+  if (!existsSync(info.venvPython)) return false;
+  if (readyCache.get(runtimeId) === true) return true;
+  const probeOk = await new Promise((resolve) => {
+    const child = spawn(info.venvPython, ['-c', info.importProbe], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 30000);
+    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
+    child.on('error', () => { clearTimeout(timer); resolve(false); });
+  });
+  if (probeOk) readyCache.set(runtimeId, true);
+  return probeOk;
+}
+
+// Throws the same shape the per-runtime buildArgs used to throw inline — a
+// 500 with a stable runtime-specific code the route layer and tests already
+// match against. The error codes are LTX2_VENV_MISSING / WAN22_VENV_MISSING
+// / HUNYUAN_VENV_MISSING; keep `runtimeId.toUpperCase()` to preserve them.
+export function assertByovRuntimeInstalled(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info) return;
+  if (existsSync(info.venvPython)) return;
+  throw new ServerError(
+    `${info.label} venv not found at ${info.venvPython}. Run \`${info.installEnvVar}=1 bash scripts/setup-image-video.sh\` to install.`,
+    { status: 500, code: `${runtimeId.toUpperCase()}_VENV_MISSING` },
+  );
+}
 
 export const listVideoModels = () => getVideoModels();
 
@@ -88,12 +208,7 @@ export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
 const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
-  if (!existsSync(LTX2_VENV_PYTHON)) {
-    throw new ServerError(
-      `ltx-2-mlx venv not found at ${LTX2_VENV_PYTHON}. Run \`INSTALL_LTX2=1 bash scripts/setup-image-video.sh\` to install.`,
-      { status: 500, code: 'LTX2_VENV_MISSING' },
-    );
-  }
+  assertByovRuntimeInstalled('ltx2');
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
   // source video's latent (motion + visual content) rather than just the
@@ -242,12 +357,89 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   return { bin: LTX2_VENV_PYTHON, args };
 };
 
+// Build args for the Wan 2.2 MLX helper. The helper subprocesses upstream
+// `generate.py` from the cloned osama-ata/Wan2.2-mlx repo. The wrapper
+// translates PortOS's stable arg surface (prompt, output, image) into
+// upstream's --task / --size / --ckpt_dir form so PortOS releases don't
+// fight upstream CLI changes.
+const buildWan22Args = ({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath }) => {
+  assertByovRuntimeInstalled('wan22');
+  const args = [
+    WAN22_HELPER_SCRIPT,
+    '--repo-dir', WAN22_REPO_DIR,
+    '--task', model.mode === 'i2v' ? 'i2v-A14B' : 't2v-A14B',
+    '--model-repo', model.repo,
+    '--prompt', prompt,
+    '--width', String(width),
+    '--height', String(height),
+    '--num-frames', String(numFrames),
+    '--steps', String(steps),
+    '--guidance', String(guidance ?? 5.0),
+    '--seed', String(seed),
+    '--output', outputPath,
+  ];
+  if (model.mode === 'i2v') {
+    if (!sourceImagePath) {
+      throw new ServerError(
+        'Wan 2.2 i2v requires a source image — upload one before running this model.',
+        { status: 400, code: 'WAN22_I2V_REQUIRES_IMAGE' },
+      );
+    }
+    args.push('--image', sourceImagePath);
+  }
+  return { bin: WAN22_VENV_PYTHON, args };
+};
+
+// Allowed precision tokens for runners that expose dtype as a CLI flag. The
+// Python side already gates argparse with `choices=`, but a bogus value in
+// data/media-models.json would otherwise reach the helper and surface as a
+// less-friendly "invalid choice" inside a Python traceback — failing here
+// gives a stable PortOS error code the route + client error path knows.
+const VIDEO_PRECISIONS = Object.freeze(['fp16', 'bf16', 'fp32']);
+
+// Build args for the HunyuanVideo MLX helper. Calls hyvideo.inference
+// directly (see scripts/generate_hunyuan.py) so the steps / guidance /
+// precision flags actually take effect — upstream's sample_video_mps.py
+// silently hardcoded them.
+const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFrames, steps, guidance, seed, outputPath }) => {
+  assertByovRuntimeInstalled('hunyuan');
+  const precision = model.precision || 'fp16';
+  if (!VIDEO_PRECISIONS.includes(precision)) {
+    throw new ServerError(
+      `Invalid precision "${precision}" on model "${model.id}" — expected one of ${VIDEO_PRECISIONS.join(', ')}`,
+      { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
+    );
+  }
+  const args = [
+    HUNYUAN_HELPER_SCRIPT,
+    '--repo-dir', HUNYUAN_REPO_DIR,
+    '--model-repo', model.repo,
+    '--prompt', prompt,
+    '--width', String(width),
+    '--height', String(height),
+    '--num-frames', String(numFrames),
+    '--steps', String(steps),
+    '--guidance', String(guidance ?? 6.0),
+    '--seed', String(seed),
+    '--precision', precision,
+    '--output', outputPath,
+  ];
+  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
+  return { bin: HUNYUAN_VENV_PYTHON, args };
+};
+
 const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
     return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
+  }
+  if (model.runtime === 'wan22') {
+    return buildWan22Args({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath });
+  }
+  if (model.runtime === 'hunyuan') {
+    return buildHunyuanArgs({ model, prompt, negativePrompt, width, height, numFrames, steps, guidance, seed, outputPath });
   }
   if (Array.isArray(keyframes) && keyframes.length >= 2) {
     throw new ServerError(
@@ -321,7 +513,6 @@ export const DEFAULT_NUM_FRAMES = 121;
 
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
-  if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
   // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
@@ -330,6 +521,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   const model = VIDEO_MODELS[modelId];
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  // Only require the legacy mlx_video pythonPath when the chosen runtime
+  // actually uses it. ltx2/wan22/hunyuan resolve their own venv path inside
+  // buildArgs — gating them on the unrelated mlx_video setting locks users
+  // out of the runtimes they just installed via INSTALL_WAN22 / INSTALL_LTX2
+  // / INSTALL_HUNYUAN. Routes/videoGen.js reads the same module-level set.
+  if (!pythonPath && !BYOV_VIDEO_RUNTIMES.has(model.runtime)) {
+    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
+  }
   // macOS/mlx_video requires a HuggingFace repo id — Windows doesn't (the
   // diffusers wrapper hardcodes Lightricks/LTX-Video). A user-edited registry
   // entry missing `repo` would otherwise pass `undefined` into spawn args.
@@ -502,18 +701,28 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
   // NOT unset the var — Node coerces it to the literal string "undefined" —
   // so build the env explicitly and `delete`.
-  const childEnv = { ...process.env };
+  // Merge HF_TOKEN/HF_HOME via hfTokenEnv() so the Wan 2.2 / HunyuanVideo
+  // python helpers can authenticate snapshot_download() against gated repos
+  // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
+  // a gated repo, but the merge is harmless when no token is configured.
+  const childEnv = { ...process.env, ...(await hfTokenEnv()) };
   delete childEnv.PYTHONPATH;
+  // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
+  // immediately. Without this, child stdio is line-buffered against a pipe and
+  // long inference loops emit nothing to handleLine() for minutes — the UI
+  // looks dead even when the model is making progress.
+  childEnv.PYTHONUNBUFFERED = '1';
   const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
   // Hold a sleep-prevention lock for the lifetime of the python child, so a
-  // 90s+ render doesn't get aborted by display/system sleep on a laptop. -w
-  // makes caffeinate self-exit when our pid does, so no manual cleanup is
-  // needed and a server crash mid-render still releases the assertion.
-  // macOS-only — `caffeinate` is a darwin binary; gating on `!IS_WIN` would
-  // also fire on Linux and emit a pointless ENOENT every render.
+  // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
+  // sleep (lid-close / low-power), `-i` blocks idle sleep, `-d` blocks display
+  // sleep — together they survive everything short of the user forcing sleep
+  // from the Apple menu. `-w` makes caffeinate self-exit when our pid does, so
+  // no manual cleanup is needed and a server crash mid-render still releases
+  // the assertion. macOS-only — `caffeinate` is a darwin binary.
   if (process.platform === 'darwin' && proc.pid) {
-    spawn('caffeinate', ['-i', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
+    spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
   }
   // Without an 'error' handler, a missing/non-executable pythonPath would
   // crash the server with an unhandled error event.
@@ -542,6 +751,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   });
 
   let outputBuf = '';
+  let missingPyModule = null;
 
   // Returns true when the line was a known progress/status message (already
   // broadcast over SSE) or python-noise — caller should suppress logging.
@@ -553,25 +763,70 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
-      broadcastSse(job, { type: 'status', message: line.slice(7) });
+      const message = line.slice(7);
+      broadcastSse(job, { type: 'status', message });
+      // Mirror status to videoGenEvents so the mediaJobQueue SSE dispatcher
+      // forwards it to the client. Without this, only STAGE: progress
+      // reaches the UI and long pre-render phases ("Loading pipeline…",
+      // "Generating I2V…") display nothing.
+      videoGenEvents.emit('status', { generationId: jobId, message });
       return true;
     }
     if (line.startsWith('STAGE:')) {
       const parts = line.split(':');
-      const step = parseInt(parts[3], 10) || 0;
-      const total = parseInt(parts[4], 10) || 1;
-      broadcastSse(job, { type: 'progress', progress: step / total, message: parts.slice(5).join(':') });
-      videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total });
+      // Three STAGE: shapes ship today:
+      //   STAGE:<stage>:step:<cur>:<total>:<msg>  — explicit progress (parts[2]='step')
+      //   STAGE:<stage>:heartbeat:<N>s            — idle-watchdog ping (parts[2]='heartbeat')
+      //   STAGE:<stage>                           — terse phase marker (no extra fields)
+      // The legacy "treat every STAGE: as step:" parse mangled heartbeat
+      // lines: parts[3]='20s' → parseInt=20, parts[4]=undefined → total=1, so
+      // a download-clip heartbeat broadcast progress=20.0 (= 2000%) to the UI.
+      // Normalize tag case — generate_ltx2.py emits `STEP:` (uppercase),
+      // generate_hunyuan.py emits `step:` and `heartbeat:` (lowercase).
+      const tag = (parts[2] || '').toLowerCase();
+      if (tag === 'heartbeat') {
+        // Surface as a status message; the activity emit above already
+        // resets the queue watchdog. Mirror to videoGenEvents so the
+        // mediaJobQueue SSE dispatcher forwards it to the client.
+        const message = `${parts[1]}: heartbeat ${parts[3] || ''}`;
+        broadcastSse(job, { type: 'status', message });
+        videoGenEvents.emit('status', { generationId: jobId, message });
+        return true;
+      }
+      if (tag === 'step') {
+        const step = parseInt(parts[3], 10) || 0;
+        const total = parseInt(parts[4], 10) || 1;
+        const label = parts.slice(5).join(':');
+        broadcastSse(job, { type: 'progress', progress: step / total, message: label });
+        // Pass the python-side label as `message` so the dispatcher surfaces
+        // it to the client instead of falling back to the synthesized
+        // "Rendering step X/Y" (which hides useful labels like "Loading
+        // model" emitted at stage boundaries).
+        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total, message: label || undefined });
+        return true;
+      }
+      // Bare phase marker (e.g. STAGE:load-pipeline, STAGE:from-pretrained) —
+      // surface as a status line. No progress %, no division-by-undefined.
+      // Mirror to videoGenEvents for client forwarding.
+      const message = parts.slice(1).join(':');
+      broadcastSse(job, { type: 'status', message });
+      videoGenEvents.emit('status', { generationId: jobId, message });
       return true;
     }
     if (line.startsWith('DOWNLOAD:')) {
-      broadcastSse(job, { type: 'status', message: `Downloading model... ${line.slice(9)}` });
+      const message = `Downloading model... ${line.slice(9)}`;
+      broadcastSse(job, { type: 'status', message });
+      videoGenEvents.emit('status', { generationId: jobId, message });
       return true;
     }
     const m = line.match(/(\d+)%\|/);
     if (m) {
       const pct = parseInt(m[1], 10) / 100;
       broadcastSse(job, { type: 'progress', progress: pct, message: line });
+      // Omit `message` on the queue-dispatcher emit: the raw tqdm bar
+      // (`60%|██████    | 6/10 [00:30<00:20, ...]`) is terminal noise that
+      // would clobber the last meaningful STATUS/STAGE line on every
+      // percent update. Client renders the percentage separately.
       videoGenEvents.emit('progress', { generationId: jobId, progress: pct });
       return true;
     }
@@ -598,6 +853,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   proc.stderr.on('data', (chunk) => {
     for (const raw of chunk.toString().split(/[\n\r]+/)) {
+      // Record the root-cause module only — downstream imports in the same
+      // traceback raise the same error against later names.
+      if (!missingPyModule) {
+        const m = raw.match(MODULE_NOT_FOUND_RE);
+        if (m) missingPyModule = m[1];
+      }
       if (!handleLine(raw)) console.log(`🐍 [${jobId.slice(0, 8)}] ${raw.trim()}`);
     }
   });
@@ -623,9 +884,25 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
     if (code !== 0) {
       job.status = 'error';
-      const reason = signal === 'SIGKILL'
-        ? 'Process killed (likely out of memory — try a smaller model or resolution)'
-        : signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+      let reason;
+      if (missingPyModule) {
+        const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
+        if (runtimeInfo) {
+          // The probe believed the venv was ready but a runtime import
+          // disagreed — drop the cached "ready" so the next /runtime-status
+          // re-probes and the install banner re-appears.
+          invalidateByovReadyCache(runtimeInfo.id);
+          reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} venv. Re-run the installer via Settings → Video (or \`${runtimeInfo.installEnvVar}=1 bash scripts/setup-image-video.sh\`).`;
+        } else {
+          reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+        }
+      } else if (signal === 'SIGKILL') {
+        reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
+      } else if (signal) {
+        reason = `Killed by signal ${signal}`;
+      } else {
+        reason = `Exit code ${code}`;
+      }
       console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
       broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
       videoGenEvents.emit('failed', { generationId: jobId, error: reason });

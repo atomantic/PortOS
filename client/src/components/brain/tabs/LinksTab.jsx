@@ -15,12 +15,33 @@ import {
   AlertCircle,
   FolderOpen,
   Tag,
-  ShieldCheck
+  ShieldCheck,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  FolderClosed,
+  GripVertical
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import BucketBoard from '../links/BucketBoard';
+import { LINK_DND_TYPE } from '../links/bucketColors';
+
+/** Normalize a user-entered URL the way the quick-add form does. */
+function normalizeUrl(raw) {
+  let url = raw.trim();
+  if (!url) return null;
+  if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git@')) {
+    if (url.includes('github.com') || url.includes('.')) {
+      url = 'https://' + url;
+    } else {
+      return null;
+    }
+  }
+  return url;
+}
 
 const LINK_TYPE_COLORS = {
   github: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
@@ -41,57 +62,83 @@ const CLONE_STATUS_STYLES = {
 
 export default function LinksTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
+  const [inputTitle, setInputTitle] = useState('');
+  const [inputTags, setInputTags] = useState('');
+  const [showDetails, setShowDetails] = useState(false);
   const [sending, setSending] = useState(false);
   const [links, setLinks] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [buckets, setBuckets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all'); // all, github, other
+  const [filter, setFilter] = useState('all'); // all, github, other, ungrouped
+  const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [scanningId, setScanningId] = useState(null);
   const inputRef = useRef(null);
 
+  // Fetch the full link set; filtering, search, and bucket membership are all
+  // computed client-side, so we need every link in one round-trip — the prior
+  // `limit: 100` silently truncated power-user collections (>100 links lost
+  // from list views, search, and bucket boards). The server schema caps at
+  // 5000, which is ample headroom for a single-user bookmark collection.
   const fetchLinks = useCallback(async () => {
-    const options = {};
-    if (filter === 'github') {
-      options.isGitHubRepo = true;
-    } else if (filter === 'other') {
-      options.isGitHubRepo = false;
-    }
-
-    const data = await api.getBrainLinks(options).catch(() => ({ links: [], total: 0 }));
+    const data = await api.getBrainLinks({ limit: 5000, silent: true }).catch(() => ({ links: [] }));
     setLinks(data.links || []);
-    setTotal(data.total || 0);
     setLoading(false);
-  }, [filter]);
+  }, []);
 
   useEffect(() => {
     fetchLinks();
+    api.getBrainBuckets({ silent: true })
+      .then(data => setBuckets(data.buckets || []))
+      .catch(() => setBuckets([]));
   }, [fetchLinks]);
 
   // Poll for clone status updates while at least one link is in flight.
   const hasInFlightClone = links.some(l => l.cloneStatus === 'cloning' || l.cloneStatus === 'pending');
   useAutoRefetch(fetchLinks, 3000, { enabled: hasInFlightClone, pollOnly: true });
 
+  // Client-side filter (type / bucket membership) then keyword search.
+  const matchesFilter = (link) => {
+    if (filter === 'github') return link.isGitHubRepo;
+    if (filter === 'other') return !link.isGitHubRepo;
+    if (filter === 'ungrouped') return !link.bucketId;
+    return true;
+  };
+  const filteredLinks = links.filter(matchesFilter);
+
+  const query = search.trim().toLowerCase();
+  const visibleLinks = query
+    ? filteredLinks.filter(link => {
+        const haystack = [
+          link.title,
+          link.url,
+          link.description,
+          ...(link.tags || [])
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(query);
+      })
+    : filteredLinks;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!inputUrl.trim() || sending) return;
 
-    // Basic URL validation
-    let url = inputUrl.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git@')) {
-      // Try adding https://
-      if (url.includes('github.com') || url.includes('.')) {
-        url = 'https://' + url;
-      } else {
-        toast.error('Please enter a valid URL');
-        return;
-      }
+    const url = normalizeUrl(inputUrl);
+    if (!url) {
+      toast.error('Please enter a valid URL');
+      return;
     }
 
+    const payload = { url };
+    const title = inputTitle.trim();
+    if (title) payload.title = title;
+    const tags = inputTags.split(',').map(t => t.trim()).filter(Boolean);
+    if (tags.length) payload.tags = tags;
+
     setSending(true);
-    const result = await api.createBrainLink({ url }).catch(err => {
+    const result = await api.createBrainLink(payload).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('This URL is already saved');
       } else {
@@ -105,14 +152,64 @@ export default function LinksTab({ onRefresh }) {
       const isGitHub = result.isGitHubRepo;
       toast.success(isGitHub ? 'GitHub repo added - cloning in background' : 'Link saved');
       setInputUrl('');
+      setInputTitle('');
+      setInputTags('');
+      setShowDetails(false);
       fetchLinks();
       onRefresh?.();
     }
   };
 
+  // Next bucketOrder for a target bucket (append to the end).
+  const nextBucketOrder = (bucketId) => links
+    .filter(l => l.bucketId === bucketId)
+    .reduce((max, l) => Math.max(max, l.bucketOrder ?? 0), -1) + 1;
+
+  // Assign (or, with bucketId === null, unassign) a link to a bucket.
+  const handleAssignLink = async (link, bucketId) => {
+    const patch = bucketId
+      ? { bucketId, bucketOrder: nextBucketOrder(bucketId) }
+      : { bucketId: null };
+    // Optimistic update so chips move instantly.
+    setLinks(prev => prev.map(l => (l.id === link.id ? { ...l, ...patch } : l)));
+    const updated = await api.updateBrainLink(link.id, patch).catch(err => {
+      toast.error(err.message || 'Failed to update link');
+      return null;
+    });
+    if (updated) {
+      setLinks(prev => prev.map(l => (l.id === updated.id ? updated : l)));
+    } else {
+      fetchLinks(); // revert optimistic change on failure
+    }
+  };
+
+  // Quick-add a URL directly into a bucket. Returns true on success.
+  const handleAddLinkToBucket = async (rawUrl, bucketId) => {
+    const url = normalizeUrl(rawUrl);
+    if (!url) {
+      toast.error('Please enter a valid URL');
+      return false;
+    }
+    const result = await api.createBrainLink({ url, bucketId, bucketOrder: nextBucketOrder(bucketId) }).catch(err => {
+      if (err.message?.includes('already exists')) {
+        toast.error('This URL is already saved');
+      } else {
+        toast.error(err.message || 'Failed to add link');
+      }
+      return null;
+    });
+    if (result) {
+      setLinks(prev => [result, ...prev]);
+      onRefresh?.();
+      return true;
+    }
+    return false;
+  };
+
   const handleEdit = (link) => {
     setEditingId(link.id);
     setEditForm({
+      url: link.url,
       title: link.title,
       description: link.description || '',
       linkType: link.linkType,
@@ -121,7 +218,14 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleSaveEdit = async (linkId) => {
+    const url = editForm.url?.trim();
+    if (!url) {
+      toast.error('URL cannot be empty');
+      return;
+    }
+
     const updates = {
+      url,
       title: editForm.title,
       description: editForm.description,
       linkType: editForm.linkType,
@@ -129,7 +233,11 @@ export default function LinksTab({ onRefresh }) {
     };
 
     const result = await api.updateBrainLink(linkId, updates).catch(err => {
-      toast.error(err.message || 'Failed to update');
+      if (err.message?.includes('already exists')) {
+        toast.error('Another link already uses this URL');
+      } else {
+        toast.error(err.message || 'Failed to update');
+      }
       return null;
     });
 
@@ -210,7 +318,15 @@ export default function LinksTab({ onRefresh }) {
   }
 
   return (
-    <div className="flex flex-col h-full max-w-4xl mx-auto">
+    <div className="flex flex-col h-full">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(340px,440px)] gap-6 items-start">
+        {/* Left column: entry form, filters, and the full link list */}
+        <div className="min-w-0 flex flex-col">
+          <div className="flex items-center gap-2 mb-3">
+            <Link2 size={16} className="text-gray-400 shrink-0" />
+            <h2 className="text-sm font-semibold text-gray-300">All Links</h2>
+          </div>
+
       {/* Quick-add input */}
       <form onSubmit={handleSubmit} className="mb-6">
         <div className="flex gap-2">
@@ -236,17 +352,56 @@ export default function LinksTab({ onRefresh }) {
             )}
           </button>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowDetails(v => !v)}
+          className="mt-2 flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+        >
+          {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {showDetails ? 'Hide title & tags' : 'Add title & tags (optional)'}
+        </button>
+
+        {showDetails && (
+          <div className="mt-2 space-y-2">
+            <div>
+              <label htmlFor="link-title" className="sr-only">Title</label>
+              <input
+                id="link-title"
+                type="text"
+                value={inputTitle}
+                onChange={(e) => setInputTitle(e.target.value)}
+                placeholder="Title (defaults to repo name or URL)"
+                className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+                disabled={sending}
+              />
+            </div>
+            <div>
+              <label htmlFor="link-tags" className="sr-only">Tags</label>
+              <input
+                id="link-tags"
+                type="text"
+                value={inputTags}
+                onChange={(e) => setInputTags(e.target.value)}
+                placeholder="Tags (comma-separated)"
+                className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+                disabled={sending}
+              />
+            </div>
+          </div>
+        )}
+
         <p className="mt-2 text-xs text-gray-500">
           Paste any URL. GitHub repos will be automatically cloned for local reference.
         </p>
       </form>
 
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap">
         {[
-          { id: 'all', label: 'All', count: total },
-          { id: 'github', label: 'GitHub Repos', icon: GitBranch },
-          { id: 'other', label: 'Other Links', icon: Link2 }
+          { id: 'all', label: 'All', count: links.length },
+          { id: 'github', label: 'GitHub Repos', icon: GitBranch, count: links.filter(l => l.isGitHubRepo).length },
+          { id: 'other', label: 'Other Links', icon: Link2, count: links.filter(l => !l.isGitHubRepo).length },
+          { id: 'ungrouped', label: 'Ungrouped', icon: FolderClosed, count: links.filter(l => !l.bucketId).length }
         ].map(tab => {
           const Icon = tab.icon;
           const isActive = filter === tab.id;
@@ -270,25 +425,71 @@ export default function LinksTab({ onRefresh }) {
         })}
       </div>
 
+      {/* Search */}
+      <div className="relative mb-4">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search links by title, URL, description, or tag..."
+          className="w-full pl-9 pr-9 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white transition-colors"
+            title="Clear search"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
       {/* Links list */}
       <div className="space-y-3">
-        {links.map(link => (
+        {visibleLinks.map(link => {
+          const isEditing = editingId === link.id;
+          return (
           <div
             key={link.id}
-            className="p-4 bg-port-card border border-port-border rounded-lg"
+            draggable={!isEditing}
+            onDragStart={!isEditing ? (e) => {
+              e.dataTransfer.setData(LINK_DND_TYPE, link.id);
+              e.dataTransfer.effectAllowed = 'move';
+            } : undefined}
+            className={`p-4 bg-port-card border border-port-border rounded-lg ${isEditing ? '' : 'cursor-grab'}`}
           >
             {/* Header row */}
             <div className="flex items-start justify-between gap-3 mb-2">
+              {!isEditing && (
+                <GripVertical size={16} className="shrink-0 mt-0.5 text-gray-600" title="Drag to a bucket" />
+              )}
               {editingId === link.id ? (
                 <div className="flex-1 space-y-2">
-                  <input
-                    type="text"
-                    value={editForm.title}
-                    onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                    className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
-                    placeholder="Title"
-                    autoFocus
-                  />
+                  <div>
+                    <label htmlFor={`link-url-${link.id}`} className="block text-xs text-gray-400 mb-1">URL</label>
+                    <input
+                      id={`link-url-${link.id}`}
+                      type="url"
+                      value={editForm.url}
+                      onChange={(e) => setEditForm({ ...editForm, url: e.target.value })}
+                      className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                      placeholder="https://example.com"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={`link-title-${link.id}`} className="block text-xs text-gray-400 mb-1">Title</label>
+                    <input
+                      id={`link-title-${link.id}`}
+                      type="text"
+                      value={editForm.title}
+                      onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                      className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                      placeholder="Title"
+                      autoFocus
+                    />
+                  </div>
                   <textarea
                     value={editForm.description}
                     onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
@@ -349,6 +550,7 @@ export default function LinksTab({ onRefresh }) {
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      draggable={false}
                       className="text-sm text-gray-400 hover:text-port-accent truncate block"
                     >
                       {link.url}
@@ -377,6 +579,7 @@ export default function LinksTab({ onRefresh }) {
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      draggable={false}
                       className="p-1.5 text-gray-400 hover:text-port-accent transition-colors"
                       title="Open in new tab"
                     >
@@ -417,6 +620,21 @@ export default function LinksTab({ onRefresh }) {
                 <span className={`px-2 py-1 text-xs rounded border ${LINK_TYPE_COLORS[link.linkType] || LINK_TYPE_COLORS.other}`}>
                   {link.linkType}
                 </span>
+
+                {/* Bucket assignment */}
+                <label htmlFor={`link-bucket-${link.id}`} className="sr-only">Assign to bucket</label>
+                <select
+                  id={`link-bucket-${link.id}`}
+                  value={link.bucketId || ''}
+                  onChange={(e) => handleAssignLink(link, e.target.value || null)}
+                  className="px-1.5 py-1 text-xs rounded border border-port-border bg-port-bg text-gray-300 focus:outline-hidden focus:border-port-accent"
+                  title="Assign to a bucket"
+                >
+                  <option value="">＋ Bucket…</option>
+                  {buckets.map(b => (
+                    <option key={b.id} value={b.id}>{b.icon ? `${b.icon} ` : ''}{b.name}</option>
+                  ))}
+                </select>
 
                 {/* Tags */}
                 {link.tags?.length > 0 && (
@@ -521,7 +739,21 @@ export default function LinksTab({ onRefresh }) {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
+
+        {visibleLinks.length === 0 && query && (
+          <div className="text-center py-12 text-gray-500">
+            <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p>No links match "{search.trim()}".</p>
+            <button
+              onClick={() => setSearch('')}
+              className="text-sm mt-1 text-port-accent hover:underline"
+            >
+              Clear search
+            </button>
+          </div>
+        )}
 
         {links.length === 0 && (
           <div className="text-center py-12 text-gray-500">
@@ -530,6 +762,38 @@ export default function LinksTab({ onRefresh }) {
             <p className="text-sm mt-1">Paste a URL above to get started.</p>
           </div>
         )}
+
+        {links.length > 0 && visibleLinks.length === 0 && !query && (
+          <div className="text-center py-12 text-gray-500">
+            <FolderClosed className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p>No links in this view.</p>
+            <button
+              onClick={() => setFilter('all')}
+              className="text-sm mt-1 text-port-accent hover:underline"
+            >
+              Show all links
+            </button>
+          </div>
+        )}
+          </div>
+        </div>
+
+        {/* Right column: bucket boards as a vertical grid */}
+        <aside className="min-w-0">
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <FolderClosed size={16} className="text-port-accent shrink-0" />
+            <h2 className="text-sm font-semibold text-gray-300">Buckets</h2>
+            <span className="text-xs text-gray-500">Group links — drag chips between buckets.</span>
+          </div>
+          <BucketBoard
+            links={links}
+            buckets={buckets}
+            setBuckets={setBuckets}
+            onAssignLink={handleAssignLink}
+            onAddLinkToBucket={handleAddLinkToBucket}
+            onBucketDeleted={(bucketId) => setLinks(prev => prev.map(l => (l.bucketId === bucketId ? { ...l, bucketId: null } : l)))}
+          />
+        </aside>
       </div>
     </div>
   );

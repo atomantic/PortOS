@@ -13,12 +13,11 @@
       },
       {
         "id": "ltx23_unified",
-        "name": "LTX-2.3 Unified Beta (~48 GB)",
+        "name": "LTX-2.3 Unified Beta (~48 GB, bf16 quality ceiling)",
         "repo": "notapalindrome/ltx23-mlx-av",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3,
-        "deprecated": true
+        "guidance": 3
       },
       {
         "id": "ltx23_distilled_q4",
@@ -26,8 +25,7 @@
         "repo": "notapalindrome/ltx23-mlx-av-q4",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3,
-        "deprecated": true
+        "guidance": 3
       },
       {
         "id": "ltx23_dgrauet_q4",
@@ -44,6 +42,35 @@
         "runtime": "ltx2",
         "steps": 8,
         "guidance": 3
+      },
+      {
+        "id": "wan22_t2v_a14b",
+        "name": "Wan 2.2 T2V A14B (~28 GB, MoE-14B-active)",
+        "repo": "Wan-AI/Wan2.2-T2V-A14B",
+        "runtime": "wan22",
+        "mode": "t2v",
+        "steps": 25,
+        "guidance": 5
+      },
+      {
+        "id": "wan22_i2v_a14b",
+        "name": "Wan 2.2 I2V A14B (~28 GB, image-to-video)",
+        "repo": "Wan-AI/Wan2.2-I2V-A14B",
+        "runtime": "wan22",
+        "mode": "i2v",
+        "steps": 25,
+        "guidance": 5
+      },
+      {
+        "id": "hunyuan_video",
+        "name": "HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)",
+        "repo": "tencent/HunyuanVideo",
+        "runtime": "hunyuan",
+        "mode": "t2v",
+        "steps": 30,
+        "guidance": 6,
+        "precision": "fp32",
+        "deprecated": true
       }
     ],
     "windows": [
@@ -91,7 +118,7 @@
       "runner": "flux2",
       "quantization": "sdnq",
       "repo": "Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",
-      "tokenizerRepo": "black-forest-labs/FLUX.2-klein-9B",
+      "tokenizerRepo": "black-forest-labs/FLUX.2-klein-9B-kv",
       "steps": 8,
       "guidance": 3.5,
       "cfgDisabled": true
@@ -106,6 +133,65 @@
       "steps": 8,
       "guidance": 3.5,
       "cfgDisabled": true
+    },
+    {
+      "id": "flux2-klein-9b-bf16",
+      "name": "Flux 2 Klein 9B (bf16, ~36 GB — 64+ GB RAM)",
+      "runner": "flux2",
+      "quantization": "none",
+      "repo": "black-forest-labs/FLUX.2-klein-9B",
+      "steps": 20,
+      "guidance": 3.5,
+      "cfgDisabled": true,
+      "requiresHfToken": true,
+      "licenseUrl": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B"
+    },
+    {
+      "id": "hidream-i1-full",
+      "name": "HiDream-I1 Full (17B, ~34 GB @ bf16, 50 steps)",
+      "runner": "hidream",
+      "repo": "HiDream-ai/HiDream-I1-Full",
+      "pipelineClass": "HiDreamImagePipeline",
+      "textEncoderRepo": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "textEncoderClass": "LlamaForCausalLM",
+      "tokenizerClass": "PreTrainedTokenizerFast",
+      "steps": 50,
+      "guidance": 5,
+      "requiresHfToken": true,
+      "licenseUrl": "https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct"
+    },
+    {
+      "id": "hidream-i1-fast",
+      "name": "HiDream-I1 Fast (17B distilled, ~34 GB, 16 steps)",
+      "runner": "hidream",
+      "repo": "HiDream-ai/HiDream-I1-Fast",
+      "pipelineClass": "HiDreamImagePipeline",
+      "textEncoderRepo": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "textEncoderClass": "LlamaForCausalLM",
+      "tokenizerClass": "PreTrainedTokenizerFast",
+      "steps": 16,
+      "guidance": 0,
+      "cfgDisabled": true,
+      "requiresHfToken": true,
+      "licenseUrl": "https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct"
+    },
+    {
+      "id": "qwen-image",
+      "name": "Qwen-Image (20B MMDiT, ~40 GB @ bf16, best text rendering)",
+      "runner": "qwen",
+      "repo": "Qwen/Qwen-Image",
+      "pipelineClass": "QwenImagePipeline",
+      "steps": 30,
+      "guidance": 4
+    },
+    {
+      "id": "qwen-image-edit",
+      "name": "Qwen-Image-Edit (20B, image-to-image + text-rewrite)",
+      "runner": "qwen",
+      "repo": "Qwen/Qwen-Image-Edit",
+      "pipelineClass": "QwenImageEditPipeline",
+      "steps": 30,
+      "guidance": 4
     },
     {
       "id": "z-image-turbo-bf16",

@@ -255,7 +255,7 @@ export default function ArcCanvas({ series, issues, onSeriesUpdate, onIssuesUpda
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4 items-start">
+      <div className="grid grid-cols-1 @5xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4 items-start">
         <ArcHeader
           series={series}
           onSeriesUpdate={onSeriesUpdate}
@@ -648,7 +648,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   };
 
   return (
-    <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+    <section className="@container bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-xs uppercase tracking-wider text-gray-500">Series arc</h2>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1036,7 +1036,7 @@ function ArcContent({ series, onSeriesUpdate }) {
   const shapeDef = arc.shape ? getStoryShape(arc.shape) : null;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_260px] gap-4">
+    <div className="grid grid-cols-1 @2xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
       <div className="space-y-2 min-w-0">
         {arc.logline ? (
           <div className="flex items-start gap-2">

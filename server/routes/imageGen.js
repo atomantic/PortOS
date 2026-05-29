@@ -23,11 +23,15 @@ import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '..
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
-import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
+import { usesDiffusersRunner } from '../lib/runners.js';
+import { inspectModelCache } from '../lib/hfCache.js';
+import { startHfDownloadStream } from '../lib/sseDownload.js';
 import {
-  REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
-  isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
+  REQUIRED_PACKAGES, detectPython, installPackages,
+  createVenv, isAllowedPython, pipNameFor,
   resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2VenvHealthy,
+  detectArm64Python, HOST_ARCH, probePythonHealth,
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { join } from 'node:path';
@@ -346,7 +350,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const selectedModel = allModels.find((m) => m.id === data.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
-    if (selectedModel && !isFlux2(selectedModel) && !isZImage(selectedModel) && !isErnie(selectedModel) && !py) {
+    if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
       throw new ServerError(
         'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
         { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
@@ -377,6 +381,52 @@ router.post('/avatar', asyncHandler(async (req, res) => {
 router.get('/models', (_req, res) => {
   res.json(local.listImageModels());
 });
+
+// Per-model download status. Returns `[{ id, repo, cached, sizeBytes }]` so
+// the form can show an inline "Available" or "Download" badge next to the
+// model picker — without waiting until a render to discover a multi-GB HF
+// download. Models without a known HF repo (typically third-party custom
+// entries with `runner: 'mflux'` and a non-default name) report
+// `cached: null` so the UI can render "unknown" rather than a misleading
+// "not downloaded" state. Lazy generation still works regardless of badge.
+router.get('/models/status', asyncHandler(async (_req, res) => {
+  const statuses = await Promise.all(getImageModels().map(async (m) => {
+    const required = requiredReposForModel(m);
+    if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+    // Inspect every required repo (main + any aux text encoders). The badge
+    // is `cached: true` only when ALL are cached; sizeBytes is the sum. The
+    // `pendingRepos` field lets the UI explain WHICH repos still need a pull
+    // so the user isn't surprised when clicking "Download" triggers >1 fetch.
+    const inspections = await Promise.all(required.map((r) => inspectModelCache(r)));
+    const cached = inspections.every((i) => i.cached);
+    const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
+    const pendingRepos = required.filter((_, i) => !inspections[i].cached);
+    return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos };
+  }));
+  res.json(statuses);
+}));
+
+// SSE-driven model download. Cancels the python child if the client
+// disconnects mid-download; cross-route in-flight dedupe lives in
+// startHfDownloadStream so a FLUX repo shared with video gen can't spawn
+// two concurrent children.
+router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
+  const model = getImageModels().find((m) => m.id === req.params.modelId);
+  if (!model) {
+    return res.status(404).json({ error: `Unknown model id: ${req.params.modelId}` });
+  }
+  const repos = requiredReposForModel(model);
+  if (!repos) {
+    return res.status(400).json({
+      error: `Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`,
+      code: 'NO_REPO_FOR_MODEL',
+    });
+  }
+  // Sequentially fetch every required repo (main + aux text encoders for
+  // HiDream). The SSE stream tags each event with `repo` so the client can
+  // show per-repo progress / log lines.
+  await startHfDownloadStream({ req, res, repos });
+}));
 
 router.get('/loras', asyncHandler(async (_req, res) => {
   res.json(await local.listLoraFilenames());
@@ -629,15 +679,27 @@ router.get('/setup/flux2-install', asyncHandler(async (req, res) => {
 // license hasn't been accepted (HF_TOKEN missing) and the runner is set up.
 // `venvInstalled` reflects functional health (binary AND packages import) —
 // a half-broken venv would otherwise hide the install banner forever.
-router.get('/setup/flux2-status', asyncHandler(async (_req, res) => {
+router.get('/setup/flux2-status', asyncHandler(async (req, res) => {
   const [token, healthy] = await Promise.all([getHfToken(), isFlux2VenvHealthy()]);
   const venvPython = resolveFlux2Python();
+  // The 9B (bf16) and 4B variants ship as separately-gated repos with
+  // distinct HF license URLs. Use the active model's `licenseUrl` when the
+  // client supplies a `modelId`; fall back to the 4B URL for callers that
+  // pre-date the multi-variant registry.
+  const FLUX2_DEFAULT_LICENSE = 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B';
+  let licenseUrl = FLUX2_DEFAULT_LICENSE;
+  if (typeof req.query?.modelId === 'string' && req.query.modelId.length > 0) {
+    const model = getImageModels().find((m) => m.id === req.query.modelId);
+    if (isFlux2(model) && typeof model?.licenseUrl === 'string' && model.licenseUrl.length > 0) {
+      licenseUrl = model.licenseUrl;
+    }
+  }
   res.json({
     hfTokenPresent: !!token,
     venvInstalled: healthy,
     venvPath: venvPython,
     expectedVenvPath: FLUX2_VENV_DEFAULT,
-    licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B',
+    licenseUrl,
   });
 }));
 
@@ -683,15 +745,22 @@ router.get('/setup/check', asyncHandler(async (req, res) => {
   if (!isAllowedPython(pythonPath)) {
     return res.status(400).json({ error: 'pythonPath must be a python interpreter (basename python/python3/python3.NN)' });
   }
-  const [pkgs, externallyManaged] = await Promise.all([
-    checkPackages(pythonPath),
-    isExternallyManaged(pythonPath),
-  ]);
+  const health = await probePythonHealth(pythonPath);
+  // The arch warning is specifically about mlx wheels (arm64-only) on Apple
+  // Silicon. A generic interpreterArch !== HOST_ARCH compare would false-
+  // positive on Windows (Python reports `AMD64`, Node reports `x86_64`) and
+  // on hypothetical arm64 Linux — where mlx isn't even in REQUIRED_PACKAGES.
+  const archMismatch = process.platform === 'darwin'
+    && HOST_ARCH === 'arm64'
+    && health.interpreterArch === 'x86_64';
+  const suggestedArm64Python = archMismatch ? await detectArm64Python() : null;
   res.json({
     pythonPath,
-    externallyManaged,
     required: REQUIRED_PACKAGES,
-    ...pkgs,
+    hostArch: HOST_ARCH,
+    archMismatch,
+    suggestedArm64Python,
+    ...health,
   });
 }));
 

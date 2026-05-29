@@ -40,6 +40,8 @@ export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
 export * from './storyArc.js';
+export * from './storyBuilderIntegrity.js';
+export * from './storyBuilderSteps.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
@@ -56,6 +58,9 @@ export * from './cliProviderRun.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './hfToken.js';
+export * from './hfCache.js';
+export * from './hfDownload.js';
+export * from './sseDownload.js';
 export * from './mediaModels.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';

@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
+import { arch, homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
@@ -8,6 +8,10 @@ import { PATHS } from './fileUtils.js';
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
 const IS_DARWIN = platform() === 'darwin';
+// Node's os.arch() reports 'arm64' on Apple Silicon, 'x64' on Intel — the
+// platform.machine() probe below reports 'arm64' / 'x86_64'. Normalize both
+// onto the python convention so callers compare apples to apples.
+export const HOST_ARCH = ({ arm64: 'arm64', x64: 'x86_64' })[arch()] || arch();
 
 export const REQUIRED_PACKAGES = IS_DARWIN
   ? ['mflux', 'mlx', 'mlx_vlm', 'mlx_video', 'transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm']
@@ -15,11 +19,34 @@ export const REQUIRED_PACKAGES = IS_DARWIN
     ? ['transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm', 'torch', 'diffusers']
     : ['mflux', 'transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm'];
 
+// Some package identifiers in REQUIRED_PACKAGES need to be probed via a
+// deeper submodule import to distinguish two PyPI packages that publish the
+// same top-level namespace. `mlx_video` is the prime case: the plain PyPI
+// package `mlx_video` is unrelated (video classification) and lacks the
+// `generate_av` CLI the LTX renderer shells into. We want the wrong package
+// to FAIL the check so the UI's "Install missing" button reappears and the
+// `installPackages` pre-uninstall path (PIP_PRE_UNINSTALL) can swap it out.
+const IMPORT_PROBE_PATHS = IS_DARWIN ? { mlx_video: 'mlx_video.generate_av' } : {};
+const importProbePathFor = (importName) => IMPORT_PROBE_PATHS[importName] || importName;
+
+// The PyPI package literally named `mlx_video` is unrelated (a video
+// classification lib); the one shipping `mlx_video.generate_av` is
+// `mlx-video-with-audio`. Both expose `import mlx_video`, so the conflict
+// hides at namespace-probe time — `IMPORT_PROBE_PATHS` + `PIP_PRE_UNINSTALL`
+// below force a deeper probe and uninstall the wrong package first.
+const MLX_VIDEO_PIP = 'mlx-video-with-audio>=0.1.35';
+
 const PIP_NAMES = {
   cv2: 'opencv-python',
-  // mlx-compatible transformers must stay <5 — pin only on macOS where the
-  // mlx path matters; Windows torch path uses latest.
+  // mlx-compatible transformers must stay <5; Windows torch path uses latest.
   ...(IS_DARWIN ? { transformers: 'transformers<5' } : {}),
+  ...(IS_DARWIN ? { mlx_video: MLX_VIDEO_PIP } : {}),
+};
+
+// Keys are pipNameFor-output specs; values are the conflicting package names
+// to remove before install. Mirrors `scripts/setup-image-video.sh`.
+const PIP_PRE_UNINSTALL = {
+  [MLX_VIDEO_PIP]: ['mlx_video'],
 };
 
 export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
@@ -58,14 +85,46 @@ const PYTHON_CANDIDATES = IS_WIN
       '/usr/bin/python3',
     ];
 
+export async function probePythonArch(pythonPath) {
+  const { stdout } = await execFileAsync(pythonPath, [
+    '-c', 'import platform; print(platform.machine())'
+  ], { timeout: 10_000 }).catch(() => ({ stdout: '' }));
+  return stdout.trim() || null;
+}
+
+export async function isArchMismatch(pythonPath) {
+  if (!IS_DARWIN) return false;
+  const interp = await probePythonArch(pythonPath);
+  if (!interp) return false;
+  return interp !== HOST_ARCH;
+}
+
+// Find first candidate matching `predicate(arch)` by probing arches in parallel.
+const firstArchMatch = async (candidates, predicate) => {
+  const arches = await Promise.all(candidates.map(probePythonArch));
+  const idx = arches.findIndex((a) => a && predicate(a));
+  return idx >= 0 ? candidates[idx] : null;
+};
+
 export async function detectPython() {
-  for (const p of PYTHON_CANDIDATES) {
-    if (existsSync(p)) return p;
+  // mlx ships arm64-only wheels; prefer an arm64 interpreter on Apple Silicon
+  // so /opt/anaconda3 (often x86_64) doesn't beat /opt/homebrew/bin/python3.
+  const present = PYTHON_CANDIDATES.filter((p) => existsSync(p));
+  if (IS_DARWIN && HOST_ARCH === 'arm64' && present.length > 1) {
+    const match = await firstArchMatch(present, (a) => a === HOST_ARCH);
+    if (match) return match;
   }
+  if (present.length) return present[0];
   const which = IS_WIN ? 'where' : 'which';
   const name = IS_WIN ? 'python' : 'python3';
   const { stdout } = await execFileAsync(which, [name], { timeout: 5000 }).catch(() => ({ stdout: '' }));
   return stdout.trim().split(/\r?\n/)[0] || null;
+}
+
+export async function detectArm64Python() {
+  if (!IS_DARWIN || HOST_ARCH !== 'arm64') return null;
+  const present = PYTHON_CANDIDATES.filter((p) => existsSync(p));
+  return firstArchMatch(present, (a) => a === 'arm64');
 }
 
 // FLUX.2 runs in its own venv because mflux (MLX) and torch+diffusers-from-git
@@ -136,17 +195,6 @@ export function isAllowedPython(pythonPath) {
   return false;
 }
 
-// Returns true if `pythonPath` has a PEP 668 EXTERNALLY-MANAGED marker next
-// to its stdlib — pip will refuse to install into it.
-export async function isExternallyManaged(pythonPath) {
-  const { stdout } = await execFileAsync(pythonPath, [
-    '-c', 'import sysconfig; print(sysconfig.get_path("stdlib"))'
-  ], { timeout: 10_000 }).catch(() => ({ stdout: '' }));
-  const stdlib = stdout.trim();
-  if (!stdlib) return false;
-  return existsSync(join(stdlib, 'EXTERNALLY-MANAGED'));
-}
-
 // Idempotent: if the venv exists, returns its python path without recreating.
 // Windows venvs put the interpreter at Scripts\python.exe, POSIX at bin/python3.
 export async function createVenv(basePython, targetDir) {
@@ -161,62 +209,109 @@ export async function createVenv(basePython, targetDir) {
   return venvPython;
 }
 
-export async function checkPackages(pythonPath) {
-  const probe = REQUIRED_PACKAGES.map(pkg =>
-    `try:\n import ${pkg}\n print("OK:${pkg}")\nexcept Exception:\n print("MISSING:${pkg}")`
+export async function probePythonHealth(pythonPath) {
+  const importLines = REQUIRED_PACKAGES.map((pkg) =>
+    `try:\n import ${importProbePathFor(pkg)}\n imports["${pkg}"] = True\nexcept Exception:\n imports["${pkg}"] = False`,
   ).join('\n');
-
+  const probe = [
+    'import sys, sysconfig, platform, json',
+    'imports = {}',
+    importLines,
+    'print(json.dumps({',
+    '  "prefix": sys.prefix,',
+    '  "basePrefix": sys.base_prefix,',
+    '  "stdlib": sysconfig.get_path("stdlib"),',
+    '  "arch": platform.machine(),',
+    '  "imports": imports,',
+    '}))',
+  ].join('\n');
   const { stdout } = await execFileAsync(pythonPath, ['-c', probe], { timeout: 30_000 });
-
+  const data = JSON.parse(stdout.trim().split(/\r?\n/).pop());
   const installed = [];
   const missing = [];
-  for (const line of stdout.trim().split(/\r?\n/)) {
-    if (line.startsWith('OK:')) installed.push(line.slice(3).trim());
-    else if (line.startsWith('MISSING:')) missing.push(line.slice(8).trim());
+  for (const pkg of REQUIRED_PACKAGES) {
+    (data.imports[pkg] ? installed : missing).push(pkg);
   }
-  return { installed, missing, missingPip: missing.map(pipNameFor) };
+  // Inside a venv, sysconfig.get_path("stdlib") resolves to the base
+  // interpreter's stdlib — so a venv from PEP 668 Homebrew Python would
+  // inherit the marker even though pip-in-venv ignores PEP 668. Skip the
+  // marker check when sys.prefix != sys.base_prefix.
+  const inVenv = data.prefix && data.basePrefix && data.prefix !== data.basePrefix;
+  const externallyManaged = !inVenv && data.stdlib
+    ? existsSync(join(data.stdlib, 'EXTERNALLY-MANAGED'))
+    : false;
+  return {
+    installed,
+    missing,
+    missingPip: missing.map(pipNameFor),
+    externallyManaged,
+    interpreterArch: data.arch || null,
+  };
 }
 
-// Spawn pip install; emit each line via onLog. Resolves on exit.
-// onLog gets `{ type: 'log' | 'error' | 'complete', message }`.
-// Returns `{ promise, kill }` so the route can SIGTERM the pip child if
-// the SSE client disconnects mid-install (otherwise a 10-minute torch
-// upgrade would keep running invisibly).
-export function installPackages(pythonPath, importNames, onLog) {
-  const pipSpecs = importNames.map(pipNameFor);
-  onLog({ type: 'log', message: `pip install ${pipSpecs.join(' ')}` });
+export async function checkPackages(pythonPath) {
+  const { installed, missing, missingPip } = await probePythonHealth(pythonPath);
+  return { installed, missing, missingPip };
+}
 
-  const proc = spawn(pythonPath, [
-    '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on',
-    ...pipSpecs,
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-  const promise = new Promise((resolve) => {
-    const handleOutput = (chunk) => {
+// Spawn a child, stream its stdout+stderr line-by-line via `onLog`, resolve
+// with the exit code (or -1 on spawn error). `onProc` is invoked with the
+// live child handle so the caller's outer closure can track it for SIGTERM.
+function streamSpawn(bin, args, onLog, onProc) {
+  return new Promise((resolve) => {
+    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    onProc(proc);
+    const onChunk = (chunk) => {
       for (const line of chunk.toString().split(/[\r\n]+/)) {
-        const trimmed = line.trim();
-        if (trimmed) onLog({ type: 'log', message: trimmed });
+        const t = line.trim();
+        if (t) onLog({ type: 'log', message: t });
       }
     };
-    proc.stdout.on('data', handleOutput);
-    proc.stderr.on('data', handleOutput);
-
-    proc.on('close', (code) => {
-      if (code === 0) {
-        onLog({ type: 'complete', message: 'All packages installed successfully.' });
-        resolve({ ok: true, code: 0 });
-      } else {
-        onLog({ type: 'error', message: `pip exited with code ${code}` });
-        resolve({ ok: false, code });
-      }
-    });
-    proc.on('error', (err) => {
-      onLog({ type: 'error', message: err.message });
-      resolve({ ok: false, code: -1 });
-    });
+    proc.stdout.on('data', onChunk);
+    proc.stderr.on('data', onChunk);
+    proc.on('close', (code) => { onProc(null); resolve(code ?? -1); });
+    proc.on('error', (err) => { onLog({ type: 'error', message: err.message }); onProc(null); resolve(-1); });
   });
+}
 
-  return { promise, kill: () => { if (!proc.killed) proc.kill('SIGTERM'); } };
+// Returns `{ promise, kill }` so the route can SIGTERM the pip child if the
+// SSE client disconnects mid-install — a 10-minute torch upgrade would
+// otherwise keep running invisibly.
+export function installPackages(pythonPath, importNames, onLog) {
+  const pipSpecs = importNames.map(pipNameFor);
+  const conflicts = [...new Set(pipSpecs.flatMap((s) => PIP_PRE_UNINSTALL[s] || []))];
+
+  let currentProc = null;
+  let killed = false;
+  const trackProc = (p) => { currentProc = p; };
+  const runPip = (args) => streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc);
+
+  const promise = (async () => {
+    if (conflicts.length) {
+      onLog({ type: 'log', message: `pip uninstall -y ${conflicts.join(' ')} (resolving package-name conflict)` });
+      // Uninstall isn't allowed to fail the run — when the conflicting
+      // package isn't installed pip exits non-zero with a "not installed"
+      // message that's noise, not an error.
+      await runPip(['uninstall', '--yes', ...conflicts]);
+      if (killed) return { ok: false, code: -1 };
+    }
+    onLog({ type: 'log', message: `pip install ${pipSpecs.join(' ')}` });
+    const code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
+    if (code === 0) {
+      onLog({ type: 'complete', message: 'All packages installed successfully.' });
+      return { ok: true, code: 0 };
+    }
+    onLog({ type: 'error', message: `pip exited with code ${code}` });
+    return { ok: false, code };
+  })();
+
+  return {
+    promise,
+    kill: () => {
+      killed = true;
+      if (currentProc && !currentProc.killed) currentProc.kill('SIGTERM');
+    },
+  };
 }
 
 // Pip specs for the FLUX.2 venv. Mirrors scripts/setup-image-video.sh so the
@@ -250,20 +345,9 @@ export function installFlux2Venv(onLog) {
   const stage = (name, message) => onLog({ type: 'stage', stage: name, message });
   const log = (message) => onLog({ type: 'log', message });
 
-  const runPython = (args) => new Promise((resolve) => {
-    const proc = spawn(args[0], args.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
-    currentProc = proc;
-    const onChunk = (chunk) => {
-      for (const line of chunk.toString().split(/[\r\n]+/)) {
-        const t = line.trim();
-        if (t) log(t);
-      }
-    };
-    proc.stdout.on('data', onChunk);
-    proc.stderr.on('data', onChunk);
-    proc.on('close', (code) => { currentProc = null; resolve(code === 0); });
-    proc.on('error', (err) => { onLog({ type: 'error', message: err.message }); currentProc = null; resolve(false); });
-  });
+  const trackProc = (p) => { currentProc = p; };
+  const runPython = async (args) =>
+    (await streamSpawn(args[0], args.slice(1), onLog, trackProc)) === 0;
 
   const promise = (async () => {
     stage('detect', 'Looking for system Python…');

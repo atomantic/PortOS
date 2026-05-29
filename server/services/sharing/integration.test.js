@@ -2057,7 +2057,7 @@ describe('sharing round-trip', () => {
       const result = await importer.processManifest(bucket.id, exp.filename);
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe('portos-schema-ahead');
-      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 1 }]);
+      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 2 }]);
       expect(result.producedByVersion).toBe('99.0.0');
       // Series stayed tombstoned (or absent) — apply was refused.
       await expect(series.getSeries(s.id)).rejects.toThrow();
@@ -2073,7 +2073,7 @@ describe('sharing round-trip', () => {
       const exp = await exporter.exportSeries(s.id, bucket.id);
       const manifestPath = join(tempBucket, 'manifests', exp.filename);
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      manifest.portosSchemaVersions = { universes: 99, pipelineSeries: 1, pipelineIssues: 1, mediaCollections: 99 };
+      manifest.portosSchemaVersions = { universes: 99, pipelineSeries: 2, pipelineIssues: 1, mediaCollections: 99 };
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       await series.deleteSeries(s.id);
       simulateRemoteSender(tempBucket, exp.filename);

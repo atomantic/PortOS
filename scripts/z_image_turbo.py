@@ -32,17 +32,81 @@ from _runner_common import (  # noqa: E402
     make_generator,
     make_stepwise_callback,
     pick_device,
+    suppress_cosmetic_clip_truncation,
     write_sidecar,
 )
 from lora_utils import apply_loras  # noqa: E402
 
 
-def load_pipeline(repo: str, device: str, dtype, pipeline_class: str = ""):
+def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: str, dtype):
+    """Load a separately-distributed text encoder + its tokenizer.
+
+    HiDream-I1 needs Llama-3.1-8B-Instruct as `text_encoder_4` / `tokenizer_4`,
+    passed to HiDreamImagePipeline.from_pretrained as kwargs. The base
+    HiDream-I1 repo doesn't ship Llama weights — they're loaded from a
+    separate (gated) repo. This helper resolves the encoder + tokenizer
+    classes by name from transformers and loads them. `encoder_class` is
+    required; `tokenizer_class` defaults to AutoTokenizer when unset.
+    """
+    import transformers
+
+    print(f"STAGE:download-text-encoder:{repo}", file=sys.stderr, flush=True)
+    print(f"🔧 diffusers runner: text encoder ← {repo} ({encoder_class})", file=sys.stderr)
+    enc_cls = getattr(transformers, encoder_class, None)
+    if enc_cls is None:
+        print(f"❌ Unknown transformers text-encoder class: {encoder_class}", file=sys.stderr)
+        sys.exit(2)
+    tok_cls = (
+        getattr(transformers, tokenizer_class, None) if tokenizer_class else transformers.AutoTokenizer
+    )
+    if tok_cls is None:
+        print(f"❌ Unknown transformers tokenizer class: {tokenizer_class}", file=sys.stderr)
+        sys.exit(2)
+    with heartbeat("loading-text-encoder"):
+        # output_hidden_states / output_attentions are required for HiDream
+        # (it reaches into Llama's hidden states for prompt conditioning).
+        # Harmless for other LMs that ignore the kwargs.
+        text_encoder = enc_cls.from_pretrained(
+            repo,
+            output_hidden_states=True,
+            output_attentions=True,
+            torch_dtype=dtype,
+        )
+        tokenizer = tok_cls.from_pretrained(repo)
+    return text_encoder, tokenizer
+
+
+def load_pipeline(
+    repo: str,
+    device: str,
+    dtype,
+    pipeline_class: str = "",
+    text_encoder_repo: str = "",
+    text_encoder_class: str = "",
+    tokenizer_class: str = "",
+):
     # When the registry pins a pipeline class (e.g. ErnieImagePipeline,
-    # which isn't yet in AutoPipelineForText2Image's registry) load it
-    # directly. Falls back to AutoPipelineForText2Image so Z-Image-Turbo
-    # and any future registered model continues to work without a flag.
+    # HiDreamImagePipeline, QwenImagePipeline) load it directly. Falls back
+    # to AutoPipelineForText2Image so Z-Image-Turbo and any future registered
+    # model continues to work without a flag.
     import diffusers
+    suppress_cosmetic_clip_truncation()
+
+    # HiDream needs a 4th text encoder + tokenizer loaded externally and
+    # passed as kwargs. The text-encoder-repo flag is the trigger; if it's
+    # set, the loaded objects are passed as text_encoder_4 / tokenizer_4 to
+    # the pipeline constructor. Other diffusers-runner models leave this
+    # path untouched.
+    extra_kwargs = {}
+    if text_encoder_repo:
+        if not text_encoder_class:
+            print("❌ --text-encoder-repo set but --text-encoder-class missing", file=sys.stderr)
+            sys.exit(2)
+        text_encoder, tokenizer = load_external_text_encoder(
+            text_encoder_repo, text_encoder_class, tokenizer_class, dtype
+        )
+        extra_kwargs["text_encoder_4"] = text_encoder
+        extra_kwargs["tokenizer_4"] = tokenizer
 
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 diffusers runner: pipeline ← {repo} (class={pipeline_class or 'auto'})", file=sys.stderr)
@@ -52,13 +116,16 @@ def load_pipeline(repo: str, device: str, dtype, pipeline_class: str = ""):
             if cls is None:
                 print(f"❌ Unknown diffusers pipeline class: {pipeline_class}", file=sys.stderr)
                 sys.exit(2)
-            pipe = cls.from_pretrained(repo, torch_dtype=dtype, low_cpu_mem_usage=True)
+            pipe = cls.from_pretrained(
+                repo, torch_dtype=dtype, low_cpu_mem_usage=True, **extra_kwargs
+            )
         else:
             from diffusers import AutoPipelineForText2Image
             pipe = AutoPipelineForText2Image.from_pretrained(
                 repo,
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
+                **extra_kwargs,
             )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
     with heartbeat("move-to-device"):
@@ -93,8 +160,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
     p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
-    p.add_argument("--pipeline-class", default="", help="optional explicit diffusers pipeline class (e.g. ErnieImagePipeline)")
+    p.add_argument("--pipeline-class", default="", help="optional explicit diffusers pipeline class (e.g. ErnieImagePipeline, HiDreamImagePipeline)")
     p.add_argument("--use-pe", action="store_true", help="enable the prompt enhancer (ERNIE-Image's use_pe kwarg)")
+    p.add_argument("--text-encoder-repo", default="", help="HF repo for an external text encoder (HiDream → Llama-3.1-8B-Instruct)")
+    p.add_argument("--text-encoder-class", default="", help="transformers class name for the external text encoder (e.g. LlamaForCausalLM)")
+    p.add_argument("--tokenizer-class", default="", help="transformers class name for the external tokenizer (defaults to AutoTokenizer)")
     return p.parse_args()
 
 
@@ -105,7 +175,15 @@ def main() -> None:
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
-    pipe = load_pipeline(args.repo, device, dtype, pipeline_class=args.pipeline_class)
+    pipe = load_pipeline(
+        args.repo,
+        device,
+        dtype,
+        pipeline_class=args.pipeline_class,
+        text_encoder_repo=args.text_encoder_repo,
+        text_encoder_class=args.text_encoder_class,
+        tokenizer_class=args.tokenizer_class,
+    )
 
     init_image = None
     if args.image_path:
@@ -137,6 +215,7 @@ def main() -> None:
     # mismatch ([32,32,1,1] weight vs 128-ch input). When the loaded pipeline
     # exposes both hooks, pass an ERNIE-aware preview decoder.
     preview_decoder = None
+    unpack_latents = None
     pipe_vae = getattr(pipe, "vae", None)
     if hasattr(pipe, "_unpatchify_latents") and pipe_vae is not None and hasattr(pipe_vae, "bn"):
         def preview_decoder(p, latents):  # noqa: E306 — local closure on purpose
@@ -145,12 +224,50 @@ def main() -> None:
             std = torch.sqrt(vae.bn.running_var.view(1, -1, 1, 1) + 1e-5).to(device=latents.device, dtype=latents.dtype)
             unpacked = p._unpatchify_latents(latents * std + mean)
             return vae.decode(unpacked, return_dict=False)[0]
+    # Qwen-Image (and its Img2Img / Edit siblings) packs latents to 3D
+    # `(B, num_patches, C*4)` like Flux, then unpacks to a 5-D video-VAE
+    # layout `(B, C, 1, H, W)` and unnormalizes with per-channel
+    # latents_mean/latents_std lists from vae.config before decoding. The
+    # generic `latents/scaling + shift` path doesn't match either step, so
+    # we wire both an unpack helper (3D→5D) and a Qwen-specific decoder.
+    elif hasattr(pipe, "_unpack_latents") and getattr(getattr(pipe_vae, "config", None), "latents_mean", None) is not None:
+        vae_scale_factor = getattr(pipe, "vae_scale_factor", 8)
+        z_dim = getattr(pipe_vae.config, "z_dim", len(pipe_vae.config.latents_mean))
+        # Pipeline config holds these as plain Python lists; build the CPU
+        # tensors once here and lazily migrate to (device, dtype) per call —
+        # the diffusion loop fires this closure ~30-50 times per render, and
+        # rebuilding from a list every step is pure waste (mirrors how the
+        # ERNIE branch above pulls vae.bn directly, not from a list).
+        qwen_mean_cpu = torch.tensor(pipe_vae.config.latents_mean).view(1, z_dim, 1, 1, 1)
+        qwen_inv_std_cpu = (1.0 / torch.tensor(pipe_vae.config.latents_std)).view(1, z_dim, 1, 1, 1)
+        qwen_norm_cache = {}
+
+        def unpack_latents(latents, height, width):  # noqa: E306
+            return pipe._unpack_latents(latents, height, width, vae_scale_factor)
+
+        def preview_decoder(p, latents):  # noqa: E306
+            key = (latents.device, latents.dtype)
+            cached = qwen_norm_cache.get(key)
+            if cached is None:
+                cached = (
+                    qwen_mean_cpu.to(device=latents.device, dtype=latents.dtype),
+                    qwen_inv_std_cpu.to(device=latents.device, dtype=latents.dtype),
+                )
+                qwen_norm_cache[key] = cached
+            mean, inv_std = cached
+            unnorm = latents * inv_std + mean
+            decoded = p.vae.decode(unnorm, return_dict=False)[0]
+            # Qwen's image VAE returns `(B, C, T, H, W)` with T=1 for stills.
+            # Slice the temporal dim out so the generic post-decode path's
+            # `decoded[0].permute(1, 2, 0)` receives the expected 4-D shape.
+            return decoded[:, :, 0]
 
     callback = make_stepwise_callback(
         args.stepwise_image_output_dir,
         pipe,
         int(args.height),
         int(args.width),
+        unpack_latents=unpack_latents,
         preview_decoder=preview_decoder,
     )
 

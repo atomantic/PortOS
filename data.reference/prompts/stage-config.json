@@ -228,6 +228,27 @@
       "returnsJson": true,
       "variables": []
     },
+    "story-builder-idea-expand": {
+      "name": "Story Builder — Idea Expand",
+      "description": "Expand a one-line seed idea into a working title, logline, and a world-and-arc-ready premise for the Unified Story Builder's first step (seed intake mode). Seeds the universe starter prompt and the series premise.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "story-builder-reader-map": {
+      "name": "Story Builder — Reader Map",
+      "description": "Plan the reader/viewer's experience across a series arc — hooks, payoffs, emotional beats, and cliffhangers — built on the protagonist arc and Vonnegut shape. Distinct from the protagonist arc; lives at series.arc.readerMap.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "story-builder-reader-map-refine": {
+      "name": "Story Builder — Reader Map Refine",
+      "description": "Refine an existing reader map against free-text feedback, returning the full revised map plus a changes list and rationale (the AI-feedback affordance for the Story Builder reader-map step).",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-arc-overview": {
       "name": "Pipeline — Series Arc Overview",
       "description": "Plan the top-level multi-season story spine for a series from its bible: a series-level logline, summary, themes, protagonist arc, and a 2–5 season breakdown with per-season loglines, ending hooks, and episode-count targets. Runs at `heavy` tier — most expensive single call in the pipeline.",

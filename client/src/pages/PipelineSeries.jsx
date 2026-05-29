@@ -190,7 +190,7 @@ export default function PipelineSeries() {
           </aside>
         )}
 
-        <section className="flex flex-col gap-4 p-4 min-h-0 lg:overflow-y-auto">
+        <section className="@container flex flex-col gap-4 p-4 min-h-0 lg:overflow-y-auto">
           <header className={`flex items-center gap-3 flex-wrap ${sidebarCollapsed ? 'lg:pl-8' : ''}`}>
             <Link to="/pipeline" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} /> All Series

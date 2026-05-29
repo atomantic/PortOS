@@ -22,8 +22,12 @@
 
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, createWriteStream } from 'fs'
+import { stat, mkdir, rm } from 'fs/promises'
 import { join } from 'path'
+import { tmpdir } from 'os'
+import { pipeline } from 'stream/promises'
+import { Readable } from 'stream'
 import { PATHS } from '../lib/fileUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
@@ -57,6 +61,56 @@ function canAutoInstall(backend) {
 
 // aiToolkit provider id that pairs with each backend.
 const PROVIDER_ID = { ollama: 'ollama', lmstudio: 'lmstudio' }
+
+// Possible places `brew` registers each backend. Ollama has both a CLI-only
+// formula and a separate macOS .app cask (`ollama-app`); LM Studio is cask-only.
+const BREW_LOCATIONS = {
+  ollama: [
+    { kind: 'formula', name: 'ollama', listArgs: ['list', '--formula', 'ollama'], upgradeArgs: ['upgrade', 'ollama'] },
+    { kind: 'cask', name: 'ollama-app', listArgs: ['list', '--cask', 'ollama-app'], upgradeArgs: ['upgrade', '--cask', 'ollama-app'] }
+  ],
+  lmstudio: [
+    { kind: 'cask', name: 'lm-studio', listArgs: ['list', '--cask', 'lm-studio'], upgradeArgs: ['upgrade', '--cask', 'lm-studio'] }
+  ]
+}
+
+// Macs that installed Ollama via the official .app downloader (not Homebrew)
+// have /usr/local/bin/ollama (or /opt/homebrew/bin/ollama) as a symlink into
+// the bundle, and the app's built-in updater handles upgrades. The .app for
+// LM Studio works the same way. Detecting this lets us tell the user "open
+// the app and use its own updater" instead of blindly running brew.
+function macAppPath(backend) {
+  if (process.platform !== 'darwin') return null
+  return backend === 'ollama' ? '/Applications/Ollama.app' : '/Applications/LM Studio.app'
+}
+
+async function pathExists(p) {
+  if (!p) return false
+  return stat(p).then(() => true).catch(() => false)
+}
+
+/**
+ * Where did this install of `backend` come from? Decides which upgrade path is
+ * actually safe to run — `brew upgrade ollama` against a `.app`-installed
+ * Ollama fails with "Error: ollama not installed" and surfaces as a useless
+ * "exited with code 1". Probes Homebrew first (formula then cask) and falls
+ * back to a macOS .app presence check.
+ *
+ * @returns {Promise<{ source: 'brew-formula'|'brew-cask'|'mac-app'|'unknown', upgradeArgs?: string[], packageName?: string }>}
+ */
+async function detectInstallSource(backend) {
+  if (process.platform === 'darwin' && await commandExists('brew', ['--version'])) {
+    for (const loc of BREW_LOCATIONS[backend] || []) {
+      if (await commandExists('brew', loc.listArgs)) {
+        return { source: loc.kind === 'cask' ? 'brew-cask' : 'brew-formula', upgradeArgs: loc.upgradeArgs, packageName: loc.name }
+      }
+    }
+  }
+  if (process.platform === 'darwin' && await pathExists(macAppPath(backend))) {
+    return { source: 'mac-app' }
+  }
+  return { source: 'unknown' }
+}
 
 // ---- active-backend marker (.env LLM_BACKEND) --------------------------------
 
@@ -135,14 +189,32 @@ const manager = (backend) => (backend === 'ollama' ? ollamaManager : lmStudioMan
  * `{ success }` on exit. Used for package-manager installs where live output is
  * the only progress signal. Never rejects (errors resolve as `{ success:false }`)
  * and guards the `onLine` hook — this runs outside the request lifecycle.
+ *
+ * The error path includes a tail of the streamed output (last ~1KB of recent
+ * lines) so callers get an actionable message — `brew upgrade ollama` exiting
+ * non-zero with stderr "Error: ollama not installed" must surface that string,
+ * not just "exited with code 1".
  */
 function runStreaming(cmd, args, onLine, timeoutMs = 0) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let buffer = ''
     let settled = false
+    const tail = [] // recent non-empty lines, capped by char budget for the error message
+    let tailChars = 0
+    const TAIL_BUDGET = 1024
+    const rememberLine = (line) => {
+      if (!line) return
+      tail.push(line)
+      tailChars += line.length + 1
+      while (tailChars > TAIL_BUDGET && tail.length > 1) {
+        tailChars -= tail.shift().length + 1
+      }
+    }
     const safeLine = (line) => {
-      if (!line || typeof onLine !== 'function') return
+      if (!line) return
+      rememberLine(line)
+      if (typeof onLine !== 'function') return
       try { onLine(line) } catch (err) { console.error(`⚠️ install progress hook failed: ${err.message}`) }
     }
     const finish = (result) => {
@@ -167,7 +239,9 @@ function runStreaming(cmd, args, onLine, timeoutMs = 0) {
     child.on('error', (err) => finish({ success: false, error: err.message }))
     child.on('close', (code) => {
       safeLine(buffer.trim())
-      finish(code === 0 ? { success: true } : { success: false, error: `exited with code ${code}` })
+      if (code === 0) return finish({ success: true })
+      const detail = tail.join(' — ').trim()
+      finish({ success: false, error: detail ? `exit ${code}: ${detail}` : `exited with code ${code}` })
     })
   })
 }
@@ -235,6 +309,210 @@ export async function installBackend(backend, onProgress = () => {}) {
     backend,
     note: 'Launch LM Studio, enable the local server (Developer tab), then run `lms bootstrap`.'
   }
+}
+
+/**
+ * Pre-upgrade Ollama version (best-effort — returns null if Ollama isn't running
+ * or isn't responding). Used to verify an upgrade actually moved the version.
+ */
+async function readOllamaVersion() {
+  const status = await ollamaManager.getStatus(true).catch(() => null)
+  return status?.version || null
+}
+
+/**
+ * Poll Ollama's /api/version until it responds (after a (re)start). Returns the
+ * version string when reachable, null on timeout.
+ */
+async function waitForOllamaVersion(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const v = await readOllamaVersion()
+    if (v) return v
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  return null
+}
+
+/**
+ * Download + install the latest Ollama macOS .app in place. This is the only
+ * reliable path on macOS — `brew upgrade ollama` either has a behind-by-weeks
+ * formula, OR the running server is the .app binary (because `/usr/local/bin/
+ * ollama` symlinks into the bundle) so even a successful brew upgrade leaves
+ * the wrong binary serving. Pulls the latest `Ollama-darwin.zip` from the
+ * official GitHub releases, replaces `/Applications/Ollama.app` on disk, strips
+ * quarantine, and relaunches.
+ *
+ * The .app keeps its own user prefs / model store (`~/.ollama`) so this is
+ * non-destructive; only the bundle itself gets swapped.
+ */
+async function upgradeOllamaMacApp(emit) {
+  const appPath = '/Applications/Ollama.app'
+
+  emit('Looking up the latest Ollama release on GitHub…')
+  const release = await fetch('https://api.github.com/repos/ollama/ollama/releases/latest', {
+    headers: { 'User-Agent': 'PortOS', Accept: 'application/vnd.github+json' }
+  }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  if (!release) return { success: false, error: 'Could not reach GitHub to look up the latest Ollama release.' }
+
+  const asset = (release.assets || []).find((a) => a.name === 'Ollama-darwin.zip')
+  if (!asset?.browser_download_url) {
+    return { success: false, error: `Latest Ollama release ${release.tag_name} has no Ollama-darwin.zip asset — try downloading from ${DOWNLOAD_URL.ollama}.` }
+  }
+
+  const before = await readOllamaVersion()
+  const tagClean = String(release.tag_name || '').replace(/^v/, '')
+  if (before && tagClean && before === tagClean) {
+    return { success: true, backend: 'ollama', note: `Ollama is already at ${before} (latest).`, alreadyLatest: true }
+  }
+
+  const tmpDir = join(tmpdir(), `portos-ollama-upgrade-${Date.now()}`)
+  const zipPath = join(tmpDir, 'Ollama-darwin.zip')
+  await mkdir(tmpDir, { recursive: true })
+
+  emit(`Downloading Ollama ${release.tag_name} (${Math.round(asset.size / 1024 / 1024)} MB)…`)
+  const dl = await fetch(asset.browser_download_url).catch((err) => ({ _err: err.message }))
+  if (dl._err || !dl?.ok || !dl.body) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: `Download failed: ${dl?._err || dl?.statusText || 'no response body'}` }
+  }
+  await pipeline(Readable.fromWeb(dl.body), createWriteStream(zipPath))
+    .catch(async (err) => {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+      throw err
+    })
+
+  emit('Stopping running Ollama…')
+  await ollamaManager.stopServer().catch(() => null)
+  // Force-kill stragglers — the menu-bar .app launches `ollama serve` as a child
+  // that doesn't always exit cleanly via the service stop above.
+  await runStreaming('pkill', ['-x', 'Ollama'], () => {}, 10_000).catch(() => null)
+  await runStreaming('pkill', ['-x', 'ollama'], () => {}, 10_000).catch(() => null)
+  // Brief settle so the OS releases the bundle before we replace it.
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+
+  emit('Extracting…')
+  const unzip = await runStreaming('unzip', ['-q', '-o', zipPath, '-d', tmpDir], emit, 5 * 60 * 1000)
+  if (!unzip.success) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: `Extract failed: ${unzip.error}` }
+  }
+  const extractedApp = join(tmpDir, 'Ollama.app')
+  if (!(await pathExists(extractedApp))) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: 'Extracted archive did not contain Ollama.app — release layout may have changed.' }
+  }
+
+  emit('Installing /Applications/Ollama.app…')
+  // rm the old bundle first — `mv` can't merge with an existing directory on macOS.
+  await rm(appPath, { recursive: true, force: true }).catch(() => {})
+  const move = await runStreaming('mv', [extractedApp, appPath], emit, 60_000)
+  if (!move.success) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: `Could not install ${appPath}: ${move.error}. PortOS may not have permission to write to /Applications — try running the official installer manually.` }
+  }
+  // Strip quarantine so Gatekeeper doesn't refuse to launch the freshly-downloaded bundle.
+  await runStreaming('xattr', ['-dr', 'com.apple.quarantine', appPath], () => {}, 30_000).catch(() => null)
+  await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+
+  emit('Starting Ollama…')
+  const launch = await runStreaming('open', ['-g', '-a', appPath], () => {}, 30_000)
+  if (!launch.success) {
+    return {
+      success: true,
+      backend: 'ollama',
+      note: `Upgraded to ${release.tag_name}, but couldn't auto-launch Ollama (${launch.error}). Open Ollama.app manually.`
+    }
+  }
+  const after = await waitForOllamaVersion(30_000)
+  if (!after) {
+    return {
+      success: true,
+      backend: 'ollama',
+      note: `Upgraded to ${release.tag_name}, but Ollama did not come back online within 30s. Open Ollama.app if it isn't already running.`
+    }
+  }
+  console.log(`⬆️ Upgraded Ollama: ${before || 'unknown'} → ${after} (${release.tag_name})`)
+  return { success: true, backend: 'ollama', note: `Ollama ${before ? `${before} → ` : ''}${after}. The new binary is now serving requests.` }
+}
+
+/**
+ * Upgrade an already-installed backend in place. Used when a model pull returns
+ * Ollama's 412 "requires a newer version of Ollama" error.
+ *
+ * macOS Ollama is special: even when Homebrew has a recent enough formula, the
+ * .app binary is what `ollama serve` actually runs (via the symlink at
+ * `/usr/local/bin/ollama` → `/Applications/Ollama.app/Contents/Resources/ollama`),
+ * so a brew-only upgrade leaves the OLD binary serving. So we prefer a direct
+ * download + .app replacement on macOS whenever the .app is present. Other paths:
+ *
+ *   • macOS LM Studio cask → `brew upgrade --cask lm-studio`
+ *   • macOS Ollama brew formula (no .app) → `brew upgrade ollama`
+ *   • Linux Ollama → re-run the official install script (idempotent upgrade)
+ *
+ * @param {string} backend - 'ollama' | 'lmstudio'
+ * @param {(p: { event: string, message: string }) => void} [onProgress]
+ */
+export async function upgradeBackend(backend, onProgress = () => {}) {
+  if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
+  const emit = (message) => onProgress({ event: 'start', message })
+  const label = backend === 'ollama' ? 'Ollama' : 'LM Studio'
+  const downloadHint = `Download the latest version from ${DOWNLOAD_URL[backend]}.`
+
+  // Linux Ollama: the official install script is also the upgrade path.
+  if (process.platform === 'linux' && backend === 'ollama') {
+    emit('Upgrading Ollama via the official install script…')
+    const r = await runStreaming('bash', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], emit, BACKEND_INSTALL_TIMEOUT_MS)
+    if (!r.success) {
+      console.error(`⚠️ Ollama upgrade (linux script) failed: ${r.error}`)
+      return { success: false, error: `Ollama upgrade failed: ${r.error}. ${downloadHint}` }
+    }
+    console.log('⬆️ Upgraded Ollama (linux script)')
+    return { success: true, backend }
+  }
+
+  if (process.platform !== 'darwin') {
+    return { success: false, error: `Automatic upgrade isn't supported on this platform. ${downloadHint}` }
+  }
+
+  // macOS Ollama with a .app present — direct download is the only path that
+  // actually replaces the binary that's serving requests.
+  if (backend === 'ollama' && await pathExists(macAppPath('ollama'))) {
+    return upgradeOllamaMacApp(emit)
+  }
+
+  // Everything else: route through Homebrew.
+  const source = await detectInstallSource(backend)
+  if (source.source === 'mac-app') {
+    // LM Studio .app — Sparkle handles updates; brew doesn't know about it.
+    return {
+      success: false,
+      manualUpdateRequired: true,
+      error: `LM Studio was installed from the official .app, which has its own updater — PortOS can't drive it from here. Open LM Studio → Settings → "Check for updates", or ${downloadHint.toLowerCase()}`
+    }
+  }
+  if (source.source === 'unknown') {
+    return { success: false, error: `Couldn't identify how ${label} was installed. ${downloadHint}` }
+  }
+  if (!(await commandExists('brew', ['--version']))) {
+    return { success: false, error: `Homebrew not found — install it from https://brew.sh first, or ${downloadHint.toLowerCase()}` }
+  }
+  emit(`Upgrading ${label} via Homebrew (${source.packageName}) — this can take a few minutes…`)
+  const r = await runStreaming('brew', source.upgradeArgs, emit, BACKEND_INSTALL_TIMEOUT_MS)
+  if (!r.success) {
+    console.error(`⚠️ ${label} upgrade via brew ${source.upgradeArgs.join(' ')} failed: ${r.error}`)
+    return { success: false, error: `Homebrew upgrade failed: ${r.error}` }
+  }
+  console.log(`🍺 Upgraded ${label} via Homebrew (${source.source})`)
+  if (backend === 'ollama') {
+    const stop = await ollamaManager.stopPersistentService().catch((err) => ({ success: false, error: err.message }))
+    const restart = await ollamaManager.startPersistentService().catch((err) => ({ success: false, error: err.message }))
+    const note = restart.success
+      ? 'Restarted Ollama service so the new binary is now serving requests.'
+      : `Upgraded, but PortOS could not restart the Ollama service (${restart.error || stop.error}). Restart it from the Local LLMs tab.`
+    return { success: true, backend, note }
+  }
+  return { success: true, backend, note: 'Restart LM Studio so the new binary is loaded.' }
 }
 
 /**

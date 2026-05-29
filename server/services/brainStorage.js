@@ -31,6 +31,7 @@ const FILES = {
   admin: join(DATA_DIR, 'admin.json'),
   memories: join(DATA_DIR, 'memories.json'),
   links: join(DATA_DIR, 'links.json'),
+  buckets: join(DATA_DIR, 'buckets.json'),
   digests: join(DATA_DIR, 'digests.jsonl'),
   reviews: join(DATA_DIR, 'reviews.jsonl')
 };
@@ -47,6 +48,7 @@ const caches = {
   admin: { data: null, timestamp: 0 },
   memories: { data: null, timestamp: 0 },
   links: { data: null, timestamp: 0 },
+  buckets: { data: null, timestamp: 0 },
   inboxLog: { data: null, timestamp: 0 },
   digests: { data: null, timestamp: 0 },
   reviews: { data: null, timestamp: 0 }
@@ -570,6 +572,13 @@ export async function getLinkByUrl(url) {
   return links.find(link => link.url === url) || null;
 }
 
+// Buckets (bookmark groups for links)
+export const getBuckets = (filters) => filters ? query('buckets', filters) : getAll('buckets');
+export const getBucketById = (id) => getById('buckets', id);
+export const createBucket = (data) => create('buckets', data);
+export const updateBucket = (id, data) => update('buckets', id, data);
+export const deleteBucket = (id) => remove('buckets', id);
+
 // =============================================================================
 // REMOTE SYNC OPERATIONS (no events, no sync log — echo prevention)
 // =============================================================================
@@ -614,7 +623,7 @@ export async function applyRemoteRecord(type, id, record, op) {
  */
 export async function backfillOriginInstanceId() {
   const instanceId = await getInstanceId();
-  const entityTypes = ['people', 'projects', 'ideas', 'admin', 'memories', 'links'];
+  const entityTypes = ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets'];
   let totalBackfilled = 0;
 
   for (const type of entityTypes) {
@@ -660,13 +669,14 @@ export function invalidateAllCaches() {
  * Get brain data summary (for dashboard)
  */
 export async function getSummary() {
-  const [people, projects, ideas, adminItems, memoryEntries, links, inboxCounts, meta] = await Promise.all([
+  const [people, projects, ideas, adminItems, memoryEntries, links, buckets, inboxCounts, meta] = await Promise.all([
     getAll('people'),
     getAll('projects'),
     getAll('ideas'),
     getAll('admin'),
     getAll('memories'),
     getAll('links'),
+    getAll('buckets'),
     getInboxLogCounts(),
     loadMeta()
   ]);
@@ -679,6 +689,7 @@ export async function getSummary() {
       admin: adminItems.length,
       memories: memoryEntries.length,
       links: links.length,
+      buckets: buckets.length,
       inbox: inboxCounts
     },
     activeProjects: projects.filter(p => p.status === 'active').length,

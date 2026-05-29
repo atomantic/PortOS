@@ -2323,10 +2323,16 @@ const DEFAULT_TASK_INTERVALS = {
   // do-replan audits PLAN.md after open PRs and stale branches have been cleaned up,
   // so the plan reflects what actually merged.
   'do-replan':           { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, runAfter: ['pr-reviewer', 'branch-cleanup'], taskMetadata: { useWorktree: true, openPR: true } },
-  // Read-only by default — the agent's job is to propose, not implement.
-  // Worktree off because the task body itself reads from data/cos/reference-repos
-  // (managed clones the user can't accidentally clobber).
-  'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true } }
+  // Writable — the v2 reference-watch prompt (PROMPT_VERSIONS['reference-watch'] = 2)
+  // instructs the agent to APPEND slug-tagged `[ref-watch-…]` checklist items to
+  // PLAN.md and commit them. `readOnly: true` would inject the "do not modify or
+  // commit files" guard into the system prompt and the agent would refuse to write
+  // the PLAN entries — defeating the whole flow. Worktree off because the task body
+  // itself reads from data/cos/reference-repos (managed clones the user can't
+  // accidentally clobber) and the PLAN.md write is small enough that the in-place
+  // commit on the source repo is simpler than a worktree round-trip. Mirrors the
+  // on-commit trigger path in referenceRepos.js#triggerReferenceAnalysis.
+  'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and

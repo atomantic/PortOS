@@ -28,6 +28,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
+import LocalSetupPanel from '../components/settings/LocalSetupPanel';
+import RuntimeInstallModal from '../components/videoGen/RuntimeInstallModal';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
@@ -43,6 +45,8 @@ import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import ModelSelect from '../components/ModelSelect';
+import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
+import { useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID } from '../hooks/useModelDownloadStatus';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -51,6 +55,8 @@ import {
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
   upscaleVideo,
   listImageGallery,
+  getSettings, updateSettings,
+  getActiveVideoJob,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
@@ -84,6 +90,17 @@ const videoModelMemoryGb = (model) => {
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
   const match = String(model?.name || '').match(/~\s*(\d+(?:\.\d+)?)\s*GB/i);
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+};
+
+// Mode-compatibility predicate for the Model dropdown. a2v requires the
+// ltx2 runtime (dgrauet's pipeline) — the legacy mlx_video pipeline has no
+// audio-conditioned mode, and Wan/Hunyuan don't either. Server enforces the
+// same rule in routes/videoGen.js (A2V_REQUIRES_LTX2); filtering client-side
+// keeps the dropdown honest so the user can't pick a doomed model.
+const isModelAllowedForMode = (model, mode) => {
+  if (!model) return false;
+  if (mode === 'a2v') return model.runtime === 'ltx2';
+  return true;
 };
 
 const ImagePreview = ({ src, alt, label }) => (
@@ -426,31 +443,248 @@ export default function VideoGen() {
     return () => eventSourceRef.current?.close();
   }, [refreshStatus]);
 
-  // Validate `modelId` once models are loaded. A Remix URL (or hand-edited
-  // link) can carry a `modelId` that no longer exists in the catalog — that
-  // leaves <ModelSelect> showing nothing and `currentModel` undefined, which
-  // then breaks resolution suggestions and submit. When we detect that, fall
-  // back to status.defaultModel (preferred) or the first available model so
-  // the form stays in a usable state.
+  // SSE subscriber shared by the in-flight POST path and the mount-time
+  // resume path. `withToast: false` on resume suppresses the success/error
+  // toast — the user already saw it the first time and a page reload
+  // shouldn't replay it.
+  const attachJobEvents = (jobId, { isCurrent = () => true, settleResolve = () => {}, settleReject = () => {}, withToast = true } = {}) => {
+    const es = new EventSource(`/api/video-gen/${jobId}/events`);
+    eventSourceRef.current = es;
+    es.onmessage = (ev) => {
+      if (!isCurrent()) { es.close(); return; }
+      const msg = safeParseJSON(ev.data);
+      if (!msg) return;
+      if (msg.type === 'queued') {
+        setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued');
+      }
+      if (msg.type === 'started') setStatusMsg('Starting render…');
+      if (msg.type === 'status') setStatusMsg(msg.message);
+      if (msg.type === 'progress') {
+        setProgress({ progress: msg.progress });
+        // A bare tqdm percentage shouldn't blank the STATUS line that just
+        // preceded it; only overwrite when the progress event carries text.
+        if (msg.message) setStatusMsg(msg.message);
+      }
+      if (msg.type === 'complete') {
+        setResult(msg.result);
+        setGenerating(false);
+        setProgress({ progress: 1 });
+        setStatusMsg('Complete');
+        es.close();
+        if (withToast) toast.success('Video generated');
+        refreshHistory();
+        settleResolve(msg.result);
+      }
+      if (msg.type === 'error') {
+        setError(msg.error);
+        setGenerating(false);
+        es.close();
+        if (withToast) toast.error(msg.error);
+        settleReject(new Error(msg.error));
+      }
+      if (msg.type === 'canceled') {
+        setGenerating(false);
+        setStatusMsg(msg.reason || 'Canceled');
+        es.close();
+        if (withToast) toast(msg.reason || 'Render canceled');
+        settleReject(new Error(msg.reason || 'Canceled'));
+      }
+    };
+    es.onerror = () => {
+      if (!isCurrent()) { es.close(); return; }
+      setError('Lost connection to server');
+      setGenerating(false);
+      es.close();
+      settleReject(new Error('Lost connection to server'));
+    };
+    return es;
+  };
+
+  // Resume an in-flight (or queued) render so a page reload doesn't lose
+  // the preview/progress display. Server holds the job's last SSE payload,
+  // so re-attaching replays the most recent status/progress immediately.
+  // Mirrors the ImageGen `getActiveImageJob` mount path.
+  useEffect(() => {
+    getActiveVideoJob().then((data) => {
+      const job = data?.activeJob;
+      if (!job?.jobId) return;
+      // Bail if the user already started a render in this tab. `generating`
+      // would be stale here (effect deps are []), so gate on the live ref:
+      // runTokenRef is bumped at the top of every runGeneration() and stays
+      // > 0 for the session afterward. eventSourceRef is also checked as a
+      // belt-and-suspenders signal for the in-flight POST window before
+      // attachJobEvents runs.
+      if (runTokenRef.current > 0 || eventSourceRef.current) return;
+      const p = job.params || {};
+      if (p.prompt) setPrompt(p.prompt);
+      if (p.negativePrompt) setNegativePrompt(p.negativePrompt);
+      if (p.modelId) setModelId(p.modelId);
+      if (p.width) setWidth(p.width);
+      if (p.height) setHeight(p.height);
+      if (p.numFrames) setNumFrames(p.numFrames);
+      if (p.fps) setFps(p.fps);
+      if (p.steps != null) setSteps(String(p.steps));
+      if (p.guidanceScale != null) setGuidanceScale(String(p.guidanceScale));
+      if (p.seed != null) setSeed(String(p.seed));
+      if (p.tiling) setTiling(p.tiling);
+      if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
+      if (p.mode) setMode(p.mode);
+      if (p.chunks && p.chunks > 1) setChunks(p.chunks);
+      setGenerating(true);
+      // Skip a forced setProgress(0) here — attachJobEvents will replay the
+      // server's last SSE payload synchronously after EventSource open, and
+      // a job mid-render would otherwise visibly flash 0% before jumping
+      // back to its real progress.
+      setStatusMsg(job.status === 'queued'
+        ? (typeof job.position === 'number' ? `Queued (position ${job.position})` : 'Queued')
+        : 'Resuming…');
+      const myToken = ++runTokenRef.current;
+      const isCurrent = () => myToken === runTokenRef.current;
+      attachJobEvents(job.jobId, { isCurrent, withToast: false });
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Settings PUT shallow-merges top-level keys, so the full imageGen slice
+  // must round-trip — otherwise mode/external/codex/expose get clobbered.
+  const handleSavePythonPath = useCallback(async (path) => {
+    const current = await getSettings({ silent: true }).catch(() => ({}));
+    const imageGen = current?.imageGen || {};
+    await updateSettings(
+      {
+        imageGen: {
+          ...imageGen,
+          local: { ...(imageGen.local || {}), pythonPath: path || undefined },
+        },
+      },
+      { silent: true },
+    )
+      .then(() => refreshStatus())
+      .catch((err) => toast.error(`Failed to save: ${err.message}`));
+  }, [refreshStatus]);
+
+  // Models filtered to the current mode's compatibility. Drives the
+  // <ModelSelect> options and the auto-select fallback so the user can't
+  // land on a model the server will reject.
+  const visibleModels = useMemo(
+    () => models.filter((m) => isModelAllowedForMode(m, mode)),
+    [models, mode],
+  );
+
+  // Validate `modelId` once models are loaded. Two failure modes covered:
+  //  1. A Remix URL (or hand-edited link) carries a `modelId` that no longer
+  //     exists in the catalog — <ModelSelect> shows nothing and `currentModel`
+  //     is undefined, which then breaks resolution suggestions and submit.
+  //  2. The picked model exists but isn't compatible with the current mode
+  //     (e.g. switching into a2v while an mlx_video model is selected). The
+  //     server would 400 on submit; we proactively swap to a compatible model.
+  // a2v fallback preference: highest-memory model that fits this machine
+  // (leaving headroom for the OS + text encoder) > the largest if none fit.
+  // Other modes: status.defaultModel (if compatible) > first compatible model.
   useEffect(() => {
     if (!modelId || models.length === 0) return;
-    if (models.some((m) => m.id === modelId)) return;
-    const fallback = status?.defaultModel || models[0]?.id || '';
-    if (fallback) {
-      // Notify the user once per unique stale id so a Remix of an uninstalled
-      // model doesn't silently drop to default. staleModelToastRef prevents
-      // re-firing when the effect re-runs with the same stale modelId.
-      if (staleModelToastRef.current !== modelId) {
-        staleModelToastRef.current = modelId;
-        toast(`Original model "${modelId}" is no longer available — using default`);
+    const current = models.find((m) => m.id === modelId);
+    const currentCompatible = current && isModelAllowedForMode(current, mode);
+    if (currentCompatible) return;
+    let fallback = '';
+    if (mode === 'a2v') {
+      // Reserve ~16 GB headroom for the OS + text encoder + working set.
+      // Anything that fits within `systemMemoryGb - reserveGb` is "runnable"
+      // on this machine; among those, pick the largest (highest quality).
+      // If nothing fits (constrained box), fall back to the smallest model
+      // so the user can at least try, and the install banner / OOM surfaces
+      // the real constraint instead of a silent dropdown change.
+      const reserveGb = 16;
+      // typeof === 'number' (not `status?.systemMemoryGb ? ...`) so a server
+      // legitimately reporting a tiny number (0 GB after rounding on a
+      // sub-GB box) flows through the `fits` check and lands on the
+      // smallest model. The truthiness shortcut would collapse 0 with
+      // "absent" and pick the LARGEST model on a tiny machine.
+      const budget = typeof status?.systemMemoryGb === 'number'
+        ? Math.max(0, status.systemMemoryGb - reserveGb)
+        : Number.POSITIVE_INFINITY;
+      const sortedDesc = [...visibleModels].sort(
+        (a, b) => videoModelMemoryGb(b) - videoModelMemoryGb(a),
+      );
+      const fits = sortedDesc.find((m) => videoModelMemoryGb(m) <= budget);
+      fallback = (fits || sortedDesc[sortedDesc.length - 1])?.id || '';
+    } else {
+      const defaultModel = models.find((m) => m.id === status?.defaultModel);
+      if (defaultModel && isModelAllowedForMode(defaultModel, mode)) {
+        fallback = defaultModel.id;
+      } else {
+        fallback = visibleModels[0]?.id || status?.defaultModel || models[0]?.id || '';
       }
-      setModelId(fallback);
     }
-  }, [modelId, models, status?.defaultModel]);
+    if (!fallback || fallback === modelId) return;
+    // Toast only for the stale-id case (model removed from catalog). The
+    // mode-incompatibility swap is expected behavior after a mode change —
+    // no need to surface it. Name the destination model so users on a2v
+    // don't think they landed on `status.defaultModel` (they may not have —
+    // a2v picks the largest-fits model, which is often a dgrauet entry).
+    if (!current && staleModelToastRef.current !== modelId) {
+      staleModelToastRef.current = modelId;
+      const fallbackName = models.find((m) => m.id === fallback)?.name || fallback;
+      toast(`Original model "${modelId}" is no longer available — switched to "${fallbackName}"`);
+    }
+    setModelId(fallback);
+  }, [modelId, models, status?.defaultModel, status?.systemMemoryGb, mode, visibleModels]);
 
   const currentModel = models.find((m) => m.id === modelId);
+
+  // Probe the per-runtime status BEFORE the user hits Generate — without
+  // this they'd see the buildArgs-time "venv not found" 500 with no good way
+  // to recover. The set of "BYOV" runtimes comes from /status server-side so
+  // it can't drift from the server's BYOV_RUNTIME_INFO map.
+  const [byovStatus, setByovStatus] = useState(null);
+  const [installModalOpen, setInstallModalOpen] = useState(false);
+  const byovRuntime = currentModel?.runtime;
+  const needsByovProbe = byovRuntime && (status?.byovRuntimes || []).includes(byovRuntime);
+  const refreshByovStatus = useCallback((signal) => {
+    if (!needsByovProbe) { setByovStatus(null); return Promise.resolve(); }
+    return fetch(`/api/video-gen/setup/runtime-status?runtime=${encodeURIComponent(byovRuntime)}`, { signal })
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => { if (s) setByovStatus(s); })
+      .catch(() => {});
+  }, [byovRuntime, needsByovProbe]);
+  useEffect(() => {
+    if (!needsByovProbe) { setByovStatus(null); return; }
+    const controller = new AbortController();
+    refreshByovStatus(controller.signal);
+    return () => controller.abort();
+  }, [needsByovProbe, refreshByovStatus]);
+  const byovRuntimeMissing = !!byovStatus && byovStatus.installed === false;
+  // While the runtime-status probe is in flight (`needsByovProbe` is true but
+  // we haven't received a response yet), `byovStatus` is null and
+  // `byovRuntimeMissing` reads false — without this guard the user could
+  // submit during that window and hit a venv-missing 500 before the install
+  // banner appears. Gate Generate / Enqueue on the broader "BYOV not yet
+  // confirmed ready" instead. The banner itself still keys on `byovRuntimeMissing`
+  // (we don't want to flash "isn't installed yet" copy before we know).
+  const byovGateBlocked = needsByovProbe && (byovStatus === null || byovStatus.installed === false);
+
+  // Inline cache-status badge for the picked video model + the active text
+  // encoder (a separate ~7-25 GB HF pull). Drives the "Available" / "Download"
+  // affordance under the Model select, so users learn about the multi-GB
+  // pull before hitting Render.
+  const modelDownload = useModelDownloadStatus({ kind: 'video' });
+  const modelStatus = modelId ? modelDownload.getStatus(modelId) : null;
+  const textEncoderInfo = modelDownload.extra.textEncoder || null;
+  const textEncoderStatus = textEncoderInfo
+    ? (modelDownload.activeModelId === TEXT_ENCODER_DOWNLOAD_ID
+      ? { ...textEncoderInfo, downloading: true, progress: modelDownload.progress }
+      : textEncoderInfo)
+    : null;
+
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
+
+  // Explicit px sizing — maxWidth + maxHeight + aspectRatio together resolves
+  // inconsistently across browsers for mixed orientations.
+  const previewBudget = 420;
+  const previewRatio = (width > 0 && height > 0) ? width / height : 16 / 9;
+  const previewWidth = previewRatio >= 1 ? previewBudget : Math.round(previewBudget * previewRatio);
+  const previewHeight = previewRatio >= 1 ? Math.round(previewBudget / previewRatio) : previewBudget;
 
   const handleResolutionChange = (e) => {
     const r = VIDEO_RESOLUTIONS.find((r) => r.label === e.target.value);
@@ -515,16 +749,8 @@ export default function VideoGen() {
       setDisableAudio(false);
       setNoMusic(false);
       setChunks(1);
-      // Auto-select the lowest-memory ltx2-runtime model so the user
-      // doesn't land on a blocked state. Only fires when the current model
-      // can't handle a2v — if they already have a dgrauet model selected
-      // we leave it alone.
-      if (currentModel?.runtime !== 'ltx2') {
-        const ltx2Model = models
-          .filter((m) => m.runtime === 'ltx2')
-          .sort((a, b) => videoModelMemoryGb(a) - videoModelMemoryGb(b))[0];
-        if (ltx2Model) setModelId(ltx2Model.id);
-      }
+      // Auto-select to a compatible ltx2-runtime model is handled by the
+      // modelId-validation effect, which re-runs on every mode change.
     }
   };
 
@@ -656,55 +882,7 @@ export default function VideoGen() {
       // earlier handleCancel() already settled the Promise via runRejectRef.
       if (!isCurrent()) return;
       const jobId = data.jobId || data.generationId;
-      const es = new EventSource(`/api/video-gen/${jobId}/events`);
-      eventSourceRef.current = es;
-
-      es.onmessage = (ev) => {
-        // A cancel that landed after the EventSource opened would have closed
-        // it, but a stray buffered message could still fire — bail before
-        // touching component state for a run we no longer own.
-        if (!isCurrent()) { es.close(); return; }
-        const msg = safeParseJSON(ev.data);
-        if (!msg) return;
-        if (msg.type === 'status') setStatusMsg(msg.message);
-        if (msg.type === 'progress') {
-          setProgress({ progress: msg.progress });
-          setStatusMsg(msg.message);
-        }
-        if (msg.type === 'complete') {
-          setResult(msg.result);
-          setGenerating(false);
-          setProgress({ progress: 1 });
-          setStatusMsg('Complete');
-          es.close();
-          toast.success('Video generated');
-          refreshHistory();
-          settleResolve(msg.result);
-        }
-        if (msg.type === 'error') {
-          setError(msg.error);
-          setGenerating(false);
-          es.close();
-          toast.error(msg.error);
-          settleReject(new Error(msg.error));
-        }
-        if (msg.type === 'canceled') {
-          // Queue-driven cancellation (different from gen-side error). Mark
-          // the UI terminal so the spinner clears and the user can resubmit.
-          setGenerating(false);
-          setStatusMsg(msg.reason || 'Canceled');
-          es.close();
-          toast(msg.reason || 'Render canceled');
-          settleReject(new Error(msg.reason || 'Canceled'));
-        }
-      };
-      es.onerror = () => {
-        if (!isCurrent()) { es.close(); return; }
-        setError('Lost connection to server');
-        setGenerating(false);
-        es.close();
-        settleReject(new Error('Lost connection to server'));
-      };
+      attachJobEvents(jobId, { isCurrent, settleResolve, settleReject, withToast: true });
     }).catch((err) => {
       if (!isCurrent()) return;
       setError(err.message || 'Video generation failed');
@@ -738,12 +916,16 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
+    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
   const handleEnqueue = () => {
-    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
+    // Mirror the Generate guard — a BYOV runtime that isn't installed yet
+    // would silently queue a doomed job that fails late in the worker with
+    // VENV_MISSING, hiding the installer banner from the user. Block at
+    // enqueue time so the only path forward is the install banner above.
+    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
     const payload = buildGeneratePayload();
     // Strip File blobs for snapshot — re-using a File across multiple queued
     // submissions is fine, but we need a stable JSON-ish summary for the
@@ -843,8 +1025,14 @@ export default function VideoGen() {
     }
   };
 
-  const notConnected = status && status.connected === false;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked;
+  // `status.connected` reflects the LEGACY mlx_video pythonPath health. BYOV
+  // runtimes (ltx2/wan22/hunyuan) resolve their own venv inside the service
+  // layer, so a missing legacy pythonPath must NOT block them — gate only on
+  // `byovRuntimeMissing` for those models. Without this, a user who installed
+  // ONLY a BYOV runtime via the modal would stay stuck behind a "not
+  // configured" error from the unrelated legacy probe.
+  const notConnected = !!status && status.connected === false && !needsByovProbe;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked;
 
   // Symmetric frame picker for the FFLF + image modes. Each slot accepts
   // EITHER a gallery filename OR a fresh upload; the preview renders
@@ -938,8 +1126,7 @@ export default function VideoGen() {
             ) : (
               <>
                 <AlertTriangle className="w-3 h-3" />
-                {status.reason || 'Local Python not configured'} —
-                <button type="button" onClick={openSettings} className="underline">Settings</button>
+                {status.reason || 'Local Python not configured — set one up below'}
               </>
             )}
           </span>
@@ -965,6 +1152,30 @@ export default function VideoGen() {
           </button>
         </div>
       </div>
+
+      {status && status.connected === false && (() => {
+        const missingCount = status.missingPackages?.length || 0;
+        const hasPath = !!status.pythonPath;
+        return (
+          <div className="bg-port-card border border-port-border rounded-xl p-4">
+            <div className="mb-3">
+              <h3 className="text-sm font-medium text-gray-200">
+                {hasPath ? 'Install missing Python packages' : 'Set up Local Python'}
+              </h3>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                {hasPath
+                  ? `Your Python is selected (${status.pythonPath}), but ${missingCount} required ${missingCount === 1 ? "package isn't" : "packages aren't"} installed. Click "Install" below — PortOS will pip-install them into this interpreter.`
+                  : 'Pick a Python 3.10+ interpreter — PortOS auto-detects venvs and conda installs and can install missing packages directly.'}
+              </p>
+            </div>
+            <LocalSetupPanel
+              pythonPath={status.pythonPath || ''}
+              onPythonPathChange={handleSavePythonPath}
+              onPackagesChanged={refreshStatus}
+            />
+          </div>
+        );
+      })()}
 
       {/* Mode switch — segmented control above the form. Sets state that
           both the form rendering and the submit payload react to.
@@ -996,6 +1207,23 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          {byovRuntimeMissing && (
+            <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <strong className="font-semibold">{byovStatus.label}</strong> isn't installed yet.
+                PortOS can fetch and install it from {byovStatus.repoUrl?.replace('https://', '')} (~5-15 min, multi-GB on first run).
+              </div>
+              <button
+                type="button"
+                onClick={() => setInstallModalOpen(true)}
+                disabled={generating}
+                className="self-start sm:self-auto whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80 disabled:opacity-50"
+              >
+                <Sparkles size={14} />
+                Install {byovStatus.label}
+              </button>
+            </div>
+          )}
           <StylePresetPicker
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
@@ -1110,9 +1338,12 @@ export default function VideoGen() {
               <p className="text-[10px] text-gray-500 leading-snug">
                 Audio length should match {`${(numFrames / fps).toFixed(1)}s`} (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.
               </p>
-              {currentModel?.runtime !== 'ltx2' && (
+              {visibleModels.length === 0 && (
                 <p className="text-[11px] text-port-warning">
-                  a2v requires an ltx2-runtime model — switch the Model dropdown to one of the dgrauet entries.
+                  a2v requires an ltx2-runtime model, but none are installed. Add a dgrauet entry to{' '}
+                  <code>data/media-models.json</code> (or restore <code>ltx23_dgrauet_q4</code> / <code>_q8</code>{' '}
+                  from the built-in defaults), then provision the runtime via{' '}
+                  <code>INSTALL_LTX2=1 bash scripts/setup-image-video.sh</code>.
                 </p>
               )}
             </div>
@@ -1157,10 +1388,28 @@ export default function VideoGen() {
               <div className="col-span-2 sm:col-span-3">
                 <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
                 <ModelSelect
-                  models={models}
+                  models={visibleModels}
                   value={modelId}
                   onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidanceScale(''); }}
                 />
+                {modelStatus && (
+                  <ModelDownloadBadge
+                    status={modelStatus}
+                    onDownload={() => modelDownload.start(modelId)}
+                    onCancel={modelDownload.cancel}
+                    estimateLabel={deriveSizeEstimate(currentModel?.name)}
+                  />
+                )}
+                {textEncoderStatus && textEncoderStatus.cached === false && (
+                  <div className="mt-1">
+                    <p className="text-[10px] text-gray-500">Text encoder ({textEncoderStatus.repo}) is also required:</p>
+                    <ModelDownloadBadge
+                      status={textEncoderStatus}
+                      onDownload={() => modelDownload.start(TEXT_ENCODER_DOWNLOAD_ID)}
+                      onCancel={modelDownload.cancel}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -1338,10 +1587,12 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
-                  extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
+                  byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
+                    : byovGateBlocked ? `Checking ${byovRuntime} runtime status…`
+                    : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
                     : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
                       ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
                       : 'Pick an audio file before generating')
@@ -1382,7 +1633,10 @@ export default function VideoGen() {
               </a>
             )}
           </div>
-          <div className="aspect-video max-w-[420px] mx-auto bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
+          <div
+            className="mx-auto bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative max-w-full"
+            style={{ width: previewWidth, height: previewHeight }}
+          >
             {result ? (
               // muted so the clip autoplays under the mobile media-engagement
               // policy (iOS/Android block unmuted autoplay outside a user
@@ -1515,6 +1769,14 @@ export default function VideoGen() {
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
         <ImageGenTab />
       </Drawer>
+
+      <RuntimeInstallModal
+        open={installModalOpen}
+        runtime={byovRuntime}
+        label={byovStatus?.label}
+        onClose={() => setInstallModalOpen(false)}
+        onComplete={() => refreshByovStatus()}
+      />
     </div>
   );
 }

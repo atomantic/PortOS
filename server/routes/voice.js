@@ -10,8 +10,9 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
-import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice } from '../services/voice/bootstrap.js';
+import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices, VALID_ENGINES } from '../services/voice/tts.js';
+import { readyState as kokoroReadyState, unloadKokoro, loadedModelKey as kokoroLoadedKey } from '../services/voice/tts-kokoro.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
 import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
@@ -228,6 +229,56 @@ router.post('/speak', asyncHandler(async (req, res) => {
   }
   const result = await speakProactive({ io, ...parsed.data });
   res.json(result);
+}));
+
+// GET /api/voice/tts/status — Kokoro residency snapshot (lazy/loading/loaded
+// plus the model key currently cached). Piper has no resident model — it
+// spawns per-synthesis — so it's not represented here.
+router.get('/tts/status', asyncHandler(async (_req, res) => {
+  res.json({
+    kokoro: {
+      state: kokoroReadyState(),
+      loadedKey: kokoroLoadedKey(),
+    },
+  });
+}));
+
+// POST /api/voice/tts/unload — drop the cached Kokoro instance so unified
+// memory can host a big diffusion model instead. The next synthesizeKokoro
+// call pays the ~2–3s cold start. No-op if nothing was loaded.
+router.post('/tts/unload', asyncHandler(async (_req, res) => {
+  res.json(unloadKokoro());
+}));
+
+// POST /api/voice/whisper — body: { action: 'stop' | 'start' }.
+// Memory-management lever: stop frees ~1.5 GB of whisper.cpp + GGML model
+// weights for the duration. Start re-binds the PM2 process using current
+// voice.stt config. Distinct from /api/voice/config (which persists enabled
+// state) — this is a transient stop, voice.enabled stays true.
+const whisperActionSchema = z.object({
+  action: z.enum(['start', 'stop']),
+});
+router.post('/whisper', asyncHandler(async (req, res) => {
+  const parsed = whisperActionSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    throw new ServerError(
+      `Invalid whisper payload: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
+      { status: 400, code: 'VALIDATION_ERROR' },
+    );
+  }
+  const { action } = parsed.data;
+  if (action === 'stop') {
+    await stopWhisper();
+    // Drop the cached `services.whisper.ok` so the next /voice/status reflects
+    // the just-flipped PM2 state — without this the Memory Management panel
+    // re-polls and sees up to 3s of "still running" after a successful stop.
+    invalidateHealthCache();
+    return res.json({ success: true, action: 'stop' });
+  }
+  const cfg = await getVoiceConfig();
+  const result = await startWhisper(cfg);
+  invalidateHealthCache();
+  res.json({ success: true, action: 'start', ...result });
 }));
 
 export default router;

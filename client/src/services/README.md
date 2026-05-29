@@ -95,6 +95,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiAsk.js` | Ask page (chat-like). |
 | `apiGSD.js` | "Get Stuff Done" integration. |
 | `apiImporter.js` | Manuscript / chat importer. |
+| `apiStoryBuilder.js` | Unified Story Builder conductor (sessions, step lock/unlock, generate/refine). |
 | `apiOpenClaw.js` | File browser / picker backend. |
 | `apiPalette.js` | Command-palette manifest + action dispatch. |
 | `apiVoice.js` | Voice synthesis / processing. |

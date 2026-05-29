@@ -39,6 +39,25 @@ export const ARC_LIMITS = Object.freeze({
 export const ARC_STATUSES = Object.freeze(['draft', 'verified']);
 export const SEASON_STATUSES = Object.freeze(['draft', 'verified', 'in-production', 'complete']);
 
+// Reader map — the audience-facing companion to the protagonist arc. Where
+// `arc.protagonistArc` + `arc.shape` describe the *character's* emotional
+// fortune, the reader map describes what the *reader/viewer* experiences as
+// they move through the content: questions planted (hooks), their resolutions
+// (payoffs), the felt emotional beats, and the cliffhangers between issues.
+// Lives at `series.arc.readerMap`; built on top of the Vonnegut `shape`.
+export const READER_MAP_LIMITS = Object.freeze({
+  LABEL_MAX: 200,
+  NOTE_MAX: 1000,
+  HOOKS_MAX: 60,
+  PAYOFFS_MAX: 60,
+  BEATS_MAX: 200,
+  CLIFFHANGERS_MAX: 60,
+  ARC_POSITION_MAX: 9999,
+  ISSUE_BOUNDARY_MAX: 9999,
+});
+export const READER_MAP_BEAT_KINDS = Object.freeze(['hook', 'reveal', 'payoff', 'emotional', 'cliffhanger']);
+export const READER_MAP_STATUSES = Object.freeze(['draft', 'verified']);
+
 // Per-episode arc roles produced by the season-episodes generator and
 // persisted on the issue so downstream stages (idea-expansion in particular)
 // know whether they're writing a pilot vs. midpoint vs. finale episode.
@@ -227,6 +246,92 @@ function cleanThemes(raw) {
   return out;
 }
 
+// Reader-map entry ids are minted as `rm-<uuid>` so payoffs can reference the
+// hook they resolve (`resolvesHookId`) and the client can key list rows.
+const RM_ID_RE = /^rm-[a-zA-Z0-9-]+$/;
+const ensureRmId = (raw) => (isStr(raw) && RM_ID_RE.test(raw) ? raw : `rm-${randomUUID()}`);
+
+// Optional non-negative integer position. Absent / non-finite → null so the
+// caller can distinguish "no position pinned" from position 0.
+const optPosition = (raw, max) => (Number.isFinite(raw) ? Math.max(0, Math.min(max, Math.floor(raw))) : null);
+
+// Clamp a beat's reader-intensity to [0,1]; non-finite → null (unspecified).
+const clampIntensity = (raw) => (Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : null);
+
+function sanitizeReaderHook(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, READER_MAP_LIMITS.LABEL_MAX);
+  const note = trimTo(raw.note, READER_MAP_LIMITS.NOTE_MAX);
+  if (!label && !note) return null;
+  return { id: ensureRmId(raw.id), label, atArcPosition: optPosition(raw.atArcPosition, READER_MAP_LIMITS.ARC_POSITION_MAX), note };
+}
+
+function sanitizeReaderPayoff(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, READER_MAP_LIMITS.LABEL_MAX);
+  const note = trimTo(raw.note, READER_MAP_LIMITS.NOTE_MAX);
+  if (!label && !note) return null;
+  return {
+    id: ensureRmId(raw.id),
+    label,
+    atArcPosition: optPosition(raw.atArcPosition, READER_MAP_LIMITS.ARC_POSITION_MAX),
+    resolvesHookId: isStr(raw.resolvesHookId) && RM_ID_RE.test(raw.resolvesHookId) ? raw.resolvesHookId : null,
+    note,
+  };
+}
+
+function sanitizeReaderBeat(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  // Unknown `kind` drops the whole beat — a beat with no classified kind can't
+  // be placed on the reader-map timeline meaningfully.
+  const kind = READER_MAP_BEAT_KINDS.includes(raw.kind) ? raw.kind : null;
+  if (!kind) return null;
+  return {
+    id: ensureRmId(raw.id),
+    kind,
+    atArcPosition: optPosition(raw.atArcPosition, READER_MAP_LIMITS.ARC_POSITION_MAX),
+    intensity: clampIntensity(raw.intensity),
+    note: trimTo(raw.note, READER_MAP_LIMITS.NOTE_MAX),
+  };
+}
+
+function sanitizeReaderCliffhanger(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const note = trimTo(raw.note, READER_MAP_LIMITS.NOTE_MAX);
+  const atIssueBoundary = optPosition(raw.atIssueBoundary, READER_MAP_LIMITS.ISSUE_BOUNDARY_MAX);
+  if (!note && atIssueBoundary == null) return null;
+  return { id: ensureRmId(raw.id), atIssueBoundary, note };
+}
+
+function cleanReaderMapList(rawList, fn, cap) {
+  if (!Array.isArray(rawList)) return [];
+  const out = [];
+  for (const raw of rawList) {
+    const v = fn(raw);
+    if (v) out.push(v);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
+ * Sanitize the optional `series.arc.readerMap` field. Returns `null` when the
+ * map carries no identifying content (all four lists empty) so callers store
+ * `null` to mean "no reader map yet" — mirroring `sanitizeArc`. Drops malformed
+ * entries, caps each list, coerces ids to `rm-<uuid>`, clamps `intensity` to
+ * [0,1], and drops beats with an unknown `kind`.
+ */
+export function sanitizeReaderMap(raw) {
+  if (raw == null || typeof raw !== 'object') return null;
+  const hooks = cleanReaderMapList(raw.hooks, sanitizeReaderHook, READER_MAP_LIMITS.HOOKS_MAX);
+  const payoffs = cleanReaderMapList(raw.payoffs, sanitizeReaderPayoff, READER_MAP_LIMITS.PAYOFFS_MAX);
+  const beats = cleanReaderMapList(raw.beats, sanitizeReaderBeat, READER_MAP_LIMITS.BEATS_MAX);
+  const cliffhangers = cleanReaderMapList(raw.cliffhangers, sanitizeReaderCliffhanger, READER_MAP_LIMITS.CLIFFHANGERS_MAX);
+  if (hooks.length === 0 && payoffs.length === 0 && beats.length === 0 && cliffhangers.length === 0) return null;
+  const status = READER_MAP_STATUSES.includes(raw.status) ? raw.status : 'draft';
+  return { hooks, payoffs, beats, cliffhangers, status };
+}
+
 /**
  * Sanitize the optional `series.arc` field. Returns `null` if the input is
  * empty (no identifying fields) — callers store `null` to mean "no arc yet."
@@ -247,9 +352,12 @@ export function sanitizeArc(raw) {
   // `shape` counts as identifying content: it's an explicit narrative
   // decision the user made at create time and shouldn't silently vanish.
   const shape = isStr(raw.shape) && ARC_SHAPE_IDS.includes(raw.shape) ? raw.shape : null;
-  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape) return null;
+  // The reader map is identifying content too — an arc that has only a reader
+  // map (e.g. the Story Builder generated it before any logline) must survive.
+  const readerMap = sanitizeReaderMap(raw.readerMap);
+  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap) return null;
   const status = ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { logline, summary, protagonistArc, themes, shape, status };
+  return { logline, summary, protagonistArc, themes, shape, readerMap, status };
 }
 
 /**

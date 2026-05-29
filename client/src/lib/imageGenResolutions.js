@@ -18,13 +18,16 @@ export const RESOLUTIONS = [
   { label: '512×768', w: 512, h: 768 },
   { label: '768×768', w: 768, h: 768 },
   { label: '1024×1024', w: 1024, h: 1024 },
-  { label: '832×1216 (Flux portrait)', w: 832, h: 1216, compatible: ['flux1', RUNNER_FAMILIES.FLUX2, 'external'] },
-  { label: '1216×832 (Flux landscape)', w: 1216, h: 832, compatible: ['flux1', RUNNER_FAMILIES.FLUX2, 'external'] },
+  { label: '832×1216 (Flux portrait)', w: 832, h: 1216, compatible: ['flux1', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM, 'external'] },
+  { label: '1216×832 (Flux landscape)', w: 1216, h: 832, compatible: ['flux1', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM, 'external'] },
   { label: '1024×576 (16:9)', w: 1024, h: 576 },
   { label: '576×1024 (9:16)', w: 576, h: 1024 },
-  { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
-  { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
-  { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
+  { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
+  { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
+  { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
+  // Past Qwen's documented ~1664 long-edge support window — renders coherently
+  // in practice but is out-of-distribution; keep flagged "experimental."
+  { label: '1328×2048 (Qwen comic draft — experimental)', w: 1328, h: 2048, compatible: [RUNNER_FAMILIES.QWEN] },
   // US comic-book trim presets — 6.625"×10.25" = 1.547:1 aspect, the real
   // standard. Distinct from "portrait" because comic pages are squarer than
   // 2:3. Codex-only: every dimension here exceeds the implicit local-runner
@@ -44,14 +47,18 @@ export const RESOLUTIONS = [
 
 // Flux 1 (mflux/diffusers, `dev` / `schnell`) has no `runner` field — it's
 // the fallback for local mode when nothing more specific matches.
+const NATIVE_RUNNER_KEYS = new Set([
+  RUNNER_FAMILIES.FLUX2,
+  RUNNER_FAMILIES.Z_IMAGE,
+  RUNNER_FAMILIES.ERNIE,
+  RUNNER_FAMILIES.QWEN,
+  RUNNER_FAMILIES.HIDREAM,
+]);
+
 export const compatibilityKey = (mode, runner) => {
   if (mode === IMAGE_GEN_MODE.CODEX) return 'codex';
   if (mode === IMAGE_GEN_MODE.EXTERNAL) return 'external';
-  if (runner === RUNNER_FAMILIES.FLUX2
-      || runner === RUNNER_FAMILIES.Z_IMAGE
-      || runner === RUNNER_FAMILIES.ERNIE) {
-    return runner;
-  }
+  if (NATIVE_RUNNER_KEYS.has(runner)) return runner;
   return 'flux1';
 };
 

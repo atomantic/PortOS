@@ -8,4 +8,6 @@ export const RUNNER_FAMILIES = Object.freeze({
   FLUX2: 'flux2',
   Z_IMAGE: 'z-image',
   ERNIE: 'ernie',
+  HIDREAM: 'hidream',
+  QWEN: 'qwen',
 });

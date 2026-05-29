@@ -29,27 +29,35 @@ export default function EntryThumbSlot({
   primaryImageRef = null,
   onRender = null,
   onPreview = null,
+  // Fired with the rendered filename when an in-flight job completes (forwarded
+  // to MediaJobThumb's onFilename) so callers can persist the new ref + clear
+  // the in-flight job without their own job subscription.
+  onComplete = null,
   canRender = true,
   alt = 'Render',
   // `'lg'` renders the empty-state box at 64x96 with a bigger Sparkles
-  // affordance (reserved for slots that ride a wider card). Defaults to the
-  // compact 48x80 (w-12 h-20) portrait footprint shared with variation +
-  // canon avatar rows — matched to the 2:3 aspect of typical 1024x1536
-  // universe renders so the slot doesn't crop the subject.
+  // affordance (reserved for slots that ride a wider card). `'xl'` is the
+  // 160x240 hero footprint used by the base-style probe on the universe page.
+  // Defaults to the compact 48x80 (w-12 h-20) portrait footprint shared with
+  // variation + canon avatar rows — matched to the 2:3 aspect of typical
+  // 1024x1536 universe renders so the slot doesn't crop the subject.
   size = 'sm',
 }) {
   if (inFlightJobId) {
     // `xs` (48x80) matches the empty + completed states below so all three
     // states share a footprint and the row doesn't jump mid-render. `'lg'`
-    // upgrades the pending box to `sm` (64x64) when the slot is configured
-    // for the larger size — note `MediaJobThumb` doesn't have a portrait
-    // 64x96 variant, so the larger slot's pending state is square.
+    // upgrades the pending box to `sm` (64x64); `'xl'` uses `lg` (128x128).
+    // `MediaJobThumb` doesn't have portrait variants past `xs`, so the
+    // larger pending states are square — one-time jitter when the render
+    // finishes and the portrait completed-thumb takes over.
+    const pendingSize = size === 'xl' ? 'lg' : size === 'lg' ? 'sm' : 'xs';
     return (
       <MediaJobThumb
         jobId={inFlightJobId}
         label={alt}
-        size={size === 'lg' ? 'sm' : 'xs'}
+        size={pendingSize}
         onPreview={onPreview}
+        onFilename={onComplete}
       />
     );
   }
@@ -66,15 +74,16 @@ export default function EntryThumbSlot({
         fallbackRefs={refs}
         isPrimary={!!primaryImageRef && primaryImageRef === chosen}
         onClick={onPreview}
+        size={size}
       />
     );
   }
   // Empty state — placeholder box with render button. Portrait footprint
-  // (48x80 / 64x96) matches the 2:3 aspect of typical universe renders so
-  // the row reserves the same vertical space as WalkBackThumb's completed
-  // image, and the pending MediaJobThumb (xs / sm), eliminating row jitter
-  // across the three states.
-  const dim = size === 'lg' ? 'w-16 h-24' : 'w-12 h-20';
+  // (48x80 / 64x96 / 160x240) matches the 2:3 aspect of typical universe
+  // renders so the row reserves the same vertical space as WalkBackThumb's
+  // completed image, eliminating row jitter across the three states.
+  const dim = size === 'xl' ? 'w-40 h-60' : size === 'lg' ? 'w-16 h-24' : 'w-12 h-20';
+  const iconSize = size === 'xl' ? 32 : size === 'lg' ? 18 : 14;
   return (
     <button
       type="button"
@@ -83,7 +92,7 @@ export default function EntryThumbSlot({
       title={canRender ? 'Render image for this item' : 'Save the universe first to enable render'}
       className={`${dim} shrink-0 flex items-center justify-center rounded border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
     >
-      <Sparkles size={size === 'lg' ? 18 : 14} />
+      <Sparkles size={iconSize} />
     </button>
   );
 }
@@ -93,7 +102,7 @@ export default function EntryThumbSlot({
 // (stale gallery file → walk back through prior renders → collapse). Mirrors
 // `EntryCardThumbnail` in `EntryCard.jsx`; intentionally kept in sync — visual
 // drift would defeat the point of a shared slot.
-function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs = null }) {
+function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs = null, size = 'sm' }) {
   const candidates = [];
   if (filename) candidates.push(filename);
   if (Array.isArray(fallbackRefs)) {
@@ -107,10 +116,11 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
   const candidateKey = candidates.join('|');
   const [idx, setIdx] = useState(0);
   useEffect(() => { setIdx(0); }, [candidateKey]);
+  const dim = size === 'xl' ? 'w-40 h-60' : size === 'lg' ? 'w-16 h-24' : 'w-12 h-20';
   if (!candidates.length || idx >= candidates.length) {
     // All candidates failed to load — collapse to empty (no render button
     // here; the user can re-render from the action column).
-    return <div className="w-12 h-20 shrink-0 rounded border border-port-border bg-port-bg/40" />;
+    return <div className={`${dim} shrink-0 rounded border border-port-border bg-port-bg/40`} />;
   }
   const currentFilename = candidates[idx];
   const img = (
@@ -123,7 +133,7 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
     />
   );
   const frame = (
-    <div className={`relative w-12 h-20 shrink-0 rounded overflow-hidden border ${
+    <div className={`relative ${dim} shrink-0 rounded overflow-hidden border ${
       isPrimary ? 'border-port-accent' : 'border-port-border'
     }`}>
       {img}

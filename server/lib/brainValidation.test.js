@@ -26,7 +26,11 @@ import {
   inboxQuerySchema,
   linkRecordSchema,
   linkInputSchema,
+  linkUpdateInputSchema,
   linksQuerySchema,
+  bucketInputSchema,
+  bucketUpdateInputSchema,
+  bucketReorderSchema,
   brainSyncQuerySchema,
   brainSyncPushSchema
 } from './brainValidation.js';
@@ -499,6 +503,44 @@ describe('brainValidation.js', () => {
     it('should reject invalid URL', () => {
       expect(linkInputSchema.safeParse({ url: 'not-valid' }).success).toBe(false);
     });
+
+    it('should accept a bucketId + bucketOrder', () => {
+      const result = linkInputSchema.safeParse({
+        url: 'https://example.com',
+        bucketId: '11111111-1111-4111-8111-111111111111',
+        bucketOrder: 3
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.bucketOrder).toBe(3);
+    });
+
+    it('should reject a non-uuid bucketId', () => {
+      expect(linkInputSchema.safeParse({ url: 'https://example.com', bucketId: 'nope' }).success).toBe(false);
+    });
+  });
+
+  describe('linkUpdateInputSchema', () => {
+    it('should accept a null bucketId (unassign)', () => {
+      const result = linkUpdateInputSchema.safeParse({ bucketId: null });
+      expect(result.success).toBe(true);
+      expect(result.data.bucketId).toBeNull();
+    });
+
+    it('should accept a url-only update', () => {
+      const result = linkUpdateInputSchema.safeParse({ url: 'https://example.com/new' });
+      expect(result.success).toBe(true);
+      expect(result.data.url).toBe('https://example.com/new');
+    });
+
+    it('should accept a title-only update (url omitted)', () => {
+      const result = linkUpdateInputSchema.safeParse({ title: 'New title' });
+      expect(result.success).toBe(true);
+      expect(result.data.url).toBeUndefined();
+    });
+
+    it('should reject an invalid url', () => {
+      expect(linkUpdateInputSchema.safeParse({ url: 'not-valid' }).success).toBe(false);
+    });
   });
 
   describe('linksQuerySchema', () => {
@@ -515,10 +557,60 @@ describe('brainValidation.js', () => {
       expect(result.data.isGitHubRepo).toBe(true);
     });
 
+    it('should coerce the string "false" to false (not true)', () => {
+      const result = linksQuerySchema.safeParse({ isGitHubRepo: 'false' });
+      expect(result.success).toBe(true);
+      expect(result.data.isGitHubRepo).toBe(false);
+    });
+
     it('should filter by linkType', () => {
       const result = linksQuerySchema.safeParse({ linkType: 'documentation' });
       expect(result.success).toBe(true);
       expect(result.data.linkType).toBe('documentation');
+    });
+  });
+
+  describe('bucketInputSchema', () => {
+    it('should accept a minimal name-only bucket', () => {
+      expect(bucketInputSchema.safeParse({ name: 'Disney' }).success).toBe(true);
+    });
+
+    it('should accept a valid color + icon', () => {
+      const result = bucketInputSchema.safeParse({ name: 'Disney', color: 'purple', icon: '🎢' });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject an empty name', () => {
+      expect(bucketInputSchema.safeParse({ name: '' }).success).toBe(false);
+    });
+
+    it('should reject an unknown color', () => {
+      expect(bucketInputSchema.safeParse({ name: 'X', color: 'neon' }).success).toBe(false);
+    });
+  });
+
+  describe('bucketUpdateInputSchema', () => {
+    it('should accept a partial update', () => {
+      const result = bucketUpdateInputSchema.safeParse({ order: 2 });
+      expect(result.success).toBe(true);
+      expect(result.data.order).toBe(2);
+    });
+  });
+
+  describe('bucketReorderSchema', () => {
+    it('should accept a list of uuids', () => {
+      const result = bucketReorderSchema.safeParse({
+        ids: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject an empty list', () => {
+      expect(bucketReorderSchema.safeParse({ ids: [] }).success).toBe(false);
+    });
+
+    it('should reject non-uuid entries', () => {
+      expect(bucketReorderSchema.safeParse({ ids: ['nope'] }).success).toBe(false);
     });
   });
 

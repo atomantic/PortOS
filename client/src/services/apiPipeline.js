@@ -62,7 +62,7 @@ export const PIPELINE_STAGE_STATUS_COLOR = Object.freeze({
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // (e.g. an optional join that should fail quietly) — see CLAUDE.md.
 export const listPipelineSeries = (options = {}) => request('/pipeline/series', options);
-export const getPipelineSeries = (id) => request(`/pipeline/series/${encodeURIComponent(id)}`);
+export const getPipelineSeries = (id, options = {}) => request(`/pipeline/series/${encodeURIComponent(id)}`, options);
 export const createPipelineSeries = (data) => request('/pipeline/series', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -97,8 +97,8 @@ export const SERIES_TITLE_LOGO_MAX = 2000;
 export const SERIES_AUTHOR_MAX = 120;
 
 // ---- Issues ----
-export const listPipelineIssues = (seriesId) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);
+export const listPipelineIssues = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`, options);
 
 export const createPipelineIssue = (seriesId, data) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`, {

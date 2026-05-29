@@ -31,11 +31,14 @@ import {
   sanitizeSeasonList,
   sanitizeSeason,
   buildSeason,
+  sanitizeReaderMap,
   ARC_ROLES as ARC_ROLE_LIST,
   ARC_SHAPE_IDS,
+  READER_MAP_BEAT_KINDS,
   renderArcShapeGuidance,
   renderArcShapePositionSummary,
 } from '../../lib/storyArc.js';
+import { runPromptRefineRaw } from './refineHelpers.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -270,6 +273,10 @@ export async function generateArcOverview(seriesId, options = {}) {
     themes: content?.themes,
     protagonistArc: content?.protagonistArc || '',
     shape: content?.shape ?? series.arc?.shape ?? null,
+    // The arc-overview prompt doesn't author the reader map — preserve any
+    // existing one (like `shape`) so regenerating the arc never silently wipes
+    // a reader map the user already built on the next step.
+    readerMap: series.arc?.readerMap ?? null,
     status: 'draft',
   });
   const seasons = shapeSeasonOutlines(content?.seasonOutlines);
@@ -281,6 +288,120 @@ export async function generateArcOverview(seriesId, options = {}) {
     providerId,
     model,
   };
+}
+
+// Reader-map context: the protagonist arc + the Vonnegut shape backbone + the
+// planned volume boundaries (so the LLM can place cliffhangers at issue gaps).
+// Mirrors buildArcOverviewContext's world+arc projection.
+async function buildReaderMapContext(series, preloadedWorld) {
+  const arc = series.arc || {};
+  const world = await resolveWorldContext(series, preloadedWorld);
+  const seasons = Array.isArray(series.seasons) ? series.seasons : [];
+  const issueBoundaries = seasons.length === 0
+    ? '(no volumes planned yet — pace hooks/payoffs across a single-volume arc)'
+    : seasons
+      .slice()
+      .sort((a, b) => (a.number || 0) - (b.number || 0))
+      .map((s) => `Volume ${s.number} — ${s.title || 'Untitled'} (~${s.episodeCountTarget || '?'} issues): ${s.logline || '(no logline)'}`)
+      .join('\n');
+  return {
+    series: { name: series.name, logline: series.logline, premise: series.premise },
+    ...world,
+    arc: {
+      logline: arc.logline || '',
+      summary: arc.summary || '',
+      protagonistArc: arc.protagonistArc || '',
+      themesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
+      shape: arc.shape || '',
+    },
+    shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+    issueBoundaries,
+    beatKindsCsv: READER_MAP_BEAT_KINDS.join(', '),
+    existingReaderMapJson: arc.readerMap ? JSON.stringify(arc.readerMap, null, 2) : '(none yet)',
+  };
+}
+
+// The reader map is authored AFTER the plot arc is approved, so a frozen arc
+// (`locked.arc`, which protects the core arc fields from the arc-overview
+// regenerator) must NOT block reader-map work — only the reader-map field lock
+// (`locked.arcFields.readerMap`) does. The locked arc is read as INPUT here.
+function assertReaderMapUnlocked(series) {
+  if (series.locked?.arcFields?.readerMap === true) {
+    throw makeErr('Reader map is locked — unlock it before regenerating', ERR_VALIDATION);
+  }
+}
+
+/**
+ * Generate the reader map (audience experience roadmap) from the series arc.
+ * Extraction-only like generateArcOverview — returns the sanitized readerMap;
+ * the caller persists it by merging into `series.arc` (preserving the other
+ * arc fields) via updateSeries.
+ */
+export async function generateReaderMap(seriesId, options = {}) {
+  const series = await getSeries(seriesId);
+  assertReaderMapUnlocked(series);
+  const ctx = await buildReaderMapContext(series);
+  const { content, runId, providerId, model } = await runStagedLLM(
+    'story-builder-reader-map',
+    ctx,
+    {
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      returnsJson: true,
+      source: 'story-builder-reader-map',
+    },
+  );
+  const readerMap = sanitizeReaderMap({
+    hooks: content?.hooks,
+    payoffs: content?.payoffs,
+    beats: content?.beats,
+    cliffhangers: content?.cliffhangers,
+    status: 'draft',
+  });
+  // A null sanitize means the LLM returned nothing usable — surface an error
+  // rather than letting the caller persist `readerMap: null` over an existing
+  // map (silent data loss).
+  if (!readerMap) {
+    throw makeErr('LLM returned an empty reader map — try regenerating', ERR_VALIDATION);
+  }
+  return { readerMap, raw: content, runId, providerId, model };
+}
+
+/**
+ * Refine an existing reader map against free-text feedback (the same AI-
+ * feedback affordance as image-prompt refine). Returns the regenerated
+ * readerMap plus `changes` (a short bullet list) and `rationale`.
+ */
+export async function refineReaderMap(seriesId, feedback, options = {}) {
+  const series = await getSeries(seriesId);
+  assertReaderMapUnlocked(series);
+  const arc = series.arc || {};
+  const { content, rationale, runId, providerId, model } = await runPromptRefineRaw({
+    templateName: 'story-builder-reader-map-refine',
+    variables: {
+      currentReaderMapJson: arc.readerMap ? JSON.stringify(arc.readerMap, null, 2) : '{}',
+      feedback: typeof feedback === 'string' ? feedback.trim().slice(0, 4000) : '',
+      arcSummary: arc.summary || '',
+      protagonistArc: arc.protagonistArc || '',
+      shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+      beatKindsCsv: READER_MAP_BEAT_KINDS.join(', '),
+    },
+    options,
+    source: 'story-builder-reader-map-refine',
+    logTag: `Story Builder reader-map refine series=${seriesId.slice(0, 8)}`,
+  });
+  const readerMap = sanitizeReaderMap({ ...content, status: 'draft' });
+  // Refine is meant to PRESERVE — never let an empty LLM payload null out the
+  // existing map. Fall back to the current reader map when the refine produced
+  // nothing usable (mirrors the CLAUDE.md absent-vs-empty rule).
+  const safeReaderMap = readerMap || arc.readerMap || null;
+  if (!safeReaderMap) {
+    throw makeErr('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
+  }
+  const changes = Array.isArray(content.changes)
+    ? content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 12)
+    : [];
+  return { readerMap: safeReaderMap, changes, rationale, runId, providerId, model };
 }
 
 /**
@@ -920,6 +1041,10 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     themes: content?.arc?.themes ?? series.arc.themes,
     protagonistArc: content?.arc?.protagonistArc ?? series.arc.protagonistArc ?? '',
     shape: content?.arc?.shape ?? series.arc.shape ?? null,
+    // The resolve prompt doesn't author the reader map — preserve any existing
+    // one so auto-resolve never silently wipes a reader map the user already
+    // built on the next step. Mirrors `generateArcOverview` above.
+    readerMap: series.arc?.readerMap ?? null,
     status: 'draft',
   });
 

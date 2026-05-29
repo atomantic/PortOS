@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { mockNoPeers, mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 
@@ -12,6 +13,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));
+
+// Both mocks needed: vitest.setup.js's global `instances.js` mock uses importOriginal, which leaves the per-file `peerSync.js` mock unable to suppress the createSeries dynamic-import hoist error alone.
+vi.mock('../services/instances.js', () => mockNoPeers());
+vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -475,6 +480,30 @@ describe('pipeline routes', () => {
     const app = makeApp();
     const r = await request(app).patch('/api/pipeline/series/ser-nope').send({ name: 'x' });
     expect(r.status).toBe(404);
+  });
+
+  it('PATCH /series/:id preserves arc.readerMap through the route schema (no key-strip)', async () => {
+    // Regression: arcSchema must list readerMap, or Zod strips it and the
+    // wholesale arc replace in updateSeries silently wipes the user's map.
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'RM', universeId: 'u-test' });
+    const patch = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
+      arc: {
+        logline: 'spine',
+        summary: 'sum',
+        readerMap: { hooks: [{ label: 'Who fell?' }], beats: [{ kind: 'reveal', intensity: 0.7 }] },
+      },
+    });
+    expect(patch.status).toBe(200);
+    expect(patch.body.arc.readerMap).toBeTruthy();
+    expect(patch.body.arc.readerMap.hooks).toHaveLength(1);
+    expect(patch.body.arc.readerMap.beats[0].kind).toBe('reveal');
+    // And a subsequent arc edit that re-sends the full arc keeps it.
+    const edit = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
+      arc: { ...patch.body.arc, logline: 'new spine' },
+    });
+    expect(edit.body.arc.logline).toBe('new spine');
+    expect(edit.body.arc.readerMap.hooks).toHaveLength(1);
   });
 
   it('POST /series/:id/issues creates an issue under the series', async () => {

@@ -219,6 +219,16 @@ describe('taskSchedule', () => {
       const interval = await getTaskInterval('unknown-task')
       expect(interval.enabled).toBe(false)
     })
+
+    it('reference-watch default is writable so the v2 prompt can append [ref-watch-…] items to PLAN.md', async () => {
+      // The v2 reference-watch prompt instructs the agent to append slug-tagged
+      // checklist items to PLAN.md and commit them. If `readOnly` flips back to
+      // true, agentPromptBuilder injects the "## Read-Only Task" guard and the
+      // agent refuses to write the entries — silently breaking the flow. Pin
+      // the contract so a future "default to read-only" refactor surfaces here.
+      const interval = await getTaskInterval('reference-watch')
+      expect(interval.taskMetadata?.readOnly).toBe(false)
+    })
   })
 
   describe('updateTaskInterval', () => {

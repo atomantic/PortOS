@@ -5,10 +5,10 @@ import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { homedir, platform } from 'os';
+import { platform } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir } from '../lib/fileUtils.js';
+import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldExpress } from './scaffoldExpress.js';
 import { scaffoldIOS } from './scaffoldIOS.js';
@@ -31,11 +31,10 @@ router.get('/directories', asyncHandler(async (req, res) => {
   let targetPath;
   if (!dirPath) {
     targetPath = defaultPath;
-  } else if (dirPath === '~') {
-    targetPath = homedir();
-  } else if (dirPath.startsWith('~/') || dirPath.startsWith('~\\')) {
-    // Expand leading ~ only; preserve embedded ~ chars (e.g. iCloud~md~obsidian)
-    targetPath = resolve(join(homedir(), dirPath.slice(2)));
+  } else if (dirPath === '~' || dirPath.startsWith('~/') || dirPath.startsWith('~\\')) {
+    // expandHome covers `~`, `~/foo`, and `~\foo` (Windows); embedded `~`
+    // chars (e.g. `iCloud~md~obsidian`) fall through to the else branch.
+    targetPath = resolve(expandHome(dirPath));
   } else {
     targetPath = resolve(dirPath);
   }

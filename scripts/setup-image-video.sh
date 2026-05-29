@@ -31,28 +31,53 @@ mkdir -p "${PORTOS_DATA}/loras"
 mkdir -p "${PORTOS_DATA}/videos"
 mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
-INSTALL_VIDEO="${INSTALL_VIDEO:-$(is_macos && echo 1 || echo 0)}"
-
-# Install via pip --user so we don't pollute the system or require a venv.
-# mflux comes with the mflux-generate CLI which the local image backend
-# spawns directly. transformers<5 is required for MLX compatibility.
-#
-# `--force-reinstall --no-deps` on mflux only — earlier setup runs could
-# leave the user-site copy at the right version number but with stale file
-# layout (we hit this in 0.12.1, where `mflux/models/flux/cli/` was missing
-# from a partial reinstall, breaking the entry-point shim). Forcing the
-# reinstall flushes the file tree without re-resolving torch/mlx and friends.
-echo "📦 Installing image generation packages (mflux + deps)..."
-"$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps mflux
-# mflux above is installed with --no-deps to flush its file tree without
-# re-resolving torch/mlx — but that means we must explicitly install mflux's
-# own runtime deps here (notably `mlx` on macOS, which it imports at startup).
-# Without this, INSTALL_VIDEO=0 leaves mflux unable to import.
-MFLUX_DEPS=("transformers<5" safetensors huggingface_hub numpy opencv-python tqdm)
-if is_macos; then
-  MFLUX_DEPS+=(mlx)
+# When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
+# INSTALL_WAN22 / INSTALL_HUNYUAN — typically from the in-app installer),
+# skip the mflux + legacy mlx_video preamble. Those bring-your-own-venv
+# runtimes are self-contained and don't depend on mflux; running the
+# preamble unprompted hits PEP 668 ("externally-managed-environment") on
+# Homebrew Python and aborts the whole script before the requested runtime
+# install ever starts. A bare `bash setup-image-video.sh` still installs
+# mflux as before.
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}"
+if [[ "$ANY_BYOV" == "000" ]]; then
+  DEFAULT_INSTALL_MFLUX=1
+  DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
+  DEFAULT_INSTALL_FLUX2=$(is_macos && echo 1 || echo 0)
+else
+  DEFAULT_INSTALL_MFLUX=0
+  DEFAULT_INSTALL_VIDEO=0
+  # An in-app "install LTX-2" click must NOT silently run the multi-GB
+  # FLUX.2 setup too — gate flux2 off the same BYOV-only signal as mflux /
+  # mlx_video. A bare `bash setup-image-video.sh` (no env) still installs
+  # flux2 on macOS as before.
+  DEFAULT_INSTALL_FLUX2=0
 fi
-"$PYTHON_BIN" -m pip install --upgrade --user "${MFLUX_DEPS[@]}"
+INSTALL_MFLUX="${INSTALL_MFLUX:-$DEFAULT_INSTALL_MFLUX}"
+INSTALL_VIDEO="${INSTALL_VIDEO:-$DEFAULT_INSTALL_VIDEO}"
+
+if [[ "$INSTALL_MFLUX" == "1" ]]; then
+  # Install via pip --user so we don't pollute the system or require a venv.
+  # mflux comes with the mflux-generate CLI which the local image backend
+  # spawns directly. transformers<5 is required for MLX compatibility.
+  #
+  # `--force-reinstall --no-deps` on mflux only — earlier setup runs could
+  # leave the user-site copy at the right version number but with stale file
+  # layout (we hit this in 0.12.1, where `mflux/models/flux/cli/` was missing
+  # from a partial reinstall, breaking the entry-point shim). Forcing the
+  # reinstall flushes the file tree without re-resolving torch/mlx and friends.
+  echo "📦 Installing image generation packages (mflux + deps)..."
+  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps mflux
+  # mflux above is installed with --no-deps to flush its file tree without
+  # re-resolving torch/mlx — but that means we must explicitly install mflux's
+  # own runtime deps here (notably `mlx` on macOS, which it imports at startup).
+  # Without this, INSTALL_VIDEO=0 leaves mflux unable to import.
+  MFLUX_DEPS=("transformers<5" safetensors huggingface_hub numpy opencv-python tqdm)
+  if is_macos; then
+    MFLUX_DEPS+=(mlx)
+  fi
+  "$PYTHON_BIN" -m pip install --upgrade --user "${MFLUX_DEPS[@]}"
+fi
 
 if [[ "$INSTALL_VIDEO" == "1" ]]; then
   if is_macos; then
@@ -145,7 +170,110 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   echo "✅ ltx-2-mlx venv ready: ${LTX2_PY}"
 fi
 
-INSTALL_FLUX2="${INSTALL_FLUX2:-$(is_macos && echo 1 || echo 0)}"
+INSTALL_WAN22="${INSTALL_WAN22:-0}"
+if [[ "$INSTALL_WAN22" == "1" ]]; then
+  # osama-ata/Wan2.2-mlx — pure-MLX port of Alibaba's Wan 2.2 video model.
+  # MoE-A14B: 14B active params at inference, ~28 GB resident at bf16. The
+  # PortOS helper at scripts/generate_wan22.py subprocesses upstream's
+  # generate.py from the cloned repo, so PortOS releases own the arg
+  # translation layer (PortOS arg stability) while upstream owns the
+  # actual inference (upstream-tracked changes).
+  #
+  # EXPERIMENTAL — upstream CLI hasn't been pinned across releases; if a
+  # commit reshapes --task / --ckpt_dir, set `broken: true` on the
+  # wan22_* entries in data/media-models.json until generate_wan22.py is
+  # updated to match.
+  if ! have uv; then
+    echo "❌ INSTALL_WAN22=1 requires the 'uv' Python installer." >&2
+    echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    exit 1
+  fi
+  if ! have git; then
+    echo "❌ INSTALL_WAN22=1 requires git." >&2
+    exit 1
+  fi
+  WAN22_PIN="${WAN22_PIN:-main}"
+  WAN22_DIR="${HOME}/.portos/wan2.2-mlx"
+  WAN22_PY="${WAN22_DIR}/.venv/bin/python3"
+  mkdir -p "${HOME}/.portos"
+  if [[ ! -d "${WAN22_DIR}/.git" ]]; then
+    echo "📦 Cloning osama-ata/Wan2.2-mlx..."
+    git clone https://github.com/osama-ata/Wan2.2-mlx.git "${WAN22_DIR}"
+  else
+    echo "📦 Fetching Wan2.2-mlx updates..."
+    (cd "${WAN22_DIR}" && git fetch origin)
+  fi
+  (cd "${WAN22_DIR}" && git checkout --quiet "${WAN22_PIN}")
+  if [[ ! -x "${WAN22_PY}" ]]; then
+    echo "📦 Creating Wan2.2-mlx venv with Python 3.11..."
+    (cd "${WAN22_DIR}" && uv venv --python 3.11)
+  fi
+  # Upstream uses pyproject + requirements rather than a lockfile. Use
+  # `uv pip install -r requirements.txt` when present; otherwise `uv sync`
+  # falls back to the project config.
+  if [[ -f "${WAN22_DIR}/requirements.txt" ]]; then
+    echo "📦 Installing Wan2.2-mlx requirements..."
+    (cd "${WAN22_DIR}" && uv pip install -r requirements.txt)
+  else
+    echo "📦 Syncing Wan2.2-mlx packages..."
+    (cd "${WAN22_DIR}" && uv sync)
+  fi
+  echo "✅ Wan2.2-mlx venv ready: ${WAN22_PY}"
+fi
+
+INSTALL_HUNYUAN="${INSTALL_HUNYUAN:-0}"
+if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
+  # gaurav-nelson/HunyuanVideo_MLX — community MLX port of Tencent's
+  # HunyuanVideo (13B). ~60 GB resident at bf16. Practical only with the
+  # 4-bit Gemma text encoder + everything else evicted (see the Memory
+  # Management panel under Settings → Local LLMs).
+  #
+  # EXPERIMENTAL — same caveat as Wan 2.2: upstream CLI isn't pinned. If
+  # sample_video.py args drift, flip `hunyuan_video` broken in
+  # data/media-models.json and update scripts/generate_hunyuan.py.
+  if ! have uv; then
+    echo "❌ INSTALL_HUNYUAN=1 requires the 'uv' Python installer." >&2
+    exit 1
+  fi
+  if ! have git; then
+    echo "❌ INSTALL_HUNYUAN=1 requires git." >&2
+    exit 1
+  fi
+  HUNYUAN_PIN="${HUNYUAN_PIN:-main}"
+  HUNYUAN_DIR="${HOME}/.portos/hunyuan-video-mlx"
+  HUNYUAN_PY="${HUNYUAN_DIR}/.venv/bin/python3"
+  mkdir -p "${HOME}/.portos"
+  if [[ ! -d "${HUNYUAN_DIR}/.git" ]]; then
+    echo "📦 Cloning gaurav-nelson/HunyuanVideo_MLX..."
+    git clone https://github.com/gaurav-nelson/HunyuanVideo_MLX.git "${HUNYUAN_DIR}"
+  else
+    echo "📦 Fetching HunyuanVideo_MLX updates..."
+    (cd "${HUNYUAN_DIR}" && git fetch origin)
+  fi
+  (cd "${HUNYUAN_DIR}" && git checkout --quiet "${HUNYUAN_PIN}")
+  if [[ ! -x "${HUNYUAN_PY}" ]]; then
+    echo "📦 Creating HunyuanVideo_MLX venv with Python 3.11..."
+    (cd "${HUNYUAN_DIR}" && uv venv --python 3.11)
+  fi
+  # Upstream gaurav-nelson ships requirements as `requirements_mps.txt` (the
+  # MPS-specific variant — there's no plain `requirements.txt`). Prefer the
+  # MPS one when present, then plain `requirements.txt`, then fall back to
+  # `uv sync` for repos that use pyproject + lockfile instead.
+  HUNYUAN_REQS=""
+  for cand in requirements_mps.txt requirements.txt; do
+    if [[ -f "${HUNYUAN_DIR}/${cand}" ]]; then HUNYUAN_REQS="$cand"; break; fi
+  done
+  if [[ -n "$HUNYUAN_REQS" ]]; then
+    echo "📦 Installing HunyuanVideo_MLX requirements from ${HUNYUAN_REQS}..."
+    (cd "${HUNYUAN_DIR}" && uv pip install -r "$HUNYUAN_REQS")
+  else
+    echo "📦 Syncing HunyuanVideo_MLX packages..."
+    (cd "${HUNYUAN_DIR}" && uv sync)
+  fi
+  echo "✅ HunyuanVideo_MLX venv ready: ${HUNYUAN_PY}"
+fi
+
+INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   # FLUX.2-klein needs torch>=2.5 + diffusers-from-git + sdnq + optimum-quanto.

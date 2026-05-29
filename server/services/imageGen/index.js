@@ -39,7 +39,7 @@ const codexCfg = (s) => cfg(s).codex || {};
 // `/generate` and `generateImage()` (safety net for direct callers like
 // `generateAvatar`).
 export function resolveImageCleaners(body, settings, mode) {
-  const saved = resolveCleanersFromConfig(cfg(settings)[mode]);
+  const saved = resolveCleanersFromConfig(cfg(settings)[mode], mode);
   return {
     cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
     denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
