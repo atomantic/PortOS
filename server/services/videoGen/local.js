@@ -760,10 +760,32 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     }
     if (line.startsWith('STAGE:')) {
       const parts = line.split(':');
-      const step = parseInt(parts[3], 10) || 0;
-      const total = parseInt(parts[4], 10) || 1;
-      broadcastSse(job, { type: 'progress', progress: step / total, message: parts.slice(5).join(':') });
-      videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total });
+      // Three STAGE: shapes ship today:
+      //   STAGE:<stage>:step:<cur>:<total>:<msg>  — explicit progress (parts[2]='step')
+      //   STAGE:<stage>:heartbeat:<N>s            — idle-watchdog ping (parts[2]='heartbeat')
+      //   STAGE:<stage>                           — terse phase marker (no extra fields)
+      // The legacy "treat every STAGE: as step:" parse mangled heartbeat
+      // lines: parts[3]='20s' → parseInt=20, parts[4]=undefined → total=1, so
+      // a download-clip heartbeat broadcast progress=20.0 (= 2000%) to the UI.
+      // Normalize tag case — generate_ltx2.py emits `STEP:` (uppercase),
+      // generate_hunyuan.py emits `step:` and `heartbeat:` (lowercase).
+      const tag = (parts[2] || '').toLowerCase();
+      if (tag === 'heartbeat') {
+        // Surface as a status message; the activity emit above already
+        // resets the queue watchdog.
+        broadcastSse(job, { type: 'status', message: `${parts[1]}: heartbeat ${parts[3] || ''}` });
+        return true;
+      }
+      if (tag === 'step') {
+        const step = parseInt(parts[3], 10) || 0;
+        const total = parseInt(parts[4], 10) || 1;
+        broadcastSse(job, { type: 'progress', progress: step / total, message: parts.slice(5).join(':') });
+        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total });
+        return true;
+      }
+      // Bare phase marker (e.g. STAGE:load-pipeline, STAGE:from-pretrained) —
+      // surface as a status line. No progress %, no division-by-undefined.
+      broadcastSse(job, { type: 'status', message: parts.slice(1).join(':') });
       return true;
     }
     if (line.startsWith('DOWNLOAD:')) {

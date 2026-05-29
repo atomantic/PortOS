@@ -359,8 +359,12 @@ def main() -> int:
         num_videos_per_prompt=hv.num_videos,
     )
 
-    samples = outputs.get("samples") or []
-    if len(samples) == 0:
+    # `outputs["samples"]` may be a list, None, or — in some hyvideo paths — a
+    # torch tensor. Don't use `or []`: bool(tensor) on a multi-element tensor
+    # raises `RuntimeError: Boolean value of Tensor with more than one value
+    # is ambiguous` before we ever reach save_videos_grid. Check explicitly.
+    samples = outputs.get("samples")
+    if samples is None or len(samples) == 0:
         print("❌ hunyuan predict() returned no samples", file=sys.stderr)
         return 1
 

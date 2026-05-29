@@ -495,6 +495,14 @@ export default function VideoGen() {
     return () => controller.abort();
   }, [needsByovProbe, refreshByovStatus]);
   const byovRuntimeMissing = !!byovStatus && byovStatus.installed === false;
+  // While the runtime-status probe is in flight (`needsByovProbe` is true but
+  // we haven't received a response yet), `byovStatus` is null and
+  // `byovRuntimeMissing` reads false — without this guard the user could
+  // submit during that window and hit a venv-missing 500 before the install
+  // banner appears. Gate Generate / Enqueue on the broader "BYOV not yet
+  // confirmed ready" instead. The banner itself still keys on `byovRuntimeMissing`
+  // (we don't want to flash "isn't installed yet" copy before we know).
+  const byovGateBlocked = needsByovProbe && (byovStatus === null || byovStatus.installed === false);
 
   // Inline cache-status badge for the picked video model + the active text
   // encoder (a separate ~7-25 GB HF pull). Drives the "Available" / "Download"
@@ -798,12 +806,16 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovRuntimeMissing) return;
+    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
   const handleEnqueue = () => {
-    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked) return;
+    // Mirror the Generate guard — a BYOV runtime that isn't installed yet
+    // would silently queue a doomed job that fails late in the worker with
+    // VENV_MISSING, hiding the installer banner from the user. Block at
+    // enqueue time so the only path forward is the install banner above.
+    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
     const payload = buildGeneratePayload();
     // Strip File blobs for snapshot — re-using a File across multiple queued
     // submissions is fine, but we need a stable JSON-ish summary for the
@@ -910,7 +922,7 @@ export default function VideoGen() {
   // ONLY a BYOV runtime via the modal would stay stuck behind a "not
   // configured" error from the unrelated legacy probe.
   const notConnected = !!status && status.connected === false && !needsByovProbe;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked;
 
   // Symmetric frame picker for the FFLF + image modes. Each slot accepts
   // EITHER a gallery filename OR a fresh upload; the preview renders
@@ -1462,10 +1474,11 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovRuntimeMissing}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
                   byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
+                    : byovGateBlocked ? `Checking ${byovRuntime} runtime status…`
                     : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
                     : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
                       ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'

@@ -179,7 +179,13 @@ router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
   const runtime = String(req.query?.runtime || '');
   const info = BYOV_RUNTIME_INFO[runtime];
   if (!info) {
-    return failValidation(res, `Unknown runtime: ${runtime}. Expected one of: ${Object.keys(BYOV_RUNTIME_INFO).join(', ')}`);
+    // `failValidation` only accepts a Zod safeParse result — calling it with
+    // (res, string) would TypeError on `parsed.error.issues.map(...)` and
+    // bubble as a 500 instead of the intended 400.
+    throw new ServerError(
+      `Unknown runtime: ${runtime}. Expected one of: ${Object.keys(BYOV_RUNTIME_INFO).join(', ')}`,
+      { status: 400, code: 'UNKNOWN_BYOV_RUNTIME' },
+    );
   }
   const binaryPresent = isByovRuntimeInstalled(info.id);
   const packagesReady = binaryPresent ? await isByovRuntimeReady(info.id) : false;
