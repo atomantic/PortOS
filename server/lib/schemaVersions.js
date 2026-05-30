@@ -47,6 +47,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // pauses with old peers; issues/universes keep flowing.
   pipelineSeries: 2,
   mediaCollections: 1,
+  // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
+  // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
+  // Per-category gate so a new peer can sync its catalog independently of
+  // whether other categories are version-locked. `cat-ingredient` and
+  // `cat-scrap` record kinds map back here via RECORD_KIND_SCHEMA_CATEGORIES.
+  catalog: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -83,6 +89,8 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   series: Object.freeze(['pipelineSeries']),
   issue: Object.freeze(['pipelineIssues']),
   mediaCollection: Object.freeze(['mediaCollections']),
+  'cat-ingredient': Object.freeze(['catalog']),
+  'cat-scrap': Object.freeze(['catalog']),
 });
 
 /**

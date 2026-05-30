@@ -196,6 +196,7 @@ const navItems = [
     icon: Sparkles,
     defaultTo: '/media',
     children: [
+      { to: '/catalog', label: 'Catalog', icon: Sparkles },
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
@@ -1019,6 +1020,10 @@ export default function Layout() {
             location.pathname === '/ask' ||
             location.pathname.startsWith('/ask/') ||
             location.pathname.startsWith('/calendar') ||
+            // Only the Catalog DETAIL editor (/catalog/{type}/{id}) and the
+            // Ingest page (/catalog/ingest) are full-width — they own their
+            // own scroll. The /catalog list/index page stays scrolling-default.
+            location.pathname.startsWith('/catalog/') ||
             location.pathname.startsWith('/cos') ||
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||

@@ -1011,7 +1011,7 @@ export async function insertUniverseWithId(input = {}) {
   return next;
 }
 
-export async function updateUniverse(id, patchOrMutator = {}) {
+export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // The queued section covers only the universe-builder read/modify/write
   // cycle. The cross-file media-collection rename runs *after* the queue
   // releases so a slow/stuck collection write can't block unrelated universe
@@ -1025,7 +1025,14 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //     `null`/`undefined` short-circuits the write and resolves with the
   //     unchanged record (no `updatedAt` bump, no rename cascade, no
   //     `recordUpdated` emit).
+  //
+  // `options.silent: true` suppresses the post-write `emitRecordUpdated`
+  // peer-sync fan-out — used by the bible→catalog backfill which would
+  // otherwise emit one event per universe at boot on every install. The
+  // universe is still persisted; peers learn about the change on the next
+  // normal sync cycle.
   const isMutator = typeof patchOrMutator === 'function';
+  const { silent = false } = options;
   const s = store();
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
     const cur = await s.loadOne(id);
@@ -1260,7 +1267,9 @@ export async function updateUniverse(id, patchOrMutator = {}) {
         console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
       });
   }
-  emitRecordUpdated('universe', merged.id);
+  if (!silent) {
+    emitRecordUpdated('universe', merged.id);
+  }
   return merged;
 }
 

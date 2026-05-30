@@ -26,6 +26,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `validation.js` | Catch-all Zod schemas + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`). Most route inputs validate through here. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
+| `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, sync envelope). |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |

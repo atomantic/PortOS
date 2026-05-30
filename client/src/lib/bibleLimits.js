@@ -65,4 +65,5 @@ export const BIBLE_LIMITS = Object.freeze({
   TAGS_PER_ENTRY_MAX: 12,
   SOURCE_SERIES_ID_MAX: 64,
   VOICE_ID_MAX: 200,
+  INGREDIENT_ID_MAX: 64,
 });

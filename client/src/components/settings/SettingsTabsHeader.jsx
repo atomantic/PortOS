@@ -13,6 +13,7 @@ const TABS = [
   { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
   { id: 'database', label: 'Database', to: '/settings/database' },
+  { id: 'embeddings', label: 'Embeddings', to: '/settings/embeddings' },
   { id: 'general', label: 'General', to: '/settings/general' },
   { id: 'local-llm', label: 'Local LLMs', to: '/settings/local-llm' },
   { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom' },

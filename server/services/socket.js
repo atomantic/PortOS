@@ -20,6 +20,7 @@ import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { importerEvents } from './importerEvents.js';
+import { catalogEvents } from './catalogEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -565,6 +566,9 @@ export function initSocket(io) {
   // Set up importer stage-progress forwarding (broadcast to all clients)
   setupImporterEventForwarding();
 
+  // Set up catalog extraction-progress forwarding (broadcast to all clients)
+  setupCatalogEventForwarding();
+
   // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
   // and high-priority notifications — rate-limited per source).
   setupProactiveSpeechForwarding();
@@ -580,6 +584,15 @@ function setupImporterEventForwarding() {
   importerForwardingSetup = true;
   importerEvents.on('progress', (data) => {
     if (ioInstance) ioInstance.emit('importer:progress', data);
+  });
+}
+
+let catalogForwardingSetup = false;
+function setupCatalogEventForwarding() {
+  if (catalogForwardingSetup) return;
+  catalogForwardingSetup = true;
+  catalogEvents.on('progress', (data) => {
+    if (ioInstance) ioInstance.emit('catalog:extract:progress', data);
   });
 }
 

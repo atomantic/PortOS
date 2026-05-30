@@ -7,7 +7,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -69,6 +69,9 @@ router.put('/', asyncHandler(async (req, res) => {
   // whole slice rather than .partial()ing away that pairing rule.
   if (req.body?.location !== undefined) {
     validateRequest(locationSettingsSchema, req.body.location);
+  }
+  if (req.body?.embeddings !== undefined) {
+    validateRequest(settingsEmbeddingsSchema.partial(), req.body.embeddings);
   }
   const merged = await updateSettings(req.body);
   // The queue caches codex.parallelLimit in-process; sync it from the

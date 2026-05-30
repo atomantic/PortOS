@@ -18,6 +18,7 @@
 // names are the canonical PortOS-wide schemas.
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
+export * as catalogValidation from './catalogValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';

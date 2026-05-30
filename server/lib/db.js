@@ -71,13 +71,19 @@ export async function checkHealth() {
       SELECT
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
-        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
+        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
+        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
     `);
-    const { has_memories, has_links, has_sync } = result.rows?.[0] ?? {};
-    return { connected: true, hasSchema: has_memories && has_links && has_sync };
+    const { has_memories, has_links, has_sync, has_catalog, has_catalog_scraps } = result.rows?.[0] ?? {};
+    return {
+      connected: true,
+      hasSchema: has_memories && has_links && has_sync,
+      hasCatalogSchema: has_catalog && has_catalog_scraps,
+    };
   } catch (err) {
     console.error(`🗄️ Database health check failed: ${err.message}`);
-    return { connected: false, hasSchema: false, error: err.message };
+    return { connected: false, hasSchema: false, hasCatalogSchema: false, error: err.message };
   }
 }
 
@@ -94,6 +100,189 @@ export async function ensureSchema() {
     `CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence)`,
   ];
   for (const sql of upgrades) {
+    await pool.query(sql);
+  }
+
+  // Catalog block: probe ALL four tables. A previous boot that crashed
+  // mid-DDL (network blip, OOM) could leave catalog_ingredients present but
+  // catalog_ingredient_sources / _refs missing; gating only on the lead
+  // table would silently freeze the install in that half-applied state.
+  // Every catalogDDL statement is idempotent (CREATE IF NOT EXISTS / OR
+  // REPLACE), so re-running on a fully-applied install is a no-op anyway.
+  const catalogReady = await pool.query(
+    `SELECT
+       to_regclass('public.catalog_ingredients') IS NOT NULL
+       AND to_regclass('public.catalog_scraps') IS NOT NULL
+       AND to_regclass('public.catalog_ingredient_sources') IS NOT NULL
+       AND to_regclass('public.catalog_ingredient_refs') IS NOT NULL AS ready`,
+  );
+  if (catalogReady.rows?.[0]?.ready) {
+    console.log('🗄️ Database schema upgrades applied');
+    return;
+  }
+
+  const catalogDDL = [
+    `CREATE TABLE IF NOT EXISTS catalog_scraps (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      raw_text TEXT NOT NULL,
+      source_kind VARCHAR(32) DEFAULT 'paste',
+      metadata JSONB DEFAULT '{}'::jsonb,
+      embedding vector(768),
+      embedding_model VARCHAR(100),
+      origin_instance_id VARCHAR(36),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ,
+      sync_sequence BIGSERIAL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_embedding
+       ON catalog_scraps USING hnsw (embedding vector_cosine_ops)
+       WITH (m = 16, ef_construction = 64)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_fts
+       ON catalog_scraps USING gin (
+         to_tsvector('english', coalesce(title, '') || ' ' || coalesce(raw_text, ''))
+       )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_sync_seq ON catalog_scraps (sync_sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_created_at ON catalog_scraps (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_origin_instance ON catalog_scraps (origin_instance_id)`,
+
+    `CREATE TABLE IF NOT EXISTS catalog_ingredients (
+      id TEXT PRIMARY KEY,
+      type VARCHAR(20) NOT NULL
+        CHECK (type IN ('character', 'place', 'object', 'idea', 'scene', 'concept')),
+      name TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      tags TEXT[] DEFAULT '{}',
+      embedding vector(768),
+      embedding_model VARCHAR(100),
+      search_tsv tsvector GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+        setweight(to_tsvector('english',
+          coalesce(payload->>'description', '') || ' ' ||
+          coalesce(payload->>'notes', '') || ' ' ||
+          coalesce(payload->>'background', '') || ' ' ||
+          coalesce(payload->>'summary', '')
+        ), 'B')
+      ) STORED,
+      origin_instance_id VARCHAR(36),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ,
+      sync_sequence BIGSERIAL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_embedding
+       ON catalog_ingredients USING hnsw (embedding vector_cosine_ops)
+       WITH (m = 16, ef_construction = 64)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_fts ON catalog_ingredients USING gin (search_tsv)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_type ON catalog_ingredients (type)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_tags ON catalog_ingredients USING gin (tags)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_sync_seq ON catalog_ingredients (sync_sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_created_at ON catalog_ingredients (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_origin_instance ON catalog_ingredients (origin_instance_id)`,
+
+    `CREATE TABLE IF NOT EXISTS catalog_ingredient_sources (
+      ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      scrap_id TEXT NOT NULL REFERENCES catalog_scraps(id) ON DELETE CASCADE,
+      span JSONB,
+      extracted_at TIMESTAMPTZ DEFAULT NOW(),
+      sync_sequence BIGSERIAL,
+      PRIMARY KEY (ingredient_id, scrap_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_sources_scrap ON catalog_ingredient_sources (scrap_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_sources_sync_seq ON catalog_ingredient_sources (sync_sequence)`,
+
+    `CREATE TABLE IF NOT EXISTS catalog_ingredient_refs (
+      ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      ref_kind VARCHAR(32) NOT NULL,
+      ref_id TEXT NOT NULL,
+      role VARCHAR(64) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      sync_sequence BIGSERIAL,
+      PRIMARY KEY (ingredient_id, ref_kind, ref_id, role)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_target ON catalog_ingredient_refs (ref_kind, ref_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_sync_seq ON catalog_ingredient_refs (sync_sequence)`,
+
+    `CREATE OR REPLACE FUNCTION update_catalog_ingredient_timestamp()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       content_changed BOOLEAN;
+     BEGIN
+       content_changed := (
+         NEW.type IS DISTINCT FROM OLD.type OR
+         NEW.name IS DISTINCT FROM OLD.name OR
+         NEW.payload IS DISTINCT FROM OLD.payload OR
+         NEW.tags IS DISTINCT FROM OLD.tags OR
+         NEW.embedding IS DISTINCT FROM OLD.embedding OR
+         NEW.embedding_model IS DISTINCT FROM OLD.embedding_model OR
+         NEW.deleted IS DISTINCT FROM OLD.deleted OR
+         NEW.updated_at IS DISTINCT FROM OLD.updated_at
+       );
+       IF NOT content_changed THEN RETURN NEW; END IF;
+       IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+         NEW.updated_at := NOW();
+       END IF;
+       NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredients', 'sync_sequence'));
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_ingredient_updated_at ON catalog_ingredients`,
+    `CREATE TRIGGER trg_catalog_ingredient_updated_at
+       BEFORE UPDATE ON catalog_ingredients
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_ingredient_timestamp()`,
+
+    `CREATE OR REPLACE FUNCTION update_catalog_scrap_timestamp()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       content_changed BOOLEAN;
+     BEGIN
+       content_changed := (
+         NEW.title IS DISTINCT FROM OLD.title OR
+         NEW.raw_text IS DISTINCT FROM OLD.raw_text OR
+         NEW.source_kind IS DISTINCT FROM OLD.source_kind OR
+         NEW.metadata IS DISTINCT FROM OLD.metadata OR
+         NEW.embedding IS DISTINCT FROM OLD.embedding OR
+         NEW.embedding_model IS DISTINCT FROM OLD.embedding_model OR
+         NEW.deleted IS DISTINCT FROM OLD.deleted OR
+         NEW.updated_at IS DISTINCT FROM OLD.updated_at
+       );
+       IF NOT content_changed THEN RETURN NEW; END IF;
+       IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+         NEW.updated_at := NOW();
+       END IF;
+       NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_scraps', 'sync_sequence'));
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_scrap_updated_at ON catalog_scraps`,
+    `CREATE TRIGGER trg_catalog_scrap_updated_at
+       BEFORE UPDATE ON catalog_scraps
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_scrap_timestamp()`,
+
+    // Source-link UPDATE bumps sync_sequence so a span change (via
+    // `upsertSourceFromPeer` → ON CONFLICT DO UPDATE SET span = ...) doesn't
+    // stay invisible to peers (whose cursor would skip past the unchanged seq).
+    `CREATE OR REPLACE FUNCTION update_catalog_source_sync_seq()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       IF NEW.span IS DISTINCT FROM OLD.span THEN
+         NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_sources', 'sync_sequence'));
+       END IF;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_source_sync_seq ON catalog_ingredient_sources`,
+    `CREATE TRIGGER trg_catalog_source_sync_seq
+       BEFORE UPDATE ON catalog_ingredient_sources
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_source_sync_seq()`,
+  ];
+  for (const sql of catalogDDL) {
     await pool.query(sql);
   }
   console.log('🗄️ Database schema upgrades applied');

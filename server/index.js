@@ -42,6 +42,7 @@ import cosRoutes from './routes/cos.js';
 import featureAgentsRoutes from './routes/featureAgents.js';
 import feedsRoutes from './routes/feeds.js';
 import gsdRoutes from './routes/gsd.js';
+import catalogRoutes from './routes/catalog.js';
 import memoryRoutes from './routes/memory.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
@@ -409,6 +410,7 @@ app.use('/api/cos/gsd', gsdRoutes);
 app.use('/api/cos', cosRoutes);
 app.use('/api/feature-agents', featureAgentsRoutes);
 app.use('/api/feeds', feedsRoutes);
+app.use('/api/catalog', catalogRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
@@ -677,6 +679,22 @@ ensureSelf()
       const { markRecoveryDone } = await import('./services/creativeDirector/recovery.js');
       markRecoveryDone();
     });
+  })
+  .then(async () => {
+    // Catalog backfill: promote universe canon (characters/places/objects)
+    // into the Postgres ingredients catalog. Idempotent — marker in
+    // data/catalog-backfill.applied.json gates the walk after the first run.
+    // Fire-and-forget so a DB hiccup doesn't block server boot — the route
+    // surface tolerates an empty catalog and the user can re-trigger via
+    // the admin endpoint.
+    try {
+      const { ensureSchema } = await import('./lib/db.js');
+      await ensureSchema();
+      const { migrateBibleToCatalog } = await import('./scripts/migrateBibleToCatalog.js');
+      await migrateBibleToCatalog();
+    } catch (err) {
+      console.error(`🪄 bible→catalog migration failed at boot: ${err.message}`);
+    }
   })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.

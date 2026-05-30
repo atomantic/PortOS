@@ -43,6 +43,9 @@ const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
+const Catalog = lazyWithReload(() => import('./pages/Catalog'));
+const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
+const CatalogIngredient = lazyWithReload(() => import('./pages/CatalogIngredient'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
@@ -251,6 +254,9 @@ export default function App() {
               at `/universes/:universeId`; `new` is the create-mode sentinel
               (UniverseBuilder treats it as no-id → blank draft). Universe ids are
               UUIDs, so `new` can never collide with a real record. */}
+          <Route path="catalog" element={<Catalog />} />
+          <Route path="catalog/ingest" element={<CatalogIngest />} />
+          <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
           <Route path="universes" element={<Universes />} />
           <Route path="universes/new" element={<UniverseBuilder />} />
           <Route path="universes/:universeId" element={<UniverseBuilder />} />

@@ -1335,6 +1335,15 @@ export const locationSettingsSchema = z.object({
   { message: 'Provide both lat and lon, or neither.' },
 );
 
+// Provider-agnostic embeddings settings. `provider: 'none'` is the default and
+// makes embedText() a no-op — rows persist without an embedding and a future
+// admin "Re-embed missing" action backfills. Model is optional so the user can
+// pick provider first and choose a model from the live list in the UI.
+export const settingsEmbeddingsSchema = z.object({
+  provider: z.enum(['ollama', 'lmstudio', 'none']),
+  model: z.string().trim().max(200).optional().nullable(),
+}).strict();
+
 // Subscription creation: persistent (bucket, record) tuple. Series + universe
 // are the subscribable kinds (records that change over time and benefit from
 // auto-re-export). Media is one-shot via /buckets/:id/export.

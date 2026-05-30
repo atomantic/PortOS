@@ -412,6 +412,72 @@ async function getVersion() {
 }
 
 /**
+ * Get embeddings for `text` from a loaded Ollama model.
+ *
+ * Mirrors lmStudioManager.getEmbeddings shape — returns
+ * `{ success, embedding, model, dimensions }` so server/services/embeddings.js
+ * can route either backend through one interface.
+ *
+ * Ollama 0.2+ exposes `POST /api/embed` with `{ model, input }` → `{ embeddings: [[...]] }`.
+ * Older daemons only have `POST /api/embeddings` with `{ model, prompt }` → `{ embedding: [...] }`.
+ * We try the modern endpoint first, fall back on a 404/400.
+ *
+ * Auto-discovery: when `options.model` is omitted, scan installed models
+ * for a name matching a known embedding-model heuristic (embed/bge/nomic/mxbai)
+ * since Ollama tags don't carry a "type=embedding" flag.
+ */
+async function getEmbeddings(text, options = {}) {
+  const available = await checkOllamaAvailable()
+  if (!available) {
+    return { success: false, error: 'Ollama not available' }
+  }
+
+  let model = options.model
+  if (!model) {
+    const models = await getInstalledModels()
+    const guess = models.find((m) => /embed|bge|nomic|mxbai|gte|e5/i.test(m.id || m.name || ''))
+    if (!guess) {
+      return { success: false, error: 'No embedding model installed in Ollama' }
+    }
+    model = guess.id || guess.name
+  }
+
+  const tryEndpoint = async (endpoint, body) => {
+    const response = await fetchWithTimeout(`${config.baseUrl}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, options.timeout ?? 30_000).catch((err) => ({ _err: err.message }))
+    if (response._err) return { ok: false, error: response._err }
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '')
+      return { ok: false, status: response.status, error: errBody.slice(0, 200) }
+    }
+    return { ok: true, data: await response.json() }
+  }
+
+  // Modern endpoint: `/api/embed` returns `{ embeddings: [[...]] }`
+  let result = await tryEndpoint('/api/embed', { model, input: text })
+  let embedding = result.ok ? (result.data?.embeddings?.[0] || []) : null
+
+  // Fallback for older Ollama: `/api/embeddings` returns `{ embedding: [...] }`
+  if (!result.ok || !embedding?.length) {
+    const fallback = await tryEndpoint('/api/embeddings', { model, prompt: text })
+    if (!fallback.ok) {
+      return { success: false, error: result.error || fallback.error, model }
+    }
+    embedding = fallback.data?.embedding || []
+  }
+
+  return {
+    success: true,
+    embedding,
+    model,
+    dimensions: embedding.length
+  }
+}
+
+/**
  * List models currently loaded into VRAM/unified memory (Ollama's `/api/ps`).
  * Distinct from getInstalledModels(): a model on disk doesn't occupy memory
  * until it's referenced by a request.
@@ -804,5 +870,6 @@ export {
   ensureRunning,
   ensureProviderReady,
   isOllamaProvider,
-  getServiceStatus
+  getServiceStatus,
+  getEmbeddings
 }
