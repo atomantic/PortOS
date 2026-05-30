@@ -67,6 +67,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // their pushes; newer peers pushing to older receivers are sender-ahead
   // and get 412. `cat-ingredient` and `cat-scrap` record kinds map back
   // here via RECORD_KIND_SCHEMA_CATEGORIES.
+  //
+  // NOT bumped for the per-record `payload.schemaVersion` stamp added by
+  // catalog-payload-schemaversion: that key is additive JSONB that both old
+  // and new peers store verbatim (`upsertIngredientFromPeer` writes payload
+  // as-is — no sanitizer strips it), and all types are payload-v1 today so no
+  // shape actually changed on the wire. The FIRST type that bumps its
+  // registry `payloadSchemaVersion` to 2 with a genuine shape change (a peer
+  // ≤ that version would round-trip the new shape through an unaware
+  // sanitizer) MUST bump `catalog` here in lockstep.
   catalog: 3,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the

@@ -14,6 +14,7 @@ import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib
 import {
   getCatalogType,
   ingredientIdPrefix,
+  currentPayloadSchemaVersion,
 } from '../lib/catalogTypes.js';
 import { getInstanceId } from './instances.js';
 
@@ -196,6 +197,14 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   // same logical character has the same catalog id on every install. New
   // user-initiated creates omit it and we mint a fresh prefix:uuid.
   const id = explicitId || newIngredientId(type);
+  // Stamp the per-record payload-shape version from the registry so a later
+  // `migrateCatalogPayload` run knows which shape this row was written in.
+  // An incoming payload may already carry `schemaVersion` (peer backfill) — we
+  // overwrite with the LOCAL registry-current value so the stored marker
+  // reflects the shape this install's code actually wrote, not a stale sender
+  // claim. (The wire `PORTOS_SCHEMA_VERSIONS.catalog` gate covers cross-install
+  // skew; this is the per-record payload-shape marker, distinct from that.)
+  const storedPayload = { ...(payload && typeof payload === 'object' ? payload : {}), schemaVersion: currentPayloadSchemaVersion(type) };
   const originInstanceId = await getInstanceId();
   const exec = client ? client.query.bind(client) : query;
   const result = await exec(
@@ -207,7 +216,7 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
       id,
       type,
       String(name).trim(),
-      JSON.stringify(payload || {}),
+      JSON.stringify(storedPayload),
       tags || [],
       embedding ? arrayToPgvector(embedding) : null,
       embeddingModel,
@@ -282,8 +291,12 @@ export async function deleteIngredient(id, { hard = false } = {}) {
  * `null` if no row exists at that id (caller falls through to plain INSERT).
  */
 export async function reviveDeletedIngredient(id, { type, name, payload = {}, tags = [] } = {}) {
-  if (!type || !TYPE_PREFIX[type]) throw new Error(`reviveDeletedIngredient: invalid type ${type}`);
+  if (!type || !getCatalogType(type)) throw new Error(`reviveDeletedIngredient: invalid type ${type}`);
   if (!name || !String(name).trim()) throw new Error('reviveDeletedIngredient: name required');
+  // Re-stamp the payload schemaVersion on revive — the revived row is being
+  // rewritten with a fresh payload, so it gets this install's current marker
+  // (mirrors createIngredient).
+  const storedPayload = { ...(payload && typeof payload === 'object' ? payload : {}), schemaVersion: currentPayloadSchemaVersion(type) };
   const result = await query(
     `UPDATE catalog_ingredients
         SET deleted = false, deleted_at = NULL,
@@ -291,7 +304,7 @@ export async function reviveDeletedIngredient(id, { type, name, payload = {}, ta
             updated_at = NOW()
       WHERE id = $1 AND deleted = true
       RETURNING *`,
-    [id, type, String(name).trim(), JSON.stringify(payload || {}), tags || []],
+    [id, type, String(name).trim(), JSON.stringify(storedPayload), tags || []],
   );
   return result.rows.length > 0 ? rowToIngredient(result.rows[0]) : null;
 }

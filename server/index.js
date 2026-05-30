@@ -692,8 +692,14 @@ ensureSelf()
       await ensureSchema();
       const { migrateBibleToCatalog } = await import('./scripts/migrateBibleToCatalog.js');
       await migrateBibleToCatalog();
+      // Per-record catalog payload-shape migration — walks rows whose stored
+      // payload.schemaVersion lags the registry-current and applies registered
+      // upgraders. No-ops via marker once an install is at the high-water
+      // version, so this is free on steady-state boots.
+      const { migrateCatalogPayload } = await import('./scripts/migrateCatalogPayload.js');
+      await migrateCatalogPayload();
     } catch (err) {
-      console.error(`🪄 bible→catalog migration failed at boot: ${err.message}`);
+      console.error(`🪄 catalog migrations failed at boot: ${err.message}`);
     }
   })
   .then(() => {
