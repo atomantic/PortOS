@@ -81,6 +81,49 @@ describe('parseJsonBulk', () => {
   it('rejects an object root without an ingredients array', () => {
     expect(() => parseJsonBulk(JSON.stringify({ version: 1, ref: { kind: 'universe', id: 'u1' } }))).toThrow(/array of entries or an export bundle/);
   });
+
+  it('attaches a non-enumerable bundleRef when the root is an export bundle', () => {
+    const out = parseJsonBulk(JSON.stringify({
+      version: 1,
+      ref: { kind: 'series', id: 'ser-9' },
+      ingredients: [{ type: 'idea', name: 'X', payload: { summary: 'hi' } }],
+    }));
+    // Non-enumerable: deep-equal on the array shape is unaffected.
+    expect(out).toEqual([{ type: 'idea', name: 'X', payload: { summary: 'hi' }, tags: [] }]);
+    expect(Object.keys(out)).not.toContain('bundleRef');
+    expect(out.bundleRef).toEqual({ kind: 'series', id: 'ser-9' });
+  });
+
+  it('coerces a numeric bundle ref id to a string', () => {
+    const out = parseJsonBulk(JSON.stringify({
+      version: 1,
+      ref: { kind: 'issue', id: 42 },
+      ingredients: [{ type: 'idea', name: 'X' }],
+    }));
+    expect(out.bundleRef).toEqual({ kind: 'issue', id: '42' });
+  });
+
+  it('leaves bundleRef undefined for a bare array (no bundle root)', () => {
+    const out = parseJsonBulk(JSON.stringify([{ type: 'idea', name: 'X' }]));
+    expect(out.bundleRef).toBeUndefined();
+  });
+
+  it('propagates per-row roleForExportedRef as a non-enumerable field', () => {
+    const out = parseJsonBulk(JSON.stringify({
+      version: 1,
+      ref: { kind: 'universe', id: 'u1' },
+      ingredients: [
+        { type: 'character', name: 'Alice', payload: { physicalDescription: 'curious' }, roleForExportedRef: 'lead' },
+        { type: 'idea', name: 'X', payload: { summary: 'hi' } },
+      ],
+    }));
+    expect(out).toEqual([
+      { type: 'character', name: 'Alice', payload: { physicalDescription: 'curious' }, tags: [] },
+      { type: 'idea', name: 'X', payload: { summary: 'hi' }, tags: [] },
+    ]);
+    expect(out[0].roleForExportedRef).toBe('lead');
+    expect(out[1].roleForExportedRef).toBeUndefined();
+  });
 });
 
 describe('parseCsvBulk', () => {
@@ -199,6 +242,81 @@ describe('parseMarkdownBulk', () => {
   it('exposes an empty warnings array when all headings are valid', () => {
     const out = parseMarkdownBulk('## Idea: X\nbody\n');
     expect(out.warnings).toEqual([]);
+  });
+
+  it('parses a ```json fence into payload.* instead of polluting the body', () => {
+    const md = [
+      '## Character: Alice',
+      'a curious sleuth',
+      '',
+      '```json',
+      '{',
+      '  "personality": "quiet",',
+      '  "role": "detective"',
+      '}',
+      '```',
+      '',
+    ].join('\n');
+    const out = parseMarkdownBulk(md);
+    expect(out[0]).toEqual({
+      type: 'character',
+      name: 'Alice',
+      payload: { physicalDescription: 'a curious sleuth', personality: 'quiet', role: 'detective' },
+      tags: [],
+    });
+  });
+
+  it('parses a `### Scraps` subsection into a sibling scraps[] array (not the body)', () => {
+    const md = [
+      '## Idea: time loop',
+      'recurs every Tuesday',
+      '',
+      '### Scraps',
+      '',
+      '- (paste) first sighting in chapter 1',
+      '- (transcript) mentioned again at the diner',
+      '',
+    ].join('\n');
+    const out = parseMarkdownBulk(md);
+    expect(out[0].payload).toEqual({ summary: 'recurs every Tuesday' });
+    expect(out[0].scraps).toEqual([
+      { sourceKind: 'paste', rawText: 'first sighting in chapter 1' },
+      { sourceKind: 'transcript', rawText: 'mentioned again at the diner' },
+    ]);
+  });
+
+  it('records a warning and skips a malformed JSON fence without corrupting the body', () => {
+    const md = [
+      '## Idea: X',
+      'good body',
+      '',
+      '```json',
+      '{not valid json}',
+      '```',
+      '',
+    ].join('\n');
+    const out = parseMarkdownBulk(md);
+    expect(out[0].payload).toEqual({ summary: 'good body' });
+    expect(out.warnings.some((w) => /Malformed JSON fence/.test(w))).toBe(true);
+  });
+
+  it('losslessly round-trips a full export ingredient (body + fence + scraps)', () => {
+    const ing = {
+      type: 'character',
+      name: 'Alice',
+      payload: { physicalDescription: 'a curious sleuth', personality: 'quiet', role: 'detective' },
+      tags: ['noir'],
+      scraps: [{ sourceKind: 'paste', rawText: 'first sighting in chapter 1' }],
+    };
+    const md = ingredientToMarkdown(ing);
+    const out = parseMarkdownBulk(md);
+    expect(out[0]).toEqual({
+      type: 'character',
+      name: 'Alice',
+      payload: { physicalDescription: 'a curious sleuth', personality: 'quiet', role: 'detective' },
+      tags: ['noir'],
+      scraps: [{ sourceKind: 'paste', rawText: 'first sighting in chapter 1' }],
+    });
   });
 });
 

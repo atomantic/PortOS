@@ -112,13 +112,39 @@ export function parseJsonBulk(payload) {
   } catch (err) {
     throw new Error(`invalid JSON: ${err.message}`);
   }
-  const entries = Array.isArray(parsed)
+  const isBundle = !Array.isArray(parsed) && parsed && Array.isArray(parsed.ingredients);
+  const rawEntries = Array.isArray(parsed)
     ? parsed
-    : (parsed && Array.isArray(parsed.ingredients) ? parsed.ingredients : null);
-  if (!entries) {
+    : (isBundle ? parsed.ingredients : null);
+  if (!rawEntries) {
     throw new Error('json payload must be an array of entries or an export bundle with an `ingredients` array');
   }
-  return entries.map((entry, i) => normalizeEntry(entry, i));
+  const entries = rawEntries.map((entry, i) => {
+    const normalized = normalizeEntry(entry, i);
+    // Preserve the per-row role the export bundle stamped so the bulk-import
+    // route can re-create each ingredient's ref link with its original role,
+    // instead of collapsing every row onto the batch-level default. Rides as
+    // a non-enumerable field so deep-equal tests on the entry shape still pass.
+    if (entry && typeof entry.roleForExportedRef === 'string' && entry.roleForExportedRef.trim()) {
+      Object.defineProperty(normalized, 'roleForExportedRef', {
+        value: entry.roleForExportedRef.trim(),
+        enumerable: false,
+      });
+    }
+    return normalized;
+  });
+  // When the input is a full export bundle, surface its `ref` so the route can
+  // fall back to it for ref-links (re-import recreates the bundle's slice
+  // membership). Non-enumerable, like markdown's `warnings`, so array-indexing
+  // callers are unaffected.
+  if (isBundle && parsed.ref && typeof parsed.ref === 'object'
+      && typeof parsed.ref.kind === 'string' && parsed.ref.id != null) {
+    Object.defineProperty(entries, 'bundleRef', {
+      value: { kind: parsed.ref.kind, id: String(parsed.ref.id) },
+      enumerable: false,
+    });
+  }
+  return entries;
 }
 
 /**
@@ -229,6 +255,15 @@ function tokenizeCsv(text) {
  * The `tags:` line is optional and case-insensitive; everything else above
  * it (until the next `## ` heading) becomes the body. Body lands in the
  * type's primary content key per PRIMARY_CONTENT_KEY_BY_TYPE.
+ *
+ * This is the inverse of `ingredientToMarkdown`, so it also recognizes the two
+ * structured sections that exporter emits inside a `## ` block:
+ *   - a ` ```json … ``` ` fence carrying the non-primary payload keys, which
+ *     is parsed back into `payload.*` (merged under the body's primary key);
+ *   - a `### Scraps` subsection of `- (kind) text` bullets, preserved as a
+ *     sibling `scraps[]` array for a lossless round-trip.
+ * Both terminate the body so re-importing an export doesn't pollute the
+ * primary content key with fence text or scrap bullets.
  */
 export function parseMarkdownBulk(payload) {
   if (typeof payload !== 'string') {
@@ -238,6 +273,10 @@ export function parseMarkdownBulk(payload) {
   // Heading regex: `## <Type>: <Name>` — case-insensitive on the type, name
   // is everything to the right of the first `:`. Heading must start the line.
   const headingRe = /^##\s+([A-Za-z][A-Za-z-]*)\s*:\s*(.+?)\s*$/;
+  // `### Scraps` subsection header (case-insensitive).
+  const scrapsHeadingRe = /^###\s+scraps\s*$/i;
+  // `- (sourceKind) raw text…` scrap bullet emitted by ingredientToMarkdown.
+  const scrapBulletRe = /^-\s+\(([^)]*)\)\s*(.*)$/;
   const out = [];
   const warnings = [];
   let current = null;
@@ -246,6 +285,8 @@ export function parseMarkdownBulk(payload) {
     const bodyText = current.bodyLines.join('\n').trim();
     if (bodyText) {
       const key = PRIMARY_CONTENT_KEY_BY_TYPE[current.type];
+      // Don't clobber a fence-supplied key with the body, and vice-versa: the
+      // fence holds the non-primary keys, so the body's primary key wins here.
       current.payload[key] = bodyText;
     }
     out.push({
@@ -253,6 +294,7 @@ export function parseMarkdownBulk(payload) {
       name: current.name,
       payload: current.payload,
       tags: current.tags,
+      scraps: current.scraps,
     });
   };
   for (const line of lines) {
@@ -270,11 +312,52 @@ export function parseMarkdownBulk(payload) {
         current = null;
         continue;
       }
-      current = { type, name, bodyLines: [], tags: [], payload: {} };
+      current = { type, name, bodyLines: [], tags: [], payload: {}, scraps: [], section: 'body', fence: null };
       continue;
     }
     if (!current) continue;
-    // `tags: a, b, c` (case-insensitive, anywhere in the section).
+    // Inside a ```json fence: accumulate raw lines until the closing ```.
+    if (current.fence) {
+      if (/^```\s*$/.test(line)) {
+        const raw = current.fence.lines.join('\n');
+        let parsedFence = null;
+        try { parsedFence = JSON.parse(raw); } catch { parsedFence = null; }
+        if (parsedFence && typeof parsedFence === 'object' && !Array.isArray(parsedFence)) {
+          // Merge the non-primary payload keys back in. The body's primary
+          // key is applied in flush() and wins on collision.
+          for (const [k, v] of Object.entries(parsedFence)) current.payload[k] = v;
+        } else {
+          warnings.push(`Malformed JSON fence in "## ${capitalize(current.type)}: ${current.name}" — skipped`);
+        }
+        current.fence = null;
+      } else {
+        current.fence.lines.push(line);
+      }
+      continue;
+    }
+    // Open a ```json (or bare ```) fence — terminates the body section.
+    const fenceOpen = /^```(\w*)\s*$/.exec(line);
+    if (fenceOpen) {
+      current.fence = { lang: fenceOpen[1] || '', lines: [] };
+      current.section = 'fence';
+      continue;
+    }
+    // `### Scraps` switches us into the scraps subsection — body is done.
+    if (scrapsHeadingRe.test(line)) {
+      current.section = 'scraps';
+      continue;
+    }
+    if (current.section === 'scraps') {
+      const bullet = scrapBulletRe.exec(line);
+      if (bullet) {
+        const sourceKind = bullet[1].trim() || 'unknown';
+        const rawText = bullet[2].trim();
+        current.scraps.push({ sourceKind, rawText });
+      }
+      // Non-bullet lines inside the scraps subsection (blanks) are ignored.
+      continue;
+    }
+    // `tags: a, b, c` (case-insensitive, anywhere in the body section).
     const tagMatch = /^\s*tags\s*:\s*(.*)$/i.exec(line);
     if (tagMatch) {
       current.tags = normalizeTags(tagMatch[1]);
@@ -286,7 +369,16 @@ export function parseMarkdownBulk(payload) {
   if (out.length === 0) {
     throw new Error('markdown produced zero `## <Type>: <Name>` sections');
   }
-  const entries = out.map((entry, i) => normalizeEntry(entry, i));
+  const entries = out.map((entry, i) => {
+    const normalized = normalizeEntry(entry, i);
+    // Carry parsed scraps as a sibling array for a lossless round-trip. The
+    // bulk-import route ignores it today (the ref-link path is what it acts
+    // on), but the round-trip stays faithful for any consumer that reads it.
+    if (Array.isArray(entry.scraps) && entry.scraps.length > 0) {
+      normalized.scraps = entry.scraps;
+    }
+    return normalized;
+  });
   // Warnings ride as a non-enumerable property on the returned array so
   // existing callers that array-index `result[i]` (or deep-equal it in
   // tests) keep working; the bulk-import handler reads `result.warnings`

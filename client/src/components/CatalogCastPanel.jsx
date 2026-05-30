@@ -96,7 +96,11 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
     setBusyId(ingredient.id);
     await unlinkCatalogIngredient(ingredient.id, { refKind, refId, role }, { silent: true })
       .then(() => {
-        setRows((prev) => prev.filter((r) => r.ingredient.id !== ingredient.id));
+        // Ref rows are keyed by (ingredient_id, ref_kind, ref_id, role), so an
+        // ingredient can be linked to the same record under multiple roles.
+        // Drop only the (id, role) row that was unlinked — not every row sharing
+        // the ingredient id.
+        setRows((prev) => prev.filter((r) => !(r.ingredient.id === ingredient.id && r.role === role)));
       })
       .catch((err) => {
         toast.error(err.message || 'Unlink failed');
@@ -143,7 +147,7 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
             const text = snippet(ingredient.payload);
             return (
               <li
-                key={ingredient.id}
+                key={`${ingredient.id}:${role || ''}`}
                 className="flex items-start gap-3 p-2.5 rounded border border-port-border bg-port-bg/40"
               >
                 <div className="flex-1 min-w-0">

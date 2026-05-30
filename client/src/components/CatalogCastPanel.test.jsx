@@ -120,4 +120,43 @@ describe('CatalogCastPanel', () => {
     );
     expect(linkCatalogIngredient).not.toHaveBeenCalled();
   });
+
+  it('unlinks only the matching (id, role) row when an ingredient is linked under multiple roles', async () => {
+    // Same ingredient id linked under two roles — the ref table key is
+    // (ingredient_id, ref_kind, ref_id, role), so this is a legal pair. A
+    // single-role unlink must drop only that row, not both.
+    listCatalogIngredientsForRef.mockResolvedValue([
+      {
+        ingredient: { id: 'i-1', name: 'Ada Lovelace', type: 'character', payload: {} },
+        role: 'cast-character',
+      },
+      {
+        ingredient: { id: 'i-1', name: 'Ada Lovelace', type: 'character', payload: {} },
+        role: 'cast-lead',
+      },
+    ]);
+    unlinkCatalogIngredient.mockResolvedValue(undefined);
+    renderPanel();
+    await waitFor(() => {
+      expect(screen.getByText('cast-character')).toBeTruthy();
+    });
+    expect(screen.getByText('cast-lead')).toBeTruthy();
+
+    // Both rows share the same aria-label; the first is the cast-character row.
+    const removeBtns = screen.getAllByLabelText(/Unlink Ada Lovelace/i);
+    await act(async () => {
+      fireEvent.click(removeBtns[0]);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('cast-character')).toBeNull();
+    });
+    // The cast-lead row survives — it has a different role.
+    expect(screen.getByText('cast-lead')).toBeTruthy();
+    expect(unlinkCatalogIngredient).toHaveBeenCalledWith(
+      'i-1',
+      { refKind: 'series', refId: 'series-1', role: 'cast-character' },
+      { silent: true },
+    );
+  });
 });
