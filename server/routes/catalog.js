@@ -19,7 +19,7 @@ import {
   catalogEmbeddingsBackfillSchema,
   catalogMigrationRerunSchema,
 } from '../lib/catalogValidation.js';
-import { embedText, embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
+import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredients } from '../services/catalogExtraction.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -45,14 +45,15 @@ router.get('/scraps/:id', asyncHandler(async (req, res) => {
 
 router.post('/scraps', asyncHandler(async (req, res) => {
   validateRequest(catalogScrapCreateSchema, req.body);
-  const embedded = await embedText(req.body.rawText).catch(() => null);
+  // Scrap embedding was previously generated on create but never read — there is no
+  // semantic-search route or "find similar scraps" UI. Removed pending a search endpoint
+  // that justifies the LLM round-trip; the catalog_scraps.embedding column remains for
+  // future backfill (and peer sync still accepts embeddings from peers that have them).
   const scrap = await catalogDB.createScrap({
     title: req.body.title,
     rawText: req.body.rawText,
     sourceKind: req.body.sourceKind,
     metadata: req.body.metadata,
-    embedding: embedded?.success ? embedded.embedding : null,
-    embeddingModel: embedded?.success ? embedded.model : null,
   });
   res.status(201).json({ scrap });
 }));
