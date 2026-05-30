@@ -111,13 +111,13 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
 }));
 
 router.get('/ingredients', asyncHandler(async (req, res) => {
-  const q = validateRequest(catalogIngredientQuerySchema, req.query);
+  const params = validateRequest(catalogIngredientQuerySchema, req.query);
   res.json(await catalogDB.listIngredients({
-    type: q.type,
-    tag: q.tag,
-    query: q.q,
-    limit: q.limit ?? 50,
-    offset: q.offset ?? 0,
+    type: params.type,
+    tag: params.tag,
+    query: params.q,
+    limit: params.limit ?? 50,
+    offset: params.offset ?? 0,
   }));
 }));
 

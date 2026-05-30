@@ -330,6 +330,12 @@ function ReviewSection({ section, items, selected, onToggle, onSelectAll, onPatc
       <ul className="space-y-2">
         {items.map((c, idx) => {
           const baseId = `${section.key}-${idx}`;
+          // Characters use `physicalDescription` (matches the canon shape from
+          // sanitizeCharacter); places/objects use `description`. Without this
+          // a character's LLM-extracted physicalDescription would render as an
+          // empty textarea and edits would land in a sibling `description` key
+          // that the canon shape doesn't read.
+          const descField = section.type === 'character' ? 'physicalDescription' : 'description';
           return (
             <li key={baseId} className="border border-port-border rounded p-3 bg-port-bg/40 flex items-start gap-2">
               <input id={`${baseId}-check`} type="checkbox" checked={selected.has(idx)} onChange={() => onToggle(idx)}
@@ -340,8 +346,8 @@ function ReviewSection({ section, items, selected, onToggle, onSelectAll, onPatc
                   placeholder="Name" maxLength={200}
                   className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent" />
                 <label htmlFor={`${baseId}-desc`} className="sr-only">Description</label>
-                <textarea id={`${baseId}-desc`} rows={2} value={c.description ?? ''}
-                  onChange={(e) => onPatch(idx, { description: e.target.value })} placeholder="Short description"
+                <textarea id={`${baseId}-desc`} rows={2} value={c[descField] ?? ''}
+                  onChange={(e) => onPatch(idx, { [descField]: e.target.value })} placeholder="Short description"
                   className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-200 focus:outline-none focus:border-port-accent" />
               </div>
             </li>

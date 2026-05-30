@@ -7,7 +7,7 @@
  * three-table relational store, not a single flat row set.
  *
  * Pull protocol:
- *   GET /api/catalog/sync?since.scraps=A&since.ingredients=B&since.sources=C&since.refs=D&limit=100
+ *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&since[sources]=C&since[refs]=D&limit=100
  *   → { scraps[], ingredients[], sources[], refs[], maxSequences, hasMore }
  *
  * The four BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
@@ -47,7 +47,10 @@ const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs'];
 // active table get silently filtered out forever.
 function normalizeCursors(since) {
   if (since && typeof since === 'object' && !Array.isArray(since)) {
-    return Object.fromEntries(CURSOR_KEYS.map((k) => [k, since[k] ?? '0']));
+    return Object.fromEntries(CURSOR_KEYS.map((k) => {
+      const v = since[k];
+      return [k, typeof v === 'string' && /^\d+$/.test(v) ? v : '0'];
+    }));
   }
   const scalar = typeof since === 'string' && /^\d+$/.test(since) ? since : '0';
   return Object.fromEntries(CURSOR_KEYS.map((k) => [k, scalar]));

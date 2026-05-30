@@ -164,8 +164,11 @@ export async function updateScrap(id, patch = {}) {
   }
   if (fields.length === 0) return getScrap(id);
   params.push(id);
+  // `AND deleted = false` keeps PATCH consistent with GET — a PATCH on a
+  // soft-deleted row returns zero rows so the route 404s, instead of silently
+  // mutating a row the next GET would refuse to return.
   const result = await query(
-    `UPDATE catalog_scraps SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
+    `UPDATE catalog_scraps SET ${fields.join(', ')} WHERE id = $${idx} AND deleted = false RETURNING *`,
     params,
   );
   return rowToScrap(result.rows[0]);
@@ -247,8 +250,11 @@ export async function updateIngredient(id, patch = {}) {
   }
   if (fields.length === 0) return getIngredient(id);
   params.push(id);
+  // Mirrors updateScrap: PATCH on a soft-deleted row returns zero rows so the
+  // route 404s. Revival of soft-deleted rows is intentionally separate via
+  // `reviveDeletedIngredient`, so this filter doesn't conflict with that path.
   const result = await query(
-    `UPDATE catalog_ingredients SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
+    `UPDATE catalog_ingredients SET ${fields.join(', ')} WHERE id = $${idx} AND deleted = false RETURNING *`,
     params,
   );
   return rowToIngredient(result.rows[0]);

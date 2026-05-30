@@ -267,7 +267,6 @@ describe('storyBible — sanitizeCharacter', () => {
 
     it('caps the list at BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX', () => {
       const tooMany = Array.from({ length: BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX + 5 }, (_, i) => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
         name: `Outfit ${i}`,
       }));
       const out = sanitizeCharacter({ name: 'A', wardrobes: tooMany });

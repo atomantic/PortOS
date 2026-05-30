@@ -132,10 +132,18 @@ export default function Catalog() {
 
   const confirmDelete = async (it) => {
     setArmedId(null);
+    // Capture the original index so a failed delete restores in place rather
+    // than jumping the row to the top of the list.
+    const originalIdx = items.findIndex((x) => x.id === it.id);
     setItems((prev) => prev.filter((x) => x.id !== it.id));
     await deleteCatalogIngredient(it.id, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Delete failed');
-      setItems((prev) => (prev.some((x) => x.id === it.id) ? prev : [it, ...prev]));
+      setItems((prev) => {
+        if (prev.some((x) => x.id === it.id)) return prev;
+        const next = [...prev];
+        next.splice(Math.max(0, originalIdx), 0, it);
+        return next;
+      });
     });
     loadStats();
   };
