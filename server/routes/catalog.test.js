@@ -57,6 +57,11 @@ function makeApp() {
   return app;
 }
 
+// Per-run nonce so seeded names/refs can't collide with residue left by a
+// prior aborted run (cleanup hard-deletes by id, but a unique nonce keeps the
+// assertions and any leftover rows unambiguous).
+const NONCE = Date.now();
+
 const createdIngredientIds = new Set();
 const createdScrapIds = new Set();
 
@@ -74,7 +79,7 @@ afterAll(async () => {
 describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — scrap persistence', () => {
   it('persists a round-tripped `### Scraps` bullet as a catalog_scraps row + source link', async () => {
     const markdown = [
-      '## Character: Scrap Persist Hero',
+      `## Character: Scrap Persist Hero ${NONCE}`,
       '',
       'A protagonist used to verify scrap persistence.',
       '',
@@ -106,7 +111,7 @@ describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — scrap persistence',
   it('creates no scrap rows for a JSON import (no scraps carried)', async () => {
     const r = await request(makeApp())
       .post('/api/catalog/bulk-import')
-      .send({ format: 'json', payload: JSON.stringify([{ type: 'idea', name: 'Scrapless Idea', payload: { description: 'x' } }]) });
+      .send({ format: 'json', payload: JSON.stringify([{ type: 'idea', name: `Scrapless Idea ${NONCE}`, payload: { description: 'x' } }]) });
 
     expect(r.status).toBe(201);
     expect(r.body.scrapsCreated).toBe(0);
@@ -118,13 +123,13 @@ describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — scrap persistence',
 
 describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — export-bundle ref recreation', () => {
   it('recreates the bundle ref link from `bundleRef` and honors per-row role', async () => {
-    const seriesId = `test-series-${Date.now()}`;
+    const seriesId = `test-series-${NONCE}`;
     const bundle = {
       version: 1,
       ref: { kind: 'series', id: seriesId },
       ingredients: [
-        { type: 'character', name: 'Bundle Cast A', payload: { physicalDescription: 'a' }, roleForExportedRef: 'lead' },
-        { type: 'character', name: 'Bundle Cast B', payload: { physicalDescription: 'b' } },
+        { type: 'character', name: `Bundle Cast A ${NONCE}`, payload: { physicalDescription: 'a' }, roleForExportedRef: 'lead' },
+        { type: 'character', name: `Bundle Cast B ${NONCE}`, payload: { physicalDescription: 'b' } },
       ],
     };
 
@@ -137,12 +142,12 @@ describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — export-bundle ref r
     for (const c of r.body.created) createdIngredientIds.add(c.id);
 
     const linked = await catalogDB.listIngredientsForRef('series', seriesId);
-    expect(linked.map((x) => x.ingredient.name).sort()).toEqual(['Bundle Cast A', 'Bundle Cast B']);
+    expect(linked.map((x) => x.ingredient.name).sort()).toEqual([`Bundle Cast A ${NONCE}`, `Bundle Cast B ${NONCE}`]);
     // Per-row role precedence: row A carried `roleForExportedRef: 'lead'`, row B
     // fell back to the `bulk-<kind>` default.
     const roleByName = Object.fromEntries(linked.map((x) => [x.ingredient.name, x.role]));
-    expect(roleByName['Bundle Cast A']).toBe('lead');
-    expect(roleByName['Bundle Cast B']).toBe('bulk-series');
+    expect(roleByName[`Bundle Cast A ${NONCE}`]).toBe('lead');
+    expect(roleByName[`Bundle Cast B ${NONCE}`]).toBe('bulk-series');
   });
 });
 
@@ -150,7 +155,7 @@ describe.skipIf(!dbReady)('POST /api/catalog/ingredients/:id/revisions/:revision
   it('restores the revision payload verbatim, preserving its schemaVersion, and records a new revision', async () => {
     // Seed an ingredient, then write an "old shape" payload (schemaVersion 0) so
     // a later restore can prove the marker is preserved, not re-stamped.
-    const ing = await catalogDB.createIngredient({ type: 'concept', name: 'Restore Probe', payload: { description: 'v-current' } });
+    const ing = await catalogDB.createIngredient({ type: 'concept', name: `Restore Probe ${NONCE}`, payload: { description: 'v-current' } });
     createdIngredientIds.add(ing.id);
 
     await catalogDB.updateIngredient(ing.id, { payload: { schemaVersion: 0, description: 'old-shape' } });
@@ -175,8 +180,8 @@ describe.skipIf(!dbReady)('POST /api/catalog/ingredients/:id/revisions/:revision
   });
 
   it('404s when the revision belongs to a different ingredient', async () => {
-    const a = await catalogDB.createIngredient({ type: 'concept', name: 'Restore Owner A', payload: { description: 'a' } });
-    const b = await catalogDB.createIngredient({ type: 'concept', name: 'Restore Owner B', payload: { description: 'b' } });
+    const a = await catalogDB.createIngredient({ type: 'concept', name: `Restore Owner A ${NONCE}`, payload: { description: 'a' } });
+    const b = await catalogDB.createIngredient({ type: 'concept', name: `Restore Owner B ${NONCE}`, payload: { description: 'b' } });
     createdIngredientIds.add(a.id);
     createdIngredientIds.add(b.id);
     await catalogDB.updateIngredient(a.id, { payload: { description: 'a2' } });

@@ -191,9 +191,13 @@ export async function applyRemoteChanges(envelope = {}) {
   // repair (repairUniverseTags.js) already ran would otherwise reintroduce the
   // raw machine tags via LWW, and the boot repair's marker means it never runs
   // again to clean them up. Rewriting them to the friendly universe NAME here
-  // makes the repair self-heal on every sync instead of only at boot. The
-  // universe name map is built lazily — and only when a row actually carries the
-  // marker — so an envelope with no legacy rows never issues the universe query.
+  // re-applies the repair whenever an ingredient is (re)synced and its universe
+  // is resolvable locally — rather than only at boot. When the ingredient
+  // arrives BEFORE its universe, the row keeps its machine tags (changed=false)
+  // and is friendlified on the next sync once the universe is known, or by the
+  // boot repair, whichever fires first. The universe name map is built lazily —
+  // and only when a row actually carries the marker — so an envelope with no
+  // legacy rows never issues the universe query.
   let universeNameMap = null;
   const ensureUniverseNameMap = async () => {
     if (universeNameMap) return universeNameMap;
