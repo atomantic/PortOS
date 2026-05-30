@@ -89,6 +89,8 @@ export const isBlockedIngestHost = (host) => {
   const h = host.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
   if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
+  if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
   const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
   // IPv4-mapped IPv6: `::ffff:a.b.c.d` or the compressed hex `::ffff:HHHH:HHHH`.

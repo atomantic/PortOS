@@ -483,4 +483,9 @@ describe('catalogUrlIngestSchema — SSRF guard', () => {
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::]/x' })).toThrow();
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://0.0.0.0/x' })).toThrow();
   });
+
+  it('rejects native IPv6 link-local (fe80::/10) literals', () => {
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[fe80::1]/x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[febf::dead]/x' })).toThrow();
+  });
 });

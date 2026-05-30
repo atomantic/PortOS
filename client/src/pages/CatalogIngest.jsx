@@ -91,6 +91,18 @@ export default function CatalogIngest() {
   // MediaRecorder stream isn't left live with no UI to stop it.
   useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
 
+  // Any transition OUT of the paste phase that isn't the voice flow's own
+  // stop-and-transcribe (which nulls recorderRef before switching) must release
+  // the mic — otherwise starting File/URL/Paste ingest mid-recording hides the
+  // stop control while the stream stays live.
+  useEffect(() => {
+    if (phase !== 'paste' && recorderRef.current) {
+      recorderRef.current.cancel?.();
+      recorderRef.current = null;
+      setRecording(false);
+    }
+  }, [phase]);
+
   // Track active runId so a stale frame from an earlier scrap can't mutate the
   // current stage list (server fans these to all sockets — single-user trust
   // model still applies, but tab refresh + a slow extract overlap is real).

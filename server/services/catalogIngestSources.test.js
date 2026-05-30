@@ -94,7 +94,18 @@ describe('fetchUrlMainText', () => {
     // The first-hop URL passed the schema guard, but Chrome followed a redirect
     // to a loopback target — the landed page.url is what we must re-check.
     browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'http://127.0.0.1:5555/secret', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
-    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/redirect to a blocked/);
+    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/loopback|link-local/);
+    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
+  });
+
+  it('refuses a redirect to a HOSTNAME that resolves to a blocked address (DNS re-check on landed url)', async () => {
+    // First hop resolves safe; the landed redirect host resolves to metadata.
+    dnsp.lookup
+      .mockResolvedValueOnce({ address: '93.184.216.34', family: 4 })
+      .mockResolvedValueOnce({ address: '169.254.169.254', family: 4 });
+    browserService.navigateToUrl.mockResolvedValue({ id: 'p1', url: 'https://ex.com/a' });
+    browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'https://evil.example/x', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
+    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/resolves to a blocked/);
     expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
   });
 

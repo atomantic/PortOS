@@ -62,6 +62,29 @@ async function createScrapAndExtract({ title, rawText, sourceKind, metadata, pro
 }
 
 /**
+ * Full SSRF gate for an ingest URL: scheme + blocked-literal check (sync), AND
+ * a DNS resolve so a hostname whose A record points at a blocked address
+ * (cloud metadata / loopback / link-local) is rejected too. Applied to BOTH the
+ * request-body URL and the post-redirect landed URL — a redirect to such a
+ * hostname must be caught the same way as the first hop. (Residual TOCTOU —
+ * Chrome re-resolves independently — is acceptable on a single-user private
+ * network; this closes the realistic record-points-at-metadata vector.)
+ */
+async function assertIngestUrlSafe(target) {
+  if (!isSafeIngestUrl(target)) {
+    throw new Error('refusing to ingest a non-http(s) or loopback/link-local URL');
+  }
+  const { hostname } = new URL(target);
+  const isIpLiteral = /^[\d.]+$/.test(hostname) || hostname.includes(':');
+  if (!isIpLiteral) {
+    const resolved = await lookup(hostname).catch(() => null);
+    if (resolved?.address && isBlockedIngestHost(resolved.address)) {
+      throw new Error('refusing to ingest a host that resolves to a blocked (loopback/link-local) address');
+    }
+  }
+}
+
+/**
  * Fetch a URL through the browser service and return its main text + title.
  * Uses CDP (the same headed/headless Chrome the rest of PortOS drives) so
  * JS-rendered pages and login-walled content the user is already signed into
@@ -72,20 +95,7 @@ async function createScrapAndExtract({ title, rawText, sourceKind, metadata, pro
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
  */
 export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) {
-  // DNS guard: the schema rejects blocked IP LITERALS, but a hostname can
-  // resolve to a blocked address (DNS record / rebinding pointing at
-  // 169.254.169.254, loopback, …). Resolve it and reject before we navigate.
-  // (Residual TOCTOU — Chrome re-resolves independently — is acceptable on a
-  // single-user private network; this closes the realistic record-points-at-
-  // metadata vector and is paired with the post-navigation re-check below.)
-  const { hostname } = new URL(url);
-  const isIpLiteral = /^[\d.]+$/.test(hostname) || hostname.includes(':');
-  if (!isIpLiteral) {
-    const resolved = await lookup(hostname).catch(() => null);
-    if (resolved?.address && isBlockedIngestHost(resolved.address)) {
-      throw new Error('refusing to ingest a host that resolves to a blocked (loopback/link-local) address');
-    }
-  }
+  await assertIngestUrlSafe(url);
 
   // `navigateToUrl` opens a fresh tab at the exact URL and returns it; we drive
   // and read that tab below. (Don't call findOrOpenPage first — it would open a
@@ -102,14 +112,12 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
     || pages.find((p) => p.url === opened.url);
   if (!page) throw new Error('could not match the navigated tab after navigation (refusing to read an arbitrary tab)');
 
-  // Re-validate the FINAL url before reading the DOM: the request-body URL
-  // passed the SSRF guard, but a server-controlled redirect could have sent
-  // Chrome to a blocked target (127.0.0.1, 169.254.169.254, …). The schema
-  // guard only covers the first hop, so re-check here against the landed URL.
+  // Re-run the FULL gate (scheme + DNS) against the FINAL url before reading the
+  // DOM: a server-controlled redirect could have sent Chrome to a blocked
+  // target, or to a hostname that itself resolves to one. The first-hop gate
+  // doesn't cover the landed page.
   const landedUrl = page.url || opened.url || url;
-  if (!isSafeIngestUrl(landedUrl)) {
-    throw new Error('refusing to ingest a redirect to a blocked (loopback/link-local) host');
-  }
+  await assertIngestUrlSafe(landedUrl);
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer
   // chrome), falling back to document body text. Runs in the page; returns a
