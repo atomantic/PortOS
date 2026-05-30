@@ -14,6 +14,7 @@ export * from './apiHistory.js';
 export * from './apiCommands.js';
 export * from './apiGit.js';
 export * from './apiCatalog.js';
+export * from './apiCatalogTypes.js';
 export * from './apiMedia.js';
 export * from './apiAgents.js';
 export * from './apiPersonalities.js';

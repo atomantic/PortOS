@@ -137,7 +137,8 @@ import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
-import { getSettings as getInitSettings } from './services/settings.js';
+import { getSettings as getInitSettings, settingsEvents } from './services/settings.js';
+import { setUserCatalogTypes } from './lib/catalogTypes.js';
 import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
@@ -499,6 +500,18 @@ initBrainMemoryBridge();
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Warm the catalog user-type registry from settings before any catalog request
+// can land, so user-defined types validate + mint ids immediately on boot.
+// Refresh on every settings write (the Settings → Catalog tab persists through
+// updateSettings, which emits this event) so the in-process registry tracks
+// edits without a restart.
+getInitSettings()
+  .then(s => setUserCatalogTypes(s.catalogUserTypes || []))
+  .catch(err => console.error(`❌ Catalog user-type warm failed: ${err.message}`));
+settingsEvents.on('settings:updated', (s) => {
+  try { setUserCatalogTypes(s?.catalogUserTypes || []); }
+  catch (err) { console.error(`❌ Catalog user-type refresh failed: ${err.message}`); }
+});
 // Initialize Telegram (manual bot or MCP bridge based on settings)
 getInitSettings().then(s => {
   if (s.telegram?.method === 'mcp-bridge') {

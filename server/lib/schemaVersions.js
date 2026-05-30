@@ -110,7 +110,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // ≤v6 receiver doesn't understand child scrap rows, so a v7 sender pushing to
   // it is sender-ahead and gets a 412. A v7 receiver still accepts ≤v6 senders
   // (their scraps carry no chunk fields → chunkIndex 0 / parentScrapId null).
-  catalog: 7,
+  // v8 = user-defined ingredient types. The definitions live in settings.json
+  // (`catalogUserTypes`), merge into the active type registry at boot/runtime,
+  // and ride a new additive `catalogTypes: [...]` block in the catalog sync
+  // envelope (LWW-merged into the receiver's own settings slice). Same gating
+  // rationale as v4–v7: a ≤v7 receiver doesn't understand the `catalogTypes`
+  // block, so a v8 sender pushing to it is sender-ahead and gets a 412
+  // (otherwise the older peer would silently drop every user-type definition,
+  // then reject every ingredient row carrying one of those unknown types). A v8
+  // receiver still accepts ≤v7 senders (sender-behind); their envelopes carry no
+  // `catalogTypes` block and the receiver applies the other kinds as before.
+  catalog: 8,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

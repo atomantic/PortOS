@@ -56,6 +56,8 @@ export * from './useOpenClawAttachments.js';
 
 // === Settings-derived shared state ===
 export * from './useCodeReviewDefaults.jsx';
+export { default as useCatalogTypes } from './useCatalogTypes.jsx';
+export * from './useCatalogTypes.jsx';
 
 // === Sockets & lifecycle ===
 export * from './usePrevious.js';

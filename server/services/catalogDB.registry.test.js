@@ -57,11 +57,14 @@ vi.mock('./instances.js', () => ({
 }));
 
 import { createIngredient, reviveDeletedIngredient } from './catalogDB.js';
-import { currentPayloadSchemaVersion } from '../lib/catalogTypes.js';
+import { currentPayloadSchemaVersion, setUserCatalogTypes } from '../lib/catalogTypes.js';
 
 beforeEach(() => {
   captured.sql = null;
   captured.params = null;
+  // Reset the user-type registry between tests so a leftover definition can't
+  // leak across cases.
+  setUserCatalogTypes([]);
 });
 
 describe('createIngredient — payload schemaVersion stamping', () => {
@@ -102,6 +105,34 @@ describe('createIngredient — registry-derived id prefix + type guard', () => {
   it('throws on an unknown type before touching the DB', async () => {
     await expect(createIngredient({ type: 'wardrobe', name: 'Cape' })).rejects.toThrow(/Invalid ingredient type/);
     expect(captured.params).toBeNull();
+  });
+});
+
+describe('createIngredient — user-defined types', () => {
+  it('mints a cat-<prefix>-<uuid> id and round-trips a user-typed create', async () => {
+    setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [{ key: 'creed', label: 'Creed', kind: 'longtext' }] }]);
+    const ing = await createIngredient({ type: 'faction', name: 'The Choir', payload: { creed: 'unity' } });
+    expect(ing.id).toMatch(/^cat-[a-z0-9]+-[0-9a-f-]{36}$/);
+    expect(ing.type).toBe('faction');
+    const stored = JSON.parse(captured.params[3]);
+    expect(stored.creed).toBe('unity');
+    // User types are payloadSchemaVersion 1.
+    expect(stored.schemaVersion).toBe(1);
+  });
+
+  it('throws for an unregistered user type before touching the DB', async () => {
+    // No setUserCatalogTypes call → 'faction' is not active.
+    await expect(createIngredient({ type: 'faction', name: 'x' })).rejects.toThrow(/Invalid ingredient type/);
+    expect(captured.params).toBeNull();
+  });
+
+  it('never mints a user prefix that collides with a system prefix', async () => {
+    // id 'characters' would slug to 'char' which is NOT a system prefix ('chr'),
+    // but 'cha' could; assert the minted prefix avoids all six system prefixes.
+    setUserCatalogTypes([{ id: 'chronicle', label: 'Chronicle', primaryContentKey: 'body', fields: [{ key: 'body', label: 'Body', kind: 'longtext' }] }]);
+    const ing = await createIngredient({ type: 'chronicle', name: 'Log' });
+    const prefix = ing.id.split('-')[1];
+    expect(['chr', 'plc', 'obj', 'idea', 'scn', 'cnc']).not.toContain(prefix);
   });
 });
 

@@ -8,6 +8,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, validateRequest } from '../lib/validation.js';
+import { catalogUserTypesSettingsSchema } from '../lib/catalogValidation.js';
 
 const router = Router();
 
@@ -72,6 +73,14 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.embeddings !== undefined) {
     validateRequest(settingsEmbeddingsSchema.partial(), req.body.embeddings);
+  }
+  // User-defined catalog types — validate the whole slice (unique-id +
+  // system-collision refinements) when the key is present, mirroring the
+  // backup/embeddings slice guards above. The catalog `/types` routes are the
+  // primary write path, but a direct PUT /api/settings must enforce the same
+  // contract so a malformed slice can't reach disk and break the registry.
+  if (req.body?.catalogUserTypes !== undefined) {
+    validateRequest(catalogUserTypesSettingsSchema, req.body.catalogUserTypes);
   }
   const merged = await updateSettings(req.body);
   // The queue caches codex.parallelLimit in-process; sync it from the

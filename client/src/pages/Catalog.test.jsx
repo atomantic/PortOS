@@ -13,6 +13,12 @@ vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+// useCatalogTypes (via Catalog) fetches the type registry — mock the API so a
+// user-defined type surfaces as a filter chip + dropdown option.
+vi.mock('../services/apiCatalogTypes', () => ({
+  listCatalogTypes: vi.fn(),
+}));
+
 import Catalog from './Catalog';
 import {
   listCatalogIngredients,
@@ -20,6 +26,7 @@ import {
   deleteCatalogIngredient,
   getCatalogStats,
 } from '../services/apiCatalog';
+import { listCatalogTypes } from '../services/apiCatalogTypes';
 import toast from '../components/ui/Toast';
 
 const sample = [
@@ -37,6 +44,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   listCatalogIngredients.mockResolvedValue({ items: sample });
   getCatalogStats.mockResolvedValue({ total: 2, byType: { character: 1, place: 1 } });
+  // Default: system registry only (the hook merges with the static fallback).
+  listCatalogTypes.mockResolvedValue({ types: [] });
 });
 
 describe('Catalog page', () => {
@@ -147,5 +156,15 @@ describe('Catalog page', () => {
     listCatalogIngredients.mockRejectedValue(new Error('load failed'));
     renderCatalog();
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('load failed'));
+  });
+
+  it('renders a user-defined type as a filter chip from the merged registry', async () => {
+    listCatalogTypes.mockResolvedValue({
+      types: [{ id: 'faction', label: 'Faction', system: false, badgeColor: 'bg-gray-500/20 text-gray-300 border-gray-500/40', primaryContentKey: 'creed', primaryContentLabel: 'Creed', snippetFallbackKeys: ['creed'], fields: [] }],
+    });
+    renderCatalog();
+    // The built-in chips render synchronously; the user chip appears after the
+    // type-registry fetch resolves.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Faction/i })).toBeTruthy());
   });
 });

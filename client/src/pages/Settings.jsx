@@ -1,6 +1,7 @@
 import { useParams, Navigate } from 'react-router-dom';
 import { AutofixerTab } from '../components/settings/AutofixerTab';
 import { BackupTab } from '../components/settings/BackupTab';
+import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
 import EmbeddingsTab from '../components/settings/EmbeddingsTab';
 import { LocalLlmTab } from '../components/settings/LocalLlmTab';
@@ -31,6 +32,7 @@ export default function Settings() {
       case 'general': return <GeneralTab />;
       case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
+      case 'catalog': return <CatalogTypesTab />;
       case 'database': return <DatabaseTab />;
       case 'embeddings': return <EmbeddingsTab />;
       case 'local-llm': return <LocalLlmTab />;

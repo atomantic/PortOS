@@ -12,7 +12,7 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import {
-  getCatalogType,
+  getActiveCatalogType,
   ingredientIdPrefix,
   currentPayloadSchemaVersion,
   canonicalTagKey,
@@ -392,7 +392,7 @@ export async function deleteScrap(id, { hard = false } = {}) {
 // See `POST /api/catalog/scraps/:id/commit` for the scrap-commit batch that
 // needs every per-draft ingredient + source-link to commit-or-rollback together.
 export async function createIngredient({ id: explicitId, type, name, payload = {}, tags = [], embedding = null, embeddingModel = null } = {}, { client, source = 'user', actor = null } = {}) {
-  if (!type || !getCatalogType(type)) throw new Error(`Invalid ingredient type: ${type}`);
+  if (!type || !getActiveCatalogType(type)) throw new Error(`Invalid ingredient type: ${type}`);
   if (!name || !String(name).trim()) throw new Error('name is required');
 
   // `explicitId` is used by the backfill when a universe arrives from a peer
@@ -588,7 +588,7 @@ export async function deleteIngredient(id, { hard = false } = {}) {
  * `null` if no row exists at that id (caller falls through to plain INSERT).
  */
 export async function reviveDeletedIngredient(id, { type, name, payload = {}, tags = [] } = {}) {
-  if (!type || !getCatalogType(type)) throw new Error(`reviveDeletedIngredient: invalid type ${type}`);
+  if (!type || !getActiveCatalogType(type)) throw new Error(`reviveDeletedIngredient: invalid type ${type}`);
   if (!name || !String(name).trim()) throw new Error('reviveDeletedIngredient: name required');
   // Re-stamp the payload schemaVersion on revive — the revived row is being
   // rewritten with a fresh payload, so it gets this install's current marker

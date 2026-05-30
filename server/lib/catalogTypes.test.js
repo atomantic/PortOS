@@ -33,8 +33,16 @@ import {
   canonicalTagKey,
   tagIdForKey,
   defaultTagsForType,
+  USER_TYPE_FIELD_KINDS,
+  normalizeUserType,
+  setUserCatalogTypes,
+  getActiveCatalogTypes,
+  getActiveCatalogType,
+  isActiveType,
 } from './catalogTypes.js';
 import { INGREDIENT_TYPES } from './catalogValidation.js';
+
+import { afterEach } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INIT_SQL = readFileSync(join(HERE, '..', 'scripts', 'init-db.sql'), 'utf8');
@@ -247,6 +255,84 @@ describe('catalogTypes — relation kinds', () => {
   it('getRelationKind resolves a known id and returns undefined for unknown', () => {
     expect(getRelationKind('lives-in')?.label).toBe('Lives in');
     expect(getRelationKind('nemesis-of')).toBeUndefined();
+  });
+});
+
+describe('catalogTypes — user-defined types (runtime layer)', () => {
+  afterEach(() => setUserCatalogTypes([]));
+
+  it('tags every static entry system:true and never splices user types into CATALOG_TYPES', () => {
+    for (const t of CATALOG_TYPES) expect(t.system).toBe(true);
+    setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
+    // The static export is unchanged — user types live only in the runtime layer.
+    expect(CATALOG_TYPES.map((t) => t.id)).toEqual(['character', 'place', 'object', 'idea', 'scene', 'concept']);
+    expect(CATALOG_TYPES.some((t) => t.id === 'faction')).toBe(false);
+  });
+
+  it('USER_TYPE_FIELD_KINDS are the four documented kinds', () => {
+    expect([...USER_TYPE_FIELD_KINDS]).toEqual(['string', 'longtext', 'tags', 'ref']);
+  });
+
+  it('normalizeUserType maps a settings entry to the internal registry shape', () => {
+    const t = normalizeUserType({
+      id: 'faction', label: 'Faction', primaryContentKey: 'creed',
+      fields: [
+        { key: 'creed', label: 'Creed', kind: 'longtext' },
+        { key: 'leader', label: 'Leader', kind: 'ref' },
+        { key: 'motto', label: 'Motto', kind: 'string' },
+      ],
+    });
+    expect(t.system).toBe(false);
+    expect(t.extractionShape).toBe('light');
+    expect(t.payloadSchemaVersion).toBe(1);
+    expect(t.badgeColor).toMatch(/gray/);
+    expect(t.primaryContentLabel).toBe('Creed');
+    // snippet fallback: primary content key first, then longtext keys.
+    expect(t.snippetFallbackKeys[0]).toBe('creed');
+    // idPrefix never collides with a system prefix.
+    expect(['chr', 'plc', 'obj', 'idea', 'scn', 'cnc']).not.toContain(t.idPrefix);
+    expect(t.fields.map((f) => f.key)).toEqual(['creed', 'leader', 'motto']);
+  });
+
+  it('normalizeUserType returns null for a structurally invalid entry', () => {
+    expect(normalizeUserType(null)).toBeNull();
+    expect(normalizeUserType({ label: 'no id' })).toBeNull();
+    expect(normalizeUserType({ id: 'x' })).toBeNull();
+  });
+
+  it('setUserCatalogTypes merges system+user (system first) and resolves via active getters', () => {
+    setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
+    const active = getActiveCatalogTypes();
+    expect(active.slice(0, 6).map((t) => t.id)).toEqual([...INGREDIENT_TYPE_IDS]);
+    expect(active[active.length - 1].id).toBe('faction');
+    expect(getActiveCatalogType('faction')?.label).toBe('Faction');
+    expect(getActiveCatalogType('character')?.system).toBe(true);
+    expect(isActiveType('faction')).toBe(true);
+    expect(isActiveType('character')).toBe(true);
+    expect(isActiveType('nope')).toBe(false);
+  });
+
+  it('a user type colliding with a system id is skipped (system wins)', () => {
+    setUserCatalogTypes([{ id: 'character', label: 'Hijack', primaryContentKey: 'x', fields: [] }]);
+    // Still the system character (system:true), not the hijack.
+    expect(getActiveCatalogType('character')?.system).toBe(true);
+    expect(getActiveCatalogType('character')?.label).toBe('Character');
+  });
+
+  it('two user types deriving the same base prefix get distinct prefixes', () => {
+    setUserCatalogTypes([
+      { id: 'fact', label: 'Fact', primaryContentKey: 'x', fields: [] },
+      { id: 'fact-sheet', label: 'Fact Sheet', primaryContentKey: 'x', fields: [] },
+    ]);
+    const types = getActiveCatalogTypes().filter((t) => !t.system);
+    const prefixes = types.map((t) => t.idPrefix);
+    expect(new Set(prefixes).size).toBe(prefixes.length);
+  });
+
+  it('ingredientIdPrefix + currentPayloadSchemaVersion resolve active user types', () => {
+    setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'x', fields: [] }]);
+    expect(() => ingredientIdPrefix('faction')).not.toThrow();
+    expect(currentPayloadSchemaVersion('faction')).toBe(1);
   });
 });
 

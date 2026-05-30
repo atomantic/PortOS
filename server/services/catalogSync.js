@@ -48,7 +48,8 @@ import {
 } from './catalogDB.js';
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
-import { canonicalTagKey } from '../lib/catalogTypes.js';
+import { canonicalTagKey, setUserCatalogTypes, INGREDIENT_TYPE_IDS } from '../lib/catalogTypes.js';
+import { getSettings, updateSettings } from './settings.js';
 
 const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
@@ -96,7 +97,14 @@ export async function getChangesSince(since = '0', limit = 100) {
   // receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
   const tableMaxSequences = await getMaxSequences();
 
+  // User-defined type definitions ride EVERY envelope (settings-sourced, not
+  // sequence-tracked — there are at most 64 and they're small). The receiver
+  // LWW-merges them into its own settings slice. Absent → empty array.
+  const settings = await getSettings();
+  const catalogTypes = Array.isArray(settings.catalogUserTypes) ? settings.catalogUserTypes : [];
+
   return {
+    catalogTypes,
     scraps: scraps.items,
     ingredients: ingredients.items,
     sources: sources.items,
@@ -147,6 +155,7 @@ export async function applyRemoteChanges(envelope = {}) {
     relations: { applied: 0, failed: 0 },
     tags: { inserted: 0, updated: 0, skipped: 0, failed: 0 },
     media: { applied: 0, failed: 0 },
+    catalogTypes: { applied: 0, skipped: 0, failed: 0 },
     errors: [],
   };
 
@@ -285,7 +294,70 @@ export async function applyRemoteChanges(envelope = {}) {
     errLabel: 'media', idFor: (m) => `${m?.ingredientId}/${m?.kind}/${m?.mediaKey}`,
   });
 
+  // User-defined type definitions (catalog v8). LWW-merge the incoming
+  // definitions into the local settings slice: a peer's type whose `updatedAt`
+  // is newer than (or equal to, for a first-seen) the local copy wins; a type
+  // colliding with a built-in system id is skipped. The merge writes the
+  // settings slice ONCE (not per-row) and refreshes the in-process registry so
+  // the synced types resolve immediately. Wrapped so a settings write failure
+  // tallies as a single failure rather than aborting the whole apply.
+  if (Array.isArray(envelope.catalogTypes) && envelope.catalogTypes.length > 0) {
+    try {
+      stats.catalogTypes = await applyUserTypesFromPeer(envelope.catalogTypes);
+    } catch (err) {
+      stats.catalogTypes = { applied: 0, skipped: 0, failed: envelope.catalogTypes.length };
+      recordFailure('catalogTypes', null, err);
+    }
+  }
+
   return stats;
+}
+
+/**
+ * LWW-merge a peer's user-defined type definitions into the local settings
+ * `catalogUserTypes` slice. A peer type wins when its `updatedAt` is newer than
+ * the local copy's (or the local copy has none); a first-seen type is adopted.
+ * Types colliding with a built-in system id are skipped. Writes the settings
+ * slice once and refreshes the in-process registry. Returns `{ applied,
+ * skipped, failed }`.
+ */
+export async function applyUserTypesFromPeer(incoming = []) {
+  const settings = await getSettings();
+  const local = Array.isArray(settings.catalogUserTypes) ? settings.catalogUserTypes : [];
+  const byId = new Map(local.map((t) => [t.id, t]));
+  let applied = 0;
+  let skipped = 0;
+  // The LWW clock is the LATER of {updatedAt, deletedAt} — a deletion is a
+  // mutation too, so a delete newer than a peer's edit wins (no resurrection)
+  // and an edit newer than the delete revives. A tombstone the peer sends is
+  // stored verbatim (kept in the slice, filtered out of the active registry by
+  // setUserCatalogTypes) so the deletion keeps federating onward.
+  const clockOf = (t) => {
+    const u = typeof t?.updatedAt === 'string' ? t.updatedAt : '';
+    const d = typeof t?.deletedAt === 'string' ? t.deletedAt : '';
+    return d > u ? d : u;
+  };
+  for (const peer of incoming) {
+    const id = typeof peer?.id === 'string' ? peer.id.trim() : '';
+    // Skip a malformed entry or one colliding with a built-in system id —
+    // system types always win and are never represented in this slice.
+    if (!id || INGREDIENT_TYPE_IDS.includes(id)) { skipped++; continue; }
+    const existing = byId.get(id);
+    // LWW: adopt when no local copy, or the peer's clock is at-or-newer.
+    if (!existing || clockOf(peer) >= clockOf(existing)) {
+      byId.set(id, { ...peer, id });
+      applied++;
+    } else {
+      skipped++;
+    }
+  }
+  if (applied > 0) {
+    const next = [...byId.values()];
+    await updateSettings({ catalogUserTypes: next });
+    setUserCatalogTypes(next);
+    console.log(`🧩 Catalog sync: merged ${applied} user type(s) from peer`);
+  }
+  return { applied, skipped, failed: 0 };
 }
 
 // Total rows actually applied (inserted + updated for LWW kinds, applied for
@@ -299,7 +371,8 @@ export function countAppliedFromStats(stats = {}) {
     (stats.sources?.applied || 0) + (stats.refs?.applied || 0) +
     (stats.relations?.applied || 0) +
     (stats.tags?.inserted || 0) + (stats.tags?.updated || 0) +
-    (stats.media?.applied || 0)
+    (stats.media?.applied || 0) +
+    (stats.catalogTypes?.applied || 0)
   );
 }
 

@@ -12,6 +12,7 @@ import TabPills from '../ui/TabPills';
 const TABS = [
   { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
+  { id: 'catalog', label: 'Catalog', to: '/settings/catalog' },
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'embeddings', label: 'Embeddings', to: '/settings/embeddings' },
   { id: 'general', label: 'General', to: '/settings/general' },

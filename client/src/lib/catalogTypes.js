@@ -303,10 +303,16 @@ export const CATALOG_BADGE_BY_ID = Object.freeze(
  * non-empty key wins), trimmed + ellipsised to `max` chars. When `typeId` is
  * unknown/absent, falls back to a broad union of every type's keys so a row of
  * unknown type still renders a snippet.
+ *
+ * `resolveType` (optional) lets a caller pass the MERGED registry resolver
+ * (`useCatalogTypes().getType`) so a user-defined type's custom
+ * `snippetFallbackKeys` (e.g. a `creed` key) are honored — the static `BY_ID`
+ * only knows the built-ins. Falls back to the static lookup when omitted.
  */
-export function payloadSnippet(payload, typeId, max = 120) {
+export function payloadSnippet(payload, typeId, max = 120, resolveType = null) {
   if (!payload || typeof payload !== 'object') return '';
-  const keys = BY_ID[typeId]?.snippetFallbackKeys || UNION_SNIPPET_KEYS;
+  const typeDef = (resolveType && resolveType(typeId)) || BY_ID[typeId];
+  const keys = typeDef?.snippetFallbackKeys || UNION_SNIPPET_KEYS;
   let raw = '';
   for (const k of keys) {
     if (payload[k]) { raw = payload[k]; break; }
@@ -327,3 +333,80 @@ const UNION_SNIPPET_KEYS = (() => {
   }
   return out;
 })();
+
+// --- User-defined types (client mirror) ----------------------------------
+// User types are defined in Settings → Catalog, persisted server-side in
+// settings.json, and served (merged with the system registry) via
+// `GET /api/catalog/types`. The `useCatalogTypes` hook fetches them and merges
+// with the static `CATALOG_TYPES` above so the Catalog list/picker/editor pick
+// them up. The static registry stays the synchronous fallback so first render
+// never blanks.
+
+/** Field kinds a user type may declare — mirror of the server constant. */
+export const USER_TYPE_FIELD_KINDS = Object.freeze(['string', 'longtext', 'tags', 'ref']);
+
+// Map a server field `kind` to the client editor widget kind. `string` → a
+// single-line input ('text'), `longtext` → a textarea, `tags`/`ref` keep their
+// names (the generic renderer special-cases them). Unknown kinds fall back to
+// 'text' so a forked-peer field never crashes the renderer.
+const FIELD_KIND_TO_WIDGET = { string: 'text', longtext: 'textarea', tags: 'tags', ref: 'ref' };
+
+/**
+ * Normalize a server-served user type (system:false) into the client registry
+ * shape the UI consumes — the same surface a static `CATALOG_TYPES` entry
+ * exposes, plus `system: false` and a generic `editorFields` list derived from
+ * the server `fields`. Returns `null` for a structurally-invalid entry.
+ */
+export function normalizeUserTypeForClient(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') return null;
+  const fields = Array.isArray(raw.fields) ? raw.fields : [];
+  const editorFields = fields
+    .filter((f) => f && typeof f.key === 'string')
+    .map((f) => ({
+      key: f.key,
+      label: typeof f.label === 'string' && f.label ? f.label : f.key,
+      widget: FIELD_KIND_TO_WIDGET[f.kind] || 'text',
+      ...(Number.isInteger(f.maxLength) ? { maxLength: f.maxLength } : {}),
+    }));
+  return {
+    id: raw.id,
+    label: typeof raw.label === 'string' && raw.label ? raw.label : raw.id,
+    badgeColor: raw.badgeColor || 'bg-gray-500/20 text-gray-300 border-gray-500/40',
+    primaryContentKey: raw.primaryContentKey || 'description',
+    primaryContentLabel: raw.primaryContentLabel
+      || editorFields.find((f) => f.key === raw.primaryContentKey)?.label
+      || 'Description',
+    snippetFallbackKeys: Array.isArray(raw.snippetFallbackKeys) && raw.snippetFallbackKeys.length
+      ? raw.snippetFallbackKeys
+      : [raw.primaryContentKey || 'description'],
+    editorFields,
+    system: false,
+  };
+}
+
+/**
+ * Merge the static system registry with normalized user types into an ordered
+ * list (system first) + a BY_ID lookup. `userTypes` is the raw server array
+ * (system entries are dropped — they're already in `staticTypes`); each user
+ * entry is normalized. A user id colliding with a system id is skipped (system
+ * wins). Returns `{ list, byId }`.
+ */
+export function mergeCatalogTypes(staticTypes = CATALOG_TYPES, userTypes = []) {
+  const list = staticTypes.map((t) => ({ ...t, system: true }));
+  const systemIds = new Set(staticTypes.map((t) => t.id));
+  const seen = new Set(systemIds);
+  for (const raw of Array.isArray(userTypes) ? userTypes : []) {
+    if (raw?.system) continue; // server may include system entries; skip — already present
+    const normalized = normalizeUserTypeForClient(raw);
+    if (!normalized || seen.has(normalized.id)) continue;
+    seen.add(normalized.id);
+    list.push(normalized);
+  }
+  const byId = Object.fromEntries(list.map((t) => [t.id, t]));
+  return { list, byId };
+}
+
+/** Look up a type by id from a merged `byId` map (from `mergeCatalogTypes`). */
+export function getCatalogTypeFrom(byId, id) {
+  return byId?.[id];
+}

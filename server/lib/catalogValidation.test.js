@@ -28,7 +28,11 @@ import {
   catalogPortraitSetSchema,
   MEDIA_KINDS,
   catalogUrlIngestSchema,
+  catalogUserTypeSchema,
+  catalogUserTypesSettingsSchema,
 } from './catalogValidation.js';
+import { setUserCatalogTypes } from './catalogTypes.js';
+import { afterEach } from 'vitest';
 
 describe('catalogValidation — ingredient types & ref kinds', () => {
   it('exposes the six v1 ingredient types as a frozen list', () => {
@@ -98,6 +102,92 @@ describe('catalogValidation — catalogIngredientCreateSchema', () => {
   it('accepts a payload near the cap', () => {
     const ok = { blob: 'x'.repeat(190_000) };
     expect(() => catalogIngredientCreateSchema.parse({ type: 'idea', name: 'X', payload: ok })).not.toThrow();
+  });
+});
+
+describe('catalogValidation — ingredient type refinement (user types)', () => {
+  afterEach(() => setUserCatalogTypes([]));
+
+  it('accepts an active user type and rejects it once removed', () => {
+    setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
+    expect(catalogIngredientCreateSchema.parse({ type: 'faction', name: 'Choir' }).type).toBe('faction');
+    setUserCatalogTypes([]);
+    expect(() => catalogIngredientCreateSchema.parse({ type: 'faction', name: 'Choir' })).toThrow();
+  });
+
+  it('the query schema type gate also honors active user types', () => {
+    setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
+    expect(catalogIngredientQuerySchema.parse({ type: 'faction' }).type).toBe('faction');
+    expect(() => catalogIngredientQuerySchema.parse({ type: 'ghost' })).toThrow();
+  });
+
+  it('the sync ingredient gate stays loose (unknown type stores harmlessly)', () => {
+    // catalogSyncIngredientSchema.type is z.string().max(32) — a not-yet-known
+    // type must NOT be rejected on the sync apply path.
+    const env = catalogSyncEnvelopeSchema.parse({
+      ingredients: [{ id: 'cat-x-1', type: 'faction', name: 'X', createdAt: 'now', updatedAt: 'now' }],
+    });
+    expect(env.ingredients[0].type).toBe('faction');
+  });
+});
+
+describe('catalogValidation — catalogUserTypeSchema', () => {
+  const valid = { id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [{ key: 'creed', label: 'Creed', kind: 'longtext' }] };
+
+  it('accepts a well-formed user type', () => {
+    expect(() => catalogUserTypeSchema.parse(valid)).not.toThrow();
+  });
+
+  it('rejects a non-slug id and an oversized id', () => {
+    expect(() => catalogUserTypeSchema.parse({ ...valid, id: 'Faction' })).toThrow();
+    expect(() => catalogUserTypeSchema.parse({ ...valid, id: 'x'.repeat(33) })).toThrow();
+  });
+
+  it('rejects an unknown field kind', () => {
+    expect(() => catalogUserTypeSchema.parse({ ...valid, fields: [{ key: 'k', label: 'K', kind: 'wysiwyg' }] })).toThrow();
+  });
+
+  it('rejects more than 40 fields', () => {
+    const fields = Array.from({ length: 41 }, (_, i) => ({ key: `f${i}`, label: `F${i}`, kind: 'string' }));
+    expect(() => catalogUserTypeSchema.parse({ ...valid, fields })).toThrow();
+  });
+
+  it('rejects unknown top-level keys (strict)', () => {
+    expect(() => catalogUserTypeSchema.parse({ ...valid, extractionShape: 'bible' })).toThrow();
+  });
+});
+
+describe('catalogValidation — catalogUserTypesSettingsSchema', () => {
+  const t = (id) => ({ id, label: id, primaryContentKey: 'x', fields: [] });
+
+  it('accepts a unique-id list', () => {
+    expect(() => catalogUserTypesSettingsSchema.parse([t('faction'), t('relic')])).not.toThrow();
+  });
+
+  it('rejects duplicate ids', () => {
+    expect(() => catalogUserTypesSettingsSchema.parse([t('faction'), t('faction')])).toThrow(/duplicate/);
+  });
+
+  it('rejects an id colliding with a built-in system type', () => {
+    expect(() => catalogUserTypesSettingsSchema.parse([t('character')])).toThrow(/built-in/);
+  });
+
+  it('rejects more than 64 types', () => {
+    const many = Array.from({ length: 65 }, (_, i) => t(`u${i}`));
+    expect(() => catalogUserTypesSettingsSchema.parse(many)).toThrow();
+  });
+});
+
+describe('catalogValidation — catalogSyncEnvelopeSchema catalogTypes block', () => {
+  it('accepts a catalogTypes block (additive v8)', () => {
+    const env = catalogSyncEnvelopeSchema.parse({
+      catalogTypes: [{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [], updatedAt: 'now' }],
+    });
+    expect(env.catalogTypes[0].id).toBe('faction');
+  });
+
+  it('validates without a catalogTypes block (≤v7 peer)', () => {
+    expect(() => catalogSyncEnvelopeSchema.parse({ ingredients: [] })).not.toThrow();
   });
 });
 

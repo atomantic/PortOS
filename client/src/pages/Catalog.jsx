@@ -18,15 +18,16 @@ import {
   deleteCatalogIngredient,
   getCatalogStats,
 } from '../services/apiCatalog';
-import { CATALOG_TYPES, getCatalogType, payloadSnippet } from '../lib/catalogTypes';
+import { payloadSnippet } from '../lib/catalogTypes';
+import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 
 // All type-derived UI (chips, badge color, inline-form primary content
-// key/label, snippet fallback) now flows from the shared registry. Adding a
-// type is one registry entry — no per-surface edit here.
-const TYPES = CATALOG_TYPES;
+// key/label, snippet fallback) flows from the merged registry (system +
+// user-defined). The static built-ins are the synchronous fallback inside the
+// hook, so adding a type — built-in or user — surfaces here automatically.
 
-function TypeBadge({ type }) {
-  const meta = getCatalogType(type);
+function TypeBadge({ type, getType }) {
+  const meta = getType(type);
   if (!meta) return null;
   return (
     <span className={`inline-block text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${meta.badgeColor}`}>
@@ -36,6 +37,9 @@ function TypeBadge({ type }) {
 }
 
 export default function Catalog() {
+  // Merged type registry (system + user-defined). `types` drives the filter
+  // chips + the New-form dropdown; `getType` resolves badge/primary-content.
+  const { types: TYPES, getType } = useCatalogTypes();
   const [items, setItems] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -100,7 +104,7 @@ export default function Catalog() {
     const content = form.content.trim();
     const payload = {};
     if (content) {
-      payload[getCatalogType(form.type)?.primaryContentKey || 'description'] = content;
+      payload[getType(form.type)?.primaryContentKey || 'description'] = content;
     }
     setCreating(true);
     const created = await createCatalogIngredient({
@@ -262,7 +266,7 @@ export default function Catalog() {
           </div>
           <div>
             <label htmlFor="catalog-new-content" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              {getCatalogType(form.type)?.primaryContentLabel || 'Description'}
+              {getType(form.type)?.primaryContentLabel || 'Description'}
               <span className="normal-case text-gray-500"> (optional)</span>
             </label>
             <textarea
@@ -321,15 +325,15 @@ export default function Catalog() {
                 >
                   <span className="block text-white font-medium truncate">{name}</span>
                   <span className="flex items-center gap-1.5 flex-wrap">
-                    <TypeBadge type={it.type} />
+                    <TypeBadge type={it.type} getType={getType} />
                     {(it.tags || []).slice(0, 4).map((tag) => (
                       <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-gray-400">
                         {tag}
                       </span>
                     ))}
                   </span>
-                  {payloadSnippet(it.payload, it.type) ? (
-                    <span className="text-xs text-gray-400 line-clamp-3">{payloadSnippet(it.payload, it.type)}</span>
+                  {payloadSnippet(it.payload, it.type, 120, getType) ? (
+                    <span className="text-xs text-gray-400 line-clamp-3">{payloadSnippet(it.payload, it.type, 120, getType)}</span>
                   ) : null}
                 </Link>
                 <div className="absolute top-2 right-2">

@@ -27,7 +27,9 @@ import { listImageGallery } from '../services/apiImageVideo';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import TagPicker from '../components/TagPicker';
+import GenericIngredientFields from '../components/GenericIngredientFields';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind, CHARACTER_LIST_FIELDS } from '../lib/catalogTypes';
+import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo } from '../utils/formatters';
 
 // Per-type editor field list + badge color now come from the shared registry
@@ -59,6 +61,9 @@ function REFKIND_LABEL(kind) {
 export default function CatalogIngredient() {
   const { id } = useParams();
   const navigate = useNavigate();
+  // Merged type registry (system + user-defined). Falls back synchronously to
+  // the static built-ins so the editor renders before the fetch resolves.
+  const { getType: getMergedType } = useCatalogTypes();
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
@@ -273,12 +278,19 @@ export default function CatalogIngredient() {
     );
   }
 
-  const typeDef = getCatalogType(record.type) || getCatalogType('idea');
+  // Resolve from the merged registry (system + user types) so a user-typed
+  // ingredient picks up its declared fields; fall back to the static 'idea'
+  // editor for an unknown/orphaned type.
+  const typeDef = getMergedType(record.type) || getCatalogType(record.type) || getCatalogType('idea');
   const fields = typeDef.editorFields || getCatalogType('idea').editorFields;
   // Grouped "character sheet" sections for the rich canon types
   // (character/place/object); light types (idea/scene/concept) have none and
   // fall back to the flat field list below.
   const sections = typeDef.editorSections || null;
+  // A user-defined type has no hardcoded editor sections and carries
+  // generically-shaped editorFields ({ key, label, widget }); render the
+  // generic field renderer for it. System types keep their existing branches.
+  const isUserType = typeDef.system === false;
   const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
@@ -357,7 +369,9 @@ export default function CatalogIngredient() {
             <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
               placeholder="mentor, antagonist, season-1" />
           </div>
-          {sections
+          {isUserType
+            ? <GenericIngredientFields fields={fields} payload={payload} onChange={updatePayload} />
+            : sections
             ? sections.map((section) => (
                 <SheetSection key={section.title} title={section.title}
                   fields={section.fields} payload={payload} onChange={updatePayload} />
@@ -910,7 +924,10 @@ function diffRevisionAgainstCurrent(revision, current, fields) {
   }
   const curPayload = current?.payload || {};
   const revPayload = revision.payload || {};
-  for (const [key, label] of fields.map(([k, l]) => [k, l])) {
+  // `fields` is either the system tuple form `[key, label, kind]` or the
+  // user-type object form `{ key, label, widget }` — normalize to [key, label].
+  const fieldPairs = (fields || []).map((f) => (Array.isArray(f) ? [f[0], f[1]] : [f.key, f.label]));
+  for (const [key, label] of fieldPairs) {
     const from = revPayload[key] ?? '';
     const to = curPayload[key] ?? '';
     if (String(from) !== String(to)) out.push({ key, label, from: String(from), to: String(to) });

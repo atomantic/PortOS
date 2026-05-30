@@ -167,21 +167,154 @@ for (const t of REGISTRY) {
   }
 }
 
-export const CATALOG_TYPES = Object.freeze(REGISTRY.map((t) => Object.freeze({ ...t })));
+// Every static entry is a SYSTEM type — tagged `system: true` so the runtime
+// merge (system + user-defined) can tell built-ins from settings-defined types
+// without comparing against the id list. The parity test + DDL-literal test
+// depend on this static export staying the six built-ins ONLY; user types live
+// purely in the runtime layer below, never spliced into REGISTRY.
+export const CATALOG_TYPES = Object.freeze(REGISTRY.map((t) => Object.freeze({ ...t, system: true })));
 
 /** Frozen ordered list of type ids — the canonical `INGREDIENT_TYPES`. */
 export const INGREDIENT_TYPE_IDS = Object.freeze(CATALOG_TYPES.map((t) => t.id));
 
 const BY_ID = Object.freeze(Object.fromEntries(CATALOG_TYPES.map((t) => [t.id, t])));
 
-/** Look up a registry entry by type id. Returns `undefined` for unknown ids. */
+// Reserved system idPrefixes — a user type's minted idPrefix must never collide
+// with these (chr/plc/obj/idea/scn/cnc) or two types would share the
+// `cat-<prefix>-<uuid>` namespace. Also reserve `scrap`/`rev`/`tag` (used by
+// other catalog id mints) so a user type can't shadow them.
+const SYSTEM_ID_PREFIXES = new Set([...CATALOG_TYPES.map((t) => t.idPrefix), 'scrap', 'rev', 'tag']);
+const SYSTEM_TYPE_IDS = new Set(INGREDIENT_TYPE_IDS);
+
+/** Look up a SYSTEM registry entry by type id. Returns `undefined` for unknown ids. */
 export function getCatalogType(id) {
   return BY_ID[id];
 }
 
-/** Mint the `cat-<prefix>-<uuid>` id for a type, or throw on unknown type. */
+// --- User-defined types (runtime layer) ----------------------------------
+// User types are defined in `data/settings.json` (`catalogUserTypes: []`) and
+// merged into the active registry at boot/runtime via `setUserCatalogTypes`.
+// They are NOT in the static REGISTRY/CATALOG_TYPES export — that stays the six
+// built-ins so the parity + DDL-literal tests keep asserting against a stable
+// list. Active-type callers (validation refine, id minting, type-validity
+// guards) go through `getActiveCatalogType`/`isActiveType` instead.
+
+/** Field kinds a user type may declare. Drives the generic editor renderer. */
+export const USER_TYPE_FIELD_KINDS = Object.freeze(['string', 'longtext', 'tags', 'ref']);
+
+// Deterministic, collision-free idPrefix for a user type. Derives a short slug
+// from the type id, then disambiguates against the reserved system prefixes (and
+// any prefixes already minted in THIS merge pass) by appending `2`, `3`, … —
+// so the minted `cat-<prefix>-<uuid>` namespace never overlaps a system type.
+function deriveUserIdPrefix(id, taken) {
+  const base = String(id || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 4) || 'utyp';
+  let prefix = base;
+  let n = 1;
+  while (SYSTEM_ID_PREFIXES.has(prefix) || taken.has(prefix)) {
+    n += 1;
+    prefix = `${base}${n}`;
+  }
+  return prefix;
+}
+
+/**
+ * Map a settings entry `{ id, label, primaryContentKey, fields[] }` to the
+ * internal registry shape used by every active-type consumer. `taken` is the
+ * set of idPrefixes already minted in this merge pass (mutated here) so two
+ * user types can't collide on their derived prefix. Returns `null` for a
+ * structurally-invalid entry (missing id / label) so the merge can skip it.
+ */
+export function normalizeUserType(raw, taken = new Set()) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+  if (!id || !label) return null;
+  const primaryContentKey = typeof raw.primaryContentKey === 'string' && raw.primaryContentKey.trim()
+    ? raw.primaryContentKey.trim()
+    : 'description';
+  const fields = Array.isArray(raw.fields)
+    ? raw.fields.filter((f) => f && typeof f.key === 'string' && f.key.trim())
+    : [];
+  // snippet fallback chain: primary content key first, then every longtext key
+  // (richest prose), de-duplicated. Always at least the primary key.
+  const snippetFallbackKeys = [];
+  for (const k of [primaryContentKey, ...fields.filter((f) => f.kind === 'longtext').map((f) => f.key)]) {
+    if (k && !snippetFallbackKeys.includes(k)) snippetFallbackKeys.push(k);
+  }
+  const idPrefix = deriveUserIdPrefix(id, taken);
+  taken.add(idPrefix);
+  return Object.freeze({
+    id,
+    label,
+    idPrefix,
+    badgeColor: 'bg-gray-500/20 text-gray-300 border-gray-500/40',
+    primaryContentKey,
+    primaryContentLabel: fields.find((f) => f.key === primaryContentKey)?.label || 'Description',
+    snippetFallbackKeys,
+    ftsFields: [],
+    extractionShape: 'light',
+    payloadSchemaVersion: 1,
+    payloadUpgraders: {},
+    defaultTags: [],
+    system: false,
+    fields: Object.freeze(fields.map((f) => Object.freeze({
+      key: String(f.key).trim(),
+      label: typeof f.label === 'string' && f.label.trim() ? f.label.trim() : String(f.key).trim(),
+      kind: USER_TYPE_FIELD_KINDS.includes(f.kind) ? f.kind : 'string',
+      ...(Number.isInteger(f.maxLength) ? { maxLength: f.maxLength } : {}),
+    }))),
+  });
+}
+
+// Module-level mutable set of active user types (system types are static). The
+// active registry is system-first, then user types in declaration order. A user
+// type whose id collides with a system id is skipped (system always wins).
+let activeUserTypes = [];
+
+/**
+ * Replace the active user-type set from a settings `catalogUserTypes` array.
+ * Called at boot (after settings load) and on every settings-update event so
+ * the in-process registry tracks the persisted definitions without a restart.
+ * Skips entries that fail to normalize, collide with a system id, duplicate an
+ * earlier user id, or carry a `deletedAt` tombstone (a soft-deleted type is
+ * retained in the persisted slice so the deletion federates, but it must not
+ * appear in the active registry).
+ */
+export function setUserCatalogTypes(list = []) {
+  const taken = new Set();
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    if (raw?.deletedAt) continue;  // tombstone — persisted but not active
+    const normalized = normalizeUserType(raw, taken);
+    if (!normalized) continue;
+    if (SYSTEM_TYPE_IDS.has(normalized.id) || seen.has(normalized.id)) continue;
+    seen.add(normalized.id);
+    out.push(normalized);
+  }
+  activeUserTypes = out;
+  return activeUserTypes;
+}
+
+/** Active (system + user) types as an ordered list — system first. */
+export function getActiveCatalogTypes() {
+  return [...CATALOG_TYPES, ...activeUserTypes];
+}
+
+/** Look up an active (system OR user) type by id. Returns `undefined` if unknown. */
+export function getActiveCatalogType(id) {
+  return BY_ID[id] || activeUserTypes.find((t) => t.id === id);
+}
+
+/** True when `id` names an active system OR user type. */
+export function isActiveType(id) {
+  return Boolean(getActiveCatalogType(id));
+}
+
+/** Mint the `cat-<prefix>-<uuid>` id for a type, or throw on unknown type.
+ * Resolves system AND active user types so a user-typed create mints a valid id. */
 export function ingredientIdPrefix(id) {
-  const t = BY_ID[id];
+  const t = getActiveCatalogType(id);
   if (!t) throw new Error(`Unknown ingredient type: ${id}`);
   return t.idPrefix;
 }
@@ -201,9 +334,10 @@ export const FTS_PAYLOAD_FIELDS = Object.freeze((() => {
   return out;
 })());
 
-/** Current payload-shape version for a type (1 when the type declares none). */
+/** Current payload-shape version for a type (1 when the type declares none).
+ * Resolves system AND user types (user types are payloadSchemaVersion 1). */
 export function currentPayloadSchemaVersion(id) {
-  return BY_ID[id]?.payloadSchemaVersion ?? 1;
+  return getActiveCatalogType(id)?.payloadSchemaVersion ?? 1;
 }
 
 /**
@@ -213,7 +347,7 @@ export function currentPayloadSchemaVersion(id) {
  * caller can mutate/merge without poisoning the registry. Unknown type → `[]`.
  */
 export function defaultTagsForType(id) {
-  return [...(BY_ID[id]?.defaultTags || [])];
+  return [...(getActiveCatalogType(id)?.defaultTags || [])];
 }
 
 // --- Tag taxonomy --------------------------------------------------------

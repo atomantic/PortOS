@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import { getSettings, updateSettings } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
+import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
 import Dashboard from './pages/Dashboard';
 import Apps from './pages/Apps';
 import Ambient from './pages/Ambient';
@@ -152,6 +153,7 @@ function useTimezoneBootstrap() {
 export default function App() {
   useTimezoneBootstrap();
   return (
+    <CatalogTypesProvider>
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/ambient" element={<Ambient />} />
@@ -290,5 +292,6 @@ export default function App() {
         </Route>
       </Routes>
     </Suspense>
+    </CatalogTypesProvider>
   );
 }

@@ -12,12 +12,28 @@
 
 import { z } from 'zod';
 import { BIBLE_LIMITS } from './storyBible.js';
-import { INGREDIENT_TYPE_IDS, RELATION_KIND_IDS, MEDIA_KIND_IDS } from './catalogTypes.js';
+import {
+  INGREDIENT_TYPE_IDS,
+  RELATION_KIND_IDS,
+  MEDIA_KIND_IDS,
+  USER_TYPE_FIELD_KINDS,
+  isActiveType,
+} from './catalogTypes.js';
 
-// Derived from the shared type registry (`catalogTypes.js`) — adding a type
-// there flows through to every Zod enum below automatically. Kept as a frozen
+// Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
+// type there flows through to consumers automatically. Kept as a frozen
 // re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
+// NOTE: this is the SYSTEM list only — the local-create `type` gate below uses
+// the runtime `isActiveType` refinement so user-defined types validate too.
 export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
+
+// Local ingredient `type` gate. Was a frozen `z.enum(INGREDIENT_TYPES)`; now a
+// runtime refinement against the active registry (system + user-defined types)
+// so a user-typed create/query passes. The cross-instance SYNC path stays loose
+// (`z.string().max(32)` below) — a peer ingredient may arrive before its type
+// row applies, and the version gate already covers true shape skew.
+const ingredientTypeGate = z.string().trim().min(1).max(32)
+  .refine(isActiveType, 'unknown ingredient type');
 
 export const REF_KINDS = Object.freeze([
   'universe',
@@ -62,6 +78,51 @@ export const SCRAP_SOURCE_KINDS = Object.freeze([
   'file',        // POST /catalog/ingest/file — uploaded .txt/.md/.pdf
   'voice-memo',  // POST /catalog/ingest/voice — recorded memo, Whisper-transcribed
 ]);
+
+// --- User-defined catalog types (settings.json `catalogUserTypes`) -------
+// A user type is a settings-persisted, federated definition that merges into
+// the active type registry at boot/runtime as a `system:false` entry. The
+// shape is intentionally minimal: an id (the stored `type` discriminator), a
+// label, a primary content key, and a flat list of typed fields the generic
+// editor renders. There is NO per-type React file — the renderer is generic.
+const userTypeIdentifier = z.string().trim().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, 'must be a slug/identifier').max(64);
+const userTypeField = z.object({
+  key: userTypeIdentifier,
+  label: z.string().trim().min(1).max(80),
+  kind: z.enum(USER_TYPE_FIELD_KINDS),
+  maxLength: z.number().int().min(1).max(20_000).optional(),
+}).strict();
+
+export const catalogUserTypeSchema = z.object({
+  // The type id is also the `cat-<prefix>-<uuid>` discriminator stored in the
+  // DB — slug-only, ≤32 so it stays a tidy column value.
+  id: z.string().trim().regex(/^[a-z][a-z0-9-]*$/, 'id must be a lowercase slug').max(32),
+  label: z.string().trim().min(1).max(80),
+  primaryContentKey: userTypeIdentifier,
+  fields: z.array(userTypeField).max(40),
+  // Mutation timestamp — drives the cross-peer LWW merge (a newer mutation
+  // wins). Stamped server-side on every create/edit; clients don't send it.
+  updatedAt: z.string().datetime().optional(),
+  // Soft-delete tombstone. A deleted user type is KEPT in the slice with
+  // `deletedAt` set rather than physically removed, so the deletion FEDERATES
+  // to peers instead of a peer resurrecting it on the next sync. Filtered out
+  // of the active registry. LWW compares the later of {updatedAt, deletedAt}:
+  // a delete newer than a peer's edit wins, and an edit newer than the delete
+  // revives the type.
+  deletedAt: z.string().datetime().nullable().optional(),
+}).strict();
+
+// The whole `catalogUserTypes` settings slice: ≤64 user types, unique ids, and
+// no id colliding with a built-in system type. (Prefix-collision is resolved
+// deterministically at merge time in `normalizeUserType`, so it's not gated
+// here — two user types with prefix-deriving-to-the-same base just get `name2`.)
+export const catalogUserTypesSettingsSchema = z.array(catalogUserTypeSchema).max(64)
+  .refine((list) => new Set(list.map((t) => t.id)).size === list.length, {
+    message: 'duplicate catalog user-type id',
+  })
+  .refine((list) => list.every((t) => !INGREDIENT_TYPE_IDS.includes(t.id)), {
+    message: 'catalog user-type id collides with a built-in type',
+  });
 
 export const catalogScrapCreateSchema = z.object({
   title: z.string().trim().max(300).optional().nullable(),
@@ -158,7 +219,7 @@ export const catalogVoiceIngestSchema = z.object({
 }).strict();
 
 export const catalogIngredientCreateSchema = z.object({
-  type: z.enum(INGREDIENT_TYPES),
+  type: ingredientTypeGate,
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX),
   payload,
   tags,
@@ -195,7 +256,7 @@ export const catalogRevisionRestoreSchema = z.object({
 }).strict();
 
 export const catalogIngredientQuerySchema = z.object({
-  type: z.enum(INGREDIENT_TYPES).optional(),
+  type: ingredientTypeGate.optional(),
   tag: tag.optional(),
   q: z.string().trim().max(500).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -352,7 +413,10 @@ export const catalogSyncScrapSchema = z.object({
 
 export const catalogSyncIngredientSchema = z.object({
   id: z.string().min(1).max(80),
-  type: z.enum(INGREDIENT_TYPES),
+  // Loose on the wire (NOT the active-type refinement): a peer ingredient may
+  // arrive before its user-type row applies, so a not-yet-known type stores
+  // harmlessly. The version gate covers true cross-instance shape skew.
+  type: z.string().max(32),
   name: z.string().max(BIBLE_LIMITS.NAME_MAX),
   payload: syncPayload,
   tags: syncTags,
@@ -447,6 +511,23 @@ export const catalogSyncMediaSchema = z.object({
   syncSequence: z.string().optional(),
 }).passthrough();
 
+// User-defined type DEFINITIONS on the wire (catalog v8). LWW-merged on the
+// receiver into its own `settings.json` `catalogUserTypes` slice. Loose-shaped
+// (passthrough, no field-kind enum) so a forked peer's extra field shape still
+// stores — the active-registry merge re-normalizes on apply, and a malformed
+// entry is dropped there rather than 400-ing the whole envelope. `updatedAt`
+// drives the LWW window; absent → treated as createdAt for the comparison.
+export const catalogSyncUserTypeSchema = z.object({
+  id: z.string().min(1).max(32),
+  label: z.string().max(80).optional(),  // a pure tombstone may omit label
+  primaryContentKey: z.string().max(64).optional(),
+  fields: z.array(z.unknown()).max(40).optional(),
+  updatedAt: z.string().optional(),
+  // A deletion tombstone rides the wire so a delete federates instead of a
+  // peer resurrecting the type. Null/absent = live.
+  deletedAt: z.string().nullable().optional(),
+}).passthrough();
+
 export const catalogSyncEnvelopeSchema = z.object({
   scraps: z.array(catalogSyncScrapSchema).max(5_000).optional(),
   ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
@@ -455,5 +536,8 @@ export const catalogSyncEnvelopeSchema = z.object({
   relations: z.array(catalogSyncRelationSchema).max(20_000).optional(),
   tags: z.array(catalogSyncTagSchema).max(20_000).optional(),
   media: z.array(catalogSyncMediaSchema).max(20_000).optional(),
+  // Additive catalog v8 block — user-defined type definitions. Optional so a
+  // ≤v7 peer's envelope (no `catalogTypes`) still validates.
+  catalogTypes: z.array(catalogSyncUserTypeSchema).max(64).optional(),
   portosMeta,
 }).passthrough();
