@@ -13,6 +13,7 @@ import { join, resolve as resolvePath, sep as PATH_SEP, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS } from './fileUtils.js';
+import { safeChildProcessEnv } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -40,7 +41,7 @@ export const findFfmpeg = async () => {
     if (existsSync(p)) { cachedFfmpegPath = p; return p; }
   }
   const cmd = IS_WIN ? 'where' : 'which';
-  const { stdout } = await execFileAsync(cmd, ['ffmpeg'], { timeout: 5000 }).catch(() => ({ stdout: '' }));
+  const { stdout } = await execFileAsync(cmd, ['ffmpeg'], { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
   cachedFfmpegPath = stdout.trim().split(/\r?\n/)[0] || null;
   return cachedFfmpegPath;
 };
@@ -78,7 +79,7 @@ export function runFfmpegProcess({ bin, args, signal, stderrTailBytes = 2000 } =
   }
   return new Promise((resolve) => {
     const stdio = stderrTailBytes > 0 ? ['ignore', 'ignore', 'pipe'] : 'ignore';
-    const proc = spawn(bin, args, { stdio });
+    const proc = spawn(bin, args, { env: safeChildProcessEnv(), stdio });
     let stderrTail = '';
     if (stderrTailBytes > 0 && proc.stderr) {
       proc.stderr.on('data', (chunk) => {
@@ -135,7 +136,7 @@ export const findFfprobe = async () => {
   const probe = join(dirname(ffmpeg), IS_WIN ? 'ffprobe.exe' : 'ffprobe');
   if (existsSync(probe)) { cachedFfprobePath = probe; return probe; }
   const cmd = IS_WIN ? 'where' : 'which';
-  const { stdout } = await execFileAsync(cmd, ['ffprobe'], { timeout: 5000 }).catch(() => ({ stdout: '' }));
+  const { stdout } = await execFileAsync(cmd, ['ffprobe'], { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
   cachedFfprobePath = stdout.trim().split(/\r?\n/)[0] || null;
   return cachedFfprobePath;
 };
@@ -164,7 +165,7 @@ const probeDurationSeconds = async (videoPath) => {
     '-of', 'default=nokey=1:noprint_wrappers=1',
     videoPath,
   ];
-  const { stdout } = await execFileAsync(ffprobe, args, { timeout: 5000 }).catch(() => ({ stdout: '' }));
+  const { stdout } = await execFileAsync(ffprobe, args, { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
   const n = parseFloat((stdout || '').trim());
   return Number.isFinite(n) && n > 0 ? n : null;
 };
@@ -209,7 +210,7 @@ const probeFrameCount = async (videoPath) => {
       '-of', 'default=nokey=1:noprint_wrappers=1',
       videoPath,
     ];
-    const { stdout } = await execFileAsync(ffprobe, args, { timeout: 15000 }).catch(() => ({ stdout: '' }));
+    const { stdout } = await execFileAsync(ffprobe, args, { env: safeChildProcessEnv(), timeout: 15000 }).catch(() => ({ stdout: '' }));
     const n = parseInt((stdout || '').trim(), 10);
     return Number.isFinite(n) && n > 0 ? n : null;
   };

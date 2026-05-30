@@ -15,3 +15,7 @@ export function stripDebugMallocEnv(env) {
     Object.entries(env).filter(([k]) => !k.startsWith('Malloc'))
   );
 }
+
+export function safeChildProcessEnv(extra = {}) {
+  return stripDebugMallocEnv({ ...process.env, ...extra });
+}
