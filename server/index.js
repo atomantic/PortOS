@@ -693,6 +693,12 @@ ensureSelf()
       await ensureSchema();
       const { migrateBibleToCatalog } = await import('./scripts/migrateBibleToCatalog.js');
       await migrateBibleToCatalog();
+      // One-time data repair: rewrite legacy machine universe tags
+      // (`from-universe`, `universe:<id>`) on backfilled rows into the friendly
+      // universe NAME tag. Runs after the backfill so promoted rows exist;
+      // marker-gated in data/catalog-universe-tags.applied.json.
+      const { repairUniverseTags } = await import('./scripts/repairUniverseTags.js');
+      await repairUniverseTags();
       // Per-record catalog payload-shape migration — walks rows whose stored
       // payload.schemaVersion lags the registry-current and applies registered
       // upgraders. No-ops via marker once an install is at the high-water

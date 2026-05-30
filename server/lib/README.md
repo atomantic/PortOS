@@ -52,6 +52,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `bibleExtractor.js` | LLM bible-extraction stage + sanitization. |
 | `catalogBulkParsers.js` | Dependency-free markdown/CSV/JSON parsers for `POST /api/catalog/bulk-import` and YAML/markdown serializers for `GET /api/catalog/export`. |
 | `catalogTypes.js` | Shared catalog ingredient TYPE REGISTRY — one entry per type drives validation enum, ID prefix, FTS field set, extraction shape, per-record `payloadSchemaVersion` + upgraders, per-type `defaultTags`. Also exports the relation-kind registry and the tag-taxonomy helpers (`canonicalTagKey`, `tagIdForKey`, `defaultTagsForType`). Mirrored on the client at `client/src/lib/catalogTypes.js`. |
+| `catalogUniverseTags.js` | Pure transform that rewrites legacy machine universe tags (`from-universe`, `universe:<id>`) on backfilled catalog ingredients into friendly universe-NAME tags, preserving user tags + the structured `catalog_ingredient_refs` link. Used by the boot-time repair and the bible→catalog backfill. |
 | `comicScriptParser.js` | Marvel/DC-format comic script parser. |
 | `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. |
 | `creativeDirectorPresets.js` | Locked-at-creation aspect ratio + quality presets for the Creative Director. |

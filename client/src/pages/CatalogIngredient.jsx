@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   getCatalogIngredient,
@@ -28,7 +28,7 @@ import { listImageGallery } from '../services/apiImageVideo';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import TagPicker from '../components/TagPicker';
-import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
+import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind, CHARACTER_LIST_FIELDS } from '../lib/catalogTypes';
 import { timeAgo } from '../utils/formatters';
 
 // Per-type editor field list + badge color now come from the shared registry
@@ -275,7 +275,12 @@ export default function CatalogIngredient() {
     );
   }
 
-  const fields = getCatalogType(record.type)?.editorFields || getCatalogType('idea').editorFields;
+  const typeDef = getCatalogType(record.type) || getCatalogType('idea');
+  const fields = typeDef.editorFields || getCatalogType('idea').editorFields;
+  // Grouped "character sheet" sections for the rich canon types
+  // (character/place/object); light types (idea/scene/concept) have none and
+  // fall back to the flat field list below.
+  const sections = typeDef.editorSections || null;
   const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
@@ -286,6 +291,12 @@ export default function CatalogIngredient() {
     (acc[k] ||= []).push(r);
     return acc;
   }, {});
+
+  // First universe this ingredient belongs to — drives the "render reference
+  // sheet" deep-link (the renderer needs the universe's full style data, which
+  // lives on the Universe Builder surface). null when the ingredient isn't a
+  // canon entry of any universe.
+  const universeRef = (refsByKind.universe || [])[0] || null;
 
   return (
     <section className="h-full overflow-y-auto p-4 md:p-6">
@@ -348,20 +359,27 @@ export default function CatalogIngredient() {
             <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
               placeholder="mentor, antagonist, season-1" />
           </div>
-          {fields.map(([key, label, kind]) => {
-            const inputId = `ingredient-${key}`;
-            const value = payload[key] ?? '';
-            const shared = `w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent`;
-            return (
-              <div key={key}>
-                <label htmlFor={inputId} className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</label>
-                {kind === 'textarea'
-                  ? <textarea id={inputId} rows={3} value={value} onChange={(e) => updatePayload(key, e.target.value)} className={shared} />
-                  : <input id={inputId} type="text" value={value} onChange={(e) => updatePayload(key, e.target.value)} className={shared} />}
-              </div>
-            );
-          })}
+          {sections
+            ? sections.map((section) => (
+                <SheetSection key={section.title} title={section.title}
+                  fields={section.fields} payload={payload} onChange={updatePayload} />
+              ))
+            : fields.map(([key, label, kind]) => (
+                <SheetField key={key} fieldKey={key} label={label} kind={kind}
+                  value={payload[key] ?? ''} onChange={updatePayload} />
+              ))}
+
+          {/* Read-only canon arrays (color palette, stats, aliases) — edited on
+              the Universe Builder surface; surfaced here so the enriched canon
+              is visible without leaving the page. */}
+          {record.type === 'character' && (
+            <CanonListFields payload={payload} fields={CHARACTER_LIST_FIELDS} />
+          )}
         </div>
+
+        {record.type === 'character' && (
+          <ReferenceSheetPanel payload={payload} universeRef={universeRef} />
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <SourcesPanel sources={record.sources} />
@@ -390,6 +408,166 @@ export default function CatalogIngredient() {
           onRestore={handleRestore}
         />
       </div>
+    </section>
+  );
+}
+
+// One editable scalar field in the character sheet. `kind` is 'text' (single
+// line) or 'textarea' (multi-line). Edits write straight through to the shared
+// payload via `onChange(key, value)` — the same durable catalog row the
+// Universe Builder canon surface edits.
+function SheetField({ fieldKey, label, kind, value, onChange }) {
+  const inputId = `ingredient-${fieldKey}`;
+  const shared = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent';
+  return (
+    <div>
+      <label htmlFor={inputId} className="block text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</label>
+      {kind === 'textarea'
+        ? <textarea id={inputId} rows={3} value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />
+        : <input id={inputId} type="text" value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />}
+    </div>
+  );
+}
+
+// One collapsible "sheet section" — a labeled group of scalar fields. Open by
+// default; collapsing keeps the long character sheet manageable above the fold.
+function SheetSection({ title, fields, payload, onChange }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border border-port-border rounded-lg overflow-hidden">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        className="w-full flex items-center justify-between px-3 py-2 bg-port-bg/60 hover:bg-port-bg text-left">
+        <span className="text-xs font-semibold uppercase tracking-wider text-gray-300">{title}</span>
+        <ChevronDown size={14} aria-hidden="true"
+          className={`text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`} />
+      </button>
+      {open && (
+        <div className="p-3 space-y-3">
+          {fields.map(([key, label, kind]) => (
+            <SheetField key={key} fieldKey={key} label={label} kind={kind}
+              value={payload[key] ?? ''} onChange={onChange} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Read-only canon array fields (color palette, stats, aliases). The structured
+// per-item editors live on the Universe Builder surface; here they render as
+// labeled chips / swatches / key-value rows so the enriched canon is visible
+// without leaving the Catalog page. Empty fields are skipped entirely.
+function CanonListFields({ payload, fields }) {
+  const present = fields.filter((f) => Array.isArray(payload[f.key]) && payload[f.key].length > 0);
+  if (present.length === 0) return null;
+  return (
+    <div className="space-y-3 pt-1">
+      {present.map((f) => (
+        <div key={f.key}>
+          <div className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-gray-500 mb-1.5">
+            {f.label}
+            <span className="text-[9px] text-gray-600 normal-case tracking-normal">(edit in Universe Builder)</span>
+          </div>
+          {f.kind === 'colorPalette' ? (
+            <div className="flex flex-wrap gap-2">
+              {payload[f.key].map((c, i) => (
+                <span key={c?.hex ? `${c.hex}-${i}` : i}
+                  className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-port-border bg-port-bg text-gray-200">
+                  <span className="w-3.5 h-3.5 rounded-sm border border-black/40"
+                    style={{ backgroundColor: c?.hex || 'transparent' }} aria-hidden="true" />
+                  {c?.name || c?.hex || '(unnamed)'}
+                </span>
+              ))}
+            </div>
+          ) : f.kind === 'kv' ? (
+            <ul className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              {payload[f.key].map((s, i) => (
+                <li key={s?.key ? `${s.key}-${i}` : i}
+                  className="text-xs px-2 py-1 rounded border border-port-border bg-port-bg flex items-center justify-between gap-2">
+                  <span className="text-gray-400 truncate">{s?.key || s?.label || '?'}</span>
+                  <span className="text-gray-200 font-medium">{s?.value ?? ''}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {payload[f.key].map((v, i) => (
+                <span key={`${v}-${i}`} className="text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200">
+                  {String(v)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// "Reference sheet" panel — shows the rendered character turnaround sheet when
+// one exists (payload.referenceSheetImageRef / referenceSheets[]), served from
+// the /data/image-refs/ static prefix. When no sheet exists but the character
+// belongs to a universe, surfaces a deep-link to render one on the Universe
+// Builder surface, which carries the universe's full style data (styleNotes,
+// influences, palette, render settings) the renderer needs. Rendering inline
+// here would duplicate that heavy pipeline — the deep-link keeps one render
+// path. The link targets the universe's `#canon` section (the anchor the
+// Universe Builder hash-scroll resolves).
+function ReferenceSheetPanel({ payload, universeRef }) {
+  const sheets = payload?.referenceSheets && typeof payload.referenceSheets === 'object'
+    ? Object.entries(payload.referenceSheets).filter(([, v]) => typeof v === 'string' && v)
+    : [];
+  const legacy = typeof payload?.referenceSheetImageRef === 'string' ? payload.referenceSheetImageRef : '';
+  // De-dup: the legacy 'standard' pointer often duplicates a referenceSheets entry.
+  const variants = [
+    ...(legacy ? [['standard', legacy]] : []),
+    ...sheets.filter(([, v]) => v !== legacy),
+  ];
+  const hasSheet = variants.length > 0;
+
+  // Deep-link to the universe's canon section (`id="canon"`, the one anchor the
+  // Universe Builder hash-scroll handler resolves) — a per-character anchor
+  // isn't rendered there, so #canon lands the user on the canon surface where
+  // the character + its render controls live.
+  const universePath = universeRef?.refId
+    ? `/universes/${encodeURIComponent(universeRef.refId)}#canon`
+    : null;
+
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-4">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
+          <ImageIcon size={14} aria-hidden="true" /> Reference sheet
+        </h2>
+        {universePath && (
+          <Link to={universePath}
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
+            <Sparkles size={12} aria-hidden="true" />
+            {hasSheet ? 'Re-render in Universe Builder' : 'Render in Universe Builder'}
+            <ExternalLink size={11} aria-hidden="true" />
+          </Link>
+        )}
+      </div>
+      {hasSheet ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {variants.map(([variant, filename]) => (
+            <figure key={variant} className="rounded border border-port-border overflow-hidden bg-port-bg">
+              <MediaImage src={`/data/image-refs/${filename}`} alt={`${variant} reference sheet`}
+                className="w-full object-contain max-h-[420px]" />
+              <figcaption className="text-[10px] uppercase tracking-wider text-gray-500 px-2 py-1 border-t border-port-border">
+                {variant}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-gray-500">
+          No reference sheet rendered yet.
+          {universePath
+            ? ' Render one from the linked universe (it carries the style data the renderer needs).'
+            : ' Link this character to a universe to render a reference sheet from its style data.'}
+        </p>
+      )}
     </section>
   );
 }

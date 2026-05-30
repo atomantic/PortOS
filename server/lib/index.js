@@ -34,6 +34,7 @@ export * from './validation.js';
 export * from './bibleExtractor.js';
 export * as catalogBulkParsers from './catalogBulkParsers.js';
 export * from './catalogTypes.js';
+export * as catalogUniverseTags from './catalogUniverseTags.js';
 export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
 export * from './composeStyledPrompt.js';

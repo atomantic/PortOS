@@ -93,7 +93,7 @@ async function writeMarker(payload) {
  *    a pre-deterministic build) → recreate locally with the explicit foreign
  *    id so cross-peer identity holds, until the network re-converges.
  */
-async function promoteEntry({ universeId, entry, kind, role }) {
+async function promoteEntry({ universeId, universeName, entry, kind, role }) {
   if (!entry?.name || !entry?.id) return { skipped: true, reason: 'missing-id-or-name' };
 
   const payload = { ...entry };
@@ -102,11 +102,17 @@ async function promoteEntry({ universeId, entry, kind, role }) {
   delete payload.createdAt;
   delete payload.updatedAt;
 
-  // Audit tags first so a `.slice(-N)` preserves them on overflow rather than
-  // dropping them; user-supplied tags accept being trimmed before audit tags.
-  const auditTags = ['from-universe', `universe:${universeId}`];
+  // Friendly universe-name tag (e.g. "My Cool Universe") instead of the legacy
+  // machine tags (`from-universe` + `universe:<uuid>`) — the structured link
+  // already lives durably in catalog_ingredient_refs (refKind universe, role
+  // canon-<kind>), so the tag is purely a human-readable affordance and never
+  // needs the id. Existing rows with the old machine tags are repaired
+  // separately by server/scripts/repairUniverseTags.js. Audit/system tags go
+  // last so a `.slice(-N)` overflow preserves them over trimmed user tags.
+  const friendlyName = typeof universeName === 'string' ? universeName.trim() : '';
+  const systemTags = friendlyName ? [friendlyName] : [];
   const userTags = Array.isArray(entry.tags) ? entry.tags : [];
-  const tags = [...userTags, ...auditTags].slice(-12);
+  const tags = [...userTags, ...systemTags].slice(-12);
 
   const targetId = entry.ingredientId || deterministicIngredientId(universeId, kind, entry.id);
 
@@ -161,7 +167,7 @@ async function migrateUniverse(universe) {
     for (const entry of list) {
       if (!entry?.id) continue;
       try {
-        const result = await promoteEntry({ universeId: universe.id, entry, kind, role });
+        const result = await promoteEntry({ universeId: universe.id, universeName: universe.name, entry, kind, role });
         if (result.peerReconciled) {
           stats.peerReconciled++;
           continue;

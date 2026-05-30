@@ -24,6 +24,141 @@ const LIGHT_FIELDS = [
   ['notes',       'Notes',       'textarea'],
 ];
 
+// Grouped "character sheet" layout for the rich canon types
+// (character/place/object). Each section is `{ title, fields }` where `fields`
+// is the same `[key, label, kind]` tuple list as `editorFields`. The CatalogIngredient
+// detail editor renders `editorSections` as collapsible DnD-style sheet
+// sections when present, and falls back to the flat `editorFields` list for
+// the light types. The keys mirror the canon sanitizers in
+// `server/lib/storyBible.js` (`sanitizeCharacter`/`sanitizePlace`/`sanitizeObject`)
+// EXACTLY so an edit on the Catalog surface lands in the same payload field the
+// Universe Builder canon surface reads — the two are the same durable record.
+//
+// Complex array fields (stats[], colorPalette[], props[], expressions[],
+// handGestures[], wardrobes[], imageRefs[]) are intentionally NOT in these
+// scalar sections — they are surfaced read-only by the sheet (see
+// CHARACTER_LIST_FIELDS / CHARACTER_IMAGE_FIELDS) and remain editable on the
+// Universe Builder canon surface where their structured editors live.
+const CHARACTER_SECTIONS = [
+  {
+    title: 'Identity',
+    fields: [
+      ['role',          'Role / Archetype',  'text'],
+      ['pronouns',      'Pronouns',          'text'],
+      ['age',           'Age',               'text'],
+      ['coreTheme',     'Core Theme',        'text'],
+    ],
+  },
+  {
+    title: 'Appearance',
+    fields: [
+      ['physicalDescription', 'Physical Description', 'textarea'],
+      ['visualNotes',         'Visual Notes',         'textarea'],
+      ['visualIdentity',      'Visual Identity',      'textarea'],
+      ['silhouetteNotes',     'Silhouette Notes',     'textarea'],
+      ['postureNotes',        'Posture Notes',        'textarea'],
+      ['specialTraits',       'Special Traits',       'textarea'],
+    ],
+  },
+  {
+    title: 'Personality & Voice',
+    fields: [
+      ['personality',   'Personality',     'textarea'],
+      ['mannerisms',    'Mannerisms',      'textarea'],
+      ['speechAccent',  'Speech Accent',   'text'],
+      ['speechPattern', 'Speech Pattern',  'textarea'],
+    ],
+  },
+  {
+    title: 'Goals & Drives',
+    fields: [
+      ['motivations',   'Motivations / Goals', 'textarea'],
+      ['likes',         'Likes',               'textarea'],
+      ['dislikes',      'Dislikes / Fears',    'textarea'],
+    ],
+  },
+  {
+    title: 'Background & Relationships',
+    fields: [
+      ['background',    'Background',    'textarea'],
+      ['relationships', 'Relationships', 'textarea'],
+      ['skills',        'Skills / Abilities', 'textarea'],
+    ],
+  },
+  {
+    title: 'Notes',
+    fields: [
+      ['notes', 'Notes', 'textarea'],
+    ],
+  },
+];
+
+const PLACE_SECTIONS = [
+  {
+    title: 'Identity',
+    fields: [
+      ['slugline', 'Slugline', 'text'],
+      ['era',      'Era',      'text'],
+      ['weather',  'Weather',  'text'],
+    ],
+  },
+  {
+    title: 'Appearance',
+    fields: [
+      ['description',      'Description',       'textarea'],
+      ['palette',          'Color Palette',     'textarea'],
+      ['recurringDetails', 'Recurring Details', 'textarea'],
+    ],
+  },
+  {
+    title: 'Notes',
+    fields: [
+      ['notes', 'Notes', 'textarea'],
+    ],
+  },
+];
+
+const OBJECT_SECTIONS = [
+  {
+    title: 'Identity',
+    fields: [
+      ['description',  'Description',  'textarea'],
+    ],
+  },
+  {
+    title: 'Significance',
+    fields: [
+      ['significance', 'Significance', 'textarea'],
+    ],
+  },
+  {
+    title: 'Notes',
+    fields: [
+      ['notes', 'Notes', 'textarea'],
+    ],
+  },
+];
+
+// Flatten a section list back into the legacy `[key, label, kind]` flat list.
+// `editorFields` stays the canonical flat enumeration used by the revision-diff
+// builder + any consumer that just wants "every editable scalar key"; the
+// sections are an additional grouped VIEW over the same fields.
+function flattenSections(sections) {
+  return sections.flatMap((s) => s.fields);
+}
+
+// Read-only array fields surfaced by the character sheet. These are edited on
+// the Universe Builder canon surface (structured per-item editors live there);
+// the Catalog sheet renders them as labeled chips/cards so the enriched canon
+// is visible without leaving the page. `kind` drives the renderer:
+//   'colorPalette' → swatch row ({ name, hex }); 'kv' → key/value stat rows
+//   ({ key, value }); 'text' → string-array chips.
+export const CHARACTER_LIST_FIELDS = Object.freeze([
+  { key: 'aliases',      label: 'Aliases',       kind: 'text' },
+  { key: 'colorPalette', label: 'Color Palette', kind: 'colorPalette' },
+  { key: 'stats',        label: 'Stats',         kind: 'kv' },
+]);
+
 export const CATALOG_TYPES = Object.freeze([
   {
     id: 'character',
@@ -32,18 +167,12 @@ export const CATALOG_TYPES = Object.freeze([
     primaryContentKey: 'physicalDescription',
     primaryContentLabel: 'Physical Description',
     snippetFallbackKeys: ['physicalDescription', 'description', 'summary', 'personality', 'significance', 'role', 'notes'],
-    editorFields: [
-      ['role',                'Role',                  'text'],
-      // Canon character shape uses `physicalDescription` (matches
-      // sanitizeCharacter and the writers-room/bible extractor). A plain
-      // `description` here would render empty for backfill-promoted characters
-      // and edits would land in a sibling field the canon doesn't read.
-      ['physicalDescription', 'Physical Description',  'textarea'],
-      ['personality',         'Personality',           'textarea'],
-      ['background',          'Background',            'textarea'],
-      ['motivations',         'Motivations',           'textarea'],
-      ['notes',               'Notes',                 'textarea'],
-    ],
+    // Grouped DnD-style sheet sections (rendered by CatalogIngredient). Keys
+    // mirror `sanitizeCharacter` in server/lib/storyBible.js EXACTLY so a
+    // Catalog-surface edit lands in the same canon field the Universe Builder
+    // reads. `editorFields` is the flattened enumeration of these same keys.
+    editorSections: CHARACTER_SECTIONS,
+    editorFields: flattenSections(CHARACTER_SECTIONS),
   },
   {
     id: 'place',
@@ -52,12 +181,8 @@ export const CATALOG_TYPES = Object.freeze([
     primaryContentKey: 'description',
     primaryContentLabel: 'Description',
     snippetFallbackKeys: ['description', 'summary', 'significance', 'notes'],
-    editorFields: [
-      ['slugline',     'Slugline',     'text'],
-      ['era',          'Era',          'text'],
-      ['description',  'Description',  'textarea'],
-      ['notes',        'Notes',        'textarea'],
-    ],
+    editorSections: PLACE_SECTIONS,
+    editorFields: flattenSections(PLACE_SECTIONS),
   },
   {
     id: 'object',
@@ -66,11 +191,8 @@ export const CATALOG_TYPES = Object.freeze([
     primaryContentKey: 'description',
     primaryContentLabel: 'Description',
     snippetFallbackKeys: ['description', 'significance', 'summary', 'notes'],
-    editorFields: [
-      ['description',  'Description',  'textarea'],
-      ['significance', 'Significance', 'textarea'],
-      ['notes',        'Notes',        'textarea'],
-    ],
+    editorSections: OBJECT_SECTIONS,
+    editorFields: flattenSections(OBJECT_SECTIONS),
   },
   {
     id: 'idea',
