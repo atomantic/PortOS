@@ -21,7 +21,55 @@ import {
 } from '../lib/catalogTypes.js';
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { chunkRawText } from '../lib/catalogChunking.js';
+import { sanitizeCharacter, sanitizePlace, sanitizeObject } from '../lib/storyBible.js';
 import { getInstanceId } from './instances.js';
+
+// Story-bible sanitizers keyed by catalog type, for the registry
+// `extractionShape: 'bible'` types ONLY (character/place/object). The catalog
+// payload is the bible-entry shape MINUS the columns the row owns (id / name /
+// timestamps) — so we sanitize a synthetic entry `{ name, ...payload }`,
+// preserve timestamps, and strip the control fields back out before persist.
+// Scoped strictly to bible types: idea/scene/concept AND user-defined types
+// pass through untouched (running a user type's payload through a storyBible
+// sanitizer would silently drop every field it doesn't recognize).
+const BIBLE_SANITIZERS = Object.freeze({
+  character: sanitizeCharacter,
+  place: sanitizePlace,
+  object: sanitizeObject,
+});
+
+// Control fields the sanitizer stamps onto an entry that are NOT part of the
+// catalog `payload` (the row owns id/name/timestamps as columns). Stripped from
+// the sanitized entry so the stored payload stays shape-stable across the
+// catalog↔canon projection round-trip.
+const SANITIZED_NON_PAYLOAD_KEYS = ['id', 'name', 'createdAt', 'updatedAt'];
+
+/**
+ * Run a bible-type ingredient payload through its storyBible sanitizer so the
+ * structured array editors (color palette / stats / aliases) can't land
+ * malformed rows and the projection round-trip is shape-stable. Returns the
+ * sanitized payload (control fields stripped). Non-bible types (idea/scene/
+ * concept, user-defined) return their payload UNCHANGED. `preserveTimestamps`
+ * keeps the sanitizer from minting fresh ids/timestamps on an existing row.
+ */
+function sanitizeBiblePayload(type, name, payload) {
+  const sanitizer = BIBLE_SANITIZERS[type];
+  if (!sanitizer) return payload && typeof payload === 'object' ? payload : {};
+  const entry = { ...(payload && typeof payload === 'object' ? payload : {}), name: String(name || '').trim() };
+  const sane = sanitizer(entry, { preserveTimestamps: true });
+  if (!sane) return payload && typeof payload === 'object' ? payload : {};
+  const out = { ...sane };
+  for (const k of SANITIZED_NON_PAYLOAD_KEYS) delete out[k];
+  // The storyBible sanitizer only emits known bible fields, so it drops
+  // `schemaVersion`. Preserve the incoming marker (createIngredient re-stamps
+  // it anyway; updateIngredient writes payload verbatim, and the restore route
+  // relies on the marker round-tripping) so a bible payload keeps its shape
+  // version through the sanitize pass.
+  if (payload && typeof payload === 'object' && payload.schemaVersion !== undefined) {
+    out.schemaVersion = payload.schemaVersion;
+  }
+  return out;
+}
 
 function newIngredientId(type) {
   return `cat-${ingredientIdPrefix(type)}-${randomUUID()}`;
@@ -400,6 +448,11 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   // same logical character has the same catalog id on every install. New
   // user-initiated creates omit it and we mint a fresh prefix:uuid.
   const id = explicitId || newIngredientId(type);
+  // Bible-type hardening: run character/place/object payloads through their
+  // storyBible sanitizer before persist so the structured array editors (color
+  // palette / stats / aliases) can't land malformed rows and the catalog↔canon
+  // projection stays shape-stable. Non-bible / user types pass through.
+  const sanitizedPayload = sanitizeBiblePayload(type, name, payload);
   // Stamp the per-record payload-shape version from the registry so a later
   // `migrateCatalogPayload` run knows which shape this row was written in.
   // An incoming payload may already carry `schemaVersion` (peer backfill) — we
@@ -407,7 +460,7 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   // reflects the shape this install's code actually wrote, not a stale sender
   // claim. (The wire `PORTOS_SCHEMA_VERSIONS.catalog` gate covers cross-install
   // skew; this is the per-record payload-shape marker, distinct from that.)
-  const storedPayload = { ...(payload && typeof payload === 'object' ? payload : {}), schemaVersion: currentPayloadSchemaVersion(type) };
+  const storedPayload = { ...sanitizedPayload, schemaVersion: currentPayloadSchemaVersion(type) };
   const originInstanceId = await getInstanceId();
   const exec = client ? client.query.bind(client) : query;
   // Route freeform tags through the canonical catalog_tags table (creating
@@ -460,9 +513,27 @@ export async function updateIngredient(id, patch = {}, { source = 'user', actor 
   // adding `Noir` reuses the existing `noir` row instead of accumulating a
   // casing variant. `tags: []` (intentional clear) round-trips as an empty
   // array; absent `tags` skips normalization entirely (the loop below skips it).
-  const normalizedPatch = patch.tags !== undefined
+  let normalizedPatch = patch.tags !== undefined
     ? { ...patch, tags: await normalizeTags(patch.tags) }
     : patch;
+  // Bible-type hardening: when a character/place/object payload is being
+  // written, run it through the storyBible sanitizer (the same one the canon
+  // surface uses) so the array editors can't land malformed rows and the
+  // catalog↔canon projection round-trip stays shape-stable. Look up the current
+  // row for its `type` (and `name`, when the patch doesn't carry one). Scoped
+  // to `extractionShape: 'bible'` types via BIBLE_SANITIZERS — idea/scene/
+  // concept and user-defined types skip this entirely. Embedding-only patches
+  // (no payload) never trigger the lookup.
+  if (normalizedPatch.payload !== undefined) {
+    const current = await getIngredient(id);
+    if (current && BIBLE_SANITIZERS[current.type]) {
+      const name = normalizedPatch.name !== undefined ? normalizedPatch.name : current.name;
+      normalizedPatch = {
+        ...normalizedPatch,
+        payload: sanitizeBiblePayload(current.type, name, normalizedPatch.payload),
+      };
+    }
+  }
   const fieldMap = {
     name: 'name',
     payload: 'payload',

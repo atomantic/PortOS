@@ -277,6 +277,38 @@ describe("universeBuilder service", () => {
     expect(patched.influences.avoid).toEqual(w.influences.avoid);
   });
 
+  it("bumps updatedAt on a canon entry whose content changed, leaves an untouched entry's timestamp", async () => {
+    // Two canon characters; edit only the first's content. The edited entry's
+    // updatedAt must advance (so the canon→catalog projection's LWW clock is
+    // truthful and the edit reaches the catalog row); the untouched entry keeps
+    // its timestamp (no spurious projection churn).
+    const w = await svc.createUniverse({
+      name: "CanonClock",
+      characters: [
+        { name: "Ada", physicalDescription: "tall" },
+        { name: "Bee", physicalDescription: "short" },
+      ],
+    });
+    const [ada0, bee0] = w.characters;
+    expect(ada0?.updatedAt).toBeTruthy();
+
+    // Patch only Ada's description via the mutator form (the `{ ...e, ...patch }`
+    // shape that previously preserved the stale updatedAt).
+    const patched = await svc.updateUniverse(w.id, (cur) => ({
+      characters: cur.characters.map((c) =>
+        c.id === ada0.id ? { ...c, physicalDescription: "towering" } : c,
+      ),
+    }));
+
+    const ada1 = patched.characters.find((c) => c.id === ada0.id);
+    const bee1 = patched.characters.find((c) => c.id === bee0.id);
+    expect(ada1.physicalDescription).toBe("towering");
+    // Edited entry's clock advanced…
+    expect(new Date(ada1.updatedAt).getTime()).toBeGreaterThan(new Date(ada0.updatedAt).getTime());
+    // …untouched entry's clock unchanged.
+    expect(bee1.updatedAt).toBe(bee0.updatedAt);
+  });
+
   it("persists styleImageRefs (base style-probe renders); dedupes on create + patches wholesale", async () => {
     const w = await svc.createUniverse({ name: "Probe", styleImageRefs: ["a.png", "a.png", "b.png"] });
     expect(w.styleImageRefs).toEqual(["a.png", "b.png"]); // dedupe via sanitizeEntryImageRefs

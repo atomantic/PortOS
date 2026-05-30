@@ -159,6 +159,25 @@ export const CHARACTER_LIST_FIELDS = Object.freeze([
   { key: 'stats',        label: 'Stats',         kind: 'kv' },
 ]);
 
+// Structured array-field editors for the bible types — client MIRROR of the
+// server `editableListFields` (server/lib/catalogTypes.js). The Catalog detail
+// editor renders these as inline structured editors (AliasListEditor /
+// ColorPaletteEditor / StatListEditor) instead of read-only chips. The numeric
+// caps are hardcoded BIBLE_LIMITS values (the client can't import storyBible) —
+// the parity test asserts they match the server's BIBLE_LIMITS-sourced values
+// EXACTLY, so a limit bump on the server fails CI here until it's mirrored.
+//   ALIAS_MAX=100, ALIASES_PER_ENTRY_MAX=12, COLOR_NAME_MAX=80,
+//   COLORS_PER_PALETTE_MAX=12, STAT_VALUE_MAX=200, STATS_PER_CHARACTER_MAX=30
+const CHARACTER_EDITABLE_LIST_FIELDS = [
+  { key: 'aliases', label: 'Aliases', kind: 'stringArray', itemMax: 100, listMax: 12 },
+  { key: 'colorPalette', label: 'Color Palette', kind: 'colorPalette', itemMax: 80, listMax: 12 },
+  { key: 'stats', label: 'Stats', kind: 'kv', itemMax: 200, listMax: 30 },
+];
+const PLACE_EDITABLE_LIST_FIELDS = [];
+const OBJECT_EDITABLE_LIST_FIELDS = [
+  { key: 'aliases', label: 'Aliases', kind: 'stringArray', itemMax: 100, listMax: 12 },
+];
+
 export const CATALOG_TYPES = Object.freeze([
   {
     id: 'character',
@@ -173,6 +192,7 @@ export const CATALOG_TYPES = Object.freeze([
     // reads. `editorFields` is the flattened enumeration of these same keys.
     editorSections: CHARACTER_SECTIONS,
     editorFields: flattenSections(CHARACTER_SECTIONS),
+    editableListFields: CHARACTER_EDITABLE_LIST_FIELDS,
   },
   {
     id: 'place',
@@ -183,6 +203,7 @@ export const CATALOG_TYPES = Object.freeze([
     snippetFallbackKeys: ['description', 'summary', 'significance', 'notes'],
     editorSections: PLACE_SECTIONS,
     editorFields: flattenSections(PLACE_SECTIONS),
+    editableListFields: PLACE_EDITABLE_LIST_FIELDS,
   },
   {
     id: 'object',
@@ -193,6 +214,7 @@ export const CATALOG_TYPES = Object.freeze([
     snippetFallbackKeys: ['description', 'significance', 'summary', 'notes'],
     editorSections: OBJECT_SECTIONS,
     editorFields: flattenSections(OBJECT_SECTIONS),
+    editableListFields: OBJECT_EDITABLE_LIST_FIELDS,
   },
   {
     id: 'idea',

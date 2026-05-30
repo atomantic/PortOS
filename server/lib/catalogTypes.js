@@ -32,6 +32,27 @@
 
 import { BIBLE_LIMITS } from './storyBible.js';
 
+// Structured array-field editors for the bible types. Each entry declares a
+// payload array key the Catalog detail editor renders as an inline structured
+// editor (string-array chips / color-swatch rows / label-value rows) rather
+// than a read-only chip list. `kind` selects the editor widget:
+//   'stringArray' — AliasListEditor (string[] chips)
+//   'colorPalette' — ColorPaletteEditor ({ name, hex, role } swatch rows)
+//   'kv'           — StatListEditor ({ label, value } rows)
+// `itemMax`/`listMax` are the per-item char cap + per-list count cap, sourced
+// from BIBLE_LIMITS so the editor's "disable add at cap" matches the storyBible
+// sanitizer's silent drop. MIRRORED to client/src/lib/catalogTypes.js verbatim
+// (the parity test asserts they don't drift).
+const CHARACTER_EDITABLE_LIST_FIELDS = [
+  { key: 'aliases', label: 'Aliases', kind: 'stringArray', itemMax: BIBLE_LIMITS.ALIAS_MAX, listMax: BIBLE_LIMITS.ALIASES_PER_ENTRY_MAX },
+  { key: 'colorPalette', label: 'Color Palette', kind: 'colorPalette', itemMax: BIBLE_LIMITS.COLOR_NAME_MAX, listMax: BIBLE_LIMITS.COLORS_PER_PALETTE_MAX },
+  { key: 'stats', label: 'Stats', kind: 'kv', itemMax: BIBLE_LIMITS.STAT_VALUE_MAX, listMax: BIBLE_LIMITS.STATS_PER_CHARACTER_MAX },
+];
+const PLACE_EDITABLE_LIST_FIELDS = [];
+const OBJECT_EDITABLE_LIST_FIELDS = [
+  { key: 'aliases', label: 'Aliases', kind: 'stringArray', itemMax: BIBLE_LIMITS.ALIAS_MAX, listMax: BIBLE_LIMITS.ALIASES_PER_ENTRY_MAX },
+];
+
 /**
  * One entry per ingredient type. Shape:
  *   id                     — catalog `type` discriminator (column value).
@@ -64,6 +85,7 @@ const REGISTRY = [
     primaryContentLabel: 'Physical Description',
     snippetFallbackKeys: ['physicalDescription', 'description', 'summary', 'personality', 'significance', 'role', 'notes'],
     ftsFields: ['description', 'physicalDescription', 'personality', 'background', 'summary', 'notes', 'role', 'motivations', 'significance'],
+    editableListFields: CHARACTER_EDITABLE_LIST_FIELDS,
     extractionShape: 'bible',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
@@ -78,6 +100,7 @@ const REGISTRY = [
     primaryContentLabel: 'Description',
     snippetFallbackKeys: ['description', 'summary', 'significance', 'notes'],
     ftsFields: [],
+    editableListFields: PLACE_EDITABLE_LIST_FIELDS,
     extractionShape: 'bible',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
@@ -92,6 +115,7 @@ const REGISTRY = [
     primaryContentLabel: 'Description',
     snippetFallbackKeys: ['description', 'significance', 'summary', 'notes'],
     ftsFields: [],
+    editableListFields: OBJECT_EDITABLE_LIST_FIELDS,
     extractionShape: 'bible',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},

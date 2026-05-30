@@ -30,7 +30,7 @@ import {
 // The fields the client mirror MUST match the server on — the ones the UI
 // reads. `ftsFields` / `extractionShape` / `payloadSchemaVersion` are
 // server-only concerns and intentionally not mirrored.
-const MIRRORED_FIELDS = ['id', 'label', 'badgeColor', 'primaryContentKey', 'primaryContentLabel', 'snippetFallbackKeys'];
+const MIRRORED_FIELDS = ['id', 'label', 'badgeColor', 'primaryContentKey', 'primaryContentLabel', 'snippetFallbackKeys', 'editableListFields'];
 
 describe('catalog type registry — server↔client parity', () => {
   it('exposes the same type ids in the same order', () => {

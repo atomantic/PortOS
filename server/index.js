@@ -718,6 +718,14 @@ ensureSelf()
       // version, so this is free on steady-state boots.
       const { migrateCatalogPayload } = await import('./scripts/migrateCatalogPayload.js');
       await migrateCatalogPayload();
+      // One-time canon↔catalog reconciliation: collapse any pre-existing
+      // divergence between an embedded universe-canon entry and its catalog
+      // row (they were copy-on-write mirrors before the bidirectional
+      // projection landed). LWW on updatedAt; writes the winner to both sides.
+      // Runs LAST so promoted rows exist and are at current payload-shape
+      // version; marker-gated in data/catalog-canon-reconcile.applied.json.
+      const { reconcileCanonCatalog } = await import('./scripts/reconcileCanonCatalog.js');
+      await reconcileCanonCatalog();
     } catch (err) {
       console.error(`🪄 catalog migrations failed at boot: ${err.message}`);
     }

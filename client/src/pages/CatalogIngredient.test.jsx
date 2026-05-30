@@ -32,7 +32,9 @@ const { CHAR_FIXTURE } = vi.hoisted(() => ({
       motivations: 'Decode the machine.',
       dislikes: 'Being underestimated.',
       colorPalette: [{ name: 'Brass', hex: '#b08d57' }],
-      stats: [{ key: 'Logic', value: '9' }],
+      // storyBible stats are { label, value } — the editor + durable shape
+      // standardize on .label (the prior read-only renderer wrongly read .key).
+      stats: [{ label: 'Logic', value: '9' }],
       aliases: ['The Countess'],
     },
     refs: [{ refKind: 'universe', refId: 'u-1', refName: 'My Cool Universe', role: 'canon-character' }],
@@ -97,12 +99,51 @@ describe('CatalogIngredient — character sheet', () => {
     expect(screen.getByDisplayValue('Being underestimated.')).toBeTruthy();
   });
 
-  it('renders read-only canon arrays (color palette + stats)', async () => {
+  it('renders EDITABLE array editors (color palette + stats + aliases) seeded from payload', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByText('Color Palette')).toBeTruthy());
-    expect(screen.getByText('Brass')).toBeTruthy();
-    expect(screen.getByText('Logic')).toBeTruthy();
-    expect(screen.getByText('The Countess')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());
+    // Editors render their values as inputs now (editable), not static text.
+    expect(screen.getByDisplayValue('Brass')).toBeTruthy();
+    expect(screen.getByDisplayValue('Logic')).toBeTruthy();      // stat .label
+    expect(screen.getByDisplayValue('9')).toBeTruthy();          // stat .value
+    expect(screen.getByDisplayValue('The Countess')).toBeTruthy(); // alias
+  });
+
+  it('adds an alias chip, a palette swatch, and a stat row, then Save sends them in the payload', async () => {
+    const { updateCatalogIngredient } = await import('../services/apiCatalog');
+    updateCatalogIngredient.mockResolvedValue({ ...CHAR_FIXTURE, name: 'Ada Lovelace' });
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());
+
+    // Add one of each list type.
+    fireEvent.click(screen.getByRole('button', { name: /Add alias/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add color/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add stat/i }));
+
+    // Fill the newly-added rows. The new alias input is the empty one (index 1).
+    const aliasInputs = screen.getAllByLabelText(/^Aliases \d+$/);
+    fireEvent.change(aliasInputs[aliasInputs.length - 1], { target: { value: 'Lady Byron' } });
+    // New palette name input (empty) — last "Color Palette N name".
+    const paletteNames = screen.getAllByLabelText(/Color Palette \d+ name/);
+    fireEvent.change(paletteNames[paletteNames.length - 1], { target: { value: 'Cobalt' } });
+    const paletteHexes = screen.getAllByLabelText(/Color Palette \d+ hex/);
+    fireEvent.change(paletteHexes[paletteHexes.length - 1], { target: { value: '#0047ab' } });
+    // New stat label/value inputs (the empty pair).
+    const statLabels = screen.getAllByLabelText(/Stats \d+ label/);
+    fireEvent.change(statLabels[statLabels.length - 1], { target: { value: 'Charisma' } });
+    const statValues = screen.getAllByLabelText(/Stats \d+ value/);
+    fireEvent.change(statValues[statValues.length - 1], { target: { value: '7' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalled());
+    const [, patch] = updateCatalogIngredient.mock.calls[0];
+    // aliases array carries the original + the new one.
+    expect(patch.payload.aliases).toEqual(['The Countess', 'Lady Byron']);
+    // colorPalette carries the original + the new { name, hex } row.
+    expect(patch.payload.colorPalette).toContainEqual({ name: 'Cobalt', hex: '#0047ab', role: '' });
+    // stats carry the original + the new { label, value } row (NOT { key }).
+    expect(patch.payload.stats).toContainEqual({ label: 'Charisma', value: '7' });
   });
 
   it('shows a render-reference-sheet deep-link when none exists and a universe ref is present', async () => {

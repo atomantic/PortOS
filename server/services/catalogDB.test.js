@@ -16,6 +16,7 @@
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { setUserCatalogTypes } from '../lib/catalogTypes.js';
 import * as catalogDB from './catalogDB.js';
 
 // Probe the DB ONCE at module load via top-level await, so the suite is
@@ -389,5 +390,91 @@ describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
 
     // Empty query + no embedding → no signal → empty result (no throw).
     expect(await catalogDB.hybridSearchIngredients('', null, { limit: 5 })).toEqual([]);
+  });
+
+  // --- bible-type payload sanitization (array-editor hardening) -----------
+  // character/place/object payloads run through their storyBible sanitizer
+  // before persist so the structured array editors can't land malformed rows
+  // and the catalog↔canon projection round-trip stays shape-stable. idea/scene/
+  // concept (and user-defined types) pass through UNCHANGED.
+
+  it('sanitizes a character payload on create: drops a stats row missing label, caps palette + aliases', async () => {
+    if (!requireDb('bible create sanitize')) return;
+    const created = await catalogDB.createIngredient({
+      type: 'character',
+      name: 'Sanitize Me',
+      payload: {
+        // a stat with no `label` is dropped by sanitizeStat; the labeled one stays
+        stats: [{ value: 'no-label-so-dropped' }, { label: 'Logic', value: '9' }],
+        // 13 colors → capped to COLORS_PER_PALETTE_MAX (12)
+        colorPalette: Array.from({ length: 13 }, (_, i) => ({ name: `c${i}`, hex: '#000000' })),
+        // 13 aliases → capped to ALIASES_PER_ENTRY_MAX (12)
+        aliases: Array.from({ length: 13 }, (_, i) => `alias-${i}`),
+      },
+    });
+    createdIngredientIds.add(created.id);
+
+    expect(created.payload.stats).toHaveLength(1);
+    expect(created.payload.stats[0].label).toBe('Logic');
+    expect(created.payload.stats[0].value).toBe('9');
+    expect(created.payload.colorPalette).toHaveLength(12);
+    expect(created.payload.aliases).toHaveLength(12);
+  });
+
+  it('sanitizes a character payload on update too', async () => {
+    if (!requireDb('bible update sanitize')) return;
+    const created = await catalogDB.createIngredient({ type: 'character', name: 'Update Sanitize' });
+    createdIngredientIds.add(created.id);
+
+    const updated = await catalogDB.updateIngredient(created.id, {
+      payload: {
+        stats: [{ value: 'orphan' }, { label: 'Speed', value: 'fast' }],
+        aliases: Array.from({ length: 20 }, (_, i) => `a${i}`),
+      },
+    });
+    expect(updated.payload.stats).toHaveLength(1);
+    expect(updated.payload.stats[0].label).toBe('Speed');
+    expect(updated.payload.aliases).toHaveLength(12);
+  });
+
+  it('does NOT sanitize idea/scene/concept payloads through a storyBible sanitizer', async () => {
+    if (!requireDb('light type passthrough')) return;
+    const created = await catalogDB.createIngredient({
+      type: 'idea',
+      name: 'Passthrough Idea',
+      payload: {
+        // These keys are NOT in any bible shape — a bible sanitizer would drop
+        // them. They must survive verbatim for non-bible types.
+        summary: 'a thought',
+        arbitraryField: 'kept',
+        stats: [{ value: 'no-label-kept-because-not-sanitized' }],
+      },
+    });
+    createdIngredientIds.add(created.id);
+    expect(created.payload.arbitraryField).toBe('kept');
+    expect(created.payload.summary).toBe('a thought');
+    // stats survives verbatim (not run through sanitizeStat) — the orphan row stays.
+    expect(created.payload.stats).toHaveLength(1);
+  });
+
+  it('does NOT sanitize a user-defined type payload (no storyBible coercion)', async () => {
+    if (!requireDb('user type passthrough')) return;
+    // Register a runtime user type, create a row of it, assert its arbitrary
+    // payload survives verbatim, then clear the registry so the suite is hermetic.
+    setUserCatalogTypes([{ id: 'gadget', label: 'Gadget', fields: [{ key: 'spec', kind: 'string' }] }]);
+    try {
+      const created = await catalogDB.createIngredient({
+        type: 'gadget',
+        name: 'Sonic Driver',
+        payload: { spec: 'reverses polarity', stats: [{ value: 'orphan-kept' }] },
+      });
+      createdIngredientIds.add(created.id);
+      expect(created.payload.spec).toBe('reverses polarity');
+      // A storyBible sanitizer would have dropped the label-less stat; a user
+      // type must NOT be coerced, so it survives.
+      expect(created.payload.stats).toHaveLength(1);
+    } finally {
+      setUserCatalogTypes([]);
+    }
   });
 });

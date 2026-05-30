@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import * as catalogDB from '../services/catalogDB.js';
 import * as catalogSync from '../services/catalogSync.js';
+import { projectToCanon } from '../services/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -275,6 +276,18 @@ router.patch('/ingredients/:id', asyncHandler(async (req, res) => {
   );
   if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
   res.json(updated);
+  // Fan the catalog edit into every linked universe's embedded canon entry so
+  // the two stores of record never diverge. Best-effort fire-and-forget: it
+  // runs AFTER the response and is outside-request-lifecycle-style fan-out, so
+  // it MUST be try/catch-guarded — an uncaught rejection here (a universe write
+  // failing) would otherwise crash the process with no `next(err)` to bubble to.
+  // A name/payload change is the only thing the cache mirrors; a tag-only edit
+  // (or embedding-only) skips the projection.
+  if (fieldPatch.name !== undefined || fieldPatch.payload !== undefined) {
+    projectToCanon(req.params.id, updated).catch((err) => {
+      console.error(`🔁 catalog→canon projection failed for ${req.params.id}: ${err.message}`);
+    });
+  }
 }));
 
 // Revision history for one ingredient (newest first). Local audit trail — see
