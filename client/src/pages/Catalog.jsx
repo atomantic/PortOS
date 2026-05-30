@@ -30,11 +30,13 @@ const TYPES = [
 
 const TYPE_BY_ID = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
-// Pull a short snippet from the type-specific payload — first hit wins
-// (description → summary → notes), trimmed and ellipsised to ~120 chars.
+// Pull a short snippet from the type-specific payload — first hit wins,
+// trimmed and ellipsised to ~120 chars. Characters use `physicalDescription`
+// (canon shape), so check it first to avoid rendering empty rows for
+// bible-backfilled characters whose only narrative text lives there.
 function payloadSnippet(payload) {
   if (!payload || typeof payload !== 'object') return '';
-  const raw = payload.description || payload.summary || payload.notes || '';
+  const raw = payload.physicalDescription || payload.description || payload.summary || payload.notes || '';
   const text = String(raw).trim().replace(/\s+/g, ' ');
   if (text.length <= 120) return text;
   return `${text.slice(0, 117)}…`;

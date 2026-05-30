@@ -212,7 +212,12 @@ router.get('/sync', asyncHandler(async (req, res) => {
     const bracket = {};
     for (const [k, v] of Object.entries(req.query)) {
       const m = /^since\[([a-z]+)\]$/.exec(k);
-      if (m && typeof v === 'string') bracket[m[1]] = v;
+      if (!m) continue;
+      // Node's `simple` parser collapses repeated keys into an array; take
+      // the last value (HTTP convention) instead of dropping the cursor on
+      // the floor and resetting to '0'.
+      const value = Array.isArray(v) ? v[v.length - 1] : v;
+      if (typeof value === 'string') bracket[m[1]] = value;
     }
     if (Object.keys(bracket).length > 0) {
       since = bracket;

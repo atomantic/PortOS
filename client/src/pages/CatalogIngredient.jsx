@@ -25,11 +25,16 @@ const LIGHT_FIELDS = [
 ];
 const PAYLOAD_FIELDS = {
   character: [
-    ['role',         'Role',         'text'],
-    ['description',  'Description',  'textarea'],
-    ['personality',  'Personality',  'textarea'],
-    ['motivations',  'Motivations',  'textarea'],
-    ['notes',        'Notes',        'textarea'],
+    ['role',                'Role',                  'text'],
+    // Canon character shape uses `physicalDescription` (matches
+    // sanitizeCharacter and the writers-room/bible extractor). A plain
+    // `description` here would render empty for backfill-promoted characters
+    // and edits would land in a sibling field the canon doesn't read.
+    ['physicalDescription', 'Physical Description',  'textarea'],
+    ['personality',         'Personality',           'textarea'],
+    ['background',          'Background',            'textarea'],
+    ['motivations',         'Motivations',           'textarea'],
+    ['notes',               'Notes',                 'textarea'],
   ],
   place: [
     ['slugline',     'Slugline',     'text'],
