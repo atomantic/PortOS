@@ -28,11 +28,15 @@ import {
   catalogExportQuerySchema,
   catalogRevisionQuerySchema,
   catalogRevisionRestoreSchema,
+  catalogUrlIngestSchema,
+  catalogFileIngestSchema,
+  catalogVoiceIngestSchema,
 } from '../lib/catalogValidation.js';
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredients } from '../services/catalogExtraction.js';
+import { ingestFromUrl, ingestFromFile, ingestFromVoice } from '../services/catalogIngestSources.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
@@ -92,6 +96,30 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
     providerOverride: req.body?.providerOverride,
   });
   res.json({ scrap, draft });
+}));
+
+// --- Alternate ingest sources (url / file / voice) ----------------------
+// Each creates a scrap with a typed `source_kind`, runs the SAME extraction
+// pipeline as the paste flow (emitting the same catalog:extract:progress
+// frames), and returns `{ scrap, draft }` so the client review phase is
+// identical regardless of how the text arrived.
+
+router.post('/ingest/url', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogUrlIngestSchema, req.body);
+  const result = await ingestFromUrl(body);
+  res.status(201).json(result);
+}));
+
+router.post('/ingest/file', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogFileIngestSchema, req.body);
+  const result = await ingestFromFile(body);
+  res.status(201).json(result);
+}));
+
+router.post('/ingest/voice', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogVoiceIngestSchema, req.body);
+  const result = await ingestFromVoice(body);
+  res.status(201).json(result);
 }));
 
 router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {

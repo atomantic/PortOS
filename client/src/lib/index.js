@@ -30,6 +30,7 @@ export * from './wrImageDefaults.js';
 export * from './graphSimulation.js';
 
 // === Generic UI / collection utilities ===
+export * from './audioRecorder.js';
 export * from './clientErrorReporter.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';

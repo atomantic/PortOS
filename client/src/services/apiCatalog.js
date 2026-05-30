@@ -38,6 +38,19 @@ export const extractFromCatalogScrap = (id, body = {}, options) =>
 export const commitCatalogScrapDraft = (id, accepted, options) =>
   request(`/catalog/scraps/${enc(id)}/commit`, { method: 'POST', body: JSON.stringify({ accepted }), ...options });
 
+// --- Alternate ingest sources (url / file / voice) ----------------------
+// Each returns { scrap, draft } — the same shape as extractFromCatalogScrap —
+// so CatalogIngest can drop straight into its review phase.
+
+export const ingestCatalogUrl = (body = {}, options) =>
+  request('/catalog/ingest/url', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const ingestCatalogFile = (body = {}, options) =>
+  request('/catalog/ingest/file', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const ingestCatalogVoice = (body = {}, options) =>
+  request('/catalog/ingest/voice', { method: 'POST', body: JSON.stringify(body), ...options });
+
 // --- Ingredients --------------------------------------------------------
 
 export const listCatalogIngredients = ({ type, tag, q, limit, offset, ...options } = {}) => {
