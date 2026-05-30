@@ -199,6 +199,19 @@ describe('getToolSpecs', () => {
       expect(s.function.parameters?.type).toBe('object');
     }
   });
+
+  it('catalog_lookup advertises user-defined catalog types in its type enum', async () => {
+    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    try {
+      setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
+      const lookup = getToolSpecs().find((s) => s.function.name === 'catalog_lookup');
+      const enumVals = lookup.function.parameters.properties.type.enum;
+      // Built-ins still present, plus the user type.
+      expect(enumVals).toEqual(expect.arrayContaining(['character', 'place', 'object', 'idea', 'scene', 'concept', 'faction']));
+    } finally {
+      setUserCatalogTypes([]);  // restore the registry for other suites
+    }
+  });
 });
 
 describe('dispatchTool unknown tool', () => {

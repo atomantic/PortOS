@@ -17,6 +17,7 @@ import { getUserTimezone, todayInTimezone, getLocalParts, getUtcOffsetMs } from 
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 import { listIngredients as listCatalogIngredients, listRefsForIngredient } from '../catalogDB.js';
+import { getActiveCatalogTypes, isActiveType } from '../../lib/catalogTypes.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 import * as imageGen from '../imageGen/index.js';
 import { createImageGenWaiter } from '../imageGenWaiter.js';
@@ -449,9 +450,17 @@ const describeWeatherCode = (code) => WEATHER_CODES[code] ?? 'unknown conditions
 const DEFAULT_LAT = 37.7749;
 const DEFAULT_LON = -122.4194;
 
-// Catalog ingredient kinds. Hardcoded for now — the shared catalog type
-// registry (PLAN item `[catalog-shared-type-registry]`) will replace this.
+// Catalog ingredient kinds. The six built-ins are a STATIC fallback; the live
+// enum advertised to the LLM (and the filter-validity check) resolves through
+// the active type registry at `getToolSpecs()` / call time so user-defined
+// types (Settings → Catalog) are voice-addressable too. `activeCatalogTypeIds`
+// reads the registry fresh each call — it changes on a settings save / peer
+// sync without a process restart.
 const CATALOG_INGREDIENT_TYPES = ['character', 'place', 'object', 'idea', 'scene', 'concept'];
+const activeCatalogTypeIds = () => {
+  const ids = getActiveCatalogTypes().map((t) => t.id);
+  return ids.length ? ids : CATALOG_INGREDIENT_TYPES;
+};
 
 // Pull a short snippet from an ingredient's type-specific payload. Mirrors
 // the fallback chain used by client/src/pages/Catalog.jsx so voice + UI agree
@@ -2073,6 +2082,9 @@ const TOOLS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Free-text search across name + payload content. Use the user\'s most distinctive phrasing.' },
+        // enum is filled in at spec-build time (toSpec) from the active type
+        // registry so user-defined types are advertised; this static default
+        // is the fallback shape.
         type: { type: 'string', enum: CATALOG_INGREDIENT_TYPES, description: 'Optional: restrict to one ingredient kind.' },
         limit: { type: 'integer', description: 'Max results (default 5, max 20).' },
       },
@@ -2082,7 +2094,9 @@ const TOOLS = [
       if (typeof query !== 'string' || !query.trim()) throw new Error('query is required');
       const q = query.trim();
       const max = clampLimit(limit, 5, 20);
-      const filterType = CATALOG_INGREDIENT_TYPES.includes(type) ? type : undefined;
+      // Accept any ACTIVE type (built-in or user-defined); an unknown type
+      // silently drops to an unfiltered search rather than erroring.
+      const filterType = type && isActiveType(type) ? type : undefined;
       const { items } = await listCatalogIngredients({ query: q, type: filterType, limit: max });
       const results = await Promise.all(items.map(async (ing) => {
         const refs = await listRefsForIngredient(ing.id);
@@ -2102,9 +2116,25 @@ const TOOLS = [
   },
 ];
 
+// Resolve a tool's parameter schema at spec-build time. `catalog_lookup`'s
+// `type` enum is widened to the active type registry (built-in + user-defined
+// catalog types) so a user's custom kind ("faction", "wardrobe") is advertised
+// to the LLM and voice "search my factions" can filter on it. Other tools pass
+// their static schema through untouched.
+const resolveParameters = (t) => {
+  if (t.name !== 'catalog_lookup') return t.parameters;
+  return {
+    ...t.parameters,
+    properties: {
+      ...t.parameters.properties,
+      type: { ...t.parameters.properties.type, enum: activeCatalogTypeIds() },
+    },
+  };
+};
+
 const toSpec = (t) => ({
   type: 'function',
-  function: { name: t.name, description: t.description, parameters: t.parameters },
+  function: { name: t.name, description: t.description, parameters: resolveParameters(t) },
 });
 
 export const getToolSpecs = () => TOOLS.map(toSpec);
