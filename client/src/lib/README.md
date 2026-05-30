@@ -59,6 +59,7 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | Module | Purpose |
 |---|---|
+| `audioRecorder.js` | `startMemoRecording()` → `{ stop, cancel }` handle whose `stop()` resolves to `{ audioBase64, mimeType, peak, durationMs }` (16 kHz mono WAV, base64). Plus `blobToWav16k`, `encodePcmToWav`, `pickRecordingMimeType`, `arrayBufferToBase64`. Standalone one-shot memo capture for catalog voice ingest — NOT the live voice-agent recorder in `services/voiceClient.js`. |
 | `clientErrorReporter.js` | `reportClientError({ type, error?, message?, ... })` — POSTs window.onerror + unhandledrejection events to `/api/client-errors` with throttle + dedup. Wired from `main.jsx`; never call directly from React components. |
 | `clipboard.js` | `copyToClipboard`, `writeClipboardSilently`, `readClipboard` — safe across insecure-origin contexts. Use these instead of `navigator.clipboard.writeText` inline. |
 | `compareHelpers.js` | `equalByKeys(a, b, keys)` / `equalListByKeys(a, b, keys)` — typed key-based equality for `useAutoRefetch`'s `compare`. Keys are property names, dotted paths (`'context.running'`), or `(item) => value` accessors. The typed alternative to `sameJsonShape` when a monotonic timestamp or unrendered field would break stringify-equality dedup. |

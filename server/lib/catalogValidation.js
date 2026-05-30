@@ -48,14 +48,102 @@ const payload = z.record(z.string(), z.unknown())
   })
   .optional();
 
+// Scrap source kinds. The DB column is a free VARCHAR(32) so peers running a
+// newer build can push kinds an older build doesn't enumerate (the sync-apply
+// path uses the looser `z.string().max(32)` below, NOT this enum). This enum
+// gates the LOCAL ingest routes only — every value here is one a local ingest
+// path actually produces.
+export const SCRAP_SOURCE_KINDS = Object.freeze([
+  'paste',
+  'brain-bridge',
+  'importer-handoff',
+  'manual',
+  'url',         // POST /catalog/ingest/url — fetched + main-text-extracted page
+  'file',        // POST /catalog/ingest/file — uploaded .txt/.md/.pdf
+  'voice-memo',  // POST /catalog/ingest/voice — recorded memo, Whisper-transcribed
+]);
+
 export const catalogScrapCreateSchema = z.object({
   title: z.string().trim().max(300).optional().nullable(),
   rawText: z.string().min(1).max(2_000_000),
-  sourceKind: z.enum(['paste', 'brain-bridge', 'importer-handoff', 'manual']).optional(),
+  sourceKind: z.enum(SCRAP_SOURCE_KINDS).optional(),
   metadata: payload,
 }).strict();
 
 export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
+
+// --- Source-kind ingest routes (url / file / voice) ---------------------
+// Each ingest route creates a scrap with the matching `sourceKind`, then runs
+// the same extraction pipeline the paste→extract→commit flow uses, so the
+// client lands on the identical review phase. `providerOverride` mirrors
+// catalogExtractRequestSchema below.
+
+// A host (bracket-stripped, lowercased) that the URL ingest must refuse:
+// loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
+// and the unspecified address — in plain IPv4, IPv6, AND IPv4-mapped-IPv6 form
+// (`::ffff:127.0.0.1`, which WHATWG normalizes to the hex `::ffff:7f00:1`), so
+// the guard can't be bypassed with a mapped literal. We deliberately ALLOW
+// other private/LAN hosts: ingesting from a Tailscale peer or a home-network
+// wiki is a legit use of this single-user tool.
+export const isBlockedIngestHost = (host) => {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
+  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
+  if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
+  const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
+  // IPv4-mapped IPv6: `::ffff:a.b.c.d` or the compressed hex `::ffff:HHHH:HHHH`.
+  const mapped = /^::ffff:(.+)$/i.exec(h);
+  if (mapped) {
+    const tail = mapped[1];
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return v4Blocked(tail);
+    const parts = tail.split(':');
+    if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
+      const hi = parseInt(parts[0], 16), lo = parseInt(parts[1], 16);
+      return v4Blocked(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+    }
+  }
+  return false;
+};
+
+// Block schemes and hosts that would turn "fetch this page" into local-file
+// exfiltration or cloud-metadata SSRF: non-http(s) schemes (file:/chrome:/
+// javascript:/ftp:) and the blocked hosts above.
+export const isSafeIngestUrl = (raw) => {
+  let u;
+  try { u = new URL(raw); } catch { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  return !isBlockedIngestHost(u.hostname);
+};
+
+export const catalogUrlIngestSchema = z.object({
+  url: z.string().trim().max(4_000).url()
+    .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed'),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// Text-bearing file ingest. The client reads .txt/.md text locally and posts
+// it here with the original filename + mime so the scrap metadata records
+// provenance without the server needing an upload/parse dependency.
+export const catalogFileIngestSchema = z.object({
+  text: z.string().min(1).max(2_000_000),
+  filename: z.string().trim().min(1).max(300),
+  mime: z.string().trim().min(1).max(120).optional(),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// Voice-memo ingest. `audioBase64` is a base64-encoded WAV the client records
+// via MediaRecorder (matching the voice agent's STT path). The server decodes
+// it, transcribes via Whisper, persists the audio under data/audio to mint a
+// `media_key`, then ingests the transcript with that key in scrap metadata.
+// 8 MB base64 ≈ 6 MB raw ≈ several minutes of 16 kHz mono WAV.
+export const catalogVoiceIngestSchema = z.object({
+  audioBase64: z.string().min(1).max(8_000_000),
+  mimeType: z.string().trim().min(1).max(64).optional(),
+  title: z.string().trim().max(300).optional(),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
 
 export const catalogIngredientCreateSchema = z.object({
   type: z.enum(INGREDIENT_TYPES),

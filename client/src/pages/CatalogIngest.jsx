@@ -7,14 +7,18 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload } from 'lucide-react';
+import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { startMemoRecording } from '../lib/audioRecorder';
 import {
   createCatalogScrap,
   extractFromCatalogScrap,
   commitCatalogScrapDraft,
   bulkImportCatalogIngredients,
+  ingestCatalogUrl,
+  ingestCatalogFile,
+  ingestCatalogVoice,
 } from '../services/apiCatalog';
 
 // One review section per ingredient type. The first three are bible-shaped
@@ -74,6 +78,30 @@ export default function CatalogIngest() {
   const [bulkFormat, setBulkFormat] = useState('markdown');
   const [bulkText, setBulkText] = useState('');
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  // Alternate ingest sources. The paste textarea is the default; 'url' and
+  // 'voice' add their own inputs. File ingest is a one-shot picker that fires
+  // immediately on select, so it has no persistent mode.
+  const [sourceMode, setSourceMode] = useState('paste'); // 'paste' | 'url'
+  const [url, setUrl] = useState('');
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Stop the mic if the page unmounts mid-recording (navigating away), so the
+  // MediaRecorder stream isn't left live with no UI to stop it.
+  useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
+
+  // Any transition OUT of the paste phase that isn't the voice flow's own
+  // stop-and-transcribe (which nulls recorderRef before switching) must release
+  // the mic — otherwise starting File/URL/Paste ingest mid-recording hides the
+  // stop control while the stream stays live.
+  useEffect(() => {
+    if (phase !== 'paste' && recorderRef.current) {
+      recorderRef.current.cancel?.();
+      recorderRef.current = null;
+      setRecording(false);
+    }
+  }, [phase]);
 
   // Track active runId so a stale frame from an earlier scrap can't mutate the
   // current stage list (server fans these to all sockets — single-user trust
@@ -105,6 +133,9 @@ export default function CatalogIngest() {
 
   const reset = () => {
     activeRunIdRef.current = null;
+    recorderRef.current?.cancel?.();
+    recorderRef.current = null;
+    setRecording(false);
     setPhase('paste');
     setScrapId(null);
     setStages(INITIAL_STAGES);
@@ -112,22 +143,12 @@ export default function CatalogIngest() {
     setSelected({ characters: new Set(), places: new Set(), objects: new Set(), ideas: new Set(), scenes: new Set(), concepts: new Set() });
   };
 
-  const handleIngest = async (e) => {
-    e?.preventDefault?.();
-    const text = rawText.trim();
-    if (!text) { toast.error('Paste some text first.'); return; }
-    setSubmitting(true);
-    setPhase('extracting');
-    setStages(INITIAL_STAGES);
-    // silent: own error handling below — avoids double-toast.
-    const created = await createCatalogScrap({ rawText: text, title: title.trim() || undefined }, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Failed to save scrap'); return null; });
-    if (!created?.scrap?.id) { setSubmitting(false); setPhase('paste'); return; }
-    setScrapId(created.scrap.id);
-    const result = await extractFromCatalogScrap(created.scrap.id, {}, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
-    setSubmitting(false);
-    if (!result?.draft) { setPhase('paste'); return; }
+  // Shared review-entry: every ingest path (paste / url / file / voice) yields
+  // a `{ scrap, draft }` response with the same draft shape, so they all funnel
+  // through here to populate the review phase.
+  const enterReviewFromResult = (result) => {
+    if (!result?.draft) { setPhase('paste'); return false; }
+    if (result.scrap?.id) setScrapId(result.scrap.id);
     const d = Object.fromEntries(KIND_SECTIONS.map((s) => [
       s.key,
       Array.isArray(result.draft[s.key]) ? result.draft[s.key] : [],
@@ -146,6 +167,95 @@ export default function CatalogIngest() {
       setStages((prev) => prev.map((s) => ({ ...s, status: 'completed', count: countForStage(s.id) })));
     }
     setPhase('review');
+    return true;
+  };
+
+  const handleIngest = async (e) => {
+    e?.preventDefault?.();
+    const text = rawText.trim();
+    if (!text) { toast.error('Paste some text first.'); return; }
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    // silent: own error handling below — avoids double-toast.
+    const created = await createCatalogScrap({ rawText: text, title: title.trim() || undefined }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to save scrap'); return null; });
+    if (!created?.scrap?.id) { setSubmitting(false); setPhase('paste'); return; }
+    setScrapId(created.scrap.id);
+    const result = await extractFromCatalogScrap(created.scrap.id, {}, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result);
+  };
+
+  const handleUrlIngest = async (e) => {
+    e?.preventDefault?.();
+    const trimmed = url.trim();
+    if (!trimmed) { toast.error('Paste a URL first.'); return; }
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    const result = await ingestCatalogUrl({ url: trimmed }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'URL ingest failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result);
+  };
+
+  const handleFilePicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    const name = (file.name || '').toLowerCase();
+    if (name.endsWith('.pdf')) {
+      toast.error('PDF text extraction is not supported yet — paste the text or upload a .txt/.md file.');
+      return;
+    }
+    const text = await file.text().catch(() => '');
+    if (!text.trim()) { toast.error('That file had no readable text.'); return; }
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    const result = await ingestCatalogFile(
+      { text, filename: file.name, mime: file.type || undefined },
+      { silent: true },
+    ).catch((err) => { toast.error(err?.message || 'File ingest failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result);
+  };
+
+  const startRecording = async () => {
+    const handle = await startMemoRecording().catch((err) => {
+      toast.error(err?.message || 'Microphone unavailable');
+      return null;
+    });
+    if (!handle) return;
+    recorderRef.current = handle;
+    setRecording(true);
+  };
+
+  const stopRecordingAndIngest = async () => {
+    const handle = recorderRef.current;
+    if (!handle) return;
+    recorderRef.current = null;
+    setRecording(false);
+    const clip = await handle.stop().catch((err) => {
+      toast.error(err?.message || 'Recording failed');
+      return null;
+    });
+    if (!clip?.audioBase64) return;
+    if (clip.peak !== undefined && clip.peak < 0.01) {
+      toast.error('That memo was silent — check your microphone and try again.');
+      return;
+    }
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    const result = await ingestCatalogVoice(
+      { audioBase64: clip.audioBase64, mimeType: clip.mimeType, title: title.trim() || undefined },
+      { silent: true },
+    ).catch((err) => { toast.error(err?.message || 'Voice ingest failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result);
   };
 
   const handleBulkImport = async () => {
@@ -251,7 +361,9 @@ export default function CatalogIngest() {
             </button>
             {phase === 'paste' && (
               <button type="button" onClick={() => setBulkOpen((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white"
+                disabled={recording}
+                title={recording ? 'Stop the voice recording first' : undefined}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
                 aria-expanded={bulkOpen}>
                 <Upload size={14} aria-hidden="true" /> Bulk Import
               </button>
@@ -312,31 +424,85 @@ export default function CatalogIngest() {
           </div>
         )}
 
-        {phase === 'paste' && (
-          <form onSubmit={handleIngest} className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
-            <div>
-              <label htmlFor="ingest-title" className="block text-sm font-medium mb-1 text-white">
-                Title <span className="text-gray-500 font-normal">(optional)</span>
-              </label>
-              <input id="ingest-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Chapter 3 notes" maxLength={200}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
-            </div>
-            <div>
-              <label htmlFor="ingest-text" className="block text-sm font-medium mb-1 text-white">Raw text</label>
-              <textarea id="ingest-text" rows={12} value={rawText} onChange={(e) => setRawText(e.target.value)}
-                placeholder="Paste prose, scene notes, character sketches — anything you want catalogued."
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
-              <p className="text-xs text-gray-500 mt-1">{rawText.length.toLocaleString()} chars</p>
-            </div>
-            <div className="flex items-center justify-end">
-              <button type="submit" disabled={submitting || !rawText.trim()}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                {submitting ? 'Ingesting…' : 'Ingest'}
+        {phase === 'paste' && !bulkOpen && (
+          <>
+            {/* Source picker — paste / URL / file / voice all funnel into the
+                same review phase. File + voice fire immediately; paste + URL
+                have their own input rows. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => setSourceMode('paste')}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border ${sourceMode === 'paste' ? 'border-port-accent text-white bg-port-accent/10' : 'border-port-border text-gray-300 hover:text-white'}`}>
+                <Sparkles size={14} aria-hidden="true" /> Paste
               </button>
+              <button type="button" onClick={() => setSourceMode('url')}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border ${sourceMode === 'url' ? 'border-port-accent text-white bg-port-accent/10' : 'border-port-border text-gray-300 hover:text-white'}`}>
+                <Link2 size={14} aria-hidden="true" /> URL
+              </button>
+              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={submitting}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white disabled:opacity-50">
+                <FileText size={14} aria-hidden="true" /> File
+              </button>
+              <input ref={fileInputRef} type="file" accept=".txt,.md,.markdown,text/plain,text/markdown"
+                onChange={handleFilePicked} className="hidden" aria-hidden="true" tabIndex={-1} />
+              {!recording ? (
+                <button type="button" onClick={startRecording} disabled={submitting}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white disabled:opacity-50">
+                  <Mic size={14} aria-hidden="true" /> Voice Memo
+                </button>
+              ) : (
+                <button type="button" onClick={stopRecordingAndIngest}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-error text-white bg-port-error/10 animate-pulse">
+                  <Square size={14} aria-hidden="true" /> Stop &amp; Transcribe
+                </button>
+              )}
             </div>
-          </form>
+
+            {sourceMode === 'url' && (
+              <form onSubmit={handleUrlIngest} className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
+                <div>
+                  <label htmlFor="ingest-url" className="block text-sm font-medium mb-1 text-white">URL</label>
+                  <input id="ingest-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://example.com/article"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+                  <p className="text-xs text-gray-500 mt-1">Fetched through the browser service; main article text is extracted server-side.</p>
+                </div>
+                <div className="flex items-center justify-end">
+                  <button type="submit" disabled={submitting || !url.trim()}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+                    {submitting ? 'Fetching…' : 'Fetch & Ingest'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {sourceMode === 'paste' && (
+              <form onSubmit={handleIngest} className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-4">
+                <div>
+                  <label htmlFor="ingest-title" className="block text-sm font-medium mb-1 text-white">
+                    Title <span className="text-gray-500 font-normal">(optional)</span>
+                  </label>
+                  <input id="ingest-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g. Chapter 3 notes" maxLength={200}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+                </div>
+                <div>
+                  <label htmlFor="ingest-text" className="block text-sm font-medium mb-1 text-white">Raw text</label>
+                  <textarea id="ingest-text" rows={12} value={rawText} onChange={(e) => setRawText(e.target.value)}
+                    placeholder="Paste prose, scene notes, character sketches — anything you want catalogued."
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
+                  <p className="text-xs text-gray-500 mt-1">{rawText.length.toLocaleString()} chars</p>
+                </div>
+                <div className="flex items-center justify-end">
+                  <button type="submit" disabled={submitting || !rawText.trim()}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {submitting ? 'Ingesting…' : 'Ingest'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </>
         )}
 
         {phase === 'extracting' && (
