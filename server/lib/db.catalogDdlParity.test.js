@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -168,11 +169,15 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     const sqlKeys = extractPayloadFtsKeys(INIT_SQL);
     const jsKeys = extractPayloadFtsKeys(DB_JS);
     expect([...sqlKeys].sort()).toEqual([...jsKeys].sort());
-    // Sanity: today's v2 expression covers the bible-backfilled character
-    // fields. If either drops below the documented set the test is lying.
-    for (const required of ['description', 'physicalDescription', 'personality', 'background', 'summary', 'notes']) {
-      expect(sqlKeys.has(required), `init-db.sql search_tsv missing ${required}`).toBe(true);
-      expect(jsKeys.has(required), `db.js search_tsv missing ${required}`).toBe(true);
+    // The registry (`catalogTypes.FTS_PAYLOAD_FIELDS`) is the single source of
+    // truth for which payload keys the FTS column must index. Derive the
+    // required set from it rather than a hand-maintained list, so adding a
+    // type's `ftsFields` without updating BOTH DDL sources fails here instead
+    // of silently de-indexing the field.
+    expect(FTS_PAYLOAD_FIELDS.length, 'registry declares no FTS payload fields').toBeGreaterThan(0);
+    for (const required of FTS_PAYLOAD_FIELDS) {
+      expect(sqlKeys.has(required), `init-db.sql search_tsv missing registry FTS field ${required}`).toBe(true);
+      expect(jsKeys.has(required), `db.js search_tsv missing registry FTS field ${required}`).toBe(true);
     }
   });
 });

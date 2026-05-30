@@ -6,7 +6,7 @@
  * content key/label, the snippet fallback chain, and the per-type editor field
  * list.
  *
- * Drift is asserted by `client/src/lib/catalogTypes.test.js` against the
+ * Drift is asserted by `server/lib/catalogTypes.parity.test.js` against the
  * server registry's shared fields — if you change one side, change the other.
  *
  * Adding a type: add an entry here AND in the server registry (+ one migration
@@ -107,7 +107,7 @@ export const CATALOG_TYPES = Object.freeze([
  * picker on the ingredient detail page. `label` is the from→to direction;
  * `inverseLabel` renders the same stored edge from the `to` side.
  *
- * Drift is asserted by `client/src/lib/catalogTypes.test.js` against the server
+ * Drift is asserted by `server/lib/catalogTypes.parity.test.js` against the server
  * registry — change one side, change the other.
  */
 export const RELATION_KINDS = Object.freeze([
@@ -143,7 +143,7 @@ export function getRelationKind(id) {
  * Catalog ingredient MEDIA-attachment kinds — client mirror of
  * `server/lib/catalogTypes.js` MEDIA_KINDS. Drives the "Media" panel attach
  * picker / drag-drop on the ingredient detail page. `accept` is the file-input
- * MIME filter. Drift is asserted by `client/src/lib/catalogTypes.test.js`
+ * MIME filter. Drift is asserted by `server/lib/catalogTypes.parity.test.js`
  * against the server registry — change one side, change the other.
  */
 export const MEDIA_KINDS = Object.freeze([
