@@ -16,18 +16,29 @@ import {
   commitCatalogScrapDraft,
 } from '../services/apiCatalog';
 
+// One review section per ingredient type. The first three are bible-shaped
+// (character/place/object) and use `physicalDescription`/`description` as the
+// primary editable text; the last three are light-shaped (idea/scene/concept)
+// and use `summary` — matching PRIMARY_CONTENT_KEY in Catalog.jsx.
 const KIND_SECTIONS = [
   { key: 'characters', label: 'Characters', type: 'character' },
   { key: 'places',     label: 'Places',     type: 'place' },
   { key: 'objects',    label: 'Objects',    type: 'object' },
+  { key: 'ideas',      label: 'Ideas',      type: 'idea' },
+  { key: 'scenes',     label: 'Scenes',     type: 'scene' },
+  { key: 'concepts',   label: 'Concepts',   type: 'concept' },
 ];
 
 // Initial stage list, used until the server's `start` frame supplies the real
-// one. Matches the three sections rendered in the review phase so the panel
-// never looks empty between click and first frame.
-const INITIAL_STAGES = KIND_SECTIONS.map((s) => ({
-  id: s.key, label: s.label, status: 'pending', count: 0,
-}));
+// one. Mirrors server-side EXTRACTION_STAGES — three bible passes plus one
+// bundled light pass (`ideasScenesConcepts`) — so the panel never looks empty
+// between click and first frame.
+const INITIAL_STAGES = [
+  { id: 'characters', label: 'Characters', status: 'pending', count: 0 },
+  { id: 'places',     label: 'Places',     status: 'pending', count: 0 },
+  { id: 'objects',    label: 'Objects',    status: 'pending', count: 0 },
+  { id: 'ideasScenesConcepts', label: 'Ideas, scenes & concepts', status: 'pending', count: 0 },
+];
 
 function StageIcon({ status }) {
   if (status === 'completed' || status === 'done') {
@@ -53,8 +64,8 @@ export default function CatalogIngest() {
   const [stages, setStages] = useState(INITIAL_STAGES);
   // The draft returned by extractFromCatalogScrap(): per-kind candidate arrays
   // editable inline + checkbox-gated. Defaults all to selected.
-  const [draft, setDraft] = useState({ characters: [], places: [], objects: [] });
-  const [selected, setSelected] = useState({ characters: new Set(), places: new Set(), objects: new Set() });
+  const [draft, setDraft] = useState({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] });
+  const [selected, setSelected] = useState({ characters: new Set(), places: new Set(), objects: new Set(), ideas: new Set(), scenes: new Set(), concepts: new Set() });
 
   // Track active runId so a stale frame from an earlier scrap can't mutate the
   // current stage list (server fans these to all sockets — single-user trust
@@ -89,8 +100,8 @@ export default function CatalogIngest() {
     setPhase('paste');
     setScrapId(null);
     setStages(INITIAL_STAGES);
-    setDraft({ characters: [], places: [], objects: [] });
-    setSelected({ characters: new Set(), places: new Set(), objects: new Set() });
+    setDraft({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] });
+    setSelected({ characters: new Set(), places: new Set(), objects: new Set(), ideas: new Set(), scenes: new Set(), concepts: new Set() });
   };
 
   const handleIngest = async (e) => {
@@ -109,22 +120,22 @@ export default function CatalogIngest() {
       .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
     setSubmitting(false);
     if (!result?.draft) { setPhase('paste'); return; }
-    const d = {
-      characters: Array.isArray(result.draft.characters) ? result.draft.characters : [],
-      places:     Array.isArray(result.draft.places)     ? result.draft.places     : [],
-      objects:    Array.isArray(result.draft.objects)    ? result.draft.objects    : [],
-    };
+    const d = Object.fromEntries(KIND_SECTIONS.map((s) => [
+      s.key,
+      Array.isArray(result.draft[s.key]) ? result.draft[s.key] : [],
+    ]));
     setDraft(d);
-    setSelected({
-      characters: new Set(d.characters.map((_, i) => i)),
-      places:     new Set(d.places.map((_, i) => i)),
-      objects:    new Set(d.objects.map((_, i) => i)),
-    });
+    setSelected(Object.fromEntries(KIND_SECTIONS.map((s) => [s.key, new Set(d[s.key].map((_, i) => i))])));
     // Prefer server-supplied stage list; otherwise mark defaults completed.
+    // The bundled `ideasScenesConcepts` stage has no matching `d[id]` array,
+    // so its count is the sum of the three light kinds it backs.
     if (Array.isArray(result.draft.stages) && result.draft.stages.length > 0) {
       setStages(result.draft.stages.map((s) => ({ ...s, status: s.status || 'completed' })));
     } else {
-      setStages((prev) => prev.map((s) => ({ ...s, status: 'completed', count: d[s.id]?.length || 0 })));
+      const countForStage = (id) => id === 'ideasScenesConcepts'
+        ? d.ideas.length + d.scenes.length + d.concepts.length
+        : d[id]?.length || 0;
+      setStages((prev) => prev.map((s) => ({ ...s, status: 'completed', count: countForStage(s.id) })));
     }
     setPhase('review');
   };
@@ -198,8 +209,8 @@ export default function CatalogIngest() {
             <div>
               <h1 className="text-2xl font-bold text-white">Catalog Ingest</h1>
               <p className="text-sm text-gray-400 mt-1">
-                Paste prose, notes, or a synopsis. The LLM extracts characters, places, and objects;
-                review and commit only what you want to keep.
+                Paste prose, notes, or a synopsis. The LLM extracts characters, places, and objects
+                alongside ideas, scenes, and concepts; review and commit only what you want to keep.
               </p>
             </div>
           </div>
@@ -330,12 +341,15 @@ function ReviewSection({ section, items, selected, onToggle, onSelectAll, onPatc
       <ul className="space-y-2">
         {items.map((c, idx) => {
           const baseId = `${section.key}-${idx}`;
-          // Characters use `physicalDescription` (matches the canon shape from
-          // sanitizeCharacter); places/objects use `description`. Without this
-          // a character's LLM-extracted physicalDescription would render as an
-          // empty textarea and edits would land in a sibling `description` key
-          // that the canon shape doesn't read.
-          const descField = section.type === 'character' ? 'physicalDescription' : 'description';
+          // Each type's primary editable field matches PRIMARY_CONTENT_KEY in
+          // Catalog.jsx: character → physicalDescription (canon shape from
+          // sanitizeCharacter); place/object → description; idea/scene/concept
+          // → summary. Without this an edit lands in a sibling key the
+          // catalog editor doesn't read.
+          let descField;
+          if (section.type === 'character') descField = 'physicalDescription';
+          else if (section.type === 'place' || section.type === 'object') descField = 'description';
+          else descField = 'summary';
           return (
             <li key={baseId} className="border border-port-border rounded p-3 bg-port-bg/40 flex items-start gap-2">
               <input id={`${baseId}-check`} type="checkbox" checked={selected.has(idx)} onChange={() => onToggle(idx)}
