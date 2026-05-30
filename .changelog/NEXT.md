@@ -2,6 +2,7 @@
 
 ## Changed
 
+- **[pythonsetup-arch-tests] Test coverage for the arch-aware Local Python detector.** Internal: locks in the macOS arm64-vs-x86_64 preference behavior and the `/setup/check` arch fields with mocked-platform unit tests, so future edits to interpreter detection can't silently regress mlx wheel loading. No user-visible behavior change.
 - **[mediajobqueue-resolve-live-params] Media job dispatch internals.** Internal refactor: the live-settings re-resolution step that picks the current Python interpreter before each video / local-image render moves into its own helper, giving future live-resolved fields a single seam. No user-visible behavior change.
 - **[patch-settings-slice-helper] Nested settings edits no longer risk clobbering sibling fields.** Saving a Python path from Video Gen, or an image-gen config from a pipeline / Writers Room stage, used to round-trip the entire current settings object — leaving unrelated top-level keys exposed to drift if the read raced a concurrent write elsewhere. These edits now scope themselves to the slice being changed.
 - **[client-use-previous-hook] Shared `usePrevious` hook.** Internal refactor: collapses two ad-hoc previous-render comparisons into one shared hook. No user-visible behavior change.
