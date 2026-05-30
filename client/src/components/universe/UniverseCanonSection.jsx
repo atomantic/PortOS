@@ -561,7 +561,9 @@ export default function UniverseCanonSection({
     // Optimistic append so the new row shows immediately; the server response
     // (with the minted entry id) replaces it.
     onUniverseChange({ ...universe, [kindKey]: nextList });
-    const updated = await updateUniverse(universeId, { [kindKey]: nextList })
+    // `{ silent: true }` because the .catch below owns the error toast — without
+    // it the apiCore request() helper would fire a second, duplicate toast.
+    const updated = await updateUniverse(universeId, { [kindKey]: nextList }, { silent: true })
       .catch((err) => { toast.error(`Add from Catalog failed: ${err.message}`); return null; });
     if (!updated) {
       // Revert the optimistic append — the save didn't land, so the phantom

@@ -139,6 +139,29 @@ describe('UniverseCanonSection — Pick from Catalog', () => {
     ));
   });
 
+  it('derives the role per-kind: a picked place links as canon-place', async () => {
+    // Guards the `canon-${kind.apiKind}` derivation the backfill depends on —
+    // a regression that hard-coded "character" would otherwise pass CI.
+    const onUniverseChange = vi.fn();
+    updateUniverse.mockResolvedValue(baseUniverse({
+      places: [{ id: 'plc-server', name: 'The Hollow', ingredientId: 'cat-plc-1' }],
+    }));
+    listCatalogIngredients.mockResolvedValue({
+      items: [{ id: 'cat-plc-1', type: 'place', name: 'The Hollow', payload: { description: 'tunnel' } }],
+    });
+
+    renderSection({ onUniverseChange, kindFilter: 'places' });
+    fireEvent.click(screen.getByRole('button', { name: /pick place from catalog/i }));
+    const row = await screen.findByRole('button', { name: /the hollow/i });
+    fireEvent.click(row);
+
+    await waitFor(() => expect(linkCatalogIngredient).toHaveBeenCalledWith(
+      'cat-plc-1',
+      { refKind: 'universe', refId: 'uni-1', role: 'canon-place' },
+      { silent: true },
+    ));
+  });
+
   it('reverts the optimistic append when the save fails', async () => {
     const onUniverseChange = vi.fn();
     updateUniverse.mockRejectedValue(new Error('boom'));
