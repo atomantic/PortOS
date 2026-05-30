@@ -80,23 +80,35 @@ export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
 
 // A host (bracket-stripped, lowercased) that the URL ingest must refuse:
 // loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
-// and the unspecified address — in plain IPv4, IPv6, AND IPv4-mapped-IPv6 form
-// (`::ffff:127.0.0.1`, which WHATWG normalizes to the hex `::ffff:7f00:1`), so
-// the guard can't be bypassed with a mapped literal. We deliberately ALLOW
-// other private/LAN hosts: ingesting from a Tailscale peer or a home-network
-// wiki is a legit use of this single-user tool.
+// and the unspecified address — in plain IPv4, IPv6, IPv4-mapped-IPv6
+// (`::ffff:127.0.0.1` → WHATWG-hex `::ffff:7f00:1`), AND the deprecated
+// IPv4-compatible-IPv6 form (`::127.0.0.1` → `::7f00:1`), so the guard can't be
+// bypassed by embedding a blocked v4 address inside an IPv6 literal. A trailing
+// FQDN dot (`localhost.`, `127.0.0.1.`) is stripped first since resolvers treat
+// it as equivalent. NOTE: decimal / hex / octal / shorthand IPv4 (`2130706433`,
+// `0x7f000001`, `127.1`) need no special handling — `new URL()` already
+// normalizes them to canonical dotted-quad in `.hostname` before this runs. We
+// deliberately ALLOW other private/LAN hosts (incl. IPv6 ULA `fd00::/8`):
+// reaching a Tailscale peer or home-network wiki is a legit use of this
+// single-user tool. This is a host-literal guard, not a DNS-resolution or
+// post-redirect check — a hostname that RESOLVES to loopback, or a redirect to
+// a blocked host, is not caught here.
 export const isBlockedIngestHost = (host) => {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
   if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
   // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
   if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
   const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
-  // IPv4-mapped IPv6: `::ffff:a.b.c.d` or the compressed hex `::ffff:HHHH:HHHH`.
-  const mapped = /^::ffff:(.+)$/i.exec(h);
-  if (mapped) {
-    const tail = mapped[1];
+  // A blocked v4 address embedded in an IPv6 literal — either IPv4-mapped
+  // (`::ffff:…`) or the deprecated IPv4-compatible (`::…`) form. WHATWG
+  // normalizes the trailing v4 to a pair of hex hextets (`7f00:1`), or keeps it
+  // dotted in older inputs; handle both. A `::ffff:`-less match also catches the
+  // compatible form; the real `::1` / `::` cases were already returned above.
+  const embedded = /^::(?:ffff:)?(.+)$/i.exec(h);
+  if (embedded) {
+    const tail = embedded[1];
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return v4Blocked(tail);
     const parts = tail.split(':');
     if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {

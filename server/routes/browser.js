@@ -10,11 +10,15 @@ const router = express.Router();
 
 // Validation schemas
 // SSRF guard (shared with catalog URL ingest): reject non-http(s) schemes
-// (file:/chrome:/javascript:) and loopback / link-local / cloud-metadata hosts
-// so a redirect or agent-driven navigate can't turn this into local-file
-// exfiltration or a metadata-endpoint hit. Private/LAN + Tailscale hosts stay
+// (file:/chrome:/javascript:) and loopback / link-local / cloud-metadata host
+// LITERALS so an agent-driven navigate can't directly target local-file
+// exfiltration or a metadata endpoint. Private/LAN + Tailscale hosts stay
 // allowed (a single-user tool legitimately drives its browser there);
 // `localhost`/`127.x` are blocked — navigate by LAN IP/hostname for a local app.
+// This is a host-literal guard, not a DNS-resolution / post-redirect check: a
+// hostname that RESOLVES to loopback, or a server-side redirect the CDP browser
+// then follows to a blocked host, is out of scope here (the browser, not this
+// route, performs the redirect fetch).
 const navigateSchema = z.object({
   url: z.string().url()
     .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed')

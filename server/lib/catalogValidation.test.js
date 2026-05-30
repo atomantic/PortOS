@@ -488,4 +488,23 @@ describe('catalogUrlIngestSchema — SSRF guard', () => {
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://[fe80::1]/x' })).toThrow();
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://[febf::dead]/x' })).toThrow();
   });
+
+  it('rejects deprecated IPv4-COMPATIBLE IPv6 literals embedding a blocked v4', () => {
+    // [::127.0.0.1] → WHATWG-hex [::7f00:1] (NOT ::ffff:), and
+    // [::169.254.169.254] → [::a9fe:a9fe]; both must reject like the mapped form.
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::127.0.0.1]/x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::169.254.169.254]/x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[0:0:0:0:0:0:7f00:1]/x' })).toThrow();
+  });
+
+  it('rejects trailing-FQDN-dot loopback (resolvers treat it as equivalent)', () => {
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://localhost./x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://127.0.0.1./x' })).toThrow();
+  });
+
+  it('still ACCEPTS a LAN host embedded as IPv4-compatible IPv6 (allow-LAN policy holds)', () => {
+    // [::192.168.0.1] → [::c0a8:1] decodes to a private LAN v4 → allowed, same as
+    // the bare 192.168.x case above. Confirms the new branch doesn't over-block.
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::192.168.0.1]/x' })).not.toThrow();
+  });
 });

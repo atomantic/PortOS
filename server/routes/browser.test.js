@@ -85,6 +85,19 @@ describe('POST /api/browser/navigate — SSRF guard', () => {
     expect(navigateToUrl).not.toHaveBeenCalled();
   });
 
+  it('rejects IPv4-compatible-IPv6 + trailing-dot bypasses', async () => {
+    for (const url of [
+      'http://[::127.0.0.1]/',          // → ::7f00:1 (compatible, not ::ffff:)
+      'http://[::169.254.169.254]/',    // → ::a9fe:a9fe
+      'http://localhost./',             // trailing FQDN dot
+      'http://127.0.0.1./',
+    ]) {
+      const r = await navigate(url);
+      expect(r.status, url).toBe(400);
+    }
+    expect(navigateToUrl).not.toHaveBeenCalled();
+  });
+
   it('rejects a non-URL string', async () => {
     const r = await navigate('not a url');
     expect(r.status).toBe(400);
