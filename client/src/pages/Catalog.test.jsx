@@ -98,6 +98,11 @@ describe('Catalog page', () => {
       { silent: true },
     );
     await waitFor(() => expect(screen.getByText('New Idea')).toBeTruthy());
+    // Assert the PREPEND contract (not just existence): the new card must
+    // render before the pre-existing "Echo Saint" card in document order.
+    const newEl = screen.getByText('New Idea');
+    const echoEl = screen.getByText('Echo Saint');
+    expect(newEl.compareDocumentPosition(echoEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(toast.success).toHaveBeenCalled();
   });
 
