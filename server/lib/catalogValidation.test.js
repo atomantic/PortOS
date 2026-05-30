@@ -475,4 +475,12 @@ describe('catalogUrlIngestSchema — SSRF guard', () => {
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://127.0.0.1/x' })).toThrow();
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://metadata.google.internal/x' })).toThrow();
   });
+
+  it('rejects IPv4-mapped IPv6 loopback/link-local + unspecified literals (no bypass)', () => {
+    // WHATWG normalizes [::ffff:127.0.0.1] → [::ffff:7f00:1]; both must reject.
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::ffff:127.0.0.1]/x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::ffff:169.254.169.254]/x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::]/x' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://0.0.0.0/x' })).toThrow();
+  });
 });

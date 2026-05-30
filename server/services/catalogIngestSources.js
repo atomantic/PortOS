@@ -30,6 +30,7 @@ import {
   evaluateOnPage,
 } from './browserService.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { isSafeIngestUrl } from '../lib/catalogValidation.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
 // rawText max). A runaway page or a multi-hour memo can't blow past the DB.
@@ -82,6 +83,15 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
     || pages.find((p) => p.url === opened.url)
     || pages[0];
   if (!page) throw new Error('browser tab not found after navigation');
+
+  // Re-validate the FINAL url before reading the DOM: the request-body URL
+  // passed the SSRF guard, but a server-controlled redirect could have sent
+  // Chrome to a blocked target (127.0.0.1, 169.254.169.254, …). The schema
+  // guard only covers the first hop, so re-check here against the landed URL.
+  const landedUrl = page.url || opened.url || url;
+  if (!isSafeIngestUrl(landedUrl)) {
+    throw new Error('refusing to ingest a redirect to a blocked (loopback/link-local) host');
+  }
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer
   // chrome), falling back to document body text. Runs in the page; returns a

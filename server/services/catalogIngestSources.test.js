@@ -76,6 +76,15 @@ describe('fetchUrlMainText', () => {
     expect(catalogDB.createScrap).not.toHaveBeenCalled();
   });
 
+  it('refuses to ingest a redirect that lands on a blocked (loopback) host', async () => {
+    browserService.navigateToUrl.mockResolvedValue({ id: 'p1', url: 'https://ex.com/a' });
+    // The first-hop URL passed the schema guard, but Chrome followed a redirect
+    // to a loopback target — the landed page.url is what we must re-check.
+    browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'http://127.0.0.1:5555/secret', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
+    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/redirect to a blocked/);
+    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
+  });
+
   it('clamps an oversized page body to the raw-text cap (2M chars)', async () => {
     browserService.navigateToUrl.mockResolvedValue({ id: 'p1', url: 'https://ex.com/a' });
     browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'https://ex.com/a', title: 'Big', webSocketDebuggerUrl: 'ws://x' }]);

@@ -78,22 +78,41 @@ export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
 // client lands on the identical review phase. `providerOverride` mirrors
 // catalogExtractRequestSchema below.
 
+// A host (bracket-stripped, lowercased) that the URL ingest must refuse:
+// loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
+// and the unspecified address — in plain IPv4, IPv6, AND IPv4-mapped-IPv6 form
+// (`::ffff:127.0.0.1`, which WHATWG normalizes to the hex `::ffff:7f00:1`), so
+// the guard can't be bypassed with a mapped literal. We deliberately ALLOW
+// other private/LAN hosts: ingesting from a Tailscale peer or a home-network
+// wiki is a legit use of this single-user tool.
+const isBlockedIngestHost = (host) => {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
+  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
+  // IPv4-mapped IPv6: `::ffff:a.b.c.d` or the compressed hex `::ffff:HHHH:HHHH`.
+  const mapped = /^::ffff:(.+)$/i.exec(h);
+  if (mapped) {
+    const tail = mapped[1];
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return v4Blocked(tail);
+    const parts = tail.split(':');
+    if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
+      const hi = parseInt(parts[0], 16), lo = parseInt(parts[1], 16);
+      return v4Blocked(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+    }
+  }
+  return false;
+};
+
 // Block schemes and hosts that would turn "fetch this page" into local-file
-// exfiltration or cloud-metadata SSRF. We deliberately ALLOW other private/LAN
-// hosts: ingesting from a Tailscale peer or a home-network wiki is a legit use
-// of this single-user tool. We only reject the two genuinely dangerous classes:
-// non-http(s) schemes (file:/chrome:/javascript:/ftp:) and loopback +
-// link-local (127.x/::1/169.254.169.254 cloud-metadata).
+// exfiltration or cloud-metadata SSRF: non-http(s) schemes (file:/chrome:/
+// javascript:/ftp:) and the blocked hosts above.
 export const isSafeIngestUrl = (raw) => {
   let u;
   try { u = new URL(raw); } catch { return false; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host === '::1' || host.endsWith('.localhost')) return false;
-  if (/^127\./.test(host)) return false;       // loopback
-  if (/^169\.254\./.test(host)) return false;   // link-local incl. cloud metadata
-  if (host === 'metadata.google.internal') return false;
-  return true;
+  return !isBlockedIngestHost(u.hostname);
 };
 
 export const catalogUrlIngestSchema = z.object({
