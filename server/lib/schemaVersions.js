@@ -67,7 +67,44 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // their pushes; newer peers pushing to older receivers are sender-ahead
   // and get 412. `cat-ingredient` and `cat-scrap` record kinds map back
   // here via RECORD_KIND_SCHEMA_CATEGORIES.
-  catalog: 3,
+  //
+  // NOT bumped for the per-record `payload.schemaVersion` stamp added by
+  // catalog-payload-schemaversion: that key is additive JSONB that both old
+  // and new peers store verbatim (`upsertIngredientFromPeer` writes payload
+  // as-is — no sanitizer strips it), and all types are payload-v1 today so no
+  // shape actually changed on the wire. The FIRST type that bumps its
+  // registry `payloadSchemaVersion` to 2 with a genuine shape change (a peer
+  // ≤ that version would round-trip the new shape through an unaware
+  // sanitizer) MUST bump `catalog` here in lockstep.
+  //
+  // v4 = `catalog_ingredient_relations` table (ingredient↔ingredient edges)
+  // + a new `relations: [...]` block in the catalog sync envelope. An older
+  // (≤v3) receiver doesn't understand the relations block, so a v4 sender
+  // pushing to it is sender-ahead on `catalog` and gets a 412 — correct,
+  // since the older peer would silently drop every relation edge. v4 receivers
+  // still accept ≤v3 senders (sender-behind): those envelopes simply carry no
+  // `relations` block and the receiver applies the other four kinds as before.
+  // v5 = `catalog_tags` first-class table (id, label, description?, color?,
+  // parent_id?, created_at, sync_sequence) + a new `tags: [...]` block in the
+  // catalog sync envelope. Same gating rationale as v4: a ≤v4 receiver doesn't
+  // understand the `tags` block, so a v5 sender pushing to it is sender-ahead
+  // and gets a 412 (otherwise the older peer would silently drop every canonical
+  // tag row + its parent hierarchy). The freeform `catalog_ingredients.tags
+  // TEXT[]` column is unchanged — canonical tag rows are an additive index, so
+  // a v5 receiver still accepts ≤v4 ingredient/scrap/ref/relation pushes; those
+  // envelopes simply carry no `tags` block.
+  // v6 = `catalog_ingredient_media` join table (typed image/audio/video/doc
+  // attachments) + a new `media: [...]` block in the catalog sync envelope.
+  // Each media row ships a `media_key` REFERENCE into the receiver's own media
+  // library (data/images + history.jsonl sidecar) — never the bytes. Same
+  // gating rationale as v4/v5: a ≤v5 receiver doesn't understand the `media`
+  // block, so a v6 sender pushing to it is sender-ahead on `catalog` and gets
+  // a 412 (otherwise the older peer would silently drop every attachment). A v6
+  // receiver still accepts ≤v5 senders (sender-behind); those envelopes carry
+  // no `media` block. Media keys that don't resolve against the receiver's own
+  // library surface via the metadata-missing integrity endpoint rather than
+  // failing the apply.
+  catalog: 6,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

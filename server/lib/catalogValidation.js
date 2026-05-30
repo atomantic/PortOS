@@ -12,15 +12,12 @@
 
 import { z } from 'zod';
 import { BIBLE_LIMITS } from './storyBible.js';
+import { INGREDIENT_TYPE_IDS, RELATION_KIND_IDS, MEDIA_KIND_IDS } from './catalogTypes.js';
 
-export const INGREDIENT_TYPES = Object.freeze([
-  'character',
-  'place',
-  'object',
-  'idea',
-  'scene',
-  'concept',
-]);
+// Derived from the shared type registry (`catalogTypes.js`) — adding a type
+// there flows through to every Zod enum below automatically. Kept as a frozen
+// re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
+export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
 
 export const REF_KINDS = Object.freeze([
   'universe',
@@ -29,6 +26,13 @@ export const REF_KINDS = Object.freeze([
   'work',
   'creative-director',
 ]);
+
+// Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
+// a kind there flows through to the Zod enum below.
+export const RELATION_KINDS = RELATION_KIND_IDS;
+
+// Media-attachment kinds derived from the shared registry — same pattern.
+export const MEDIA_KINDS = MEDIA_KIND_IDS;
 
 const tag = z.string().trim().min(1).max(BIBLE_LIMITS.TAG_MAX);
 const tags = z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional();
@@ -60,10 +64,34 @@ export const catalogIngredientCreateSchema = z.object({
   tags,
 }).strict();
 
+// Revision-history sources, mirrored from the catalog_ingredient_revisions
+// DB CHECK constraint. The PATCH route accepts an optional `source`/`actor` so
+// AI-driven callers (story-builder refine) can label their edits; a manual
+// detail-page save omits them and the DB layer defaults to 'user'.
+export const REVISION_SOURCES = Object.freeze(['user', 'extract', 'refine', 'sync']);
+const revisionSource = z.enum(REVISION_SOURCES).optional();
+const revisionActor = z.string().trim().min(1).max(120).optional();
+
 export const catalogIngredientPatchSchema = z.object({
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
   payload,
   tags,
+  source: revisionSource,
+  actor: revisionActor,
+}).strict();
+
+// /ingredients/:id/revisions — paginated history list. Newest first.
+export const catalogRevisionQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).strict();
+
+// /ingredients/:id/revisions/:revisionId/restore — re-applies a prior
+// revision's name/payload/tags. Optional `source`/`actor` label the NEW
+// revision the restore itself produces (defaults to 'user').
+export const catalogRevisionRestoreSchema = z.object({
+  source: revisionSource,
+  actor: revisionActor,
 }).strict();
 
 export const catalogIngredientQuerySchema = z.object({
@@ -74,10 +102,53 @@ export const catalogIngredientQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 }).strict();
 
+// Tag-autocomplete query — `q` is an optional prefix/substring filter, absent
+// returns the most-recently-created tags. Drives the tag-picker autocomplete on
+// CatalogIngredient.jsx + the Quick Idea widget.
+export const catalogTagQuerySchema = z.object({
+  q: z.string().trim().max(BIBLE_LIMITS.TAG_MAX).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();
+
 export const catalogIngredientLinkSchema = z.object({
   refKind: z.enum(REF_KINDS),
   refId: z.string().trim().min(1).max(120),
   role: z.string().trim().min(1).max(64),
+}).strict();
+
+// Ingredient↔ingredient relation link/unlink body. `toId` is the OTHER end of
+// the directed edge (the route's `:id` is the `fromId`). `kind` is gated to the
+// shared relation registry. The route rejects self-edges (`fromId === toId`) at
+// the DB layer; the schema can't see the path param, so that check stays
+// server-side in `linkIngredientRelation`.
+export const catalogRelationLinkSchema = z.object({
+  toId: z.string().trim().min(1).max(80),
+  kind: z.enum(RELATION_KINDS),
+}).strict();
+
+// Media attach body. `mediaKey` is a REFERENCE into the media library (a
+// gallery filename / history sidecar key), not the bytes — capped at a generous
+// 512 to allow nested paths but reject blobs. `kind` is gated to the shared
+// media registry; `role`/`caption` are optional metadata. The route validates
+// that the key resolves against the local library before persisting.
+export const catalogMediaAttachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  kind: z.enum(MEDIA_KINDS),
+  role: z.string().trim().max(64).optional().nullable(),
+  caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Set-portrait body — same as attach minus `kind` (the route forces 'portrait').
+export const catalogPortraitSetSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  role: z.string().trim().max(64).optional().nullable(),
+  caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Media detach body — identifies the tuple to soft-delete.
+export const catalogMediaDetachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  kind: z.enum(MEDIA_KINDS),
 }).strict();
 
 export const catalogScrapCommitSchema = z.object({
@@ -212,6 +283,21 @@ export const catalogSyncRefSchema = z.object({
   syncSequence: z.string().optional(),
 }).passthrough();
 
+// Relation rows carry tombstone fields (soft-delete from day one). `kind` is a
+// freeform string on the wire (not the strict enum) so a peer running a newer
+// PortOS with an additional relation kind doesn't get its whole envelope
+// rejected by an older receiver — the version gate already covers true
+// shape skew, and an unknown-kind row stores harmlessly.
+export const catalogSyncRelationSchema = z.object({
+  fromId: z.string().max(80),
+  toId: z.string().max(80),
+  kind: z.string().max(32),
+  createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
 // Receiver may receive `portosMeta.schemaVersions.catalog` for the version
 // gate; the rest of portosMeta is informational. We accept arbitrary keys
 // inside portosMeta with passthrough but cap its size at 4KB to deny a peer
@@ -224,10 +310,45 @@ const portosMeta = z.object({
   { message: 'portosMeta exceeds 4KB size cap' },
 ).optional();
 
+// Canonical tag rows on the wire. `label` carries the first-seen casing; the
+// mutable fields (description/color/parentId) round-trip via LWW on updatedAt.
+// `parentId` is freeform (the receiver's parent-less retry tolerates a parent
+// that hasn't arrived yet), so no enum/FK gate here.
+export const catalogSyncTagSchema = z.object({
+  id: z.string().min(1).max(120),
+  label: z.string().max(BIBLE_LIMITS.TAG_MAX),
+  description: z.string().max(2_000).nullable().optional(),
+  color: z.string().max(32).nullable().optional(),
+  parentId: z.string().max(120).nullable().optional(),
+  createdAt: isoDate,
+  updatedAt: isoDate.optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+// Media rows carry tombstone fields + editable metadata (role/caption).
+// `kind` is freeform on the wire (not the strict enum) for the same forward-
+// compat reason as relations: a newer peer's extra media kind stores
+// harmlessly rather than 400-ing the whole envelope. `mediaKey` is a reference,
+// not bytes — the receiver matches it against its own library on apply.
+export const catalogSyncMediaSchema = z.object({
+  ingredientId: z.string().max(80),
+  mediaKey: z.string().max(512),
+  kind: z.string().max(32),
+  role: z.string().max(64).nullable().optional(),
+  caption: z.string().max(2_000).nullable().optional(),
+  createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
 export const catalogSyncEnvelopeSchema = z.object({
   scraps: z.array(catalogSyncScrapSchema).max(5_000).optional(),
   ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
   sources: z.array(catalogSyncSourceSchema).max(20_000).optional(),
   refs: z.array(catalogSyncRefSchema).max(20_000).optional(),
+  relations: z.array(catalogSyncRelationSchema).max(20_000).optional(),
+  tags: z.array(catalogSyncTagSchema).max(20_000).optional(),
+  media: z.array(catalogSyncMediaSchema).max(20_000).optional(),
   portosMeta,
 }).passthrough();

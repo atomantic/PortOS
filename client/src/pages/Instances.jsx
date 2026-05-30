@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info, Sparkles, Film, Images
+  Lock, Globe, Info, Sparkles, Film, Images, Library
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
@@ -457,11 +457,12 @@ const SYNC_CATEGORY_META = [
   { key: 'universe', label: 'Universe', icon: Sparkles, description: 'Universe Builder canon: characters, places, objects' },
   { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' },
   { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' },
-  { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' }
+  { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' },
+  { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
-// Snapshot categories (excludes delta-based brain/memory)
-const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => m.key !== 'brain' && m.key !== 'memory');
+// Snapshot categories (excludes delta-based brain/memory/catalog)
+const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => m.key !== 'brain' && m.key !== 'memory' && m.key !== 'catalog');
 
 function SyncCategoriesPanel({ peer, onRefresh }) {
   const [expanded, setExpanded] = useState(false);

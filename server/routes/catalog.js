@@ -13,7 +13,12 @@ import {
   catalogIngredientCreateSchema,
   catalogIngredientPatchSchema,
   catalogIngredientLinkSchema,
+  catalogRelationLinkSchema,
+  catalogMediaAttachSchema,
+  catalogMediaDetachSchema,
+  catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
+  catalogTagQuerySchema,
   catalogScrapCommitSchema,
   catalogSyncEnvelopeSchema,
   catalogExtractRequestSchema,
@@ -21,9 +26,12 @@ import {
   catalogMigrationRerunSchema,
   catalogBulkImportSchema,
   catalogExportQuerySchema,
+  catalogRevisionQuerySchema,
+  catalogRevisionRestoreSchema,
   REF_KINDS,
 } from '../lib/catalogValidation.js';
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
+import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredients } from '../services/catalogExtraction.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
@@ -116,7 +124,7 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
         tags: draft.tags || [],
         embedding: e?.embedding ?? null,
         embeddingModel: e?.model ?? null,
-      }, { client });
+      }, { client, source: 'extract' });
       await catalogDB.linkIngredientToSource(ing.id, scrap.id, draft.span || null, { client });
       out.push(ing);
     }
@@ -124,6 +132,13 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   });
 
   res.status(201).json({ scrap, ingredients: created });
+}));
+
+// Tag-picker autocomplete. `?q=` does a prefix-then-substring match on the
+// canonical tag labels; absent `q` returns the most-recently-created tags.
+router.get('/tags', asyncHandler(async (req, res) => {
+  const params = validateRequest(catalogTagQuerySchema, req.query);
+  res.json(await catalogDB.listTags({ q: params.q, limit: params.limit ?? 20 }));
 }));
 
 router.get('/ingredients', asyncHandler(async (req, res) => {
@@ -169,17 +184,66 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
 
 router.patch('/ingredients/:id', asyncHandler(async (req, res) => {
   validateRequest(catalogIngredientPatchSchema, req.body);
+  // `source`/`actor` are revision-history metadata, not ingredient columns —
+  // strip them from the DB patch and forward as the revision context instead.
+  const { source, actor, ...fieldPatch } = req.body;
   // Re-embed only when name or payload changes — tag-only edits skip embed.
   let embeddingPatch = {};
-  if (req.body.name !== undefined || req.body.payload !== undefined) {
+  if (fieldPatch.name !== undefined || fieldPatch.payload !== undefined) {
     const current = await catalogDB.getIngredient(req.params.id);
     if (!current) throw new ServerError('Ingredient not found', { status: 404 });
     embeddingPatch = await embedIngredient({
-      name: req.body.name ?? current.name,
-      payload: req.body.payload ?? current.payload,
+      name: fieldPatch.name ?? current.name,
+      payload: fieldPatch.payload ?? current.payload,
     });
   }
-  const updated = await catalogDB.updateIngredient(req.params.id, { ...req.body, ...embeddingPatch });
+  const updated = await catalogDB.updateIngredient(
+    req.params.id,
+    { ...fieldPatch, ...embeddingPatch },
+    { source, actor },
+  );
+  if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
+  res.json(updated);
+}));
+
+// Revision history for one ingredient (newest first). Local audit trail — see
+// catalog_ingredient_revisions in init-db.sql; not federated.
+router.get('/ingredients/:id/revisions', asyncHandler(async (req, res) => {
+  const params = validateRequest(catalogRevisionQuerySchema, req.query);
+  // 404 the history when the ingredient itself is gone, so the UI doesn't
+  // render an empty list for a deleted/never-existed id.
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  res.json(await catalogDB.listIngredientRevisions(req.params.id, {
+    limit: params.limit ?? 50,
+    offset: params.offset ?? 0,
+  }));
+}));
+
+// Restore a prior revision: re-applies its name/payload/tags via
+// updateIngredient (which itself records a NEW revision for the restore, so the
+// restore is auditable and itself reversible). The restored revision must
+// belong to the path ingredient.
+router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogRevisionRestoreSchema, req.body || {});
+  const revision = await catalogDB.getIngredientRevision(req.params.revisionId);
+  if (!revision || revision.ingredientId !== req.params.id) {
+    throw new ServerError('Revision not found', { status: 404 });
+  }
+  // Restore the revision's payload verbatim, INCLUDING its captured
+  // `payload.schemaVersion`. `updateIngredient` writes payload as-is and does
+  // NOT re-stamp the version (only create/revive do), so the marker must match
+  // the restored *shape*: a v1-era revision keeps v1, and the boot-time
+  // `migrateCatalogPayload` upgrades it to current iff it's behind. Stripping
+  // the marker (→ absent → treated as v1) or forcing it to current would
+  // mislabel the restored shape and mis-drive that migration.
+  const restoredPayload = revision.payload || {};
+  const embeddingPatch = await embedIngredient({ name: revision.name, payload: restoredPayload });
+  const updated = await catalogDB.updateIngredient(
+    req.params.id,
+    { name: revision.name, payload: restoredPayload, tags: revision.tags, ...embeddingPatch },
+    { source: body.source || 'user', actor: body.actor },
+  );
   if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
   res.json(updated);
 }));
@@ -207,6 +271,101 @@ router.get('/ingredients/:id/refs', asyncHandler(async (req, res) => {
 
 router.get('/refs/:refKind/:refId/ingredients', asyncHandler(async (req, res) => {
   res.json(await catalogDB.listIngredientsForRef(req.params.refKind, req.params.refId));
+}));
+
+// --- Ingredient↔ingredient relations -----------------------------------
+
+router.get('/ingredients/:id/relations', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  res.json(await catalogDB.listRelationsForIngredient(req.params.id));
+}));
+
+router.post('/ingredients/:id/relations', asyncHandler(async (req, res) => {
+  validateRequest(catalogRelationLinkSchema, req.body);
+  if (req.params.id === req.body.toId) {
+    throw new ServerError('Cannot relate an ingredient to itself', { status: 400 });
+  }
+  // Both ends must exist — FK would reject anyway, but a 404 reads cleaner
+  // than a raw FK violation and matches the link route's failure surface.
+  const [from, to] = await Promise.all([
+    catalogDB.getIngredient(req.params.id),
+    catalogDB.getIngredient(req.body.toId),
+  ]);
+  if (!from) throw new ServerError('Ingredient not found', { status: 404 });
+  if (!to) throw new ServerError('Related ingredient not found', { status: 404 });
+  await catalogDB.linkIngredientRelation(req.params.id, req.body.toId, req.body.kind);
+  res.status(201).json({ success: true });
+}));
+
+router.delete('/ingredients/:id/relations', asyncHandler(async (req, res) => {
+  validateRequest(catalogRelationLinkSchema, req.body);
+  await catalogDB.unlinkIngredientRelation(req.params.id, req.body.toId, req.body.kind);
+  res.status(204).end();
+}));
+
+// --- Ingredient media attachments ---------------------------------------
+// `media_key` is a reference into the media library (data/images + history
+// sidecar); the catalog never stores the bytes. The attach/portrait routes
+// reject a key that doesn't resolve against the local IMAGE library with a 422
+// so a typo can't persist a permanently-broken reference. Federated keys that
+// don't resolve are tolerated (they ride in via sync) and surface on the
+// integrity endpoint instead — that's a different code path that never throws.
+//
+// Only image kinds resolve against the gallery today; audio/video/document
+// keys have no library resolver yet, so they skip the existence guard.
+const IMAGE_MEDIA_KINDS = new Set(['portrait', 'reference']);
+
+router.get('/ingredients/:id/media', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  res.json(await catalogDB.listMediaForIngredient(req.params.id));
+}));
+
+// Integrity surface: media keys on this ingredient that don't resolve against
+// the local library (typically arrived via federation before their asset did).
+router.get('/ingredients/:id/media/missing', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  res.json({ missing: await catalogDB.getMissingMediaForIngredient(req.params.id) });
+}));
+
+router.post('/ingredients/:id/media', asyncHandler(async (req, res) => {
+  validateRequest(catalogMediaAttachSchema, req.body);
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  // Only IMAGE kinds resolve against the gallery today, so only they get the
+  // existence guard — attaching an audio/video/document key (no library
+  // resolver yet) stores the reference without a 422. The integrity endpoint
+  // mirrors this scoping when reporting missing assets.
+  if (IMAGE_MEDIA_KINDS.has(req.body.kind) && !resolveImageInputPath(req.body.mediaKey)) {
+    throw new ServerError(`Media key "${req.body.mediaKey}" not found in the media library`, { status: 422 });
+  }
+  const media = await catalogDB.attachMedia(req.params.id, req.body.mediaKey, req.body.kind, {
+    role: req.body.role ?? null,
+    caption: req.body.caption ?? null,
+  });
+  res.status(201).json(media);
+}));
+
+router.post('/ingredients/:id/media/portrait', asyncHandler(async (req, res) => {
+  validateRequest(catalogPortraitSetSchema, req.body);
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  if (!resolveImageInputPath(req.body.mediaKey)) {
+    throw new ServerError(`Media key "${req.body.mediaKey}" not found in the media library`, { status: 422 });
+  }
+  const media = await catalogDB.setPortraitMedia(req.params.id, req.body.mediaKey, {
+    role: req.body.role ?? null,
+    caption: req.body.caption ?? null,
+  });
+  res.status(201).json(media);
+}));
+
+router.delete('/ingredients/:id/media', asyncHandler(async (req, res) => {
+  validateRequest(catalogMediaDetachSchema, req.body);
+  await catalogDB.detachMedia(req.params.id, req.body.mediaKey, req.body.kind);
+  res.status(204).end();
 }));
 
 // Bulk-create ingredients from a markdown / CSV / JSON dump — no LLM round
@@ -322,10 +481,11 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
 
 // Export one ref slice (universe/series/issue/work) as a portable bundle.
 // JSON is the canonical round-trip format; markdown + YAML are convenience
-// outputs. Relations and media-refs are intentionally absent — those tables
-// don't exist yet; when they ship the export helper will include them
-// without a payload-shape break (the consumer treats unknown keys as
-// passthrough).
+// outputs. Each ingredient carries its `media` attachments (media-key
+// references, not bytes — the importer matches keys against its own library).
+// Relations are still absent (their table predates a portable shape); when
+// they ship the export helper will include them without a payload-shape break
+// (the consumer treats unknown keys as passthrough).
 router.get('/export', asyncHandler(async (req, res) => {
   const params = validateRequest(catalogExportQuerySchema, req.query);
   const format = params.format || 'json';

@@ -236,6 +236,87 @@ export async function ensureSchema() {
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_target ON catalog_ingredient_refs (ref_kind, ref_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_sync_seq ON catalog_ingredient_refs (sync_sequence)`,
 
+    // Ingredient↔ingredient edges (the catalog graph seam). `kind` is an
+    // app-layer enum (RELATION_KINDS in catalogTypes.js), not a DB CHECK.
+    // Both ids CASCADE on ingredient hard-delete; soft-delete columns from day
+    // one so unlinks tombstone + propagate to peers.
+    `CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
+      from_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      to_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      kind VARCHAR(32) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ,
+      sync_sequence BIGSERIAL,
+      PRIMARY KEY (from_id, to_id, kind)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_to ON catalog_ingredient_relations (to_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_sync_seq ON catalog_ingredient_relations (sync_sequence)`,
+
+    // First-class canonical tag table. Additive index over the freeform
+    // `catalog_ingredients.tags TEXT[]` column (which stays as-is). `id` is
+    // deterministic (`cat-tag-<canonical-key>`) so the same tag has the same id
+    // on every install; `parent_id` self-FK (ON DELETE SET NULL) enables tag
+    // hierarchies without cascading a subtree away.
+    `CREATE TABLE IF NOT EXISTS catalog_tags (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      description TEXT,
+      color VARCHAR(32),
+      parent_id TEXT REFERENCES catalog_tags(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      sync_sequence BIGSERIAL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_tags_label ON catalog_tags (label)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_tags_parent ON catalog_tags (parent_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_tags_sync_seq ON catalog_tags (sync_sequence)`,
+
+    // Append-only revision history for catalog_ingredients (local audit, not
+    // federated). Written by catalogDB.updateIngredient on every content change
+    // + a seed row on create; pruned to the last CATALOG_REVISION_RETENTION per
+    // ingredient at the app layer. No sync_sequence — revisions stay local; the
+    // synced ingredient row already LWW-merges the latest state across peers.
+    // Mirrors the catalog_ingredient_revisions block in init-db.sql (parity is
+    // asserted by db.catalogDdlParity.test.js).
+    `CREATE TABLE IF NOT EXISTS catalog_ingredient_revisions (
+      id TEXT PRIMARY KEY,
+      ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      tags TEXT[] DEFAULT '{}',
+      source VARCHAR(16) NOT NULL DEFAULT 'user'
+        CHECK (source IN ('user', 'extract', 'refine', 'sync')),
+      actor VARCHAR(120),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_revisions_ingredient
+       ON catalog_ingredient_revisions (ingredient_id, created_at DESC)`,
+
+    // Typed media attachments — `media_key` REFERENCES the media library
+    // (data/images + history.jsonl sidecar) by key; the bytes are never copied
+    // here, so federation ships the key and the receiver matches its own
+    // library (missing → metadata-missing integrity surface). `kind` is an
+    // app-layer enum (MEDIA_KINDS in catalogTypes.js), not a DB CHECK. Soft-
+    // delete from day one so detaches tombstone + propagate. Mirrors the
+    // catalog_ingredient_media block in init-db.sql (parity is asserted by
+    // db.catalogDdlParity.test.js).
+    `CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
+      ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      media_key TEXT NOT NULL,
+      kind VARCHAR(32) NOT NULL,
+      role VARCHAR(64),
+      caption TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ,
+      sync_sequence BIGSERIAL,
+      PRIMARY KEY (ingredient_id, media_key, kind)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_ingredient ON catalog_ingredient_media (ingredient_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence)`,
+
     `CREATE OR REPLACE FUNCTION update_catalog_ingredient_timestamp()
      RETURNS TRIGGER AS $$
      DECLARE
@@ -332,6 +413,75 @@ export async function ensureSchema() {
        BEFORE UPDATE ON catalog_ingredient_refs
        FOR EACH ROW
        EXECUTE FUNCTION update_catalog_ref_sync_seq()`,
+
+    // Relation UPDATE bumps sync_sequence on soft-delete / revival so a peer
+    // sees the tombstone (or un-delete) on its next pull — mirrors the ref
+    // trigger above.
+    `CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       IF NEW.deleted IS DISTINCT FROM OLD.deleted
+          OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+         NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
+       END IF;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_relation_sync_seq ON catalog_ingredient_relations`,
+    `CREATE TRIGGER trg_catalog_relation_sync_seq
+       BEFORE UPDATE ON catalog_ingredient_relations
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_relation_sync_seq()`,
+
+    // Media UPDATE bumps sync_sequence on soft-delete/revival OR a mutable
+    // field (role/caption) change so a peer sees the edit/tombstone next pull.
+    // Mirrors the relation trigger but also watches the editable metadata.
+    `CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       IF NEW.deleted IS DISTINCT FROM OLD.deleted
+          OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+          OR NEW.role IS DISTINCT FROM OLD.role
+          OR NEW.caption IS DISTINCT FROM OLD.caption THEN
+         NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
+       END IF;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_media_sync_seq ON catalog_ingredient_media`,
+    `CREATE TRIGGER trg_catalog_media_sync_seq
+       BEFORE UPDATE ON catalog_ingredient_media
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_media_sync_seq()`,
+
+    // Tag UPDATE bumps sync_sequence + updated_at on a mutable-field change
+    // (label/description/color/parent_id) so a peer sees the edit on its next
+    // pull. Mirrors the scrap timestamp trigger.
+    `CREATE OR REPLACE FUNCTION update_catalog_tag_timestamp()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       content_changed BOOLEAN;
+     BEGIN
+       content_changed := (
+         NEW.label IS DISTINCT FROM OLD.label OR
+         NEW.description IS DISTINCT FROM OLD.description OR
+         NEW.color IS DISTINCT FROM OLD.color OR
+         NEW.parent_id IS DISTINCT FROM OLD.parent_id OR
+         NEW.updated_at IS DISTINCT FROM OLD.updated_at
+       );
+       IF NOT content_changed THEN RETURN NEW; END IF;
+       IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+         NEW.updated_at := NOW();
+       END IF;
+       NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_tags', 'sync_sequence'));
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_tag_updated_at ON catalog_tags`,
+    `CREATE TRIGGER trg_catalog_tag_updated_at
+       BEFORE UPDATE ON catalog_tags
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_tag_timestamp()`,
   ];
   for (const sql of catalogDDL) {
     await pool.query(sql);

@@ -24,22 +24,11 @@ import { Link } from 'react-router-dom';
 import { Search, Plus, Loader2, X, Sparkles } from 'lucide-react';
 import Modal from './ui/Modal';
 import { listCatalogIngredients } from '../services/apiCatalog';
+import { CATALOG_BADGE_BY_ID, payloadSnippet } from '../lib/catalogTypes';
 
-const TYPE_BADGE = {
-  character: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-  place:     'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-  object:    'bg-amber-500/20 text-amber-300 border-amber-500/40',
-  idea:      'bg-purple-500/20 text-purple-300 border-purple-500/40',
-  scene:     'bg-pink-500/20 text-pink-300 border-pink-500/40',
-  concept:   'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
-};
-
-function snippet(payload) {
-  if (!payload || typeof payload !== 'object') return '';
-  const text = String(payload.description || payload.summary || payload.notes || '').trim().replace(/\s+/g, ' ');
-  if (text.length <= 140) return text;
-  return `${text.slice(0, 137)}…`;
-}
+// Type chip color comes from the shared registry. Snippet uses the registry's
+// per-type fallback chain at a slightly longer cap for the picker rows.
+const snippet = (payload, type) => payloadSnippet(payload, type, 140);
 
 export default function IngredientPicker({
   open,
@@ -188,7 +177,7 @@ export default function IngredientPicker({
         ) : (
           <ul className="space-y-2">
             {filtered.map((it) => {
-              const badge = TYPE_BADGE[it.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+              const badge = CATALOG_BADGE_BY_ID[it.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
               const checked = selectedIds.has(it.id);
               const rowBase = 'w-full text-left p-3 rounded border bg-port-bg/40 transition-colors';
               const rowClass = multi
@@ -216,8 +205,8 @@ export default function IngredientPicker({
                       {it.type}
                     </span>
                   </div>
-                  {snippet(it.payload) && (
-                    <p className="text-xs text-gray-400 line-clamp-2">{snippet(it.payload)}</p>
+                  {snippet(it.payload, it.type) && (
+                    <p className="text-xs text-gray-400 line-clamp-2">{snippet(it.payload, it.type)}</p>
                   )}
                   {Array.isArray(it.tags) && it.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">

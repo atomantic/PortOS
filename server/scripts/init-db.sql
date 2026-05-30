@@ -251,6 +251,111 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_refs (
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_target ON catalog_ingredient_refs (ref_kind, ref_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_sync_seq ON catalog_ingredient_refs (sync_sequence);
 
+-- Ingredient↔ingredient edges — the seam that makes the catalog a graph
+-- instead of a flat list. `kind` is an app-layer enum (RELATION_KINDS in
+-- server/lib/catalogTypes.js): 'appears-in'|'lives-in'|'created-by'|
+-- 'parent-of'|'variant-of'|'references'|'related-to'. Both ids FK to
+-- catalog_ingredients(id) ON DELETE CASCADE so deleting an ingredient
+-- (hard-delete) cleans up its edges. Soft-delete (deleted/deleted_at) from day
+-- one so unlinks propagate to peers as tombstones — same lesson as the refs
+-- table. Directed edge: from_id → to_id (the inverse direction is rendered in
+-- the UI from the same row, not stored twice).
+CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
+  from_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+  to_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+  kind VARCHAR(32) NOT NULL,                   -- relation kind from RELATION_KINDS
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so unlinks propagate to peers
+  deleted_at TIMESTAMPTZ,
+  sync_sequence BIGSERIAL,
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_to ON catalog_ingredient_relations (to_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_sync_seq ON catalog_ingredient_relations (sync_sequence);
+
+-- First-class canonical tag table. The freeform `catalog_ingredients.tags
+-- TEXT[]` column stays as-is for write-path simplicity; this table is an
+-- additive index that the normalizer (catalogDB.normalizeTags) populates on
+-- first use of a tag. `id` is deterministic (`cat-tag-<canonical-key>`) so the
+-- same logical tag has the same id on every install. `parent_id` is an optional
+-- self-FK enabling tag hierarchies (genre/tone vs structural). Federates via
+-- sync_sequence BIGSERIAL + LWW on created_at (tags are append-mostly; the
+-- mutable fields — label/description/color/parent_id — round-trip through the
+-- trigger below). `ON DELETE SET NULL` on the parent self-FK keeps orphaned
+-- children rather than cascading a whole subtree away.
+CREATE TABLE IF NOT EXISTS catalog_tags (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,                         -- canonical display label (first-seen casing)
+  description TEXT,
+  color VARCHAR(32),
+  parent_id TEXT REFERENCES catalog_tags(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  sync_sequence BIGSERIAL
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_label ON catalog_tags (label);
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_parent ON catalog_tags (parent_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_sync_seq ON catalog_tags (sync_sequence);
+
+-- Append-only revision history for catalog_ingredients. A row is written by
+-- catalogDB.updateIngredient whenever name/payload/tags actually change (and a
+-- seed row on create), so the detail page can show "what changed" and offer a
+-- Restore button. `source` records WHO/WHAT drove the change ('user' edit,
+-- 'extract' ingest commit, 'refine' AI pass, 'sync' peer apply); `actor` is an
+-- optional free label (agent run id, provider name). Keyed (ingredient_id,
+-- created_at) for the per-ingredient timeline query. Retention is capped at the
+-- last N per ingredient by the app layer (CATALOG_REVISION_RETENTION, default
+-- 50) -- older rows are pruned on each write to bound growth.
+--
+-- LOCAL audit history: revisions do NOT carry a sync_sequence and are NOT
+-- federated. Each install records its own edit timeline; the synced
+-- catalog_ingredients row already LWW-merges the latest state across peers, so
+-- replicating per-edit history would multiply rows without a restore use case
+-- on the receiving peer. (If revisions ever need to federate, add a
+-- sync_sequence BIGSERIAL + a getChangesSince path and bump
+-- PORTOS_SCHEMA_VERSIONS.catalog.)
+CREATE TABLE IF NOT EXISTS catalog_ingredient_revisions (
+  id TEXT PRIMARY KEY,
+  ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tags TEXT[] DEFAULT '{}',
+  source VARCHAR(16) NOT NULL DEFAULT 'user'
+    CHECK (source IN ('user', 'extract', 'refine', 'sync')),
+  actor VARCHAR(120),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_revisions_ingredient
+  ON catalog_ingredient_revisions (ingredient_id, created_at DESC);
+
+-- Typed media attachments for an ingredient (a generated portrait, a mood /
+-- reference image, a recorded voice memo, …). `media_key` is a REFERENCE into
+-- this install's media library (data/images + the history.jsonl sidecar /
+-- generated assets) — the bytes are NEVER duplicated here, so federation ships
+-- the key and the receiver matches it against its OWN library (a missing match
+-- surfaces via the metadata-missing integrity endpoint rather than failing the
+-- sync). `kind` is an app-layer enum (MEDIA_KINDS in catalogTypes.js), not a DB
+-- CHECK, so a newer peer's extra kind stores harmlessly. Soft-delete
+-- (deleted/deleted_at) from day one so detaches tombstone + propagate to peers
+-- — same lesson as the refs/relations tables. PK is (ingredient_id, media_key,
+-- kind): the same asset can ride as both a portrait and a reference, but not
+-- twice as the same kind.
+CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
+  ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+  media_key TEXT NOT NULL,                     -- filename/key into the media library; not an FK
+  kind VARCHAR(32) NOT NULL,                   -- portrait|reference|audio|video|document (MEDIA_KINDS)
+  role VARCHAR(64),                            -- optional free label (e.g. 'hero-shot', 'angry')
+  caption TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so detaches propagate to peers
+  deleted_at TIMESTAMPTZ,
+  sync_sequence BIGSERIAL,
+  PRIMARY KEY (ingredient_id, media_key, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_ingredient ON catalog_ingredient_media (ingredient_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence);
+
 -- Auto-update updated_at and bump sync_sequence on content/metadata changes.
 -- Mirrors update_memory_timestamp's pattern: skip the bump on no-content-change
 -- so cosmetic touches don't trigger sync. Respects explicit updated_at (used by
@@ -363,3 +468,81 @@ CREATE TRIGGER trg_catalog_ref_sync_seq
   BEFORE UPDATE ON catalog_ingredient_refs
   FOR EACH ROW
   EXECUTE FUNCTION update_catalog_ref_sync_seq();
+
+-- Relation UPDATE bumps sync_sequence on soft-delete or revival so peers pick
+-- up the tombstone (or the un-delete) on their next pull — same rationale as
+-- the ref trigger above.
+CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.deleted IS DISTINCT FROM OLD.deleted
+     OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_catalog_relation_sync_seq ON catalog_ingredient_relations;
+CREATE TRIGGER trg_catalog_relation_sync_seq
+  BEFORE UPDATE ON catalog_ingredient_relations
+  FOR EACH ROW
+  EXECUTE FUNCTION update_catalog_relation_sync_seq();
+
+-- Media UPDATE bumps sync_sequence when a soft-delete/revival OR a mutable
+-- field (role/caption) changes, so peers receive the edit (or the tombstone)
+-- on their next pull. Unlike refs/relations, media rows carry editable
+-- metadata, so the change-detector also watches role + caption.
+CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.deleted IS DISTINCT FROM OLD.deleted
+     OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+     OR NEW.role IS DISTINCT FROM OLD.role
+     OR NEW.caption IS DISTINCT FROM OLD.caption THEN
+    NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_catalog_media_sync_seq ON catalog_ingredient_media;
+CREATE TRIGGER trg_catalog_media_sync_seq
+  BEFORE UPDATE ON catalog_ingredient_media
+  FOR EACH ROW
+  EXECUTE FUNCTION update_catalog_media_sync_seq();
+
+-- Tag UPDATE bumps sync_sequence + updated_at when a mutable field changes
+-- (label/description/color/parent_id) so peers receive the edit on their next
+-- pull. Respects an explicit updated_at (the sync apply path preserves the
+-- originating timestamp during LWW merges). Mirrors the scrap timestamp trigger.
+CREATE OR REPLACE FUNCTION update_catalog_tag_timestamp()
+RETURNS TRIGGER AS $$
+DECLARE
+  content_changed BOOLEAN;
+BEGIN
+  content_changed := (
+    NEW.label IS DISTINCT FROM OLD.label OR
+    NEW.description IS DISTINCT FROM OLD.description OR
+    NEW.color IS DISTINCT FROM OLD.color OR
+    NEW.parent_id IS DISTINCT FROM OLD.parent_id OR
+    NEW.updated_at IS DISTINCT FROM OLD.updated_at
+  );
+
+  IF NOT content_changed THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+    NEW.updated_at := NOW();
+  END IF;
+  NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_tags', 'sync_sequence'));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_catalog_tag_updated_at ON catalog_tags;
+CREATE TRIGGER trg_catalog_tag_updated_at
+  BEFORE UPDATE ON catalog_tags
+  FOR EACH ROW
+  EXECUTE FUNCTION update_catalog_tag_timestamp();

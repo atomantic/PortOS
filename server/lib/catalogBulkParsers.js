@@ -9,36 +9,23 @@
  * failure (not on per-row content errors) — those bubble up as the
  * `BULK_IMPORT_PARSE_FAILED` error.
  *
- * `PRIMARY_CONTENT_KEY_BY_TYPE` mirrors the client-side map in
- * `client/src/pages/Catalog.jsx`. When a markdown body or CSV `description`
- * column is supplied without an explicit field name, it lands in the
- * type-appropriate payload key.
+ * `INGREDIENT_TYPES` + `PRIMARY_CONTENT_KEY_BY_TYPE` derive from the shared
+ * type registry (`catalogTypes.js`, a pure no-side-effect module) so a new
+ * type flows through bulk import/export automatically. A bulk-import row's
+ * body paragraph / CSV `description` column lands in each type's
+ * `primaryContentKey`.
  *
  * Also exports a minimal `toYamlString()` serializer used by the export
  * route — handwritten so we don't pull js-yaml just for the catalog bundle.
  */
 
-export const INGREDIENT_TYPES = Object.freeze([
-  'character',
-  'place',
-  'object',
-  'idea',
-  'scene',
-  'concept',
-]);
+import { CATALOG_TYPES, INGREDIENT_TYPE_IDS } from './catalogTypes.js';
 
-// Mirrors PRIMARY_CONTENT_KEY in client/src/pages/Catalog.jsx and
-// CatalogIngest.jsx. When a bulk-import row supplies a body paragraph or a
-// CSV `description` column, it lands here so the entry renders correctly in
-// the catalog UI without forcing the user to hand-wire payload keys.
-export const PRIMARY_CONTENT_KEY_BY_TYPE = Object.freeze({
-  character: 'physicalDescription',
-  place: 'description',
-  object: 'description',
-  idea: 'summary',
-  scene: 'summary',
-  concept: 'summary',
-});
+export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
+
+export const PRIMARY_CONTENT_KEY_BY_TYPE = Object.freeze(
+  Object.fromEntries(CATALOG_TYPES.map((t) => [t.id, t.primaryContentKey])),
+);
 
 const TYPE_LOWER = new Set(INGREDIENT_TYPES);
 

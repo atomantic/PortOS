@@ -18,66 +18,18 @@ import {
   deleteCatalogIngredient,
   getCatalogStats,
 } from '../services/apiCatalog';
+import { CATALOG_TYPES, getCatalogType, payloadSnippet } from '../lib/catalogTypes';
 
-const TYPES = [
-  { id: 'character', label: 'Character', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
-  { id: 'place',     label: 'Place',     color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
-  { id: 'object',    label: 'Object',    color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
-  { id: 'idea',      label: 'Idea',      color: 'bg-purple-500/20 text-purple-300 border-purple-500/40' },
-  { id: 'scene',     label: 'Scene',     color: 'bg-pink-500/20 text-pink-300 border-pink-500/40' },
-  { id: 'concept',   label: 'Concept',   color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
-];
-
-const TYPE_BY_ID = Object.fromEntries(TYPES.map((t) => [t.id, t]));
-
-// Per-type primary content key used by the inline "New" form, so users can
-// capture the body in one step instead of bouncing into the editor. Mirrors
-// the labels in CatalogIngredient.jsx — characters land in `physicalDescription`
-// (canon shape), place/object in `description`, light types in `summary`.
-const PRIMARY_CONTENT_KEY = {
-  character: 'physicalDescription',
-  place: 'description',
-  object: 'description',
-  idea: 'summary',
-  scene: 'summary',
-  concept: 'summary',
-};
-// Display label per content key — driven from PRIMARY_CONTENT_KEY so a future
-// type→key remapping automatically picks up the right label and the form
-// label can't silently lie about where content lands on submit.
-const PRIMARY_CONTENT_LABEL = {
-  physicalDescription: 'Physical Description',
-  description: 'Description',
-  summary: 'Summary',
-};
-
-// Pull a short snippet from the type-specific payload — first hit wins,
-// trimmed and ellipsised to ~120 chars. Fallback chain covers every canon
-// narrative field across the six ingredient types: characters
-// (physicalDescription / personality / role), places/objects (description /
-// significance), light types (summary / notes). Without the broader fallback,
-// objects-with-only-significance and characters-with-only-personality render
-// as snippet-less rows.
-function payloadSnippet(payload) {
-  if (!payload || typeof payload !== 'object') return '';
-  const raw = payload.physicalDescription
-    || payload.description
-    || payload.summary
-    || payload.personality
-    || payload.significance
-    || payload.role
-    || payload.notes
-    || '';
-  const text = String(raw).trim().replace(/\s+/g, ' ');
-  if (text.length <= 120) return text;
-  return `${text.slice(0, 117)}…`;
-}
+// All type-derived UI (chips, badge color, inline-form primary content
+// key/label, snippet fallback) now flows from the shared registry. Adding a
+// type is one registry entry — no per-surface edit here.
+const TYPES = CATALOG_TYPES;
 
 function TypeBadge({ type }) {
-  const meta = TYPE_BY_ID[type];
+  const meta = getCatalogType(type);
   if (!meta) return null;
   return (
-    <span className={`inline-block text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${meta.color}`}>
+    <span className={`inline-block text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${meta.badgeColor}`}>
       {meta.label}
     </span>
   );
@@ -148,7 +100,7 @@ export default function Catalog() {
     const content = form.content.trim();
     const payload = {};
     if (content) {
-      payload[PRIMARY_CONTENT_KEY[form.type] || 'description'] = content;
+      payload[getCatalogType(form.type)?.primaryContentKey || 'description'] = content;
     }
     setCreating(true);
     const created = await createCatalogIngredient({
@@ -310,7 +262,7 @@ export default function Catalog() {
           </div>
           <div>
             <label htmlFor="catalog-new-content" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              {PRIMARY_CONTENT_LABEL[PRIMARY_CONTENT_KEY[form.type]] || 'Description'}
+              {getCatalogType(form.type)?.primaryContentLabel || 'Description'}
               <span className="normal-case text-gray-500"> (optional)</span>
             </label>
             <textarea
@@ -376,8 +328,8 @@ export default function Catalog() {
                       </span>
                     ))}
                   </span>
-                  {payloadSnippet(it.payload) ? (
-                    <span className="text-xs text-gray-400 line-clamp-3">{payloadSnippet(it.payload)}</span>
+                  {payloadSnippet(it.payload, it.type) ? (
+                    <span className="text-xs text-gray-400 line-clamp-3">{payloadSnippet(it.payload, it.type)}</span>
                   ) : null}
                 </Link>
                 <div className="absolute top-2 right-2">

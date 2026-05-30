@@ -53,6 +53,17 @@ export const listCatalogIngredients = ({ type, tag, q, limit, offset, ...options
 export const getCatalogIngredient = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}`, options);
 
+// --- Tags (canonical taxonomy) ------------------------------------------
+
+// Autocomplete over the canonical catalog_tags table. `q` is an optional
+// prefix/substring filter; absent returns the most-recently-created tags.
+export const listCatalogTags = ({ q, limit, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (limit) params.set('limit', String(limit));
+  return request(`/catalog/tags${params.toString() ? `?${params}` : ''}`, options);
+};
+
 export const createCatalogIngredient = (body = {}, options) =>
   request('/catalog/ingredients', { method: 'POST', body: JSON.stringify(body), ...options });
 
@@ -61,6 +72,20 @@ export const updateCatalogIngredient = (id, patch, options) =>
 
 export const deleteCatalogIngredient = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}`, { method: 'DELETE', ...options });
+
+// --- Revision history ---------------------------------------------------
+
+export const listCatalogIngredientRevisions = (id, { limit, offset, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', String(limit));
+  if (offset) params.set('offset', String(offset));
+  return request(`/catalog/ingredients/${enc(id)}/revisions${params.toString() ? `?${params}` : ''}`, options);
+};
+
+export const restoreCatalogIngredientRevision = (id, revisionId, body = {}, options) =>
+  request(`/catalog/ingredients/${enc(id)}/revisions/${enc(revisionId)}/restore`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
 
 // --- Linking (catalog ↔ universe/series/work) ---------------------------
 
@@ -72,6 +97,34 @@ export const unlinkCatalogIngredient = (id, body, options) =>
 
 export const listCatalogIngredientsForRef = (refKind, refId, options) =>
   request(`/catalog/refs/${enc(refKind)}/${enc(refId)}/ingredients`, options);
+
+// --- Relations (ingredient ↔ ingredient) --------------------------------
+
+export const listCatalogIngredientRelations = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/relations`, options);
+
+export const linkCatalogIngredientRelation = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const unlinkCatalogIngredientRelation = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'DELETE', body: JSON.stringify(body), ...options });
+
+// --- Media attachments (portrait / reference / audio / video / document) ---
+
+export const listCatalogIngredientMedia = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media`, options);
+
+export const listCatalogIngredientMissingMedia = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/missing`, options);
+
+export const attachCatalogIngredientMedia = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const setCatalogIngredientPortrait = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/portrait`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const detachCatalogIngredientMedia = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media`, { method: 'DELETE', body: JSON.stringify(body), ...options });
 
 // --- Bulk import / export ----------------------------------------------
 

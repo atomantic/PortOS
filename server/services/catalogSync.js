@@ -2,18 +2,21 @@
  * Catalog Federation Sync Service
  *
  * Peer-to-peer sync for the Creative Ingredients Catalog. Mirrors
- * server/services/memorySync.js but the envelope carries four kinds
- * (scraps, ingredients, sources, refs) because the catalog is a
- * three-table relational store, not a single flat row set.
+ * server/services/memorySync.js but the envelope carries seven kinds
+ * (scraps, ingredients, sources, refs, relations, tags, media) because the
+ * catalog is a multi-table relational store, not a single flat row set. The
+ * `media` rows carry a `media_key` REFERENCE into the receiver's own library
+ * (never the bytes); an unresolved key surfaces via the metadata-missing
+ * integrity endpoint rather than failing the apply.
  *
  * Pull protocol:
- *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&since[sources]=C&since[refs]=D&limit=100
- *   → { scraps[], ingredients[], sources[], refs[], maxSequences, hasMore }
+ *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&...&since[media]=G&limit=100
+ *   → { scraps[], ingredients[], sources[], refs[], relations[], tags[], media[], maxSequences, hasMore }
  *
- * The four BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
+ * The BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
  * sources.sync_sequence=50 isn't comparable to ingredients.sync_sequence=50.
- * The receiver therefore tracks four cursors and `since` is `{ scraps,
- * ingredients, sources, refs }`. A scalar `?since=N` is still accepted for
+ * The receiver therefore tracks one cursor per kind and `since` is `{ scraps,
+ * ingredients, sources, refs, relations }`. A scalar `?since=N` is still accepted for
  * back-compat / one-shot pulls and is applied uniformly to all four kinds.
  * `hasMore` is true when ANY of the four tables had more than `limit` rows
  * past its respective cursor — drain by re-pulling with the maxSequences from
@@ -30,15 +33,21 @@ import {
   getIngredientChangesSince,
   getSourceChangesSince,
   getRefChangesSince,
+  getRelationChangesSince,
+  getTagChangesSince,
+  getMediaChangesSince,
   getMaxSequences,
   upsertScrapFromPeer,
   upsertIngredientFromPeer,
   upsertSourceFromPeer,
   upsertRefFromPeer,
+  upsertRelationFromPeer,
+  upsertTagFromPeer,
+  upsertMediaFromPeer,
 } from './catalogDB.js';
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
-const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs'];
+const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
 // Normalize `since` (scalar string OR per-kind object) into a `{ scraps,
 // ingredients, sources, refs }` cursor map. Scalar form is uniform across
@@ -58,32 +67,50 @@ function normalizeCursors(since) {
 
 export async function getChangesSince(since = '0', limit = 100) {
   const cursors = normalizeCursors(since);
-  const [scraps, ingredients, sources, refs] = await Promise.all([
+  const [scraps, ingredients, sources, refs, relations, tags, media] = await Promise.all([
     getScrapChangesSince(cursors.scraps, limit),
     getIngredientChangesSince(cursors.ingredients, limit),
     getSourceChangesSince(cursors.sources, limit),
     getRefChangesSince(cursors.refs, limit),
+    getRelationChangesSince(cursors.relations, limit),
+    getTagChangesSince(cursors.tags, limit),
+    getMediaChangesSince(cursors.media, limit),
   ]);
 
   const hasMore =
-    scraps.hasMore || ingredients.hasMore || sources.hasMore || refs.hasMore;
+    scraps.hasMore || ingredients.hasMore || sources.hasMore || refs.hasMore ||
+    relations.hasMore || tags.hasMore || media.hasMore;
 
   // Per-kind cursor advance — fall back to the inbound cursor so the next pull
   // doesn't move backward on a quiet kind.
   const maxOf = (items, fallback) =>
     items.length > 0 ? items[items.length - 1].syncSequence : fallback;
 
+  // True per-table maxima, INDEPENDENT of the inbound cursor. `maxSequences`
+  // (below) falls back to the inbound cursor on a quiet kind, so it can't be
+  // used to detect a peer rebuild/restore — it would just echo the caller's
+  // cursor. `tableMaxSequences` reports the real MAX(sync_sequence) so the
+  // receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
+  const tableMaxSequences = await getMaxSequences();
+
   return {
     scraps: scraps.items,
     ingredients: ingredients.items,
     sources: sources.items,
     refs: refs.items,
+    relations: relations.items,
+    tags: tags.items,
+    media: media.items,
     maxSequences: {
       scraps:      maxOf(scraps.items,      cursors.scraps),
       ingredients: maxOf(ingredients.items, cursors.ingredients),
       sources:     maxOf(sources.items,     cursors.sources),
       refs:        maxOf(refs.items,        cursors.refs),
+      relations:   maxOf(relations.items,   cursors.relations),
+      tags:        maxOf(tags.items,        cursors.tags),
+      media:       maxOf(media.items,       cursors.media),
     },
+    tableMaxSequences,
     hasMore,
   };
 }
@@ -114,6 +141,9 @@ export async function applyRemoteChanges(envelope = {}) {
     ingredients: { inserted: 0, updated: 0, skipped: 0, failed: 0 },
     sources: { applied: 0, failed: 0 },
     refs: { applied: 0, failed: 0 },
+    relations: { applied: 0, failed: 0 },
+    tags: { inserted: 0, updated: 0, skipped: 0, failed: 0 },
+    media: { applied: 0, failed: 0 },
     errors: [],
   };
 
@@ -122,7 +152,24 @@ export async function applyRemoteChanges(envelope = {}) {
     console.error(`❌ catalog sync ${kind} ${id || '?'} failed: ${err?.message || err}`);
   };
 
-  // Scraps first (sources FK to BOTH so we want the parents present before
+  // Tags first — they carry a `parent_id` self-FK (handled by the parent-less
+  // retry in upsertTagFromPeer) and are referenced by the freeform tag arrays
+  // on ingredients, so we want the canonical rows present before the ingredient
+  // rows land. They have no FK to scraps/ingredients, so ordering is otherwise
+  // free. Each row in its own try/catch.
+  for (const tag of envelope.tags || []) {
+    try {
+      const res = await upsertTagFromPeer(tag);
+      if (!res.applied) stats.tags.skipped++;
+      else if (res.isInsert) stats.tags.inserted++;
+      else stats.tags.updated++;
+    } catch (err) {
+      stats.tags.failed++;
+      recordFailure('tag', tag?.id, err);
+    }
+  }
+
+  // Scraps next (sources FK to BOTH so we want the parents present before
   // the join rows land). Each row in its own try/catch — one malformed row
   // must NOT abort the rest of the envelope.
   for (const scrap of envelope.scraps || []) {
@@ -169,7 +216,50 @@ export async function applyRemoteChanges(envelope = {}) {
     }
   }
 
+  // Relations FK BOTH ids to catalog_ingredients, so they land after the
+  // ingredient upserts above (same envelope ordering rationale as sources).
+  for (const rel of envelope.relations || []) {
+    try {
+      await upsertRelationFromPeer(rel);
+      stats.relations.applied++;
+    } catch (err) {
+      stats.relations.failed++;
+      recordFailure('relation', `${rel?.fromId}/${rel?.kind}/${rel?.toId}`, err);
+    }
+  }
+
+  // Media rows FK ingredient_id to catalog_ingredients, so they land after the
+  // ingredient upserts. The `media_key` is a REFERENCE into the receiver's own
+  // library — we store the key regardless of whether the asset is present
+  // locally; a missing asset surfaces later via the metadata-missing integrity
+  // endpoint, NOT as an apply failure (otherwise a slow asset transfer would
+  // drop the attachment metadata entirely).
+  for (const media of envelope.media || []) {
+    try {
+      await upsertMediaFromPeer(media);
+      stats.media.applied++;
+    } catch (err) {
+      stats.media.failed++;
+      recordFailure('media', `${media?.ingredientId}/${media?.kind}/${media?.mediaKey}`, err);
+    }
+  }
+
   return stats;
+}
+
+// Total rows actually applied (inserted + updated for LWW kinds, applied for
+// tuple-unique kinds) across an `applyRemoteChanges` stats object. Lives here —
+// not in the federation orchestrator — so the per-kind stats SHAPE has a single
+// owner; a future envelope kind only needs adding here, not in every caller.
+export function countAppliedFromStats(stats = {}) {
+  return (
+    (stats.scraps?.inserted || 0) + (stats.scraps?.updated || 0) +
+    (stats.ingredients?.inserted || 0) + (stats.ingredients?.updated || 0) +
+    (stats.sources?.applied || 0) + (stats.refs?.applied || 0) +
+    (stats.relations?.applied || 0) +
+    (stats.tags?.inserted || 0) + (stats.tags?.updated || 0) +
+    (stats.media?.applied || 0)
+  );
 }
 
 // Per-kind cursor view for the federation orchestrator. The previous scalar

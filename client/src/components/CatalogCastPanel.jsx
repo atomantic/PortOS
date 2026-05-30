@@ -22,15 +22,7 @@ import {
   linkCatalogIngredient,
   unlinkCatalogIngredient,
 } from '../services/apiCatalog';
-
-const TYPE_BADGE = {
-  character: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-  place:     'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-  object:    'bg-amber-500/20 text-amber-300 border-amber-500/40',
-  idea:      'bg-purple-500/20 text-purple-300 border-purple-500/40',
-  scene:     'bg-pink-500/20 text-pink-300 border-pink-500/40',
-  concept:   'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
-};
+import { CATALOG_BADGE_BY_ID } from '../lib/catalogTypes';
 
 const ROLE_BY_TYPE = {
   character: 'cast-character',
@@ -145,7 +137,7 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
         <ul className="space-y-2">
           {rows.map((row) => {
             const { ingredient, role } = row;
-            const badge = TYPE_BADGE[ingredient.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+            const badge = CATALOG_BADGE_BY_ID[ingredient.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
             const text = snippet(ingredient.payload);
             const rowBusy = busyId === `${ingredient.id}:${role || ''}`;
             return (

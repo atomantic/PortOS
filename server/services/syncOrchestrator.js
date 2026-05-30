@@ -16,6 +16,7 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import * as memorySync from './memorySync.js';
+import * as catalogSync from './catalogSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -106,13 +107,14 @@ async function syncImageFromPeer(peer, avatarPath) {
 export async function getSyncStatus({ includeChecksums = false } = {}) {
   const isPostgres = getBackendName() === 'postgres';
   const snapshotCategories = includeChecksums ? dataSync.getSupportedCategories() : [];
-  const [brainSeq, memorySeq, cursors, ...checksumResults] = await Promise.all([
+  const [brainSeq, memorySeq, catalogSeqs, cursors, ...checksumResults] = await Promise.all([
     Promise.resolve(brainSyncLog.getCurrentSeq()),
     isPostgres ? memorySync.getMaxSequence() : Promise.resolve(null),
+    isPostgres ? catalogSync.getMaxSequences().catch(() => null) : Promise.resolve(null),
     loadCursors(),
     ...snapshotCategories.map(cat => dataSync.getChecksum(cat).catch(() => null))
   ]);
-  const local = { brainSeq, memorySeq };
+  const local = { brainSeq, memorySeq, catalogSeqs };
   if (includeChecksums) {
     local.checksums = {};
     for (let i = 0; i < snapshotCategories.length; i++) {
@@ -165,6 +167,134 @@ async function syncMemoryFromPeer(peer, cursor) {
   }
 
   return { memorySeq, totalApplied };
+}
+
+// The seven INDEPENDENT BIGSERIAL cursors the catalog sync envelope tracks.
+// Each table advances its own sequence, so the receiver carries seven cursors
+// (not one) — see catalogSync.js for the protocol rationale.
+const CATALOG_CURSOR_KINDS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
+
+// Build the `?since[scraps]=A&since[ingredients]=B&...` query string the
+// catalog `/sync` route parses back into per-kind cursors. A missing kind
+// defaults to '0' server-side, so a legacy cursor (pre-relations/tags/media)
+// still pulls the newer kinds from scratch on first run.
+function catalogSinceQuery(catalogSeqs) {
+  const parts = CATALOG_CURSOR_KINDS.map((kind) => {
+    const v = catalogSeqs?.[kind];
+    const safe = typeof v === 'string' && /^\d+$/.test(v) ? v : '0';
+    return `since[${kind}]=${encodeURIComponent(safe)}`;
+  });
+  return parts.join('&');
+}
+
+/**
+ * Sync the creative-ingredients catalog from a peer (pull all changes since
+ * cursor, apply locally). Delta-based + PostgreSQL-only, mirroring memory sync
+ * — but the catalog is a multi-table relational store, so the cursor is the
+ * per-kind `maxSequences` object the peer returns, not a single scalar.
+ *
+ * A schema-version-ahead peer (newer `catalog` schema) makes applyRemoteChanges
+ * throw CatalogSyncVersionMismatchError; we record the gap on the peer record
+ * (same surfacing as the snapshot categories) and stop draining so we don't
+ * loop on a payload we can't safely apply.
+ */
+async function syncCatalogFromPeer(peer, peerId, cursor) {
+  let catalogSeqs = isPlainObjectShallow(cursor.catalogSeqs) ? { ...cursor.catalogSeqs } : {};
+  let totalApplied = 0;
+  let blockedBySchema = null;
+
+  let hasMore = true;
+  // Only the FIRST fetch can carry a stale saved cursor from a prior session;
+  // once we start draining, each cursor came from this peer's own maxSequences
+  // and can't exceed them. So the rebuild/reset check runs on the first fetch
+  // only (a mid-drain quiet kind legitimately reports a per-page max at/under
+  // our just-advanced cursor, which must NOT be read as a reset).
+  let firstFetch = true;
+  while (hasMore) {
+    const data = await fetchPeer(peer, `/api/catalog/sync?${catalogSinceQuery(catalogSeqs)}&limit=100`);
+    if (!data) break;
+
+    // Detect a peer catalog rebuild/restore: if our saved cursor for a kind
+    // exceeds the peer's TRUE table maximum, that table's sequence was reset,
+    // so our `since[kind]=<high>` would skip every row forever. Rewind the
+    // affected kinds to 0 and re-fetch from scratch before applying — safe
+    // because catalog apply is idempotent (LWW / ON CONFLICT dedup). We compare
+    // against `tableMaxSequences` (real MAX per table), NOT `maxSequences`,
+    // which falls back to our own inbound cursor on a quiet kind and so could
+    // never signal a reset. Absent on a pre-this-version peer → detection is
+    // skipped (backward-compatible).
+    if (firstFetch && isPlainObjectShallow(data.tableMaxSequences)) {
+      let rewound = false;
+      for (const kind of CATALOG_CURSOR_KINDS) {
+        const ours = catalogSeqs[kind];
+        const peerMax = data.tableMaxSequences[kind];
+        if (typeof ours === 'string' && /^\d+$/.test(ours)
+            && typeof peerMax === 'string' && /^\d+$/.test(peerMax)
+            && BigInt(ours) > BigInt(peerMax)) {
+          console.log(`🔄 Catalog cursor reset for ${peer.name} (${kind}): cursor ${ours} > peer table max ${peerMax}`);
+          catalogSeqs[kind] = '0';
+          rewound = true;
+        }
+      }
+      if (rewound) continue; // re-fetch with the rewound cursors before applying
+    }
+    firstFetch = false;
+
+    // Forward the sender's portosMeta so applyRemoteChanges runs the schema
+    // gate BEFORE merging — a sender ahead on `catalog` throws and we persist
+    // the gap rather than corrupting local state.
+    let stats;
+    try {
+      stats = await catalogSync.applyRemoteChanges({ ...data, portosMeta: data.portosMeta });
+    } catch (err) {
+      if (err?.code === 'CATALOG_SCHEMA_VERSION_AHEAD') {
+        blockedBySchema = err.diff;
+        const ahead = Array.isArray(err.diff?.ahead) ? err.diff.ahead : [];
+        await recordPeerSchemaGap(peerId, 'catalog', {
+          ahead, behind: [], senderPortosVersion: data?.portosMeta?.portosVersion ?? null,
+        }).catch((e) => console.log(`⚠️ syncOrchestrator: persist catalog schema gap failed: ${e.message}`));
+        break;
+      }
+      throw err;
+    }
+
+    // Count every applied row across the seven kinds for the heartbeat log.
+    // catalogSync owns the per-kind stats shape, so it owns the tally.
+    totalApplied += catalogSync.countAppliedFromStats(stats);
+
+    // Advance every cursor the peer reported. The peer falls each quiet kind
+    // back to the inbound cursor, so this never moves a cursor backward.
+    const before = catalogSinceQuery(catalogSeqs);
+    if (isPlainObjectShallow(data.maxSequences)) {
+      for (const kind of CATALOG_CURSOR_KINDS) {
+        // Don't advance a kind's cursor past a page that had apply failures: a
+        // child row (relation/media/ref to an ingredient on a LATER page) fails
+        // when its parent isn't applied yet. Leaving the cursor makes the next
+        // pull re-request and re-apply it once the parent lands (re-applying the
+        // page's already-succeeded rows is idempotent). A quiet/clean kind has
+        // failed===0 and still advances normally.
+        if ((stats?.[kind]?.failed || 0) > 0) continue;
+        const v = data.maxSequences[kind];
+        if (typeof v === 'string' && /^\d+$/.test(v)) catalogSeqs[kind] = v;
+      }
+    }
+    // Guard against a buggy/malicious peer that returns `hasMore: true` without
+    // advancing ANY cursor — that would loop forever re-pulling the same window.
+    // A well-behaved peer always advances at least one kind when hasMore is true
+    // (hasMore implies it returned a full page on some table).
+    if (catalogSinceQuery(catalogSeqs) === before) break;
+    hasMore = data.hasMore === true;
+  }
+
+  // Clear any prior gap once we successfully drained (sender either upgraded
+  // or the earlier block was transient). Skip when we just recorded a fresh
+  // block this cycle.
+  if (!blockedBySchema) {
+    await clearPeerSchemaGap(peerId, 'catalog')
+      .catch((err) => console.log(`⚠️ syncOrchestrator: clear catalog schema gap failed: ${err.message}`));
+  }
+
+  return { catalogSeqs, totalApplied, blockedBySchema };
 }
 
 /**
@@ -467,6 +597,15 @@ export async function syncWithPeer(peer) {
       }
     }
 
+    // --- Catalog sync (delta-based, multi-table, PostgreSQL only) ---
+    let catalogResult = { catalogSeqs: cursor.catalogSeqs, totalApplied: 0 };
+    if (categories.catalog) {
+      const isPostgres = getBackendName() === 'postgres';
+      if (isPostgres) {
+        catalogResult = await syncCatalogFromPeer(peer, peerId, cursor);
+      }
+    }
+
     // --- Snapshot-based category syncs (parallel) ---
     const dataCategoryResults = {};
     // We no longer skip whole categories when a peer has SOME per-record
@@ -509,6 +648,12 @@ export async function syncWithPeer(peer) {
       if (!cursors[peerId]) cursors[peerId] = {};
       if (categories.brain) cursors[peerId].brainSeq = brainResult.brainSeq;
       if (memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
+      // Persist the per-kind catalog cursor only when the drain wasn't blocked
+      // by a schema gap — a blocked cycle leaves the prior cursor so we re-try
+      // the same window after the sender upgrades (mirrors the snapshot path).
+      if (categories.catalog && !catalogResult.blockedBySchema && isPlainObjectShallow(catalogResult.catalogSeqs)) {
+        cursors[peerId].catalogSeqs = catalogResult.catalogSeqs;
+      }
       if (!cursors[peerId].checksums) cursors[peerId].checksums = {};
       for (const [cat, result] of Object.entries(dataCategoryResults)) {
         if (result.checksum) cursors[peerId].checksums[cat] = result.checksum;
@@ -520,6 +665,7 @@ export async function syncWithPeer(peer) {
     const parts = [];
     if (brainResult.totalApplied > 0) parts.push(`${brainResult.totalApplied} brain`);
     if (memoryResult.totalApplied > 0) parts.push(`${memoryResult.totalApplied} memory`);
+    if (catalogResult.totalApplied > 0) parts.push(`${catalogResult.totalApplied} catalog`);
     for (const [cat, result] of Object.entries(dataCategoryResults)) {
       if (result.totalApplied > 0) parts.push(`${result.totalApplied} ${cat}`);
     }
@@ -527,7 +673,7 @@ export async function syncWithPeer(peer) {
       console.log(`🔄 Synced with ${peer.name}: ${parts.join(', ')} changes`);
     }
 
-    return { brain: brainResult, memory: memoryResult, ...dataCategoryResults };
+    return { brain: brainResult, memory: memoryResult, catalog: catalogResult, ...dataCategoryResults };
   } finally {
     syncingPeers.delete(peerId);
   }

@@ -6,6 +6,7 @@ import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { STEP_IDS as STORY_STEP_IDS } from './storyBuilderSteps.js';
+import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogValidation.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -1452,10 +1453,24 @@ const peerSyncPushBase = {
 // therefore rejects it. See peerSync.js buildPushPayload (never sets it for the
 // mediaCollection kind) and applyIncomingPush.
 const linkedCollectionField = { linkedCollection: peerWireRecordSchema.optional() };
+// Optional bundled catalog rows — a universe push carries the catalog
+// ingredients + universe→ingredient ref links referenced by its embedded
+// canon, so the receiver gets the enriched catalog row (tags, embedding,
+// payload.summary) instead of re-deriving a lossy view. Same wire shapes as
+// the direct catalog-sync envelope. ONLY valid on universe pushes (series /
+// mediaCollection .strict() reject it) — series catalog refs ride their own
+// catalog-sync category; smuggling them here would be a side-channel.
+const catalogBundleField = {
+  catalogBundle: z.object({
+    ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
+    refs: z.array(catalogSyncRefSchema).max(20_000).optional(),
+  }).strict().optional(),
+};
 const universePushSchema = z.object({
   kind: z.literal('universe'),
   ...peerSyncPushBase,
   ...linkedCollectionField,
+  ...catalogBundleField,
 }).strict();
 const seriesPushSchema = z.object({
   kind: z.literal('series'),

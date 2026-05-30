@@ -5,61 +5,35 @@
  * pipeline series / issues / writers-room). Full-width page; owns its scroll.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   getCatalogIngredient,
   updateCatalogIngredient,
   deleteCatalogIngredient,
+  listCatalogIngredientRelations,
+  linkCatalogIngredientRelation,
+  unlinkCatalogIngredientRelation,
+  listCatalogIngredientRevisions,
+  restoreCatalogIngredientRevision,
+  listCatalogIngredientMedia,
+  listCatalogIngredientMissingMedia,
+  attachCatalogIngredientMedia,
+  setCatalogIngredientPortrait,
+  detachCatalogIngredientMedia,
 } from '../services/apiCatalog';
+import { listImageGallery } from '../services/apiImageVideo';
+import IngredientPicker from '../components/IngredientPicker';
+import MediaImage from '../components/MediaImage';
+import TagPicker from '../components/TagPicker';
+import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
+import { timeAgo } from '../utils/formatters';
 
-// Per-type payload field list. Each entry is `[key, label, kind]` where `kind`
-// is 'text' (single line) or 'textarea' (multi-line). idea/scene/concept all
-// share the lightweight shape.
-const LIGHT_FIELDS = [
-  ['summary',     'Summary',     'textarea'],
-  ['description', 'Description', 'textarea'],
-  ['notes',       'Notes',       'textarea'],
-];
-const PAYLOAD_FIELDS = {
-  character: [
-    ['role',                'Role',                  'text'],
-    // Canon character shape uses `physicalDescription` (matches
-    // sanitizeCharacter and the writers-room/bible extractor). A plain
-    // `description` here would render empty for backfill-promoted characters
-    // and edits would land in a sibling field the canon doesn't read.
-    ['physicalDescription', 'Physical Description',  'textarea'],
-    ['personality',         'Personality',           'textarea'],
-    ['background',          'Background',            'textarea'],
-    ['motivations',         'Motivations',           'textarea'],
-    ['notes',               'Notes',                 'textarea'],
-  ],
-  place: [
-    ['slugline',     'Slugline',     'text'],
-    ['era',          'Era',          'text'],
-    ['description',  'Description',  'textarea'],
-    ['notes',        'Notes',        'textarea'],
-  ],
-  object: [
-    ['description',  'Description',  'textarea'],
-    ['significance', 'Significance', 'textarea'],
-    ['notes',        'Notes',        'textarea'],
-  ],
-  idea: LIGHT_FIELDS,
-  scene: LIGHT_FIELDS,
-  concept: LIGHT_FIELDS,
-};
-
-const TYPE_BADGE = {
-  character: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-  place:     'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-  object:    'bg-amber-500/20 text-amber-300 border-amber-500/40',
-  idea:      'bg-purple-500/20 text-purple-300 border-purple-500/40',
-  scene:     'bg-pink-500/20 text-pink-300 border-pink-500/40',
-  concept:   'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
-};
+// Per-type editor field list + badge color now come from the shared registry
+// (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
+// where `kind` is 'text' (single line) or 'textarea' (multi-line).
 
 // Map a refKind onto a click-through route. Returns null for kinds we don't
 // know how to deep-link to, so callers can render the chip without a link.
@@ -89,10 +63,27 @@ export default function CatalogIngredient() {
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
-  const [tagsInput, setTagsInput] = useState('');
+  const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState(false);
+  // { outbound: [...], inbound: [...] } — relations are loaded separately from
+  // the ingredient record so the panel can refresh independently after add/
+  // remove without re-fetching the whole detail payload.
+  const [relations, setRelations] = useState({ outbound: [], inbound: [] });
+  const [revisions, setRevisions] = useState([]);
+  // Media attachments + the subset of their keys that don't resolve against the
+  // local library (federated-in but asset not yet present). `missingMedia` is a
+  // Set of media_keys driving the integrity badge on each thumbnail.
+  const [media, setMedia] = useState([]);
+  const [missingMedia, setMissingMedia] = useState(new Set());
+
+  const refreshRevisions = useCallback(() => {
+    if (!id) return;
+    listCatalogIngredientRevisions(id, { limit: 50, silent: true })
+      .then((r) => setRevisions(Array.isArray(r?.items) ? r.items : []))
+      .catch(() => { /* history is non-critical — leave the panel empty */ });
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,9 +98,10 @@ export default function CatalogIngredient() {
         }
         setRecord(r);
         setName(r.name || '');
-        setTagsInput((r.tags || []).join(', '));
+        setTags(Array.isArray(r.tags) ? r.tags : []);
         setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
         setLoading(false);
+        refreshRevisions();
       })
       .catch((err) => {
         if (cancelled) return;
@@ -117,7 +109,106 @@ export default function CatalogIngredient() {
         navigate('/catalog');
       });
     return () => { cancelled = true; };
-  }, [id, navigate]);
+  }, [id, navigate, refreshRevisions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCatalogIngredientRelations(id, { silent: true })
+      .then((data) => {
+        if (cancelled) return;
+        setRelations({
+          outbound: Array.isArray(data?.outbound) ? data.outbound : [],
+          inbound: Array.isArray(data?.inbound) ? data.inbound : [],
+        });
+      })
+      .catch(() => { if (!cancelled) setRelations({ outbound: [], inbound: [] }); });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // Add an outbound edge (this ingredient → picked target). Optimistically
+  // appends to local state so the panel updates without a refetch.
+  const handleAddRelation = async (target, kind) => {
+    if (!record || !target?.id) return;
+    if (target.id === record.id) { toast.error('Cannot relate an ingredient to itself'); return; }
+    const ok = await linkCatalogIngredientRelation(record.id, { toId: target.id, kind }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to add relation'); return false; });
+    if (!ok) return;
+    setRelations((prev) => {
+      const exists = prev.outbound.some((r) => r.toId === target.id && r.kind === kind);
+      if (exists) return prev;
+      return {
+        ...prev,
+        outbound: [...prev.outbound, {
+          fromId: record.id, toId: target.id, kind,
+          createdAt: new Date().toISOString(),
+          other: { id: target.id, name: target.name, type: target.type },
+        }],
+      };
+    });
+    toast.success('Relation added');
+  };
+
+  // Remove an outbound edge. Inbound edges are owned by the OTHER ingredient,
+  // so the panel only deletes outbound ones (filter is by toId + kind).
+  const handleRemoveRelation = async (toId, kind) => {
+    if (!record) return;
+    const ok = await unlinkCatalogIngredientRelation(record.id, { toId, kind }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to remove relation'); return false; });
+    if (!ok) return;
+    setRelations((prev) => ({
+      ...prev,
+      outbound: prev.outbound.filter((r) => !(r.toId === toId && r.kind === kind)),
+    }));
+  };
+
+  // Load media attachments + the integrity (missing-key) overlay. Both refresh
+  // independently of the detail payload so attach/detach updates the panel
+  // without re-fetching the whole record.
+  const refreshMedia = useCallback(() => {
+    if (!id) return;
+    listCatalogIngredientMedia(id, { silent: true })
+      .then((rows) => setMedia(Array.isArray(rows) ? rows : []))
+      .catch(() => { /* media is non-critical — leave the panel empty */ });
+    listCatalogIngredientMissingMedia(id, { silent: true })
+      .then((r) => setMissingMedia(new Set(Array.isArray(r?.missing) ? r.missing.map((m) => m.mediaKey) : [])))
+      .catch(() => { /* integrity overlay is best-effort */ });
+  }, [id]);
+
+  useEffect(() => { refreshMedia(); }, [refreshMedia]);
+
+  // Attach a media key (gallery filename) as a typed attachment. `kind` defaults
+  // to 'reference' for drag-drop / picker; the "set portrait" path routes
+  // through handleSetPortrait instead. Optimistic — prepend then reconcile.
+  const handleAttachMedia = async (mediaKey, kind = 'reference') => {
+    if (!record || !mediaKey) return;
+    const ok = await attachCatalogIngredientMedia(record.id, { mediaKey, kind }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to attach media'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success('Media attached');
+  };
+
+  const handleSetPortrait = async (mediaKey) => {
+    if (!record || !mediaKey) return;
+    const ok = await setCatalogIngredientPortrait(record.id, { mediaKey }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to set portrait'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success('Portrait set');
+  };
+
+  const handleDetachMedia = async (mediaKey, kind) => {
+    if (!record) return;
+    const ok = await detachCatalogIngredientMedia(record.id, { mediaKey, kind }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to detach media'); return false; });
+    if (!ok) return;
+    setMedia((prev) => prev.filter((m) => !(m.mediaKey === mediaKey && m.kind === kind)));
+  };
 
   const handleSave = async () => {
     if (!record) return;
@@ -126,7 +217,6 @@ export default function CatalogIngredient() {
       toast.error('Name is required');
       return;
     }
-    const tags = tagsInput.split(',').map((t) => t.trim()).filter(Boolean);
     setSaving(true);
     const updated = await updateCatalogIngredient(record.id, {
       name: trimmedName,
@@ -139,7 +229,26 @@ export default function CatalogIngredient() {
     setSaving(false);
     if (!updated) return;
     setRecord((prev) => ({ ...prev, ...updated }));
+    // The server normalizes tags through the canonical table (casing/whitespace
+    // collapse), so reflect the persisted set back into the chips.
+    if (Array.isArray(updated.tags)) setTags(updated.tags);
     toast.success('Saved');
+    refreshRevisions();
+  };
+
+  const handleRestore = async (revisionId) => {
+    if (!record) return;
+    const updated = await restoreCatalogIngredientRevision(record.id, revisionId, {}, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Restore failed'); return null; });
+    if (!updated) return;
+    // Re-apply the restored state into the editable form so the page reflects
+    // the rollback without a full reload.
+    setRecord((prev) => ({ ...prev, ...updated }));
+    setName(updated.name || '');
+    setTags(Array.isArray(updated.tags) ? updated.tags : []);
+    setPayload(updated.payload && typeof updated.payload === 'object' ? { ...updated.payload } : {});
+    toast.success('Restored');
+    refreshRevisions();
   };
 
   const confirmDelete = async () => {
@@ -166,8 +275,8 @@ export default function CatalogIngredient() {
     );
   }
 
-  const fields = PAYLOAD_FIELDS[record.type] || PAYLOAD_FIELDS.idea;
-  const badgeClass = TYPE_BADGE[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+  const fields = getCatalogType(record.type)?.editorFields || getCatalogType('idea').editorFields;
+  const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
   // of `{ refKind, refId, role }` or a server-grouped shape.
@@ -234,11 +343,10 @@ export default function CatalogIngredient() {
           </div>
           <div>
             <label htmlFor="ingredient-tags" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Tags <span className="text-gray-500 normal-case">(comma-separated)</span>
+              Tags
             </label>
-            <input id="ingredient-tags" type="text" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="mentor, antagonist, season-1"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+            <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
+              placeholder="mentor, antagonist, season-1" />
           </div>
           {fields.map(([key, label, kind]) => {
             const inputId = `ingredient-${key}`;
@@ -259,8 +367,284 @@ export default function CatalogIngredient() {
           <SourcesPanel sources={record.sources} />
           <RefsPanel refsByKind={refsByKind} />
         </div>
+
+        <RelationsPanel
+          record={record}
+          relations={relations}
+          onAdd={handleAddRelation}
+          onRemove={handleRemoveRelation}
+        />
+
+        <MediaPanel
+          media={media}
+          missingMedia={missingMedia}
+          onAttach={handleAttachMedia}
+          onSetPortrait={handleSetPortrait}
+          onDetach={handleDetachMedia}
+        />
+
+        <RevisionsPanel
+          revisions={revisions}
+          current={record}
+          fields={fields}
+          onRestore={handleRestore}
+        />
       </div>
     </section>
+  );
+}
+
+// "Relations" panel — ingredient↔ingredient edges. Outbound edges (this
+// ingredient → other) are user-editable here; inbound edges (other → this
+// ingredient) are read-only because the owning ingredient is the other end.
+function RelationsPanel({ record, relations, onAdd, onRemove }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [kind, setKind] = useState(RELATION_KINDS[0].id);
+  const outbound = Array.isArray(relations.outbound) ? relations.outbound : [];
+  const inbound = Array.isArray(relations.inbound) ? relations.inbound : [];
+
+  // Hide the current record + everything already linked outbound from the
+  // picker so the user can't double-link or self-link.
+  const excludeIds = [record.id, ...outbound.map((r) => r.toId)];
+
+  const chip = (other) => {
+    const badge = CATALOG_BADGE_BY_ID[other?.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+    return (
+      <Link to={`/catalog/${encodeURIComponent(other?.type || 'idea')}/${encodeURIComponent(other?.id)}`}
+        className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
+        <span className="truncate max-w-[16rem]">{other?.name || other?.id || '(unnamed)'}</span>
+        <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{other?.type}</span>
+      </Link>
+    );
+  };
+
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-4">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <h2 className="text-sm font-semibold text-white">Relations</h2>
+        <div className="flex items-center gap-2">
+          <label htmlFor="relation-kind" className="sr-only">Relation kind</label>
+          <select id="relation-kind" value={kind} onChange={(e) => setKind(e.target.value)}
+            className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-xs text-white focus:outline-none focus:border-port-accent">
+            {RELATION_KINDS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+          <button type="button" onClick={() => setPickerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium">
+            <Plus size={12} aria-hidden="true" /> Add relation
+          </button>
+        </div>
+      </div>
+
+      {outbound.length === 0 && inbound.length === 0 ? (
+        <p className="text-xs text-gray-500">No relations yet. Link this ingredient to another (a character to the place they live, a scene to its cast, …).</p>
+      ) : (
+        <div className="space-y-3">
+          {outbound.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Outbound</div>
+              <ul className="space-y-1.5">
+                {outbound.map((r) => (
+                  <li key={`${r.toId}-${r.kind}`} className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.label || r.kind}</span>
+                    {chip(r.other)}
+                    <button type="button" onClick={() => onRemove(r.toId, r.kind)}
+                      aria-label={`Remove relation to ${r.other?.name || r.toId}`}
+                      className="text-gray-500 hover:text-port-error">
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {inbound.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Inbound</div>
+              <ul className="space-y-1.5">
+                {inbound.map((r) => (
+                  <li key={`${r.fromId}-${r.kind}`} className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.inverseLabel || r.kind}</span>
+                    {chip(r.other)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <IngredientPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(picked) => onAdd(picked, kind)}
+        excludeIds={excludeIds}
+      />
+    </section>
+  );
+}
+
+// "Media" panel — typed image/audio/video/document attachments. Each row
+// stores a `media_key` REFERENCE into the media library (never the bytes), so
+// the panel scopes its picker to the existing gallery/history. The portrait
+// (one per ingredient) renders large at the head; other attachments tile below.
+// Drag-and-drop accepts an in-app gallery filename dragged as text (the
+// dashboard/gallery tiles set `dataTransfer.setData('text/plain', filename)`);
+// file-upload + voice-memo capture are intentionally out of scope here and
+// land via the separate `[catalog-source-kinds-url-file-voice]` item — the
+// `onAttach(mediaKey, kind)` seam is all those paths need to reuse.
+function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const list = Array.isArray(media) ? media : [];
+  const portrait = list.find((m) => m.kind === 'portrait');
+  const others = list.filter((m) => m.kind !== 'portrait');
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    // In-app gallery DnD: the dragged tile carries its filename as text.
+    const key = (e.dataTransfer.getData('text/plain') || '').trim();
+    if (key) { onAttach(key, 'reference'); return; }
+    toast.error('Drop a gallery image, or use “Pick from gallery”. File upload coming soon.');
+  };
+
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
+          <ImageIcon size={14} aria-hidden="true" /> Media
+        </h2>
+        <button type="button" onClick={() => setPickerOpen(true)}
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
+          <Plus size={12} aria-hidden="true" /> Pick from gallery
+        </button>
+      </div>
+
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        className={`mb-3 rounded-lg border border-dashed p-3 text-center text-xs transition-colors ${dragOver ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-500'}`}
+      >
+        Drag a gallery image here to attach it as a reference.
+      </div>
+
+      {portrait && (
+        <div className="mb-3">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Portrait</div>
+          <MediaTile m={portrait} missing={missingMedia.has(portrait.mediaKey)} isPortrait
+            onSetPortrait={onSetPortrait} onDetach={onDetach} />
+        </div>
+      )}
+
+      {others.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {others.map((m) => (
+            <MediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia.has(m.mediaKey)}
+              onSetPortrait={onSetPortrait} onDetach={onDetach} />
+          ))}
+        </div>
+      )}
+
+      {list.length === 0 && (
+        <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, or a recorded memo (memo capture coming soon).</p>
+      )}
+
+      {pickerOpen && (
+        <GalleryPickerModal
+          onClose={() => setPickerOpen(false)}
+          onPick={(filename, asPortrait) => {
+            if (asPortrait) onSetPortrait(filename);
+            else onAttach(filename, 'reference');
+            setPickerOpen(false);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+// One media attachment tile. Images render via <MediaImage> (gracefully shows a
+// "syncing" placeholder when the asset hasn't arrived — the same surface the
+// `missing` integrity flag warns about). Non-image kinds render a labeled chip.
+function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) {
+  const isImage = m.kind === 'portrait' || m.kind === 'reference';
+  return (
+    <div className="relative group rounded border border-port-border overflow-hidden bg-port-bg">
+      {isImage ? (
+        <MediaImage src={`/data/images/${m.mediaKey}`} alt={m.caption || m.kind}
+          className={isPortrait ? 'w-full max-w-[180px] aspect-square object-cover' : 'w-full aspect-square object-cover'} />
+      ) : (
+        <div className="w-full aspect-square flex items-center justify-center text-[10px] uppercase tracking-wider text-gray-400 px-1 text-center">
+          {m.kind}<br />{m.mediaKey}
+        </div>
+      )}
+      {missing && (
+        <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-port-warning/20 text-port-warning border border-port-warning/40"
+          title="This asset isn't in your media library yet (received from a peer before the file arrived).">
+          missing
+        </span>
+      )}
+      <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {!isPortrait && isImage && (
+          <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait"
+            className="p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
+            <Star size={12} aria-hidden="true" />
+          </button>
+        )}
+        <button type="button" onClick={() => onDetach(m.mediaKey, m.kind)} title="Detach"
+          className="p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
+          <X size={12} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Modal that lists the existing media gallery (history) so the user can attach
+// or set-portrait from already-generated assets — the "scoped to existing media
+// history" requirement. Never uploads; it only references library keys.
+function GalleryPickerModal({ onClose, onPick }) {
+  const [items, setItems] = useState(null); // null = loading, [] = loaded-empty
+  const closeRef = useRef(null);
+
+  useEffect(() => {
+    listImageGallery()
+      .then((rows) => setItems(Array.isArray(rows) ? rows : []))
+      .catch(() => setItems([]));
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="bg-port-card border border-port-border rounded-lg w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-3 border-b border-port-border">
+          <h3 className="text-sm font-semibold text-white">Pick from media gallery</h3>
+          <button ref={closeRef} type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-3 overflow-y-auto">
+          {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
+          {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
+          {items && items.length > 0 && (
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              {items.map((it) => (
+                <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
+                  <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
+                    className="w-full aspect-square object-cover" />
+                  <div className="absolute inset-x-0 bottom-0 flex opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button type="button" onClick={() => onPick(it.filename, false)}
+                      className="flex-1 text-[10px] py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
+                    <button type="button" onClick={() => onPick(it.filename, true)}
+                      className="flex-1 text-[10px] py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -322,6 +706,129 @@ function RefsPanel({ refsByKind }) {
             </div>
           ))}
         </div>
+      )}
+    </section>
+  );
+}
+
+const SOURCE_BADGE = {
+  user:    'bg-port-accent/20 text-port-accent border-port-accent/40',
+  extract: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  refine:  'bg-port-warning/20 text-port-warning border-port-warning/40',
+  sync:    'bg-port-success/20 text-port-success border-port-success/40',
+};
+
+// Build the label set for diffing: the editor fields plus name + tags. Used to
+// render a field-by-field "what changed" diff between a revision and the
+// currently-saved record.
+function diffRevisionAgainstCurrent(revision, current, fields) {
+  const out = [];
+  const curName = current?.name || '';
+  if ((revision.name || '') !== curName) {
+    out.push({ key: '__name', label: 'Name', from: revision.name || '', to: curName });
+  }
+  const curTags = (current?.tags || []).join(', ');
+  const revTags = (revision.tags || []).join(', ');
+  if (revTags !== curTags) {
+    out.push({ key: '__tags', label: 'Tags', from: revTags, to: curTags });
+  }
+  const curPayload = current?.payload || {};
+  const revPayload = revision.payload || {};
+  for (const [key, label] of fields.map(([k, l]) => [k, l])) {
+    const from = revPayload[key] ?? '';
+    const to = curPayload[key] ?? '';
+    if (String(from) !== String(to)) out.push({ key, label, from: String(from), to: String(to) });
+  }
+  return out;
+}
+
+function RevisionsPanel({ revisions, current, fields, onRestore }) {
+  const [openId, setOpenId] = useState(null);
+  const [restoring, setRestoring] = useState(null);
+
+  const list = Array.isArray(revisions) ? revisions : [];
+
+  const handleRestore = async (id) => {
+    setRestoring(id);
+    await onRestore(id);
+    setRestoring(null);
+  };
+
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-4">
+      <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+        <History size={15} className="text-port-accent" aria-hidden="true" /> Revision history
+        {list.length > 0 && <span className="text-xs text-gray-500 font-normal">({list.length})</span>}
+      </h2>
+      {list.length === 0 ? (
+        <p className="text-xs text-gray-500">No revisions recorded yet.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {list.map((rev, i) => {
+            const open = openId === rev.id;
+            const isLatest = i === 0;
+            const diff = open ? diffRevisionAgainstCurrent(rev, current, fields) : [];
+            const badge = SOURCE_BADGE[rev.source] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+            return (
+              <li key={rev.id} className="border border-port-border rounded bg-port-bg">
+                <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(open ? null : rev.id)}
+                    className="flex items-center gap-2 min-w-0 text-left flex-1 hover:opacity-90"
+                    aria-expanded={open}
+                  >
+                    <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${badge}`}>
+                      {rev.source}
+                    </span>
+                    <span className="text-xs text-gray-300 truncate">{rev.name || '(untitled)'}</span>
+                    {rev.actor && <span className="text-[10px] text-gray-500 truncate">· {rev.actor}</span>}
+                    <span className="text-[10px] text-gray-500 whitespace-nowrap ml-auto">{timeAgo(rev.createdAt)}</span>
+                  </button>
+                  {!isLatest && (
+                    <button
+                      type="button"
+                      onClick={() => handleRestore(rev.id)}
+                      disabled={restoring === rev.id}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border border-port-border text-gray-400 hover:text-white disabled:opacity-50"
+                      title="Restore this revision"
+                    >
+                      {restoring === rev.id
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <RotateCcw size={11} aria-hidden="true" />} Restore
+                    </button>
+                  )}
+                  {isLatest && (
+                    <span className="text-[10px] text-gray-500 px-1 whitespace-nowrap">current</span>
+                  )}
+                </div>
+                {open && (
+                  <div className="px-2.5 pb-2 pt-0.5 border-t border-port-border">
+                    {diff.length === 0 ? (
+                      <p className="text-[11px] text-gray-500 mt-1.5">Identical to the current saved state.</p>
+                    ) : (
+                      <dl className="mt-1.5 space-y-1.5">
+                        {diff.map((d) => (
+                          <div key={d.key} className="text-[11px]">
+                            <dt className="text-gray-500 uppercase tracking-wider text-[9px] mb-0.5">{d.label}</dt>
+                            <dd className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                              <span className="px-1.5 py-0.5 rounded bg-port-error/10 text-port-error/90 break-words">
+                                {d.from || <em className="text-gray-600">empty</em>}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded bg-port-success/10 text-port-success/90 break-words">
+                                {d.to || <em className="text-gray-600">empty</em>}
+                              </span>
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </section>
   );

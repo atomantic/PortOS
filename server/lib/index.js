@@ -33,6 +33,7 @@ export * from './validation.js';
 // === Story & narrative ===
 export * from './bibleExtractor.js';
 export * as catalogBulkParsers from './catalogBulkParsers.js';
+export * from './catalogTypes.js';
 export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
 export * from './composeStyledPrompt.js';

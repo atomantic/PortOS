@@ -11,7 +11,7 @@ vi.mock('./instances.js', () => ({
   UNKNOWN_INSTANCE_ID: 'unknown',
   DEFAULT_SYNC_CATEGORIES: {
     brain: false, memory: false, goals: false,
-    character: false, digitalTwin: false, meatspace: false
+    character: false, digitalTwin: false, meatspace: false, catalog: false
   }
 }));
 vi.mock('./brainSyncLog.js', () => ({
@@ -25,6 +25,22 @@ vi.mock('./memorySync.js', () => ({
   applyRemoteChanges: vi.fn(),
   getMaxSequence: vi.fn().mockResolvedValue('0')
 }));
+vi.mock('./catalogSync.js', async (importOriginal) => {
+  // Keep the real countAppliedFromStats (pure tally over the stats shape) so
+  // the orchestrator's totalApplied assertions exercise the production sum.
+  const actual = await importOriginal();
+  return {
+    countAppliedFromStats: actual.countAppliedFromStats,
+    applyRemoteChanges: vi.fn().mockResolvedValue({
+      scraps: { inserted: 0, updated: 0 }, ingredients: { inserted: 0, updated: 0 },
+      sources: { applied: 0 }, refs: { applied: 0 }, relations: { applied: 0 },
+      tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: []
+    }),
+    getMaxSequences: vi.fn().mockResolvedValue({
+      scraps: '0', ingredients: '0', sources: '0', refs: '0', relations: '0', tags: '0', media: '0'
+    })
+  };
+});
 vi.mock('./memoryBackend.js', () => ({
   getBackendName: vi.fn(() => 'postgres')
 }));
@@ -44,7 +60,11 @@ vi.mock('./instanceEvents.js', () => ({
 }));
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
-  readJSONFile: vi.fn().mockResolvedValue({}),
+  // Fresh object per call: `mockResolvedValue({})` would hand every
+  // loadCursors() the SAME object, so one test's saveCursors mutation leaks
+  // into the next (a prior test's high catalog cursor then trips the
+  // rebuild/reset detection). A fresh {} isolates each test's cursor state.
+  readJSONFile: vi.fn(async () => ({})),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),
   PATHS: { data: '/mock/data' },
@@ -58,9 +78,11 @@ vi.mock('fs/promises', () => ({
   rename: vi.fn().mockResolvedValue()
 }));
 
+import { readJSONFile } from '../lib/fileUtils.js';
 import { getPeers } from './instances.js';
 import { applyRemoteChanges as applyBrainChanges } from './brainSync.js';
 import { applyRemoteChanges as applyMemoryChanges } from './memorySync.js';
+import { applyRemoteChanges as applyCatalogChanges } from './catalogSync.js';
 import { instanceEvents } from './instanceEvents.js';
 import { syncWithPeer, syncAllPeers, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
 
@@ -78,6 +100,12 @@ describe('syncOrchestrator', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset the cursor-store read to a FRESH empty object each test. The
+    // brain/memory reset tests below override it with `mockResolvedValue(
+    // cursorData)`, and that implementation survives `clearAllMocks` — without
+    // this reset a later test inherits a prior test's (mutated) cursor and the
+    // catalog rebuild/reset detection fires on it.
+    readJSONFile.mockImplementation(async () => ({}));
     vi.useFakeTimers();
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
@@ -292,6 +320,184 @@ describe('syncOrchestrator', () => {
       // Categories still pulled, but WITHOUT the forPeer param (full snapshot).
       expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(true);
       expect(urls.some((u) => u.includes('forPeer='))).toBe(false);
+    });
+  });
+
+  describe('catalog sync (delta-based, Postgres-only)', () => {
+    const catalogPeer = { ...mockPeer, syncCategories: { catalog: true } };
+
+    it('pulls /api/catalog/sync with per-kind cursors and applies locally', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ingredients: [{ id: 'cat-chr-1' }],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character' }],
+          maxSequences: { scraps: '0', ingredients: '7', sources: '0', refs: '3', relations: '0', tags: '0', media: '0' },
+          hasMore: false,
+          portosMeta: { schemaVersions: { catalog: 1 } },
+        }),
+      });
+      applyCatalogChanges.mockResolvedValueOnce({
+        scraps: { inserted: 0, updated: 0 }, ingredients: { inserted: 1, updated: 0 },
+        sources: { applied: 0 }, refs: { applied: 1 }, relations: { applied: 0 },
+        tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: [],
+      });
+
+      const result = await syncWithPeer(catalogPeer);
+
+      const url = mockFetch.mock.calls[0][0];
+      expect(url).toContain('/api/catalog/sync?');
+      expect(url).toContain('since[ingredients]=0');
+      expect(url).toContain('since[refs]=0');
+      expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
+      // inserted ingredient (1) + applied ref (1)
+      expect(result.catalog.totalApplied).toBe(2);
+    });
+
+    it('drains multiple batches via hasMore, advancing the per-kind cursor', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ingredients: [{ id: 'a' }],
+            maxSequences: { scraps: '0', ingredients: '5', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+            hasMore: true,
+            portosMeta: { schemaVersions: { catalog: 1 } },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ingredients: [{ id: 'b' }],
+            maxSequences: { scraps: '0', ingredients: '9', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+            hasMore: false,
+            portosMeta: { schemaVersions: { catalog: 1 } },
+          }),
+        });
+      applyCatalogChanges.mockResolvedValue({
+        scraps: { inserted: 0, updated: 0 }, ingredients: { inserted: 1, updated: 0 },
+        sources: { applied: 0 }, refs: { applied: 0 }, relations: { applied: 0 },
+        tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: [],
+      });
+
+      const result = await syncWithPeer(catalogPeer);
+
+      expect(applyCatalogChanges).toHaveBeenCalledTimes(2);
+      expect(result.catalog.totalApplied).toBe(2);
+      // Second pull must carry the cursor from the first batch.
+      const secondUrl = mockFetch.mock.calls[1][0];
+      expect(secondUrl).toContain('since[ingredients]=5');
+      // Final cursor advanced to the last batch's max.
+      expect(result.catalog.catalogSeqs.ingredients).toBe('9');
+    });
+
+    it('rewinds a stale catalog cursor that exceeds the peer max (peer DB rebuild) and re-pulls from 0', async () => {
+      // Saved cursor is far ahead of the peer's rebuilt table maxima.
+      readJSONFile.mockResolvedValue({
+        [catalogPeer.instanceId]: {
+          catalogSeqs: { scraps: '0', ingredients: '999', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+        },
+      });
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ingredients: [],
+            // No rows for the stale cursor → maxSequences ECHOES the inbound
+            // cursor (999), but tableMaxSequences reports the TRUE max (5).
+            maxSequences: { scraps: '0', ingredients: '999', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+            tableMaxSequences: { scraps: '0', ingredients: '5', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+            hasMore: true,
+            portosMeta: { schemaVersions: { catalog: 1 } },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ingredients: [{ id: 'a' }],
+            maxSequences: { scraps: '0', ingredients: '5', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+            tableMaxSequences: { scraps: '0', ingredients: '5', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+            hasMore: false,
+            portosMeta: { schemaVersions: { catalog: 1 } },
+          }),
+        });
+      applyCatalogChanges.mockResolvedValue({
+        scraps: { inserted: 0, updated: 0 }, ingredients: { inserted: 1, updated: 0 },
+        sources: { applied: 0 }, refs: { applied: 0 }, relations: { applied: 0 },
+        tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: [],
+      });
+
+      await syncWithPeer(catalogPeer);
+
+      // First fetch carries the stale cursor; detecting cursor(999) > peerMax(5)
+      // rewinds ingredients to 0 and re-fetches BEFORE applying, so the stale
+      // page isn't applied and the rewound page is.
+      expect(mockFetch.mock.calls[0][0]).toContain('since[ingredients]=999');
+      expect(mockFetch.mock.calls[1][0]).toContain('since[ingredients]=0');
+      expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a kind cursor when that kind had apply failures (parent on a later page)', async () => {
+      // A ref fails because its parent ingredient is on a later page; the
+      // ingredient itself applies cleanly in the same batch.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ingredients: [{ id: 'a' }], refs: [{ id: 'r' }],
+          maxSequences: { scraps: '0', ingredients: '5', sources: '0', refs: '5', relations: '0', tags: '0', media: '0' },
+          hasMore: false,
+          portosMeta: { schemaVersions: { catalog: 1 } },
+        }),
+      });
+      applyCatalogChanges.mockResolvedValue({
+        scraps: { inserted: 0, updated: 0 }, ingredients: { inserted: 1, updated: 0 },
+        sources: { applied: 0 }, refs: { applied: 0, failed: 1 }, relations: { applied: 0 },
+        tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: [{ kind: 'refs', id: 'r' }],
+      });
+
+      const result = await syncWithPeer(catalogPeer);
+
+      // ingredients applied cleanly → its cursor advances; refs failed → its
+      // cursor is HELD (unset/0) so the next sync re-requests it once the parent
+      // ingredient has landed.
+      expect(result.catalog.catalogSeqs.ingredients).toBe('5');
+      expect(result.catalog.catalogSeqs.refs ?? '0').toBe('0');
+    });
+
+    it('records a schema gap and stops draining when the sender is ahead on catalog', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ingredients: [{ id: 'x' }],
+          maxSequences: { scraps: '0', ingredients: '5', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+          hasMore: true,
+          portosMeta: { schemaVersions: { catalog: 99 }, portosVersion: '99.0.0' },
+        }),
+      });
+      const mismatch = new Error('catalog ahead');
+      mismatch.code = 'CATALOG_SCHEMA_VERSION_AHEAD';
+      mismatch.diff = { ahead: [{ category: 'catalog', senderV: 99, receiverV: 1 }], behind: [] };
+      applyCatalogChanges.mockRejectedValueOnce(mismatch);
+
+      const { updatePeer } = await import('./instances.js');
+      getPeers.mockResolvedValue([{ ...catalogPeer, id: 'local-peer-row', instanceId: catalogPeer.instanceId }]);
+
+      const result = await syncWithPeer(catalogPeer);
+
+      // Only one apply attempt — we stop draining on the block (no hasMore loop).
+      expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
+      expect(result.catalog.blockedBySchema).toBeTruthy();
+      // Gap persisted on the local peer row under schemaGaps.catalog.
+      expect(updatePeer).toHaveBeenCalledWith(
+        'local-peer-row',
+        expect.objectContaining({
+          schemaGaps: expect.objectContaining({
+            catalog: expect.objectContaining({
+              ahead: [{ category: 'catalog', senderV: 99, receiverV: 1 }],
+            }),
+          }),
+        }),
+      );
     });
   });
 

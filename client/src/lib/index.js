@@ -13,6 +13,7 @@ export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
 export * from './bibleLimits.js';
+export * from './catalogTypes.js';
 export * from './editorialRoadmap.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';

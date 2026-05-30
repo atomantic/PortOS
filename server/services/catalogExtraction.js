@@ -21,8 +21,21 @@ import { randomUUID } from 'crypto';
 import { extractBible } from '../lib/bibleExtractor.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { BIBLE_KINDS, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
+import { CATALOG_TYPES } from '../lib/catalogTypes.js';
 import { catalogEvents } from './catalogEvents.js';
 import { listIngredientsForRef } from './catalogDB.js';
+
+// Light-shape ingredient type ids, sourced from the shared registry
+// (`extractionShape === 'light'`). Adding a light type to `catalogTypes.js`
+// flows through the draft scaffolding without a manual edit here. Order
+// matches the registry → matches the bundled prompt's JSON keys
+// (ideas/scenes/concepts today).
+const LIGHT_TYPE_IDS = CATALOG_TYPES.filter((t) => t.extractionShape === 'light').map((t) => t.id);
+// Bible type ids, sourced the same way (`extractionShape === 'bible'`).
+const BIBLE_TYPE_IDS = CATALOG_TYPES.filter((t) => t.extractionShape === 'bible').map((t) => t.id);
+// Map a light TYPE id to its plural draft key (`idea` → `ideas`). The bundled
+// prompt's JSON keys + the draft scaffolding key results by this plural.
+const lightDraftKey = (id) => `${id}s`;
 
 // Light-shape stage that bundles ideas/scenes/concepts into one LLM call.
 // Surfaced to the UI as a single stage row — the three result arrays land
@@ -128,11 +141,16 @@ async function extractIdeasScenesConcepts({ corpus, providerOverride }) {
     source: 'catalog-extract-ideas-scenes-concepts',
   });
   const content = result?.content || {};
-  return {
-    ideas:    (Array.isArray(content.ideas)    ? content.ideas    : []).map((r) => sanitizeLightEntry('idea',    r)).filter(Boolean),
-    scenes:   (Array.isArray(content.scenes)   ? content.scenes   : []).map((r) => sanitizeLightEntry('scene',   r)).filter(Boolean),
-    concepts: (Array.isArray(content.concepts) ? content.concepts : []).map((r) => sanitizeLightEntry('concept', r)).filter(Boolean),
-  };
+  // One sanitized array per light type, keyed by plural draft key. Driven by
+  // the registry so a new light type (with its prompt JSON key) is picked up
+  // here without an extra line.
+  const out = {};
+  for (const id of LIGHT_TYPE_IDS) {
+    const key = lightDraftKey(id);
+    const raw = Array.isArray(content[key]) ? content[key] : [];
+    out[key] = raw.map((r) => sanitizeLightEntry(id, r)).filter(Boolean);
+  }
+  return out;
 }
 
 /**
@@ -196,7 +214,7 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
     try {
       if (stage.id === LIGHT_STAGE_ID) {
         const out = await extractIdeasScenesConcepts({ corpus, providerOverride });
-        const count = out.ideas.length + out.scenes.length + out.concepts.length;
+        const count = LIGHT_TYPE_IDS.reduce((n, id) => n + (out[lightDraftKey(id)]?.length || 0), 0);
         emit({ type: 'stage', id: stage.id, status: 'completed', count });
         return { id: stage.id, light: out, error: null };
       }
@@ -220,15 +238,19 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
 
   // Default empty arrays for every result key the UI can render — keeps the
   // commit path's `Array.isArray(result.draft.x)` guard happy even when a
-  // stage failed or returned nothing.
-  const draft = { characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] };
+  // stage failed or returned nothing. Bible keys use BIBLE_FIELD plurals;
+  // light keys use the registry's plural draft key.
+  const draft = {};
+  for (const kind of BIBLE_TYPE_IDS) draft[BIBLE_FIELD[kind]] = [];
+  for (const id of LIGHT_TYPE_IDS) draft[lightDraftKey(id)] = [];
   const stages = settled.map(({ id, extracted, light, error }) => {
     let count = 0;
     if (light) {
-      draft.ideas = light.ideas;
-      draft.scenes = light.scenes;
-      draft.concepts = light.concepts;
-      count = light.ideas.length + light.scenes.length + light.concepts.length;
+      for (const lightId of LIGHT_TYPE_IDS) {
+        const key = lightDraftKey(lightId);
+        draft[key] = light[key] || [];
+        count += draft[key].length;
+      }
     } else if (extracted) {
       draft[id] = extracted;
       count = extracted.length;

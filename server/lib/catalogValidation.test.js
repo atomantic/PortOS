@@ -21,6 +21,12 @@ import {
   catalogSyncEnvelopeSchema,
   catalogBulkImportSchema,
   catalogExportQuerySchema,
+  catalogRelationLinkSchema,
+  RELATION_KINDS,
+  catalogMediaAttachSchema,
+  catalogMediaDetachSchema,
+  catalogPortraitSetSchema,
+  MEDIA_KINDS,
 } from './catalogValidation.js';
 
 describe('catalogValidation — ingredient types & ref kinds', () => {
@@ -316,5 +322,136 @@ describe('catalogValidation — catalogExportQuerySchema', () => {
 
   it('caps refId at 120 chars', () => {
     expect(() => catalogExportQuerySchema.parse({ refKind: 'universe', refId: 'a'.repeat(200) })).toThrow();
+  });
+});
+
+describe('catalogValidation — relation kinds & catalogRelationLinkSchema', () => {
+  it('exposes the relation kinds as a frozen list including the documented set', () => {
+    expect(Object.isFrozen(RELATION_KINDS)).toBe(true);
+    for (const k of ['appears-in', 'lives-in', 'created-by', 'parent-of', 'variant-of', 'references']) {
+      expect(RELATION_KINDS).toContain(k);
+    }
+  });
+
+  it('accepts a valid relation link body', () => {
+    const out = catalogRelationLinkSchema.parse({ toId: 'cat-chr-abc', kind: 'lives-in' });
+    expect(out).toEqual({ toId: 'cat-chr-abc', kind: 'lives-in' });
+  });
+
+  it('accepts every registered relation kind', () => {
+    for (const k of RELATION_KINDS) {
+      expect(() => catalogRelationLinkSchema.parse({ toId: 'x', kind: k })).not.toThrow();
+    }
+  });
+
+  it('rejects an unknown relation kind', () => {
+    expect(() => catalogRelationLinkSchema.parse({ toId: 'x', kind: 'nemesis-of' })).toThrow();
+  });
+
+  it('rejects a missing or empty toId', () => {
+    expect(() => catalogRelationLinkSchema.parse({ kind: 'lives-in' })).toThrow();
+    expect(() => catalogRelationLinkSchema.parse({ toId: '', kind: 'lives-in' })).toThrow();
+  });
+
+  it('rejects unknown keys (strict)', () => {
+    expect(() => catalogRelationLinkSchema.parse({ toId: 'x', kind: 'lives-in', fromId: 'y' })).toThrow();
+  });
+
+  it('caps toId at 80 chars', () => {
+    expect(() => catalogRelationLinkSchema.parse({ toId: 'a'.repeat(81), kind: 'lives-in' })).toThrow();
+  });
+});
+
+describe('catalogValidation — catalogSyncEnvelopeSchema relations block', () => {
+  it('accepts an envelope carrying a relations array with tombstone fields', () => {
+    const out = catalogSyncEnvelopeSchema.parse({
+      relations: [
+        { fromId: 'a', toId: 'b', kind: 'lives-in', createdAt: '2026-01-01T00:00:00Z' },
+        { fromId: 'a', toId: 'c', kind: 'references', createdAt: '2026-01-01T00:00:00Z', deleted: true, deletedAt: '2026-01-02T00:00:00Z' },
+      ],
+    });
+    expect(out.relations).toHaveLength(2);
+  });
+
+  it('tolerates a forward (unknown) relation kind on the wire', () => {
+    // The sync schema intentionally accepts freeform `kind` (not the enum) so a
+    // newer peer's extra relation kind doesn't get the whole envelope rejected.
+    expect(() => catalogSyncEnvelopeSchema.parse({
+      relations: [{ fromId: 'a', toId: 'b', kind: 'future-kind', createdAt: '2026-01-01T00:00:00Z' }],
+    })).not.toThrow();
+  });
+
+  it('requires createdAt on a relation row', () => {
+    expect(() => catalogSyncEnvelopeSchema.parse({
+      relations: [{ fromId: 'a', toId: 'b', kind: 'lives-in' }],
+    })).toThrow();
+  });
+});
+
+describe('catalogValidation — media kinds & catalogMediaAttachSchema', () => {
+  it('exposes the media kinds as a frozen list including the documented set', () => {
+    expect(Object.isFrozen(MEDIA_KINDS)).toBe(true);
+    for (const k of ['portrait', 'reference', 'audio', 'video', 'document']) {
+      expect(MEDIA_KINDS).toContain(k);
+    }
+  });
+
+  it('accepts a valid media attach body with optional role/caption', () => {
+    const out = catalogMediaAttachSchema.parse({ mediaKey: 'hero.png', kind: 'portrait', role: 'hero-shot', caption: 'angry' });
+    expect(out).toEqual({ mediaKey: 'hero.png', kind: 'portrait', role: 'hero-shot', caption: 'angry' });
+  });
+
+  it('accepts an attach body without role/caption', () => {
+    expect(() => catalogMediaAttachSchema.parse({ mediaKey: 'a.png', kind: 'reference' })).not.toThrow();
+  });
+
+  it('accepts every registered media kind', () => {
+    for (const k of MEDIA_KINDS) {
+      expect(() => catalogMediaAttachSchema.parse({ mediaKey: 'x.png', kind: k })).not.toThrow();
+    }
+  });
+
+  it('rejects an unknown media kind', () => {
+    expect(() => catalogMediaAttachSchema.parse({ mediaKey: 'x.png', kind: 'hologram' })).toThrow();
+  });
+
+  it('rejects a missing or empty mediaKey', () => {
+    expect(() => catalogMediaAttachSchema.parse({ kind: 'portrait' })).toThrow();
+    expect(() => catalogMediaAttachSchema.parse({ mediaKey: '', kind: 'portrait' })).toThrow();
+  });
+
+  it('rejects unknown keys (strict)', () => {
+    expect(() => catalogMediaAttachSchema.parse({ mediaKey: 'x.png', kind: 'portrait', bytes: 'nope' })).toThrow();
+  });
+
+  it('portrait-set body omits kind; detach body requires kind', () => {
+    expect(() => catalogPortraitSetSchema.parse({ mediaKey: 'x.png' })).not.toThrow();
+    expect(() => catalogPortraitSetSchema.parse({ mediaKey: 'x.png', kind: 'portrait' })).toThrow(); // strict: no kind
+    expect(() => catalogMediaDetachSchema.parse({ mediaKey: 'x.png', kind: 'portrait' })).not.toThrow();
+    expect(() => catalogMediaDetachSchema.parse({ mediaKey: 'x.png' })).toThrow();
+  });
+});
+
+describe('catalogValidation — catalogSyncEnvelopeSchema media block', () => {
+  it('accepts an envelope carrying a media array with tombstone + metadata fields', () => {
+    const out = catalogSyncEnvelopeSchema.parse({
+      media: [
+        { ingredientId: 'i1', mediaKey: 'a.png', kind: 'portrait', createdAt: '2026-01-01T00:00:00Z' },
+        { ingredientId: 'i1', mediaKey: 'b.png', kind: 'reference', role: 'mood', caption: 'rainy', createdAt: '2026-01-01T00:00:00Z', deleted: true, deletedAt: '2026-01-02T00:00:00Z' },
+      ],
+    });
+    expect(out.media).toHaveLength(2);
+  });
+
+  it('tolerates a forward (unknown) media kind on the wire', () => {
+    expect(() => catalogSyncEnvelopeSchema.parse({
+      media: [{ ingredientId: 'i1', mediaKey: 'a.png', kind: 'future-kind', createdAt: '2026-01-01T00:00:00Z' }],
+    })).not.toThrow();
+  });
+
+  it('requires ingredientId + mediaKey + createdAt on a media row', () => {
+    expect(() => catalogSyncEnvelopeSchema.parse({
+      media: [{ kind: 'portrait', createdAt: '2026-01-01T00:00:00Z' }],
+    })).toThrow();
   });
 });
