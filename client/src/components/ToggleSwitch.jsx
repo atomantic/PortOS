@@ -21,7 +21,7 @@ export default function ToggleSwitch({ enabled, onChange, disabled, ariaLabel, s
     }`} />
   );
   const trackClass = `relative inline-flex ${s.track} items-center rounded-full transition-colors shrink-0 ${
-    enabled ? activeColor : 'bg-gray-600'
+    enabled ? activeColor : 'port-toggle-track-off'
   } border border-port-border/60 shadow-sm ${disabled ? 'opacity-50' : ''} ${className}`;
 
   // Decorative mode renders as a <span> so it can sit inside another <button>
