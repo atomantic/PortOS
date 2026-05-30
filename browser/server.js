@@ -4,6 +4,7 @@ import { readFile, mkdir } from 'fs/promises';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
+import { deriveMacAppBundleFromChromePath } from '../server/lib/browserConfig.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..');
@@ -42,10 +43,12 @@ function getChromePath(config) {
   return defaultChromeBinary();
 }
 
-function getMacAppBundle(config) {
+function getMacAppBundle(config, chromePath) {
   if (typeof config?.macAppBundle === 'string' && config.macAppBundle.trim()) {
     return config.macAppBundle;
   }
+  const derived = deriveMacAppBundleFromChromePath(chromePath);
+  if (derived) return derived;
   return DEFAULT_MAC_CHROME_APP;
 }
 
@@ -168,6 +171,7 @@ function scheduleDownloadReconnect() {
 async function launchBrowser() {
   const config = await loadConfig();
   const downloadDir = config.downloadDir || DEFAULT_DOWNLOAD_DIR;
+  headlessMode = config.headless === true;
 
   // Reuse existing Chrome if CDP is already reachable (e.g. after PM2 restart)
   if (await checkCdp()) {
@@ -177,10 +181,9 @@ async function launchBrowser() {
     return;
   }
 
-  headlessMode = config.headless === true;
   const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
   const chromePath = getChromePath(config);
-  const macAppBundle = getMacAppBundle(config);
+  const macAppBundle = getMacAppBundle(config, chromePath);
 
   await mkdir(profileDir, { recursive: true });
   await mkdir(downloadDir, { recursive: true });

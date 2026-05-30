@@ -1,6 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
 import * as browserService from '../services/browserService.js';
 
 const router = express.Router();
@@ -20,6 +21,16 @@ const optionalPath = z.preprocess(
   ).optional()
 );
 
+const chromePathSchema = optionalPath.superRefine((value, ctx) => {
+  const message = validateChromePath(value);
+  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+});
+
+const macAppBundleSchema = optionalPath.superRefine((value, ctx) => {
+  const message = validateMacAppBundle(value);
+  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+});
+
 const updateConfigSchema = z.object({
   cdpPort: z.number().int().min(1024).max(65535).optional(),
   cdpHost: z.enum(['127.0.0.1', 'localhost', '::1']).optional(),
@@ -35,10 +46,11 @@ const updateConfigSchema = z.object({
   // back to the platform default (`/Applications/Google Chrome.app/...` on
   // macOS, `C:\Program Files\Google\Chrome\...` on Windows, `google-chrome`
   // on Linux).
-  chromePath: optionalPath,
+  chromePath: chromePathSchema,
   // macOS headed mode launches via `open -na <app-bundle>` for TCC reasons,
   // so the bundle (`.app`) path is tracked separately from the executable.
-  macAppBundle: optionalPath
+  macAppBundle: macAppBundleSchema,
+  canaryPromptDeclined: z.boolean().optional()
 });
 
 // GET /api/browser - Full browser status

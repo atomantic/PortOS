@@ -135,6 +135,7 @@ export * from './renderSlot.js';
 export * from './telegramClient.js';
 
 // === Model & config ===
+export * from './browserConfig.js';
 export * from './buildId.js';
 export * from './db.js';
 export * from './platform.js';

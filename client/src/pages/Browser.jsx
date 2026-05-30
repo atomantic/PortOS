@@ -17,6 +17,13 @@ import { formatBytes } from '../utils/formatters';
 
 const POLL_INTERVAL = 5000;
 
+function deriveMacAppBundle(chromePath) {
+  if (!chromePath?.trim()) return null;
+  const normalized = chromePath.trim().replaceAll('\\', '/');
+  const appIndex = normalized.toLowerCase().indexOf('.app/');
+  return appIndex >= 0 ? normalized.slice(0, appIndex + '.app'.length) : null;
+}
+
 function formatUptime(timestamp) {
   if (!timestamp) return '-';
   const ms = Date.now() - timestamp;
@@ -242,7 +249,15 @@ export default function BrowserPage() {
                 id="chromePath"
                 type="text"
                 value={configDraft.chromePath || ''}
-                onChange={e => setConfigDraft(d => ({ ...d, chromePath: e.target.value }))}
+                onChange={e => setConfigDraft(d => {
+                  const chromePath = e.target.value;
+                  const nextAppBundle = deriveMacAppBundle(chromePath);
+                  const currentAppBundle = deriveMacAppBundle(d.chromePath);
+                  const macAppBundle = !d.macAppBundle || d.macAppBundle === currentAppBundle
+                    ? nextAppBundle
+                    : d.macAppBundle;
+                  return { ...d, chromePath, macAppBundle };
+                })}
                 placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
               />

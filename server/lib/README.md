@@ -168,6 +168,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `browserConfig.js` | Shared custom browser path helpers for deriving macOS app bundles, detecting configured browser choices, normalizing browser config, and validating Chrome-compatible binary paths. |
 | `db.js` | PostgreSQL connection pool. |
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
 | `platform.js` | Platform/OS detection helpers. |
