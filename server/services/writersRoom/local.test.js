@@ -191,6 +191,28 @@ describe('draft body and versioning', () => {
     expect(body).toBe('Body text v1.');
   });
 
+  it('saveDraftBody stores referencedIngredientIds when provided; absence preserves the prior snapshot', async () => {
+    const work = await createWork({ title: 'Refs' });
+    // Present array → stored on the active draft meta.
+    const { manifest: m1 } = await saveDraftBody(work.id, 'Mira appears.', {
+      referencedIngredientIds: ['cat-chr-mira'],
+    });
+    const a1 = m1.drafts.find((d) => d.id === m1.activeDraftVersionId);
+    expect(a1.referencedIngredientIds).toEqual(['cat-chr-mira']);
+
+    // Field omitted → the prior reference snapshot must NOT be wiped.
+    const { manifest: m2 } = await saveDraftBody(work.id, 'Mira appears again.');
+    const a2 = m2.drafts.find((d) => d.id === m2.activeDraftVersionId);
+    expect(a2.referencedIngredientIds).toEqual(['cat-chr-mira']);
+
+    // Empty array → an intentional clear (prose no longer mentions anyone).
+    const { manifest: m3 } = await saveDraftBody(work.id, 'Nobody here.', {
+      referencedIngredientIds: [],
+    });
+    const a3 = m3.drafts.find((d) => d.id === m3.activeDraftVersionId);
+    expect(a3.referencedIngredientIds).toEqual([]);
+  });
+
   it('snapshotDraft creates a new version that mirrors the current body', async () => {
     const work = await createWork({ title: 'Versioned' });
     await saveDraftBody(work.id, 'First pass.');
@@ -199,6 +221,16 @@ describe('draft body and versioning', () => {
     expect(after.activeDraftVersionId).toBe(after.drafts[1].id);
     expect(after.drafts[1].wordCount).toBe(2);
     expect(after.drafts[1].createdFromVersionId).toBe(after.drafts[0].id);
+  });
+
+  it('snapshotDraft carries the source draft referencedIngredientIds forward (same body, same refs)', async () => {
+    const work = await createWork({ title: 'Versioned Refs' });
+    await saveDraftBody(work.id, 'Mira appears.', { referencedIngredientIds: ['cat-chr-mira'] });
+    const after = await snapshotDraft(work.id);
+    // Source version keeps its refs; the new active draft inherits them since
+    // it copies the body verbatim (so its chips aren't blank until re-saved).
+    expect(after.drafts[0].referencedIngredientIds).toEqual(['cat-chr-mira']);
+    expect(after.drafts[1].referencedIngredientIds).toEqual(['cat-chr-mira']);
   });
 
   it('setActiveDraft switches the pointer; subsequent saves write the new version', async () => {

@@ -22,6 +22,7 @@ import { extractBible } from '../lib/bibleExtractor.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { BIBLE_KINDS, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { catalogEvents } from './catalogEvents.js';
+import { listIngredientsForRef } from './catalogDB.js';
 
 // Light-shape stage that bundles ideas/scenes/concepts into one LLM call.
 // Surfaced to the UI as a single stage row — the three result arrays land
@@ -246,4 +247,67 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
   // frame is just noise.)
 
   return { runId, ...draft, stages };
+}
+
+// (refKind, refId) pairs the scan is allowed to consider. Only catalog
+// ingredients linked to one of the provided targets are eligible — a draft
+// shouldn't claim a reference to a character that lives in an unrelated
+// universe just because the two names collide.
+const SCAN_REF_KINDS = Object.freeze(['universe', 'series', 'work']);
+
+/**
+ * Detect which catalog ingredients a piece of prose references, scoped to the
+ * ingredients linked to the given target(s).
+ *
+ * Substring-matches each candidate ingredient's `name` against the prose
+ * (case-insensitive). The candidate set is the union of ingredients linked to
+ * any provided ref — so a Writers Room draft only ever picks up the cast that
+ * was deliberately attached to its work / series / universe, never an
+ * arbitrary catalog row. Returns a de-duplicated list of matched ingredient
+ * ids in stable (sorted) order so the stored array is comparable across saves.
+ *
+ * @param {string} text                 The prose to scan.
+ * @param {object} scope
+ * @param {string} [scope.universeId]   Universe ref to scope candidates to.
+ * @param {string} [scope.seriesId]     Series ref to scope candidates to.
+ * @param {string} [scope.workId]       Work ref to scope candidates to.
+ * @returns {Promise<string[]>}         Matched ingredient ids (sorted, unique).
+ */
+export async function scanProseForIngredientRefs(text, scope = {}) {
+  if (typeof text !== 'string' || !text.trim()) return [];
+  const targets = [
+    ['universe', scope.universeId],
+    ['series', scope.seriesId],
+    ['work', scope.workId],
+  ].filter(([kind, id]) => SCAN_REF_KINDS.includes(kind) && typeof id === 'string' && id.trim());
+  if (targets.length === 0) return [];
+
+  // Union the candidate ingredients across every provided target. The same
+  // ingredient can be linked to more than one target (a character attached to
+  // both its universe and its work) — de-dupe by id so we scan its name once.
+  const byId = new Map();
+  for (const [kind, id] of targets) {
+    const rows = await listIngredientsForRef(kind, id);
+    for (const { ingredient } of rows) {
+      if (ingredient?.id && ingredient?.name && !byId.has(ingredient.id)) {
+        byId.set(ingredient.id, ingredient.name);
+      }
+    }
+  }
+  if (byId.size === 0) return [];
+
+  const matched = [];
+  for (const [id, name] of byId) {
+    const needle = String(name).trim();
+    if (!needle) continue;
+    // Word-boundary match (not bare substring) so a short name like "Sun"
+    // doesn't false-positive inside "Sunday" or "Al" inside "always". Names
+    // are user-controlled, so escape regex metacharacters; the \p{L}\p{N}
+    // lookarounds keep multi-word phrases ("The Drowned Harbor") matching as a
+    // unit while still treating the whole name as one token boundary-wise.
+    const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'iu');
+    if (re.test(text)) matched.push(id);
+  }
+  return matched.sort();
 }

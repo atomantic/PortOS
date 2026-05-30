@@ -834,7 +834,13 @@ export const writersRoomWorkUpdateSchema = z.object({
 }).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
-  body: z.string().max(5_000_000) // 5 MB ceiling — well over a long novel in plain text
+  body: z.string().max(5_000_000), // 5 MB ceiling — well over a long novel in plain text
+  // Catalog ingredient ids this draft version references. Optional: when
+  // absent the server scans the prose against the work's linked cast and
+  // derives the list itself; when present (e.g. a client that already knows
+  // the set) it's trusted as the snapshot. Bounded so a malformed body can't
+  // balloon the manifest.
+  referencedIngredientIds: z.array(z.string().trim().min(1).max(128)).max(500).optional(),
 }).strict();
 
 export const writersRoomSnapshotSchema = z.object({
