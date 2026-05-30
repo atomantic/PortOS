@@ -148,15 +148,6 @@ export async function ensureSchema() {
       tags TEXT[] DEFAULT '{}',
       embedding vector(768),
       embedding_model VARCHAR(100),
-      search_tsv tsvector GENERATED ALWAYS AS (
-        setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
-        setweight(to_tsvector('english',
-          coalesce(payload->>'description', '') || ' ' ||
-          coalesce(payload->>'notes', '') || ' ' ||
-          coalesce(payload->>'background', '') || ' ' ||
-          coalesce(payload->>'summary', '')
-        ), 'B')
-      ) STORED,
       origin_instance_id VARCHAR(36),
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -164,6 +155,29 @@ export async function ensureSchema() {
       deleted_at TIMESTAMPTZ,
       sync_sequence BIGSERIAL
     )`,
+    // Postgres can't ALTER the expression of a STORED generated column, so the
+    // FTS column is DROPped and re-ADDed on every boot. The whole catalogDDL
+    // block is idempotent: on a fresh install the DROP is a no-op (column
+    // didn't exist) and ADD creates it; on an existing v1 install the DROP
+    // removes the narrow expression and ADD installs the expanded one that
+    // also indexes physicalDescription / personality / role / motivations /
+    // significance. Bumped PORTOS_SCHEMA_VERSIONS.catalog → 2 in lockstep.
+    `ALTER TABLE catalog_ingredients DROP COLUMN IF EXISTS search_tsv`,
+    `ALTER TABLE catalog_ingredients ADD COLUMN IF NOT EXISTS search_tsv tsvector
+       GENERATED ALWAYS AS (
+         setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+         setweight(to_tsvector('english',
+           coalesce(payload->>'description', '') || ' ' ||
+           coalesce(payload->>'physicalDescription', '') || ' ' ||
+           coalesce(payload->>'personality', '') || ' ' ||
+           coalesce(payload->>'background', '') || ' ' ||
+           coalesce(payload->>'summary', '') || ' ' ||
+           coalesce(payload->>'notes', '') || ' ' ||
+           coalesce(payload->>'role', '') || ' ' ||
+           coalesce(payload->>'motivations', '') || ' ' ||
+           coalesce(payload->>'significance', '')
+         ), 'B')
+       ) STORED`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_embedding
        ON catalog_ingredients USING hnsw (embedding vector_cosine_ops)
        WITH (m = 16, ef_construction = 64)`,

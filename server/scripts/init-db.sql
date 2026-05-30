@@ -161,18 +161,6 @@ CREATE TABLE IF NOT EXISTS catalog_ingredients (
   tags TEXT[] DEFAULT '{}',
   embedding vector(768),
   embedding_model VARCHAR(100),
-  -- Weighted FTS column. Name carries the most weight (A); description/notes/
-  -- background fall under B. Generated/stored so the GIN index stays fresh
-  -- without trigger code.
-  search_tsv tsvector GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
-    setweight(to_tsvector('english',
-      coalesce(payload->>'description', '') || ' ' ||
-      coalesce(payload->>'notes', '') || ' ' ||
-      coalesce(payload->>'background', '') || ' ' ||
-      coalesce(payload->>'summary', '')
-    ), 'B')
-  ) STORED,
   origin_instance_id VARCHAR(36),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -180,6 +168,33 @@ CREATE TABLE IF NOT EXISTS catalog_ingredients (
   deleted_at TIMESTAMPTZ,
   sync_sequence BIGSERIAL
 );
+-- Weighted FTS column. Name carries the most weight (A); the character canon
+-- fields (description, physicalDescription, personality, background, summary,
+-- notes) plus the role/motivations/significance type-specific fields fall under
+-- B. Generated/stored so the GIN index stays fresh without trigger code.
+-- Postgres can't ALTER the expression of a STORED generated column, so
+-- ensureSchema (server/lib/db.js) DROPs + re-ADDs the column on every boot —
+-- mirrored here as DROP IF EXISTS + ADD IF NOT EXISTS so a fresh-install run
+-- of this script produces the same end-state as an existing-install boot
+-- through ensureSchema. PORTOS_SCHEMA_VERSIONS.catalog is bumped to 2 in
+-- lockstep so older peers can't push pre-expansion-shape rows that would
+-- mismatch the indexed expression.
+ALTER TABLE catalog_ingredients DROP COLUMN IF EXISTS search_tsv;
+ALTER TABLE catalog_ingredients ADD COLUMN IF NOT EXISTS search_tsv tsvector
+  GENERATED ALWAYS AS (
+    setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('english',
+      coalesce(payload->>'description', '') || ' ' ||
+      coalesce(payload->>'physicalDescription', '') || ' ' ||
+      coalesce(payload->>'personality', '') || ' ' ||
+      coalesce(payload->>'background', '') || ' ' ||
+      coalesce(payload->>'summary', '') || ' ' ||
+      coalesce(payload->>'notes', '') || ' ' ||
+      coalesce(payload->>'role', '') || ' ' ||
+      coalesce(payload->>'motivations', '') || ' ' ||
+      coalesce(payload->>'significance', '')
+    ), 'B')
+  ) STORED;
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_embedding
   ON catalog_ingredients USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
