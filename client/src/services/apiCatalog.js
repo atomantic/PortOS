@@ -73,6 +73,17 @@ export const unlinkCatalogIngredient = (id, body, options) =>
 export const listCatalogIngredientsForRef = (refKind, refId, options) =>
   request(`/catalog/refs/${enc(refKind)}/${enc(refId)}/ingredients`, options);
 
+// --- Relations (ingredient ↔ ingredient) --------------------------------
+
+export const listCatalogIngredientRelations = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/relations`, options);
+
+export const linkCatalogIngredientRelation = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const unlinkCatalogIngredientRelation = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'DELETE', body: JSON.stringify(body), ...options });
+
 // --- Bulk import / export ----------------------------------------------
 
 export const bulkImportCatalogIngredients = (body, options) =>

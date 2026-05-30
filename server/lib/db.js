@@ -236,6 +236,23 @@ export async function ensureSchema() {
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_target ON catalog_ingredient_refs (ref_kind, ref_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_sync_seq ON catalog_ingredient_refs (sync_sequence)`,
 
+    // Ingredient↔ingredient edges (the catalog graph seam). `kind` is an
+    // app-layer enum (RELATION_KINDS in catalogTypes.js), not a DB CHECK.
+    // Both ids CASCADE on ingredient hard-delete; soft-delete columns from day
+    // one so unlinks tombstone + propagate to peers.
+    `CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
+      from_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      to_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+      kind VARCHAR(32) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ,
+      sync_sequence BIGSERIAL,
+      PRIMARY KEY (from_id, to_id, kind)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_to ON catalog_ingredient_relations (to_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_sync_seq ON catalog_ingredient_relations (sync_sequence)`,
+
     `CREATE OR REPLACE FUNCTION update_catalog_ingredient_timestamp()
      RETURNS TRIGGER AS $$
      DECLARE
@@ -332,6 +349,25 @@ export async function ensureSchema() {
        BEFORE UPDATE ON catalog_ingredient_refs
        FOR EACH ROW
        EXECUTE FUNCTION update_catalog_ref_sync_seq()`,
+
+    // Relation UPDATE bumps sync_sequence on soft-delete / revival so a peer
+    // sees the tombstone (or un-delete) on its next pull — mirrors the ref
+    // trigger above.
+    `CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       IF NEW.deleted IS DISTINCT FROM OLD.deleted
+          OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+         NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
+       END IF;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+    `DROP TRIGGER IF EXISTS trg_catalog_relation_sync_seq ON catalog_ingredient_relations`,
+    `CREATE TRIGGER trg_catalog_relation_sync_seq
+       BEFORE UPDATE ON catalog_ingredient_relations
+       FOR EACH ROW
+       EXECUTE FUNCTION update_catalog_relation_sync_seq()`,
   ];
   for (const sql of catalogDDL) {
     await pool.query(sql);

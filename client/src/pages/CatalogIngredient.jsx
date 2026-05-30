@@ -7,14 +7,18 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   getCatalogIngredient,
   updateCatalogIngredient,
   deleteCatalogIngredient,
+  listCatalogIngredientRelations,
+  linkCatalogIngredientRelation,
+  unlinkCatalogIngredientRelation,
 } from '../services/apiCatalog';
-import { getCatalogType, CATALOG_BADGE_BY_ID } from '../lib/catalogTypes';
+import IngredientPicker from '../components/IngredientPicker';
+import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -52,6 +56,10 @@ export default function CatalogIngredient() {
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState(false);
+  // { outbound: [...], inbound: [...] } — relations are loaded separately from
+  // the ingredient record so the panel can refresh independently after add/
+  // remove without re-fetching the whole detail payload.
+  const [relations, setRelations] = useState({ outbound: [], inbound: [] });
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +85,58 @@ export default function CatalogIngredient() {
       });
     return () => { cancelled = true; };
   }, [id, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCatalogIngredientRelations(id, { silent: true })
+      .then((data) => {
+        if (cancelled) return;
+        setRelations({
+          outbound: Array.isArray(data?.outbound) ? data.outbound : [],
+          inbound: Array.isArray(data?.inbound) ? data.inbound : [],
+        });
+      })
+      .catch(() => { if (!cancelled) setRelations({ outbound: [], inbound: [] }); });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // Add an outbound edge (this ingredient → picked target). Optimistically
+  // appends to local state so the panel updates without a refetch.
+  const handleAddRelation = async (target, kind) => {
+    if (!record || !target?.id) return;
+    if (target.id === record.id) { toast.error('Cannot relate an ingredient to itself'); return; }
+    const ok = await linkCatalogIngredientRelation(record.id, { toId: target.id, kind }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to add relation'); return false; });
+    if (!ok) return;
+    setRelations((prev) => {
+      const exists = prev.outbound.some((r) => r.toId === target.id && r.kind === kind);
+      if (exists) return prev;
+      return {
+        ...prev,
+        outbound: [...prev.outbound, {
+          fromId: record.id, toId: target.id, kind,
+          createdAt: new Date().toISOString(),
+          other: { id: target.id, name: target.name, type: target.type },
+        }],
+      };
+    });
+    toast.success('Relation added');
+  };
+
+  // Remove an outbound edge. Inbound edges are owned by the OTHER ingredient,
+  // so the panel only deletes outbound ones (filter is by toId + kind).
+  const handleRemoveRelation = async (toId, kind) => {
+    if (!record) return;
+    const ok = await unlinkCatalogIngredientRelation(record.id, { toId, kind }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err?.message || 'Failed to remove relation'); return false; });
+    if (!ok) return;
+    setRelations((prev) => ({
+      ...prev,
+      outbound: prev.outbound.filter((r) => !(r.toId === toId && r.kind === kind)),
+    }));
+  };
 
   const handleSave = async () => {
     if (!record) return;
@@ -218,7 +278,103 @@ export default function CatalogIngredient() {
           <SourcesPanel sources={record.sources} />
           <RefsPanel refsByKind={refsByKind} />
         </div>
+
+        <RelationsPanel
+          record={record}
+          relations={relations}
+          onAdd={handleAddRelation}
+          onRemove={handleRemoveRelation}
+        />
       </div>
+    </section>
+  );
+}
+
+// "Relations" panel — ingredient↔ingredient edges. Outbound edges (this
+// ingredient → other) are user-editable here; inbound edges (other → this
+// ingredient) are read-only because the owning ingredient is the other end.
+function RelationsPanel({ record, relations, onAdd, onRemove }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [kind, setKind] = useState(RELATION_KINDS[0].id);
+  const outbound = Array.isArray(relations.outbound) ? relations.outbound : [];
+  const inbound = Array.isArray(relations.inbound) ? relations.inbound : [];
+
+  // Hide the current record + everything already linked outbound from the
+  // picker so the user can't double-link or self-link.
+  const excludeIds = [record.id, ...outbound.map((r) => r.toId)];
+
+  const chip = (other) => {
+    const badge = CATALOG_BADGE_BY_ID[other?.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+    return (
+      <Link to={`/catalog/${encodeURIComponent(other?.type || 'idea')}/${encodeURIComponent(other?.id)}`}
+        className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
+        <span className="truncate max-w-[16rem]">{other?.name || other?.id || '(unnamed)'}</span>
+        <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{other?.type}</span>
+      </Link>
+    );
+  };
+
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-4">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <h2 className="text-sm font-semibold text-white">Relations</h2>
+        <div className="flex items-center gap-2">
+          <label htmlFor="relation-kind" className="sr-only">Relation kind</label>
+          <select id="relation-kind" value={kind} onChange={(e) => setKind(e.target.value)}
+            className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-xs text-white focus:outline-none focus:border-port-accent">
+            {RELATION_KINDS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+          <button type="button" onClick={() => setPickerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium">
+            <Plus size={12} aria-hidden="true" /> Add relation
+          </button>
+        </div>
+      </div>
+
+      {outbound.length === 0 && inbound.length === 0 ? (
+        <p className="text-xs text-gray-500">No relations yet. Link this ingredient to another (a character to the place they live, a scene to its cast, …).</p>
+      ) : (
+        <div className="space-y-3">
+          {outbound.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Outbound</div>
+              <ul className="space-y-1.5">
+                {outbound.map((r) => (
+                  <li key={`${r.toId}-${r.kind}`} className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.label || r.kind}</span>
+                    {chip(r.other)}
+                    <button type="button" onClick={() => onRemove(r.toId, r.kind)}
+                      aria-label={`Remove relation to ${r.other?.name || r.toId}`}
+                      className="text-gray-500 hover:text-port-error">
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {inbound.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Inbound</div>
+              <ul className="space-y-1.5">
+                {inbound.map((r) => (
+                  <li key={`${r.fromId}-${r.kind}`} className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.inverseLabel || r.kind}</span>
+                    {chip(r.other)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <IngredientPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(picked) => onAdd(picked, kind)}
+        excludeIds={excludeIds}
+      />
     </section>
   );
 }

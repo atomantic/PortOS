@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { BIBLE_LIMITS } from './storyBible.js';
-import { INGREDIENT_TYPE_IDS } from './catalogTypes.js';
+import { INGREDIENT_TYPE_IDS, RELATION_KIND_IDS } from './catalogTypes.js';
 
 // Derived from the shared type registry (`catalogTypes.js`) — adding a type
 // there flows through to every Zod enum below automatically. Kept as a frozen
@@ -26,6 +26,10 @@ export const REF_KINDS = Object.freeze([
   'work',
   'creative-director',
 ]);
+
+// Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
+// a kind there flows through to the Zod enum below.
+export const RELATION_KINDS = RELATION_KIND_IDS;
 
 const tag = z.string().trim().min(1).max(BIBLE_LIMITS.TAG_MAX);
 const tags = z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional();
@@ -75,6 +79,16 @@ export const catalogIngredientLinkSchema = z.object({
   refKind: z.enum(REF_KINDS),
   refId: z.string().trim().min(1).max(120),
   role: z.string().trim().min(1).max(64),
+}).strict();
+
+// Ingredient↔ingredient relation link/unlink body. `toId` is the OTHER end of
+// the directed edge (the route's `:id` is the `fromId`). `kind` is gated to the
+// shared relation registry. The route rejects self-edges (`fromId === toId`) at
+// the DB layer; the schema can't see the path param, so that check stays
+// server-side in `linkIngredientRelation`.
+export const catalogRelationLinkSchema = z.object({
+  toId: z.string().trim().min(1).max(80),
+  kind: z.enum(RELATION_KINDS),
 }).strict();
 
 export const catalogScrapCommitSchema = z.object({
@@ -209,6 +223,21 @@ export const catalogSyncRefSchema = z.object({
   syncSequence: z.string().optional(),
 }).passthrough();
 
+// Relation rows carry tombstone fields (soft-delete from day one). `kind` is a
+// freeform string on the wire (not the strict enum) so a peer running a newer
+// PortOS with an additional relation kind doesn't get its whole envelope
+// rejected by an older receiver — the version gate already covers true
+// shape skew, and an unknown-kind row stores harmlessly.
+export const catalogSyncRelationSchema = z.object({
+  fromId: z.string().max(80),
+  toId: z.string().max(80),
+  kind: z.string().max(32),
+  createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
 // Receiver may receive `portosMeta.schemaVersions.catalog` for the version
 // gate; the rest of portosMeta is informational. We accept arbitrary keys
 // inside portosMeta with passthrough but cap its size at 4KB to deny a peer
@@ -226,5 +255,6 @@ export const catalogSyncEnvelopeSchema = z.object({
   ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
   sources: z.array(catalogSyncSourceSchema).max(20_000).optional(),
   refs: z.array(catalogSyncRefSchema).max(20_000).optional(),
+  relations: z.array(catalogSyncRelationSchema).max(20_000).optional(),
   portosMeta,
 }).passthrough();

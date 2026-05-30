@@ -76,7 +76,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // registry `payloadSchemaVersion` to 2 with a genuine shape change (a peer
   // ≤ that version would round-trip the new shape through an unaware
   // sanitizer) MUST bump `catalog` here in lockstep.
-  catalog: 3,
+  //
+  // v4 = `catalog_ingredient_relations` table (ingredient↔ingredient edges)
+  // + a new `relations: [...]` block in the catalog sync envelope. An older
+  // (≤v3) receiver doesn't understand the relations block, so a v4 sender
+  // pushing to it is sender-ahead on `catalog` and gets a 412 — correct,
+  // since the older peer would silently drop every relation edge. v4 receivers
+  // still accept ≤v3 senders (sender-behind): those envelopes simply carry no
+  // `relations` block and the receiver applies the other four kinds as before.
+  catalog: 4,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

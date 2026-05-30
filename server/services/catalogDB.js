@@ -79,6 +79,19 @@ function rowToRef(row) {
   };
 }
 
+function rowToRelation(row) {
+  if (!row) return null;
+  return {
+    fromId: row.from_id,
+    toId: row.to_id,
+    kind: row.kind,
+    createdAt: row.created_at.toISOString(),
+    deleted: !!row.deleted,
+    deletedAt: row.deleted_at?.toISOString() ?? null,
+    syncSequence: String(row.sync_sequence),
+  };
+}
+
 function rowToSource(row) {
   if (!row) return null;
   return {
@@ -488,13 +501,123 @@ export async function listIngredientsForRef(refKind, refId) {
 }
 
 
+// --- Ingredient↔ingredient relations -----------------------------------
+// Directed edges (from_id → to_id, kind). Soft-deleted on unlink so peers
+// receive the tombstone. ON CONFLICT DO UPDATE revives a soft-deleted edge
+// (the trg_catalog_relation_sync_seq trigger bumps sync_sequence only when
+// deleted/deleted_at actually change, so a link-on-active-row stays a no-op).
+
+export async function linkIngredientRelation(fromId, toId, kind) {
+  if (fromId === toId) throw new Error('cannot relate an ingredient to itself');
+  await query(
+    `INSERT INTO catalog_ingredient_relations (from_id, to_id, kind)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (from_id, to_id, kind) DO UPDATE
+       SET deleted = false, deleted_at = NULL`,
+    [fromId, toId, kind],
+  );
+}
+
+export async function unlinkIngredientRelation(fromId, toId, kind) {
+  // Soft-delete (mirrors unlinkIngredientFromRef): keep the row as a tombstone
+  // so the sync_sequence bump propagates the unlink to peers. `AND deleted =
+  // false` keeps a re-unlink from re-bumping the sequence needlessly.
+  await query(
+    `UPDATE catalog_ingredient_relations
+        SET deleted = true, deleted_at = NOW()
+      WHERE from_id = $1 AND to_id = $2 AND kind = $3
+        AND deleted = false`,
+    [fromId, toId, kind],
+  );
+}
+
+// Both directions for one ingredient's detail "Relations" panel. Outbound
+// (from_id = id) and inbound (to_id = id) are returned separately so the UI
+// can render each with the correct directional label. Joins the OTHER end's
+// ingredient name/type so the chip reads without a second fetch. Live edges
+// only (deleted = false on both the edge and the joined ingredient).
+export async function listRelationsForIngredient(id) {
+  const [outbound, inbound] = await Promise.all([
+    query(
+      `SELECT r.from_id, r.to_id, r.kind, r.created_at,
+              i.name AS other_name, i.type AS other_type
+         FROM catalog_ingredient_relations r
+         JOIN catalog_ingredients i ON i.id = r.to_id
+        WHERE r.from_id = $1 AND r.deleted = false AND i.deleted = false
+        ORDER BY r.created_at ASC`,
+      [id],
+    ),
+    query(
+      `SELECT r.from_id, r.to_id, r.kind, r.created_at,
+              i.name AS other_name, i.type AS other_type
+         FROM catalog_ingredient_relations r
+         JOIN catalog_ingredients i ON i.id = r.from_id
+        WHERE r.to_id = $1 AND r.deleted = false AND i.deleted = false
+        ORDER BY r.created_at ASC`,
+      [id],
+    ),
+  ]);
+  const mapRow = (row, otherId) => ({
+    fromId: row.from_id,
+    toId: row.to_id,
+    kind: row.kind,
+    createdAt: row.created_at.toISOString(),
+    other: { id: otherId, name: row.other_name, type: row.other_type },
+  });
+  return {
+    outbound: outbound.rows.map((row) => mapRow(row, row.to_id)),
+    inbound: inbound.rows.map((row) => mapRow(row, row.from_id)),
+  };
+}
+
+export async function getRelationChangesSince(since = '0', limit = 100) {
+  const result = await query(
+    `SELECT * FROM catalog_ingredient_relations WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
+    [since, limit + 1],
+  );
+  const hasMore = result.rows.length > limit;
+  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
+  return { items: rows.map(rowToRelation), hasMore };
+}
+
+export async function upsertRelationFromPeer(rel) {
+  // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
+  // the relations feature never emits these rows, so there's no v1-without-
+  // tombstone shape to defend against here. But we still treat "key absent"
+  // as "no opinion" symmetrically in case a forked peer omits the tombstone
+  // fields — preserve local state on conflict rather than coercing to false.
+  const hasTombstoneFields =
+    Object.prototype.hasOwnProperty.call(rel, 'deleted') ||
+    Object.prototype.hasOwnProperty.call(rel, 'deletedAt');
+  if (hasTombstoneFields) {
+    await query(
+      `INSERT INTO catalog_ingredient_relations
+         (from_id, to_id, kind, created_at, deleted, deleted_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (from_id, to_id, kind) DO UPDATE
+         SET deleted = EXCLUDED.deleted,
+             deleted_at = EXCLUDED.deleted_at`,
+      [rel.fromId, rel.toId, rel.kind, rel.createdAt, !!rel.deleted, rel.deletedAt || null],
+    );
+  } else {
+    await query(
+      `INSERT INTO catalog_ingredient_relations (from_id, to_id, kind, created_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (from_id, to_id, kind) DO NOTHING`,
+      [rel.fromId, rel.toId, rel.kind, rel.createdAt],
+    );
+  }
+}
+
+
 export async function getMaxSequences() {
   const result = await query(`
     SELECT
       COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredients), 0)::text AS ingredients,
       COALESCE((SELECT MAX(sync_sequence) FROM catalog_scraps), 0)::text AS scraps,
       COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_sources), 0)::text AS sources,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_refs), 0)::text AS refs
+      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_refs), 0)::text AS refs,
+      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_relations), 0)::text AS relations
   `);
   return result.rows[0];
 }

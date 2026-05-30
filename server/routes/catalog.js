@@ -13,6 +13,7 @@ import {
   catalogIngredientCreateSchema,
   catalogIngredientPatchSchema,
   catalogIngredientLinkSchema,
+  catalogRelationLinkSchema,
   catalogIngredientQuerySchema,
   catalogScrapCommitSchema,
   catalogSyncEnvelopeSchema,
@@ -206,6 +207,37 @@ router.get('/ingredients/:id/refs', asyncHandler(async (req, res) => {
 
 router.get('/refs/:refKind/:refId/ingredients', asyncHandler(async (req, res) => {
   res.json(await catalogDB.listIngredientsForRef(req.params.refKind, req.params.refId));
+}));
+
+// --- Ingredient↔ingredient relations -----------------------------------
+
+router.get('/ingredients/:id/relations', asyncHandler(async (req, res) => {
+  const ing = await catalogDB.getIngredient(req.params.id);
+  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
+  res.json(await catalogDB.listRelationsForIngredient(req.params.id));
+}));
+
+router.post('/ingredients/:id/relations', asyncHandler(async (req, res) => {
+  validateRequest(catalogRelationLinkSchema, req.body);
+  if (req.params.id === req.body.toId) {
+    throw new ServerError('Cannot relate an ingredient to itself', { status: 400 });
+  }
+  // Both ends must exist — FK would reject anyway, but a 404 reads cleaner
+  // than a raw FK violation and matches the link route's failure surface.
+  const [from, to] = await Promise.all([
+    catalogDB.getIngredient(req.params.id),
+    catalogDB.getIngredient(req.body.toId),
+  ]);
+  if (!from) throw new ServerError('Ingredient not found', { status: 404 });
+  if (!to) throw new ServerError('Related ingredient not found', { status: 404 });
+  await catalogDB.linkIngredientRelation(req.params.id, req.body.toId, req.body.kind);
+  res.status(201).json({ success: true });
+}));
+
+router.delete('/ingredients/:id/relations', asyncHandler(async (req, res) => {
+  validateRequest(catalogRelationLinkSchema, req.body);
+  await catalogDB.unlinkIngredientRelation(req.params.id, req.body.toId, req.body.kind);
+  res.status(204).end();
 }));
 
 // Bulk-create ingredients from a markdown / CSV / JSON dump — no LLM round

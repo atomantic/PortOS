@@ -251,6 +251,28 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_refs (
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_target ON catalog_ingredient_refs (ref_kind, ref_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_sync_seq ON catalog_ingredient_refs (sync_sequence);
 
+-- Ingredient↔ingredient edges — the seam that makes the catalog a graph
+-- instead of a flat list. `kind` is an app-layer enum (RELATION_KINDS in
+-- server/lib/catalogTypes.js): 'appears-in'|'lives-in'|'created-by'|
+-- 'parent-of'|'variant-of'|'references'|'related-to'. Both ids FK to
+-- catalog_ingredients(id) ON DELETE CASCADE so deleting an ingredient
+-- (hard-delete) cleans up its edges. Soft-delete (deleted/deleted_at) from day
+-- one so unlinks propagate to peers as tombstones — same lesson as the refs
+-- table. Directed edge: from_id → to_id (the inverse direction is rendered in
+-- the UI from the same row, not stored twice).
+CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
+  from_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+  to_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
+  kind VARCHAR(32) NOT NULL,                   -- relation kind from RELATION_KINDS
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so unlinks propagate to peers
+  deleted_at TIMESTAMPTZ,
+  sync_sequence BIGSERIAL,
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_to ON catalog_ingredient_relations (to_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_sync_seq ON catalog_ingredient_relations (sync_sequence);
+
 -- Auto-update updated_at and bump sync_sequence on content/metadata changes.
 -- Mirrors update_memory_timestamp's pattern: skip the bump on no-content-change
 -- so cosmetic touches don't trigger sync. Respects explicit updated_at (used by
@@ -363,3 +385,23 @@ CREATE TRIGGER trg_catalog_ref_sync_seq
   BEFORE UPDATE ON catalog_ingredient_refs
   FOR EACH ROW
   EXECUTE FUNCTION update_catalog_ref_sync_seq();
+
+-- Relation UPDATE bumps sync_sequence on soft-delete or revival so peers pick
+-- up the tombstone (or the un-delete) on their next pull — same rationale as
+-- the ref trigger above.
+CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.deleted IS DISTINCT FROM OLD.deleted
+     OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_catalog_relation_sync_seq ON catalog_ingredient_relations;
+CREATE TRIGGER trg_catalog_relation_sync_seq
+  BEFORE UPDATE ON catalog_ingredient_relations
+  FOR EACH ROW
+  EXECUTE FUNCTION update_catalog_relation_sync_seq();

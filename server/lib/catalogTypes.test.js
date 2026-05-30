@@ -24,6 +24,9 @@ import {
   ingredientIdPrefix,
   currentPayloadSchemaVersion,
   upgradePayload,
+  RELATION_KINDS,
+  RELATION_KIND_IDS,
+  getRelationKind,
 } from './catalogTypes.js';
 import { INGREDIENT_TYPES } from './catalogValidation.js';
 
@@ -170,5 +173,28 @@ describe('catalogTypes — payload schemaVersion', () => {
   it('upgradePayload returns the payload unchanged (but stamped) for unknown type', () => {
     const out = upgradePayload('nope', { x: 1 });
     expect(out.x).toBe(1);
+  });
+});
+
+describe('catalogTypes — relation kinds', () => {
+  it('exposes the documented relation kinds, frozen + unique', () => {
+    expect(Object.isFrozen(RELATION_KINDS)).toBe(true);
+    for (const k of ['appears-in', 'lives-in', 'created-by', 'parent-of', 'variant-of', 'references']) {
+      expect(RELATION_KIND_IDS).toContain(k);
+    }
+    expect(new Set(RELATION_KIND_IDS).size).toBe(RELATION_KIND_IDS.length);
+  });
+
+  it('every relation kind has a label and inverseLabel', () => {
+    for (const r of RELATION_KINDS) {
+      expect(typeof r.label).toBe('string');
+      expect(r.label.length).toBeGreaterThan(0);
+      expect(typeof r.inverseLabel).toBe('string');
+    }
+  });
+
+  it('getRelationKind resolves a known id and returns undefined for unknown', () => {
+    expect(getRelationKind('lives-in')?.label).toBe('Lives in');
+    expect(getRelationKind('nemesis-of')).toBeUndefined();
   });
 });

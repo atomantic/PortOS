@@ -194,6 +194,53 @@ export function currentPayloadSchemaVersion(id) {
 }
 
 /**
+ * Catalog ingredient↔ingredient RELATION kinds.
+ *
+ * Drives the `catalog_ingredient_relations.kind` column (an app-layer enum, not
+ * a DB CHECK — same loosening rationale as the type CHECK discussion above) and
+ * the "Relations" panel on the ingredient detail page. Mirrored on the client
+ * at `client/src/lib/catalogTypes.js` (drift asserted by the client test).
+ *
+ * Each entry:
+ *   id      — the stored `kind` discriminator.
+ *   label   — human label for the relation chip / picker option (the active
+ *             "from → to" direction).
+ *   inverseLabel — label shown when the relation is viewed from the `to` side
+ *             (the inbound direction), so a single stored edge reads correctly
+ *             from both ingredients' detail pages.
+ */
+const RELATION_REGISTRY = [
+  { id: 'appears-in',  label: 'Appears in',  inverseLabel: 'Features' },
+  { id: 'lives-in',    label: 'Lives in',    inverseLabel: 'Home of' },
+  { id: 'created-by',  label: 'Created by',  inverseLabel: 'Creator of' },
+  { id: 'parent-of',   label: 'Parent of',   inverseLabel: 'Child of' },
+  { id: 'variant-of',  label: 'Variant of',  inverseLabel: 'Has variant' },
+  { id: 'references',  label: 'References',   inverseLabel: 'Referenced by' },
+  { id: 'related-to',  label: 'Related to',  inverseLabel: 'Related to' },
+];
+
+// Fail-fast at module load — duplicate / malformed relation kinds block boot.
+const seenRelationIds = new Set();
+for (const r of RELATION_REGISTRY) {
+  if (!r.id || typeof r.id !== 'string') throw new Error('catalogTypes: relation entry missing id');
+  if (seenRelationIds.has(r.id)) throw new Error(`catalogTypes: duplicate relation kind "${r.id}"`);
+  seenRelationIds.add(r.id);
+  if (!r.label) throw new Error(`catalogTypes: relation "${r.id}" missing label`);
+}
+
+export const RELATION_KINDS = Object.freeze(RELATION_REGISTRY.map((r) => Object.freeze({ ...r })));
+
+/** Frozen ordered list of relation kind ids — the canonical enum source. */
+export const RELATION_KIND_IDS = Object.freeze(RELATION_KINDS.map((r) => r.id));
+
+const RELATION_BY_ID = Object.freeze(Object.fromEntries(RELATION_KINDS.map((r) => [r.id, r])));
+
+/** Look up a relation-kind entry by id. Returns `undefined` for unknown ids. */
+export function getRelationKind(id) {
+  return RELATION_BY_ID[id];
+}
+
+/**
  * Run a payload through its registered upgrader chain up to the current
  * version. Each upgrader is keyed by the FROM version. Returns the upgraded
  * payload with `schemaVersion` stamped to current. A row at-or-above current

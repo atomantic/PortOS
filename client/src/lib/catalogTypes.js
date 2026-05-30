@@ -101,6 +101,32 @@ export const CATALOG_TYPES = Object.freeze([
   },
 ]);
 
+/**
+ * Catalog ingredient↔ingredient RELATION kinds — client mirror of
+ * `server/lib/catalogTypes.js` RELATION_KINDS. Drives the "Relations" panel
+ * picker on the ingredient detail page. `label` is the from→to direction;
+ * `inverseLabel` renders the same stored edge from the `to` side.
+ *
+ * Drift is asserted by `client/src/lib/catalogTypes.test.js` against the server
+ * registry — change one side, change the other.
+ */
+export const RELATION_KINDS = Object.freeze([
+  { id: 'appears-in', label: 'Appears in', inverseLabel: 'Features' },
+  { id: 'lives-in', label: 'Lives in', inverseLabel: 'Home of' },
+  { id: 'created-by', label: 'Created by', inverseLabel: 'Creator of' },
+  { id: 'parent-of', label: 'Parent of', inverseLabel: 'Child of' },
+  { id: 'variant-of', label: 'Variant of', inverseLabel: 'Has variant' },
+  { id: 'references', label: 'References', inverseLabel: 'Referenced by' },
+  { id: 'related-to', label: 'Related to', inverseLabel: 'Related to' },
+]);
+
+const RELATION_BY_ID = Object.freeze(Object.fromEntries(RELATION_KINDS.map((r) => [r.id, r])));
+
+/** Look up a relation-kind entry by id. Returns `undefined` for unknown ids. */
+export function getRelationKind(id) {
+  return RELATION_BY_ID[id];
+}
+
 const BY_ID = Object.freeze(Object.fromEntries(CATALOG_TYPES.map((t) => [t.id, t])));
 
 /** Look up a registry entry by type id. Returns `undefined` for unknown ids. */

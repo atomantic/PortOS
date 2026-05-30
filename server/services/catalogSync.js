@@ -2,18 +2,18 @@
  * Catalog Federation Sync Service
  *
  * Peer-to-peer sync for the Creative Ingredients Catalog. Mirrors
- * server/services/memorySync.js but the envelope carries four kinds
- * (scraps, ingredients, sources, refs) because the catalog is a
- * three-table relational store, not a single flat row set.
+ * server/services/memorySync.js but the envelope carries five kinds
+ * (scraps, ingredients, sources, refs, relations) because the catalog is a
+ * multi-table relational store, not a single flat row set.
  *
  * Pull protocol:
- *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&since[sources]=C&since[refs]=D&limit=100
- *   → { scraps[], ingredients[], sources[], refs[], maxSequences, hasMore }
+ *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&...&since[relations]=E&limit=100
+ *   → { scraps[], ingredients[], sources[], refs[], relations[], maxSequences, hasMore }
  *
- * The four BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
+ * The BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
  * sources.sync_sequence=50 isn't comparable to ingredients.sync_sequence=50.
- * The receiver therefore tracks four cursors and `since` is `{ scraps,
- * ingredients, sources, refs }`. A scalar `?since=N` is still accepted for
+ * The receiver therefore tracks one cursor per kind and `since` is `{ scraps,
+ * ingredients, sources, refs, relations }`. A scalar `?since=N` is still accepted for
  * back-compat / one-shot pulls and is applied uniformly to all four kinds.
  * `hasMore` is true when ANY of the four tables had more than `limit` rows
  * past its respective cursor — drain by re-pulling with the maxSequences from
@@ -30,15 +30,17 @@ import {
   getIngredientChangesSince,
   getSourceChangesSince,
   getRefChangesSince,
+  getRelationChangesSince,
   getMaxSequences,
   upsertScrapFromPeer,
   upsertIngredientFromPeer,
   upsertSourceFromPeer,
   upsertRefFromPeer,
+  upsertRelationFromPeer,
 } from './catalogDB.js';
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
-const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs'];
+const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations'];
 
 // Normalize `since` (scalar string OR per-kind object) into a `{ scraps,
 // ingredients, sources, refs }` cursor map. Scalar form is uniform across
@@ -58,15 +60,16 @@ function normalizeCursors(since) {
 
 export async function getChangesSince(since = '0', limit = 100) {
   const cursors = normalizeCursors(since);
-  const [scraps, ingredients, sources, refs] = await Promise.all([
+  const [scraps, ingredients, sources, refs, relations] = await Promise.all([
     getScrapChangesSince(cursors.scraps, limit),
     getIngredientChangesSince(cursors.ingredients, limit),
     getSourceChangesSince(cursors.sources, limit),
     getRefChangesSince(cursors.refs, limit),
+    getRelationChangesSince(cursors.relations, limit),
   ]);
 
   const hasMore =
-    scraps.hasMore || ingredients.hasMore || sources.hasMore || refs.hasMore;
+    scraps.hasMore || ingredients.hasMore || sources.hasMore || refs.hasMore || relations.hasMore;
 
   // Per-kind cursor advance — fall back to the inbound cursor so the next pull
   // doesn't move backward on a quiet kind.
@@ -78,11 +81,13 @@ export async function getChangesSince(since = '0', limit = 100) {
     ingredients: ingredients.items,
     sources: sources.items,
     refs: refs.items,
+    relations: relations.items,
     maxSequences: {
       scraps:      maxOf(scraps.items,      cursors.scraps),
       ingredients: maxOf(ingredients.items, cursors.ingredients),
       sources:     maxOf(sources.items,     cursors.sources),
       refs:        maxOf(refs.items,        cursors.refs),
+      relations:   maxOf(relations.items,   cursors.relations),
     },
     hasMore,
   };
@@ -114,6 +119,7 @@ export async function applyRemoteChanges(envelope = {}) {
     ingredients: { inserted: 0, updated: 0, skipped: 0, failed: 0 },
     sources: { applied: 0, failed: 0 },
     refs: { applied: 0, failed: 0 },
+    relations: { applied: 0, failed: 0 },
     errors: [],
   };
 
@@ -166,6 +172,18 @@ export async function applyRemoteChanges(envelope = {}) {
     } catch (err) {
       stats.refs.failed++;
       recordFailure('ref', `${ref?.ingredientId}/${ref?.refKind}/${ref?.refId}`, err);
+    }
+  }
+
+  // Relations FK BOTH ids to catalog_ingredients, so they land after the
+  // ingredient upserts above (same envelope ordering rationale as sources).
+  for (const rel of envelope.relations || []) {
+    try {
+      await upsertRelationFromPeer(rel);
+      stats.relations.applied++;
+    } catch (err) {
+      stats.relations.failed++;
+      recordFailure('relation', `${rel?.fromId}/${rel?.kind}/${rel?.toId}`, err);
     }
   }
 
