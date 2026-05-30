@@ -33,7 +33,11 @@ import { canonicalTagKey } from '../lib/catalogTypes.js';
 import { listUniverses } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalogDB.js';
 
-const MARKER_VERSION = 1;
+// v2: v1 shipped a no-op pass (it read `listIngredients()` as a bare array and
+// broke before scanning any row, yet still wrote the v1 marker). Bumping to 2
+// makes installs that already recorded the broken v1 marker re-run the now-fixed
+// repair instead of skipping it forever.
+const MARKER_VERSION = 2;
 const MARKER_FILENAME = 'catalog-universe-tags.applied.json';
 
 async function readMarker() {
@@ -85,7 +89,8 @@ export async function repairUniverseTags({ force = false } = {}) {
   const PAGE = 200;
   let offset = 0;
   for (;;) {
-    const rows = await catalogDB.listIngredients({ limit: PAGE, offset });
+    // listIngredients returns `{ items, nextOffset }`, NOT a bare array.
+    const { items: rows } = await catalogDB.listIngredients({ limit: PAGE, offset });
     if (!Array.isArray(rows) || rows.length === 0) break;
     for (const ing of rows) {
       totals.scanned++;

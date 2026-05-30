@@ -32,7 +32,12 @@ vi.mock('../services/universeBuilder.js', () => ({
 }));
 
 vi.mock('../services/catalogDB.js', () => ({
-  listIngredients: vi.fn(async ({ limit, offset }) => dbState.ingredients.slice(offset, offset + limit)),
+  // Mirror the REAL contract: listIngredients returns `{ items, nextOffset }`,
+  // not a bare array. (A bare-array mock is what let the original no-op bug pass.)
+  listIngredients: vi.fn(async ({ limit, offset }) => {
+    const items = dbState.ingredients.slice(offset, offset + limit);
+    return { items, nextOffset: offset + items.length };
+  }),
   updateIngredient: vi.fn(async (id, patch, ctx) => {
     dbState.updates.push({ id, patch, ctx });
     const row = dbState.ingredients.find((r) => r.id === id);
@@ -73,17 +78,31 @@ describe('repairUniverseTags', () => {
     // Repair edits are tagged as a system 'sync' source, not a user edit.
     expect(dbState.updates[0].ctx.source).toBe('sync');
     // Marker written for idempotent skip next boot.
-    expect(fsState.written.version).toBe(1);
+    expect(fsState.written.version).toBe(2);
   });
 
   it('skips entirely when the marker is already at the current version', async () => {
-    fsState.marker = { version: 1, completedAt: '2026-01-01T00:00:00Z' };
+    fsState.marker = { version: 2, completedAt: '2026-01-01T00:00:00Z' };
     dbState.ingredients = [{ id: 'cat-chr-1', tags: ['from-universe', 'universe:u-1'] }];
 
     const result = await repairUniverseTags();
 
     expect(result.skipped).toBe(true);
     expect(dbState.updates).toHaveLength(0);
+  });
+
+  it('re-runs when the marker is at the older (broken-no-op) version', async () => {
+    // v1 shipped a no-op pass; an install that recorded the v1 marker must
+    // re-run the fixed repair, not skip forever.
+    fsState.marker = { version: 1, completedAt: '2026-01-01T00:00:00Z' };
+    dbState.ingredients = [{ id: 'cat-chr-1', tags: ['from-universe', 'universe:u-1', 'mentor'] }];
+
+    const result = await repairUniverseTags();
+
+    expect(result.skipped).toBe(false);
+    expect(result.stats.rewritten).toBe(1);
+    expect(dbState.ingredients[0].tags).toEqual(['mentor', 'My Cool Universe']);
+    expect(fsState.written.version).toBe(2);
   });
 
   it('re-runs the walk when forced even with a marker present', async () => {
