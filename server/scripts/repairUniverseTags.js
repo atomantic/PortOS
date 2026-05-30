@@ -116,12 +116,19 @@ export async function repairUniverseTags({ force = false } = {}) {
     completedAt: new Date().toISOString(),
     stats: totals,
   };
-  await writeMarker(payload);
+  // Only stamp the completion marker on a CLEAN pass. A row-level failure
+  // (transient DB error) increments totals.errors; writing the marker anyway
+  // would skip the whole repair next boot and strand those rows' legacy tags
+  // forever. Leaving the marker unwritten re-runs the (idempotent) repair next
+  // boot — already-friendlified rows are no-ops, so only the failed rows retry.
+  const wroteMarker = totals.errors === 0;
+  if (wroteMarker) await writeMarker(payload);
 
   console.log(
     `🏷️  universe-tag repair: ${totals.scanned} scanned, ` +
-    `${totals.rewritten} rewritten, ${totals.errors} errors`,
+    `${totals.rewritten} rewritten, ${totals.errors} errors` +
+    (wroteMarker ? '' : ' — marker NOT written (will retry next boot)'),
   );
 
-  return { skipped: false, ...payload };
+  return { skipped: false, markerWritten: wroteMarker, ...payload };
 }

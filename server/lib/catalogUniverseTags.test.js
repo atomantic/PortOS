@@ -58,14 +58,29 @@ describe('catalogUniverseTags — friendlifyUniverseTags', () => {
     expect(tags).toEqual(['hero', 'noir']);
   });
 
-  it('drops an unresolved universe id tag but adds no name (and still reports changed)', () => {
+  it('PRESERVES an unresolved universe id tag (+ marker) for a later retry and reports NOT changed', () => {
+    // The universe name can't resolve yet (it arrived after this ingredient, or
+    // the local lookup misses). Dropping the id tag would lose it forever, so we
+    // keep it untouched and report changed=false so the row retries next run.
     const { tags, changed } = friendlifyUniverseTags(
       ['hero', 'universe:u-deleted', 'from-universe'],
       nameFor,
       canonicalKey,
     );
+    expect(changed).toBe(false);
+    expect(tags).toEqual(['hero', 'universe:u-deleted', 'from-universe']);
+  });
+
+  it('friendlifies the resolved id but KEEPS an unresolved sibling id (partial resolve)', () => {
+    // u-1 resolves, u-deleted doesn't: add the resolved name, drop u-1, keep
+    // u-deleted (+ the marker) so the still-unresolved one retries later.
+    const { tags, changed } = friendlifyUniverseTags(
+      ['hero', 'universe:u-1', 'universe:u-deleted', 'from-universe'],
+      nameFor,
+      canonicalKey,
+    );
     expect(changed).toBe(true);
-    expect(tags).toEqual(['hero']);
+    expect(tags).toEqual(['hero', 'My Cool Universe', 'universe:u-deleted', 'from-universe']);
   });
 
   it('dedupes the friendly name against an existing user tag (case-insensitive)', () => {

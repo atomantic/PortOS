@@ -76,24 +76,31 @@ export function universeIdFromLegacyTag(tag) {
 export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
   const input = Array.isArray(tags) ? tags : [];
   const kept = [];
-  const universeIds = [];
-  let sawLegacy = false;
+  let sawMarker = false;
+  const idTags = []; // { id, original } in encounter order, first-seen-per-id
 
+  const seenId = new Set();
   for (const tag of input) {
     if (isLegacyUniverseTag(tag)) {
-      sawLegacy = true;
       const id = universeIdFromLegacyTag(tag);
-      if (id && !universeIds.includes(id)) universeIds.push(id);
+      if (!id) { sawMarker = true; continue; }   // the `from-universe` marker
+      if (!seenId.has(id)) { seenId.add(id); idTags.push({ id, original: tag }); }
       continue;
     }
     kept.push(tag);
   }
 
-  // Resolve names for every distinct universe id; skip unresolved ones.
+  // Resolve each id to a friendly name. When a name CAN'T be resolved yet (the
+  // universe arrived after this ingredient, or the local lookup misses), KEEP
+  // the `universe:<id>` machine tag so a later run can still friendlify it —
+  // dropping it here would lose the id permanently (the row would need a manual
+  // re-link). The structured ref in catalog_ingredient_refs still owns querying.
   const names = [];
-  for (const id of universeIds) {
+  const unresolvedIdTags = [];
+  for (const { id, original } of idTags) {
     const name = nameForId(id);
     if (typeof name === 'string' && name.trim()) names.push(name.trim());
+    else unresolvedIdTags.push(original);
   }
 
   // De-dup the friendly names against kept tags + each other.
@@ -106,10 +113,21 @@ export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
     addedNames.push(name);
   }
 
-  const result = [...kept, ...addedNames];
-  // `changed` when we stripped any legacy tag OR added any friendly name.
-  // (A row could carry `universe:<id>` whose name dedups against an existing
-  // user tag — still changed, because the machine tag was removed.)
-  const changed = sawLegacy || addedNames.length > 0;
+  // Keep the `from-universe` marker only while an id is still unresolved, so the
+  // row stays flagged for a retry; drop it once every id resolved.
+  const keepMarker = sawMarker && unresolvedIdTags.length > 0;
+  const result = [
+    ...kept,
+    ...addedNames,
+    ...unresolvedIdTags,
+    ...(keepMarker ? [LEGACY_UNIVERSE_MARKER_TAG] : []),
+  ];
+
+  // `changed` only when we actually rewrote something: a friendly name was
+  // added, OR a legacy tag was REMOVED (a resolved id-tag dropped, or the marker
+  // dropped). If every id is unresolved we leave the row untouched so the next
+  // run retries it instead of burning a no-op write.
+  const removedLegacy = (idTags.length - unresolvedIdTags.length) > 0 || (sawMarker && !keepMarker);
+  const changed = addedNames.length > 0 || removedLegacy;
   return { tags: result, changed };
 }

@@ -378,7 +378,7 @@ export default function CatalogIngredient() {
         </div>
 
         {record.type === 'character' && (
-          <ReferenceSheetPanel payload={payload} universeRef={universeRef} ingredientId={record.id} />
+          <ReferenceSheetPanel payload={payload} universeRef={universeRef} />
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -511,9 +511,9 @@ function CanonListFields({ payload, fields }) {
 // Builder surface, which carries the universe's full style data (styleNotes,
 // influences, palette, render settings) the renderer needs. Rendering inline
 // here would duplicate that heavy pipeline — the deep-link keeps one render
-// path. The character anchor (`#char-<ingredientId>`) lets the universe page
-// scroll to the matching entry.
-function ReferenceSheetPanel({ payload, universeRef, ingredientId }) {
+// path. The link targets the universe's `#canon` section (the anchor the
+// Universe Builder hash-scroll resolves).
+function ReferenceSheetPanel({ payload, universeRef }) {
   const sheets = payload?.referenceSheets && typeof payload.referenceSheets === 'object'
     ? Object.entries(payload.referenceSheets).filter(([, v]) => typeof v === 'string' && v)
     : [];
@@ -525,8 +525,12 @@ function ReferenceSheetPanel({ payload, universeRef, ingredientId }) {
   ];
   const hasSheet = variants.length > 0;
 
+  // Deep-link to the universe's canon section (`id="canon"`, the one anchor the
+  // Universe Builder hash-scroll handler resolves) — a per-character anchor
+  // isn't rendered there, so #canon lands the user on the canon surface where
+  // the character + its render controls live.
   const universePath = universeRef?.refId
-    ? `/universes/${encodeURIComponent(universeRef.refId)}#char-${encodeURIComponent(ingredientId)}`
+    ? `/universes/${encodeURIComponent(universeRef.refId)}#canon`
     : null;
 
   return (
