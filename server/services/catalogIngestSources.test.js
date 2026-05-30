@@ -15,9 +15,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./catalogDB.js', () => ({
   createScrap: vi.fn(),
+  createChunkedScrap: vi.fn(),
 }));
 vi.mock('./catalogExtraction.js', () => ({
   extractIngredients: vi.fn(),
+  extractIngredientsForScrap: vi.fn(),
 }));
 vi.mock('./voice/stt.js', () => ({
   transcribe: vi.fn(),
@@ -54,8 +56,8 @@ const DRAFT = { runId: 'r1', characters: [], stages: [] };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  catalogExtraction.extractIngredients.mockResolvedValue(DRAFT);
-  catalogDB.createScrap.mockImplementation(async (args) => ({ id: 'cat-scrap-1', ...args }));
+  catalogExtraction.extractIngredientsForScrap.mockResolvedValue(DRAFT);
+  catalogDB.createChunkedScrap.mockImplementation(async (args) => ({ id: 'cat-scrap-1', ...args }));
   // Hostnames resolve to a safe public address by default (the DNS SSRF guard).
   dnsp.lookup.mockResolvedValue({ address: '93.184.216.34', family: 4 });
 });
@@ -79,7 +81,7 @@ describe('fetchUrlMainText', () => {
     browserService.evaluateOnPage.mockResolvedValue(JSON.stringify({ title: '', text: '   ' }));
 
     await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/no readable text/);
-    expect(catalogDB.createScrap).not.toHaveBeenCalled();
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
   });
 
   it('refuses to ingest a hostname that resolves to a blocked address (DNS SSRF) before navigating', async () => {
@@ -127,12 +129,12 @@ describe('ingestFromUrl', () => {
 
     const { scrap, draft } = await ingestFromUrl({ url: 'https://ex.com/a', settleMs: 0 });
     expect(draft).toBe(DRAFT);
-    const createArgs = catalogDB.createScrap.mock.calls[0][0];
+    const createArgs = catalogDB.createChunkedScrap.mock.calls[0][0];
     expect(createArgs.sourceKind).toBe('url');
     expect(createArgs.rawText).toBe('Body.');
     expect(createArgs.metadata).toEqual({ url: 'https://ex.com/a', title: 'Article A' });
-    expect(catalogExtraction.extractIngredients).toHaveBeenCalledWith(
-      expect.objectContaining({ rawText: 'Body.', scrapId: scrap.id }),
+    expect(catalogExtraction.extractIngredientsForScrap).toHaveBeenCalledWith(
+      expect.objectContaining({ scrapId: scrap.id }),
     );
   });
 });
@@ -141,7 +143,7 @@ describe('ingestFromFile', () => {
   it('records filename + mime on a file scrap', async () => {
     const { draft } = await ingestFromFile({ text: 'Notes body', filename: 'notes.md', mime: 'text/markdown' });
     expect(draft).toBe(DRAFT);
-    const createArgs = catalogDB.createScrap.mock.calls[0][0];
+    const createArgs = catalogDB.createChunkedScrap.mock.calls[0][0];
     expect(createArgs.sourceKind).toBe('file');
     expect(createArgs.title).toBe('notes.md');
     expect(createArgs.metadata).toEqual({ filename: 'notes.md', mime: 'text/markdown' });
@@ -149,7 +151,7 @@ describe('ingestFromFile', () => {
 
   it('throws on empty file text before creating a scrap', async () => {
     await expect(ingestFromFile({ text: '   ', filename: 'empty.txt' })).rejects.toThrow(/no extractable text/);
-    expect(catalogDB.createScrap).not.toHaveBeenCalled();
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
   });
 });
 
@@ -169,7 +171,7 @@ describe('ingestFromVoice', () => {
     expect(persistFn).toHaveBeenCalledTimes(1);
     expect(mediaKey).toBe('voice-memo-abc.wav');
     expect(draft).toBe(DRAFT);
-    const createArgs = catalogDB.createScrap.mock.calls[0][0];
+    const createArgs = catalogDB.createChunkedScrap.mock.calls[0][0];
     expect(createArgs.sourceKind).toBe('voice-memo');
     expect(createArgs.rawText).toBe('spoken memo text');
     expect(createArgs.metadata).toEqual({ mediaKey: 'voice-memo-abc.wav', mimeType: 'audio/wav' });
@@ -183,7 +185,7 @@ describe('ingestFromVoice', () => {
       ingestFromVoice({ audioBase64: wavBase64 }, { transcribeFn, persistFn }),
     ).rejects.toThrow(/empty transcript/);
     expect(persistFn).not.toHaveBeenCalled();
-    expect(catalogDB.createScrap).not.toHaveBeenCalled();
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
   });
 
   it('throws on empty audio before transcription', async () => {

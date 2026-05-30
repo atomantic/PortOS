@@ -235,9 +235,20 @@ export async function applyRemoteChanges(envelope = {}) {
   });
 
   // Scraps next (sources FK to BOTH so we want the parents present before the
-  // join rows land).
+  // join rows land). Chunked scraps self-FK: a child carries
+  // `parentScrapId` → another scrap row, so order PARENT rows (no
+  // parentScrapId) before CHILD rows within this envelope to avoid an FK
+  // violation on the child insert. (`upsertScrapFromPeer` also retries
+  // parent-less on FK error to cover a parent lagging across pages.)
+  const orderedScraps = Array.isArray(envelope.scraps)
+    ? [...envelope.scraps].sort((a, b) => {
+        const aChild = a?.parentScrapId ? 1 : 0;
+        const bChild = b?.parentScrapId ? 1 : 0;
+        return aChild - bChild;
+      })
+    : envelope.scraps;
   await applyKind({
-    items: envelope.scraps, upsertFn: upsertScrapFromPeer, tally: stats.scraps, lww: true,
+    items: orderedScraps, upsertFn: upsertScrapFromPeer, tally: stats.scraps, lww: true,
     errLabel: 'scrap', idFor: (s) => s?.id,
   });
 

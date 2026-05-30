@@ -122,6 +122,8 @@ export async function ensureSchema() {
       embedding vector(768),
       embedding_model VARCHAR(100),
       origin_instance_id VARCHAR(36),
+      chunk_index INT NOT NULL DEFAULT 0,
+      parent_scrap_id TEXT REFERENCES catalog_scraps(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       deleted BOOLEAN DEFAULT FALSE,
@@ -138,6 +140,18 @@ export async function ensureSchema() {
     `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_sync_seq ON catalog_scraps (sync_sequence)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_created_at ON catalog_scraps (created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_origin_instance ON catalog_scraps (origin_instance_id)`,
+    // Scrap chunking (catalog v7): a long paste is split into a parent row
+    // (chunk_index 0, raw_text = the FULL original text so the FTS index stays
+    // populated) plus N child rows (parent_scrap_id → parent, chunk_index 1..N,
+    // raw_text = the chunk slice). The extractor processes each child and unions
+    // results. The columns are declared inline in the CREATE above (fresh
+    // installs) AND re-added idempotently here for EXISTING installs (CREATE IF
+    // NOT EXISTS won't add columns to a pre-existing table). Existing rows
+    // default to chunk_index 0 / parent_scrap_id NULL — a plain non-chunked
+    // scrap, unchanged behavior. We do NOT retro-chunk existing rows.
+    `ALTER TABLE catalog_scraps ADD COLUMN IF NOT EXISTS chunk_index INT NOT NULL DEFAULT 0`,
+    `ALTER TABLE catalog_scraps ADD COLUMN IF NOT EXISTS parent_scrap_id TEXT REFERENCES catalog_scraps(id) ON DELETE CASCADE`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_scraps_parent ON catalog_scraps (parent_scrap_id)`,
 
     `CREATE TABLE IF NOT EXISTS catalog_ingredients (
       id TEXT PRIMARY KEY,

@@ -172,6 +172,35 @@ describe('catalogValidation — catalogSyncEnvelopeSchema', () => {
     expect(() => catalogSyncEnvelopeSchema.parse(env)).not.toThrow();
   });
 
+  it('accepts a v7 chunked-scrap envelope (chunkIndex + parentScrapId)', () => {
+    const env = {
+      scraps: [
+        { id: 'cat-scrap-parent', rawText: 'full', chunkIndex: 0, parentScrapId: null, createdAt: isoNow, updatedAt: isoNow },
+        { id: 'cat-scrap-c1', rawText: 'chunk one', chunkIndex: 1, parentScrapId: 'cat-scrap-parent', createdAt: isoNow, updatedAt: isoNow },
+      ],
+    };
+    const out = catalogSyncEnvelopeSchema.parse(env);
+    expect(out.scraps[1].chunkIndex).toBe(1);
+    expect(out.scraps[1].parentScrapId).toBe('cat-scrap-parent');
+  });
+
+  it('accepts a ≤v6 scrap envelope without chunk fields (mixed-version peer)', () => {
+    const env = {
+      scraps: [{ id: 'cat-scrap-old', rawText: 'hi', createdAt: isoNow, updatedAt: isoNow }],
+    };
+    const out = catalogSyncEnvelopeSchema.parse(env);
+    // Absent on the wire — the receiver defaults chunk_index 0 / parent NULL.
+    expect(out.scraps[0].chunkIndex).toBeUndefined();
+    expect(out.scraps[0].parentScrapId).toBeUndefined();
+  });
+
+  it('rejects a negative chunkIndex', () => {
+    const env = {
+      scraps: [{ id: 'cat-scrap-bad', rawText: 'hi', chunkIndex: -1, createdAt: isoNow, updatedAt: isoNow }],
+    };
+    expect(() => catalogSyncEnvelopeSchema.parse(env)).toThrow();
+  });
+
   it('accepts an ingredients envelope with v2 tombstone fields', () => {
     const env = {
       ingredients: [

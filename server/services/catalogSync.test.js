@@ -178,6 +178,27 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     // ingredient upserts.
     expect(order).toEqual(['tag', 'scrap', 'ingredient', 'source', 'ref', 'relation']);
   });
+
+  it('orders PARENT scraps before CHILD scraps so the self-FK lands (chunking)', async () => {
+    const seenIds = [];
+    catalogDB.upsertScrapFromPeer.mockImplementation(async (scrap) => {
+      seenIds.push(scrap.id);
+      return { applied: true, isInsert: true };
+    });
+
+    await applyRemoteChanges({
+      // Intentionally CHILD-first in the envelope — the apply path must reorder
+      // so the parent (parentScrapId null) is upserted before its children.
+      scraps: [
+        { id: 'child-2', rawText: 'b', chunkIndex: 2, parentScrapId: 'parent-1', createdAt: 't', updatedAt: 't' },
+        { id: 'child-1', rawText: 'a', chunkIndex: 1, parentScrapId: 'parent-1', createdAt: 't', updatedAt: 't' },
+        { id: 'parent-1', rawText: 'full', chunkIndex: 0, parentScrapId: null, createdAt: 't', updatedAt: 't' },
+      ],
+    });
+
+    expect(seenIds[0]).toBe('parent-1');
+    expect(seenIds.slice(1).sort()).toEqual(['child-1', 'child-2']);
+  });
 });
 
 describe('applyRemoteChanges — schema-version gate', () => {

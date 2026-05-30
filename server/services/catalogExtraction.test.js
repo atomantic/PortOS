@@ -23,13 +23,21 @@ vi.mock('../lib/stageRunner.js', () => ({
 // extractor consumes so scanProseForIngredientRefs stays a pure unit test.
 vi.mock('./catalogDB.js', () => ({
   listIngredientsForRef: vi.fn(),
+  getScrap: vi.fn(),
+  listChildScraps: vi.fn(),
 }));
 
 const bibleExtractor = await import('../lib/bibleExtractor.js');
 const stageRunner = await import('../lib/stageRunner.js');
 const catalogDB = await import('./catalogDB.js');
 const { catalogEvents } = await import('./catalogEvents.js');
-const { extractIngredients, EXTRACTION_STAGES, scanProseForIngredientRefs } = await import('./catalogExtraction.js');
+const {
+  extractIngredients,
+  extractIngredientsForScrap,
+  dedupDrafts,
+  EXTRACTION_STAGES,
+  scanProseForIngredientRefs,
+} = await import('./catalogExtraction.js');
 
 const emptyLightResponse = { content: { ideas: [], scenes: [], concepts: [] } };
 
@@ -245,6 +253,107 @@ describe('catalogExtraction — bundled light stage', () => {
     const lightStage = out.stages.find((s) => s.id === 'ideasScenesConcepts');
     expect(lightStage.status).toBe('failed');
     expect(lightStage.error).toBe('provider down');
+  });
+});
+
+describe('catalogExtraction — dedupDrafts', () => {
+  it('unions per-child draft arrays under each type key', () => {
+    const merged = dedupDrafts([
+      { characters: [{ name: 'Alice' }], ideas: [{ name: 'Memory genes' }] },
+      { characters: [{ name: 'Bob' }], scenes: [{ name: 'Rooftop' }] },
+    ]);
+    expect(merged.characters.map((c) => c.name)).toEqual(['Alice', 'Bob']);
+    expect(merged.ideas.map((c) => c.name)).toEqual(['Memory genes']);
+    expect(merged.scenes.map((c) => c.name)).toEqual(['Rooftop']);
+  });
+
+  it('dedups by name+type keeping the FIRST occurrence (case-insensitive)', () => {
+    const merged = dedupDrafts([
+      { characters: [{ name: 'Echo', summary: 'first' }] },
+      { characters: [{ name: 'echo', summary: 'second' }, { name: 'Nova' }] },
+    ]);
+    expect(merged.characters).toHaveLength(2);
+    expect(merged.characters[0]).toMatchObject({ name: 'Echo', summary: 'first' });
+    expect(merged.characters[1]).toMatchObject({ name: 'Nova' });
+  });
+
+  it('a same name under DIFFERENT type keys is NOT a dup', () => {
+    const merged = dedupDrafts([
+      { characters: [{ name: 'Harbor' }], places: [{ name: 'Harbor' }] },
+    ]);
+    expect(merged.characters).toHaveLength(1);
+    expect(merged.places).toHaveLength(1);
+  });
+
+  it('tolerates missing / non-array keys and nameless entries', () => {
+    const merged = dedupDrafts([
+      { characters: 'oops', ideas: [{ name: '' }, { summary: 'no name' }, null] },
+      null,
+      undefined,
+    ]);
+    expect(merged.characters).toEqual([]);
+    expect(merged.ideas).toEqual([]);
+  });
+});
+
+describe('catalogExtraction — extractIngredientsForScrap', () => {
+  it('falls back to a single extraction when the scrap has no children', async () => {
+    catalogDB.getScrap.mockResolvedValue({ id: 'cat-scrap-p', rawText: 'whole text', parentScrapId: null });
+    catalogDB.listChildScraps.mockResolvedValue([]);
+    bibleExtractor.extractBible.mockImplementation(async ({ kind, corpus }) => ({
+      extracted: [{ name: `${kind}:${corpus}` }],
+    }));
+
+    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+    expect(catalogDB.listChildScraps).toHaveBeenCalledWith('cat-scrap-p');
+    // Single pass over the parent's full text.
+    expect(bibleExtractor.extractBible).toHaveBeenCalledTimes(3); // 3 bible kinds, one pass
+    expect(out.characters).toEqual([{ name: 'character:whole text' }]);
+  });
+
+  it('runs per-child and unions the drafts (dedup by name+type, keep first)', async () => {
+    catalogDB.getScrap.mockResolvedValue({ id: 'cat-scrap-p', rawText: 'A|B', parentScrapId: null });
+    catalogDB.listChildScraps.mockResolvedValue([
+      { id: 'cat-scrap-c1', rawText: 'chunkA', chunkIndex: 1, parentScrapId: 'cat-scrap-p' },
+      { id: 'cat-scrap-c2', rawText: 'chunkB', chunkIndex: 2, parentScrapId: 'cat-scrap-p' },
+    ]);
+    // Both chunks surface a 'Shared' character; chunk B adds 'OnlyB'.
+    bibleExtractor.extractBible.mockImplementation(async ({ kind, corpus }) => {
+      if (kind !== 'character') return { extracted: [] };
+      if (corpus === 'chunkA') return { extracted: [{ name: 'Shared', summary: 'fromA' }] };
+      return { extracted: [{ name: 'Shared', summary: 'fromB' }, { name: 'OnlyB' }] };
+    });
+
+    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+    // bible called once per kind per child (3 kinds × 2 children).
+    expect(bibleExtractor.extractBible).toHaveBeenCalledTimes(6);
+    expect(out.characters.map((c) => c.name)).toEqual(['Shared', 'OnlyB']);
+    // First occurrence wins — chunk A's summary, not chunk B's.
+    expect(out.characters[0].summary).toBe('fromA');
+  });
+
+  it('a stage failing in only ONE child is not marked failed overall', async () => {
+    catalogDB.getScrap.mockResolvedValue({ id: 'cat-scrap-p', rawText: 'x', parentScrapId: null });
+    catalogDB.listChildScraps.mockResolvedValue([
+      { id: 'c1', rawText: 'chunkA', chunkIndex: 1, parentScrapId: 'cat-scrap-p' },
+      { id: 'c2', rawText: 'chunkB', chunkIndex: 2, parentScrapId: 'cat-scrap-p' },
+    ]);
+    bibleExtractor.extractBible.mockImplementation(async ({ kind, corpus }) => {
+      if (kind === 'place' && corpus === 'chunkA') throw new Error('llm timeout');
+      return { extracted: kind === 'place' ? [{ name: 'Harbor' }] : [] };
+    });
+
+    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+    const placeStage = out.stages.find((s) => s.id === 'places');
+    // chunk B's success clears the failed flag.
+    expect(placeStage.status).toBe('completed');
+    expect(out.places.map((p) => p.name)).toEqual(['Harbor']);
+  });
+
+  it('throws when the scrap does not exist', async () => {
+    catalogDB.getScrap.mockResolvedValue(null);
+    await expect(extractIngredientsForScrap({ scrapId: 'missing' }))
+      .rejects.toThrow(/not found/);
   });
 });
 

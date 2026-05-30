@@ -338,6 +338,11 @@ export const catalogSyncScrapSchema = z.object({
   embedding: syncEmbedding,
   embeddingModel: z.string().max(100).nullable().optional(),
   originInstanceId: z.string().max(64).nullable().optional(),
+  // Scrap chunking (catalog v7). Optional so a ≤v6 peer's scrap rows (which
+  // carry neither field) still validate: chunkIndex defaults to 0 and
+  // parentScrapId to null on the receiver — a plain non-chunked scrap.
+  chunkIndex: z.number().int().min(0).optional(),
+  parentScrapId: z.string().max(80).nullable().optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
   deleted: z.boolean().optional(),

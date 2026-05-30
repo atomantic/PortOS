@@ -104,7 +104,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // no `media` block. Media keys that don't resolve against the receiver's own
   // library surface via the metadata-missing integrity endpoint rather than
   // failing the apply.
-  catalog: 6,
+  // v7 = `catalog_scraps` gained `chunk_index` + `parent_scrap_id` (a long paste
+  // chunks into a parent + N child rows; the extractor unions per-child drafts).
+  // Both fields ride the scrap sync envelope. Same gating rationale as v4–v6: a
+  // ≤v6 receiver doesn't understand child scrap rows, so a v7 sender pushing to
+  // it is sender-ahead and gets a 412. A v7 receiver still accepts ≤v6 senders
+  // (their scraps carry no chunk fields → chunkIndex 0 / parentScrapId null).
+  catalog: 7,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

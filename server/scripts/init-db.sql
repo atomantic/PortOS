@@ -132,6 +132,13 @@ CREATE TABLE IF NOT EXISTS catalog_scraps (
   embedding vector(768),
   embedding_model VARCHAR(100),
   origin_instance_id VARCHAR(36),
+  -- Scrap chunking (catalog v7): a long paste splits into a parent (chunk_index
+  -- 0, parent_scrap_id NULL, raw_text = FULL original) plus N child rows
+  -- (chunk_index 1..N, parent_scrap_id → parent, raw_text = chunk slice). A
+  -- plain scrap is just a parent with no children. ensureSchema in
+  -- server/lib/db.js mirrors these as ADD COLUMN IF NOT EXISTS for existing installs.
+  chunk_index INT NOT NULL DEFAULT 0,
+  parent_scrap_id TEXT REFERENCES catalog_scraps(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,
@@ -148,6 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_catalog_scraps_fts
 CREATE INDEX IF NOT EXISTS idx_catalog_scraps_sync_seq ON catalog_scraps (sync_sequence);
 CREATE INDEX IF NOT EXISTS idx_catalog_scraps_created_at ON catalog_scraps (created_at);
 CREATE INDEX IF NOT EXISTS idx_catalog_scraps_origin_instance ON catalog_scraps (origin_instance_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_scraps_parent ON catalog_scraps (parent_scrap_id);
 
 -- Extracted, structured ingredients. Char/place/object payloads follow the
 -- shape sanitized by server/lib/storyBible.js so backfill and fresh ingest

@@ -22,7 +22,7 @@ import { randomUUID } from 'crypto';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import * as catalogDB from './catalogDB.js';
-import { extractIngredients } from './catalogExtraction.js';
+import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import {
   navigateToUrl,
@@ -55,8 +55,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * contract the module header describes. `log` receives the created scrap.
  */
 async function createScrapAndExtract({ title, rawText, sourceKind, metadata, providerOverride, log }) {
-  const scrap = await catalogDB.createScrap({ title, rawText, sourceKind, metadata });
-  const draft = await extractIngredients({ rawText, scrapId: scrap.id, providerOverride });
+  // Chunk long pastes identically to the textarea flow — createChunkedScrap
+  // returns the PARENT scrap and extractIngredientsForScrap unions the children.
+  const scrap = await catalogDB.createChunkedScrap({ title, rawText, sourceKind, metadata });
+  const draft = await extractIngredientsForScrap({ scrapId: scrap.id, providerOverride });
   if (log) console.log(log(scrap));
   return { scrap, draft };
 }

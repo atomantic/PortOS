@@ -36,7 +36,7 @@ import {
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
-import { extractIngredients } from '../services/catalogExtraction.js';
+import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice } from '../services/catalogIngestSources.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -66,7 +66,11 @@ router.post('/scraps', asyncHandler(async (req, res) => {
   // semantic-search route or "find similar scraps" UI. Removed pending a search endpoint
   // that justifies the LLM round-trip; the catalog_scraps.embedding column remains for
   // future backfill (and peer sync still accepts embeddings from peers that have them).
-  const scrap = await catalogDB.createScrap({
+  // Chunk long pastes into a parent + N child rows (short inputs stay a single
+  // row). The response still returns the PARENT scrap, so the client flow is
+  // unchanged — extraction (POST /scraps/:id/extract) transparently unions the
+  // children.
+  const scrap = await catalogDB.createChunkedScrap({
     title: req.body.title,
     rawText: req.body.rawText,
     sourceKind: req.body.sourceKind,
@@ -91,8 +95,13 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
   validateRequest(catalogExtractRequestSchema, req.body || {});
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
-  const draft = await extractIngredients({
-    rawText: scrap.rawText,
+  // Extraction runs on the PARENT scrap (it unions across its child chunks).
+  // A request against a child row is a client bug — reject rather than extract
+  // a single chunk in isolation and silently lose the rest of the corpus.
+  if (scrap.parentScrapId) {
+    throw new ServerError('extract runs on the parent scrap, not a chunk', { status: 400 });
+  }
+  const draft = await extractIngredientsForScrap({
     scrapId: scrap.id,
     providerOverride: req.body?.providerOverride,
   });

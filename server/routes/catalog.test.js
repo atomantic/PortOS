@@ -121,6 +121,61 @@ describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — scrap persistence',
   });
 });
 
+describe.skipIf(!dbReady)('POST /api/catalog/scraps — chunking', () => {
+  it('chunks a long paste into a parent + children but returns the parent scrap', async () => {
+    // Over the 12k cap so createChunkedScrap splits it.
+    const para = `Para body ${NONCE} `.repeat(300); // ~5400 chars
+    const rawText = Array.from({ length: 4 }, (_, i) => `Section ${i}\n\n${para}`).join('\n\n');
+    expect(rawText.length).toBeGreaterThan(12_000);
+
+    const r = await request(makeApp())
+      .post('/api/catalog/scraps')
+      .send({ title: `Long ${NONCE}`, rawText, sourceKind: 'paste' });
+
+    expect(r.status).toBe(201);
+    const parent = r.body.scrap;
+    createdScrapIds.add(parent.id); // CASCADE drops children
+    // Response is the PARENT: chunk_index 0, no parent, FULL text.
+    expect(parent.chunkIndex).toBe(0);
+    expect(parent.parentScrapId).toBeNull();
+    expect(parent.rawText).toBe(rawText);
+
+    const children = await catalogDB.listChildScraps(parent.id);
+    expect(children.length).toBeGreaterThan(1);
+    expect(children.map((c) => c.rawText).join('')).toBe(rawText);
+  });
+
+  it('rejects an extract request against a child chunk with 400', async () => {
+    const para = `Child reject ${NONCE} `.repeat(300);
+    const rawText = Array.from({ length: 4 }, () => para).join('\n\n');
+    const create = await request(makeApp())
+      .post('/api/catalog/scraps')
+      .send({ rawText });
+    const parentId = create.body.scrap.id;
+    createdScrapIds.add(parentId);
+    const children = await catalogDB.listChildScraps(parentId);
+    expect(children.length).toBeGreaterThan(0);
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${children[0].id}/extract`)
+      .send({});
+    expect(r.status).toBe(400);
+    expect(r.body.error || r.body.message).toMatch(/parent scrap/i);
+  });
+
+  it('keeps a short paste as a single non-chunked scrap', async () => {
+    const r = await request(makeApp())
+      .post('/api/catalog/scraps')
+      .send({ rawText: `A brief note ${NONCE}.` });
+    expect(r.status).toBe(201);
+    const scrap = r.body.scrap;
+    createdScrapIds.add(scrap.id);
+    expect(scrap.parentScrapId).toBeNull();
+    const children = await catalogDB.listChildScraps(scrap.id);
+    expect(children).toHaveLength(0);
+  });
+});
+
 describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — export-bundle ref recreation', () => {
   it('recreates the bundle ref link from `bundleRef` and honors per-row role', async () => {
     const seriesId = `test-series-${NONCE}`;
