@@ -24,7 +24,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
-import { stripDebugMallocEnv } from '../../lib/processEnv.js';
+import { safeChildProcessEnv } from '../../lib/processEnv.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -137,7 +137,7 @@ export async function isByovRuntimeReady(runtimeId) {
   if (readyCache.get(runtimeId) === true) return true;
   const probeOk = await new Promise((resolve) => {
     const child = spawn(info.venvPython, ['-c', info.importProbe], {
-      env: stripDebugMallocEnv(process.env),
+      env: safeChildProcessEnv(),
       stdio: ['ignore', 'ignore', 'ignore'],
     });
     const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 30000);
@@ -592,7 +592,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
       '-update', '1', '-frames:v', '1',
       '-y', resizedPath,
-    ], { timeout: 10000 }).catch((err) => ({ error: err }));
+    ], { env: safeChildProcessEnv(), timeout: 10000 }).catch((err) => ({ error: err }));
     if (resizeResult.error) {
       console.log(`⚠️ Failed to resize ${tag} image, using original: ${resizeResult.error.message}`);
       return { resolved: srcPath, tempPath: null };
@@ -707,7 +707,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // python helpers can authenticate snapshot_download() against gated repos
   // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
   // a gated repo, but the merge is harmless when no token is configured.
-  const childEnv = { ...stripDebugMallocEnv(process.env), ...(await hfTokenEnv()) };
+  const childEnv = safeChildProcessEnv(await hfTokenEnv());
   delete childEnv.PYTHONPATH;
   // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
   // immediately. Without this, child stdio is line-buffered against a pipe and
@@ -1225,7 +1225,7 @@ export async function extractLastFrame(historyId) {
     // sometimes still exiting 0 — leaving a phantom-success log + missing
     // file. The output file gets a -update 1 flag so ffmpeg overwrites
     // any partial file from a prior failed run instead of erroring.
-    const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], { stdio: 'ignore' });
+    const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], { env: safeChildProcessEnv(), stdio: 'ignore' });
     proc.on('close', async (code) => {
       // safeStatSize swallows throws so the async handler can't leak an
       // unhandled rejection on transient stat errors — null is treated as
@@ -1313,7 +1313,7 @@ export async function stitchVideos(videoIds, opts = {}) {
   // ffmpeg rejects — otherwise it leaks one file per failed stitch.
   try {
     await new Promise((resolve, reject) => {
-      const proc = spawn(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { stdio: 'ignore' });
+      const proc = spawn(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { env: safeChildProcessEnv(), stdio: 'ignore' });
       proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
       proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
     });

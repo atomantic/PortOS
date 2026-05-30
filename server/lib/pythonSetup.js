@@ -4,7 +4,7 @@ import { arch, homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
-import { stripDebugMallocEnv } from './processEnv.js';
+import { safeChildProcessEnv } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -89,7 +89,7 @@ const PYTHON_CANDIDATES = IS_WIN
 export async function probePythonArch(pythonPath) {
   const { stdout } = await execFileAsync(pythonPath, [
     '-c', 'import platform; print(platform.machine())'
-  ], { env: stripDebugMallocEnv(process.env), timeout: 10_000 }).catch(() => ({ stdout: '' }));
+  ], { env: safeChildProcessEnv(), timeout: 10_000 }).catch(() => ({ stdout: '' }));
   return stdout.trim() || null;
 }
 
@@ -163,7 +163,7 @@ export async function isFlux2VenvHealthy() {
   if (cachedFlux2Healthy !== null) return cachedFlux2Healthy;
   const py = resolveFlux2Python();
   if (!py) { cachedFlux2Healthy = false; return false; }
-  const ok = await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], { env: stripDebugMallocEnv(process.env), timeout: 30_000 })
+  const ok = await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], { env: safeChildProcessEnv(), timeout: 30_000 })
     .then(() => true)
     .catch(() => false);
   cachedFlux2Healthy = ok;
@@ -203,7 +203,7 @@ export async function createVenv(basePython, targetDir) {
     ? join(targetDir, 'Scripts', 'python.exe')
     : join(targetDir, 'bin', 'python3');
   if (existsSync(venvPython)) return venvPython;
-  await execFileAsync(basePython, ['-m', 'venv', targetDir], { env: stripDebugMallocEnv(process.env), timeout: 120_000 });
+  await execFileAsync(basePython, ['-m', 'venv', targetDir], { env: safeChildProcessEnv(), timeout: 120_000 });
   if (!existsSync(venvPython)) {
     throw new Error(`Venv created but interpreter missing at ${venvPython}`);
   }
@@ -226,7 +226,7 @@ export async function probePythonHealth(pythonPath) {
     '  "imports": imports,',
     '}))',
   ].join('\n');
-  const { stdout } = await execFileAsync(pythonPath, ['-c', probe], { env: stripDebugMallocEnv(process.env), timeout: 30_000 });
+  const { stdout } = await execFileAsync(pythonPath, ['-c', probe], { env: safeChildProcessEnv(), timeout: 30_000 });
   const data = JSON.parse(stdout.trim().split(/\r?\n/).pop());
   const installed = [];
   const missing = [];
@@ -260,7 +260,7 @@ export async function checkPackages(pythonPath) {
 // live child handle so the caller's outer closure can track it for SIGTERM.
 function streamSpawn(bin, args, onLog, onProc) {
   return new Promise((resolve) => {
-    const proc = spawn(bin, args, { env: stripDebugMallocEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, { env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     onProc(proc);
     const onChunk = (chunk) => {
       for (const line of chunk.toString().split(/[\r\n]+/)) {

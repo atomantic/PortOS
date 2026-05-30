@@ -100,6 +100,21 @@ describe('runFfmpegProcess', () => {
     expect(res.reason).toMatch(/spawn failed/);
   });
 
+  it('strips Malloc debug variables from spawned ffmpeg children', async () => {
+    const oldMalloc = process.env.MallocStackLogging;
+    process.env.MallocStackLogging = '0';
+    try {
+      const res = await runFfmpegProcess({
+        bin: process.execPath,
+        args: ['-e', "process.exit(process.env.MallocStackLogging === undefined ? 0 : 2)"],
+      });
+      expect(res).toEqual({ ok: true });
+    } finally {
+      if (oldMalloc === undefined) delete process.env.MallocStackLogging;
+      else process.env.MallocStackLogging = oldMalloc;
+    }
+  });
+
   it('removes the abort listener on normal completion (no listener leak)', async () => {
     if (process.platform === 'win32') return;
     const controller = new AbortController();
