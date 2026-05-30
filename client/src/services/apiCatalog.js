@@ -53,6 +53,17 @@ export const listCatalogIngredients = ({ type, tag, q, limit, offset, ...options
 export const getCatalogIngredient = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}`, options);
 
+// --- Tags (canonical taxonomy) ------------------------------------------
+
+// Autocomplete over the canonical catalog_tags table. `q` is an optional
+// prefix/substring filter; absent returns the most-recently-created tags.
+export const listCatalogTags = ({ q, limit, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (limit) params.set('limit', String(limit));
+  return request(`/catalog/tags${params.toString() ? `?${params}` : ''}`, options);
+};
+
 export const createCatalogIngredient = (body = {}, options) =>
   request('/catalog/ingredients', { method: 'POST', body: JSON.stringify(body), ...options });
 

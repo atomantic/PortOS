@@ -75,6 +75,14 @@ export const catalogIngredientQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 }).strict();
 
+// Tag-autocomplete query — `q` is an optional prefix/substring filter, absent
+// returns the most-recently-created tags. Drives the tag-picker autocomplete on
+// CatalogIngredient.jsx + the Quick Idea widget.
+export const catalogTagQuerySchema = z.object({
+  q: z.string().trim().max(BIBLE_LIMITS.TAG_MAX).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();
+
 export const catalogIngredientLinkSchema = z.object({
   refKind: z.enum(REF_KINDS),
   refId: z.string().trim().min(1).max(120),
@@ -250,11 +258,27 @@ const portosMeta = z.object({
   { message: 'portosMeta exceeds 4KB size cap' },
 ).optional();
 
+// Canonical tag rows on the wire. `label` carries the first-seen casing; the
+// mutable fields (description/color/parentId) round-trip via LWW on updatedAt.
+// `parentId` is freeform (the receiver's parent-less retry tolerates a parent
+// that hasn't arrived yet), so no enum/FK gate here.
+export const catalogSyncTagSchema = z.object({
+  id: z.string().min(1).max(120),
+  label: z.string().max(BIBLE_LIMITS.TAG_MAX),
+  description: z.string().max(2_000).nullable().optional(),
+  color: z.string().max(32).nullable().optional(),
+  parentId: z.string().max(120).nullable().optional(),
+  createdAt: isoDate,
+  updatedAt: isoDate.optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
 export const catalogSyncEnvelopeSchema = z.object({
   scraps: z.array(catalogSyncScrapSchema).max(5_000).optional(),
   ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
   sources: z.array(catalogSyncSourceSchema).max(20_000).optional(),
   refs: z.array(catalogSyncRefSchema).max(20_000).optional(),
   relations: z.array(catalogSyncRelationSchema).max(20_000).optional(),
+  tags: z.array(catalogSyncTagSchema).max(20_000).optional(),
   portosMeta,
 }).passthrough();

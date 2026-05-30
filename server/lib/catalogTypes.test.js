@@ -27,6 +27,9 @@ import {
   RELATION_KINDS,
   RELATION_KIND_IDS,
   getRelationKind,
+  canonicalTagKey,
+  tagIdForKey,
+  defaultTagsForType,
 } from './catalogTypes.js';
 import { INGREDIENT_TYPES } from './catalogValidation.js';
 
@@ -173,6 +176,48 @@ describe('catalogTypes — payload schemaVersion', () => {
   it('upgradePayload returns the payload unchanged (but stamped) for unknown type', () => {
     const out = upgradePayload('nope', { x: 1 });
     expect(out.x).toBe(1);
+  });
+});
+
+describe('catalogTypes — tag taxonomy helpers', () => {
+  it('canonicalTagKey lowercases, trims, and collapses whitespace', () => {
+    expect(canonicalTagKey('Noir')).toBe('noir');
+    expect(canonicalTagKey('  noir ')).toBe('noir');
+    expect(canonicalTagKey('Film   Noir')).toBe('film noir');
+    expect(canonicalTagKey('FILM NOIR')).toBe('film noir');
+  });
+
+  it('canonicalTagKey returns "" for empty / non-string input', () => {
+    expect(canonicalTagKey('')).toBe('');
+    expect(canonicalTagKey('   ')).toBe('');
+    expect(canonicalTagKey(null)).toBe('');
+    expect(canonicalTagKey(undefined)).toBe('');
+    expect(canonicalTagKey(42)).toBe('');
+  });
+
+  it('canonicalTagKey does NOT fold distinct labels (synonyms stay separate)', () => {
+    // `noir` and `film-noir` are different keys — synonym merging is the user's
+    // job via parent_id, not the normalizer's.
+    expect(canonicalTagKey('noir')).not.toBe(canonicalTagKey('film-noir'));
+  });
+
+  it('tagIdForKey builds a deterministic cat-tag-<key> id', () => {
+    expect(tagIdForKey('noir')).toBe('cat-tag-noir');
+    expect(tagIdForKey(canonicalTagKey('Film Noir'))).toBe('cat-tag-film noir');
+  });
+
+  it('defaultTagsForType returns a fresh array, never the frozen registry one', () => {
+    const a = defaultTagsForType('character');
+    const b = defaultTagsForType('character');
+    expect(Array.isArray(a)).toBe(true);
+    expect(a).not.toBe(b); // distinct copies — safe to mutate
+    expect(defaultTagsForType('nope')).toEqual([]);
+  });
+
+  it('every registry entry has an array defaultTags', () => {
+    for (const t of CATALOG_TYPES) {
+      expect(Array.isArray(t.defaultTags)).toBe(true);
+    }
   });
 });
 

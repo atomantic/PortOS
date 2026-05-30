@@ -120,6 +120,18 @@ export const RELATION_KINDS = Object.freeze([
   { id: 'related-to', label: 'Related to', inverseLabel: 'Related to' },
 ]);
 
+/**
+ * Canonical key for a freeform tag label — client mirror of
+ * `server/lib/catalogTypes.js` `canonicalTagKey`. Lowercase + trim + collapse
+ * internal whitespace. Used by the tag picker to dedup the chosen-tags set
+ * (so `Noir` and `noir` don't both show as chips before save). Returns `''`
+ * for empty/non-string input.
+ */
+export function canonicalTagKey(label) {
+  if (typeof label !== 'string') return '';
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 const RELATION_BY_ID = Object.freeze(Object.fromEntries(RELATION_KINDS.map((r) => [r.id, r])));
 
 /** Look up a relation-kind entry by id. Returns `undefined` for unknown ids. */

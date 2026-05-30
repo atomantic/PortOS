@@ -18,6 +18,7 @@ import {
   unlinkCatalogIngredientRelation,
 } from '../services/apiCatalog';
 import IngredientPicker from '../components/IngredientPicker';
+import TagPicker from '../components/TagPicker';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 
 // Per-type editor field list + badge color now come from the shared registry
@@ -52,7 +53,7 @@ export default function CatalogIngredient() {
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
-  const [tagsInput, setTagsInput] = useState('');
+  const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState(false);
@@ -74,7 +75,7 @@ export default function CatalogIngredient() {
         }
         setRecord(r);
         setName(r.name || '');
-        setTagsInput((r.tags || []).join(', '));
+        setTags(Array.isArray(r.tags) ? r.tags : []);
         setPayload(r.payload && typeof r.payload === 'object' ? { ...r.payload } : {});
         setLoading(false);
       })
@@ -145,7 +146,6 @@ export default function CatalogIngredient() {
       toast.error('Name is required');
       return;
     }
-    const tags = tagsInput.split(',').map((t) => t.trim()).filter(Boolean);
     setSaving(true);
     const updated = await updateCatalogIngredient(record.id, {
       name: trimmedName,
@@ -158,6 +158,9 @@ export default function CatalogIngredient() {
     setSaving(false);
     if (!updated) return;
     setRecord((prev) => ({ ...prev, ...updated }));
+    // The server normalizes tags through the canonical table (casing/whitespace
+    // collapse), so reflect the persisted set back into the chips.
+    if (Array.isArray(updated.tags)) setTags(updated.tags);
     toast.success('Saved');
   };
 
@@ -253,11 +256,10 @@ export default function CatalogIngredient() {
           </div>
           <div>
             <label htmlFor="ingredient-tags" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Tags <span className="text-gray-500 normal-case">(comma-separated)</span>
+              Tags
             </label>
-            <input id="ingredient-tags" type="text" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="mentor, antagonist, season-1"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
+            <TagPicker id="ingredient-tags" value={tags} onChange={setTags}
+              placeholder="mentor, antagonist, season-1" />
           </div>
           {fields.map(([key, label, kind]) => {
             const inputId = `ingredient-${key}`;

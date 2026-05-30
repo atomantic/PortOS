@@ -15,6 +15,7 @@ import {
   catalogIngredientLinkSchema,
   catalogRelationLinkSchema,
   catalogIngredientQuerySchema,
+  catalogTagQuerySchema,
   catalogScrapCommitSchema,
   catalogSyncEnvelopeSchema,
   catalogExtractRequestSchema,
@@ -124,6 +125,13 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   });
 
   res.status(201).json({ scrap, ingredients: created });
+}));
+
+// Tag-picker autocomplete. `?q=` does a prefix-then-substring match on the
+// canonical tag labels; absent `q` returns the most-recently-created tags.
+router.get('/tags', asyncHandler(async (req, res) => {
+  const params = validateRequest(catalogTagQuerySchema, req.query);
+  res.json(await catalogDB.listTags({ q: params.q, limit: params.limit ?? 20 }));
 }));
 
 router.get('/ingredients', asyncHandler(async (req, res) => {

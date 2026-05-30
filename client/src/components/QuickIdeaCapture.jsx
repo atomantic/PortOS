@@ -15,32 +15,24 @@ import { useState, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Send } from 'lucide-react';
 import toast from './ui/Toast';
+import TagPicker from './TagPicker';
 import { createCatalogIngredient } from '../services/apiCatalog';
 import { CATALOG_TYPES, getCatalogType } from '../lib/catalogTypes';
 
 const TYPES = CATALOG_TYPES;
 
-// Splits a comma-or-space-separated tag string into a clean array. Per-tag
-// length is capped at TAG_MAX_CHARS (mirrors the server's BIBLE_LIMITS.TAG_MAX
-// used by catalogIngredientCreateSchema) so a 60+ char paste doesn't 400 the
-// fast-capture submit. Tag count is capped at TAGS_MAX (mirrors
-// BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).
+// Per-tag length cap (mirrors BIBLE_LIMITS.TAG_MAX used by
+// catalogIngredientCreateSchema) + tag-count cap (mirrors
+// BIBLE_LIMITS.TAGS_PER_ENTRY_MAX). The server still re-validates + normalizes;
+// these keep the fast-capture submit from 400-ing on an oversized tag.
 const TAG_MAX_CHARS = 60;
 const TAGS_MAX = 12;
-function parseTags(raw) {
-  if (!raw) return [];
-  return raw
-    .split(/[,\s]+/)
-    .map((t) => t.trim().slice(0, TAG_MAX_CHARS))
-    .filter(Boolean)
-    .slice(0, TAGS_MAX);
-}
 
 export default function QuickIdeaCapture() {
   const [type, setType] = useState('idea');
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
-  const [tagsRaw, setTagsRaw] = useState('');
+  const [tags, setTags] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
@@ -60,7 +52,6 @@ export default function QuickIdeaCapture() {
     const payload = {};
     const trimmedContent = content.trim();
     if (trimmedContent) payload[contentKey] = trimmedContent;
-    const tags = parseTags(tagsRaw);
 
     // silent: own error UI below — avoids double-toast through the request helper.
     const created = await createCatalogIngredient(
@@ -79,7 +70,7 @@ export default function QuickIdeaCapture() {
     // Optimistic clear so the user can keep capturing rapid-fire.
     setName('');
     setContent('');
-    setTagsRaw('');
+    setTags([]);
 
     // Toast with an "Open" link to the freshly-created ingredient detail.
     toast.success(
@@ -141,16 +132,18 @@ export default function QuickIdeaCapture() {
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-none focus:border-port-accent resize-none"
         />
 
-        <div className="flex gap-2 items-center">
-          <label htmlFor="quick-idea-tags" className="sr-only">Tags</label>
-          <input
-            id="quick-idea-tags"
-            type="text"
-            placeholder="Tags (comma or space separated)"
-            value={tagsRaw}
-            onChange={(e) => setTagsRaw(e.target.value)}
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-xs focus:outline-none focus:border-port-accent"
-          />
+        <div className="flex gap-2 items-start">
+          <div className="flex-1">
+            <label htmlFor="quick-idea-tags" className="sr-only">Tags</label>
+            <TagPicker
+              id="quick-idea-tags"
+              value={tags}
+              onChange={setTags}
+              placeholder="Tags…"
+              maxTags={TAGS_MAX}
+              maxTagChars={TAG_MAX_CHARS}
+            />
+          </div>
           <button
             type="submit"
             disabled={!name.trim() || isSubmitting}

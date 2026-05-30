@@ -84,7 +84,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // since the older peer would silently drop every relation edge. v4 receivers
   // still accept ≤v3 senders (sender-behind): those envelopes simply carry no
   // `relations` block and the receiver applies the other four kinds as before.
-  catalog: 4,
+  // v5 = `catalog_tags` first-class table (id, label, description?, color?,
+  // parent_id?, created_at, sync_sequence) + a new `tags: [...]` block in the
+  // catalog sync envelope. Same gating rationale as v4: a ≤v4 receiver doesn't
+  // understand the `tags` block, so a v5 sender pushing to it is sender-ahead
+  // and gets a 412 (otherwise the older peer would silently drop every canonical
+  // tag row + its parent hierarchy). The freeform `catalog_ingredients.tags
+  // TEXT[]` column is unchanged — canonical tag rows are an additive index, so
+  // a v5 receiver still accepts ≤v4 ingredient/scrap/ref/relation pushes; those
+  // envelopes simply carry no `tags` block.
+  catalog: 5,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

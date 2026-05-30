@@ -49,6 +49,10 @@ import { BIBLE_LIMITS } from './storyBible.js';
  *                            (the bundled ideas/scenes/concepts LLM stage).
  *   payloadSchemaVersion   — current per-record payload-shape version.
  *   payloadUpgraders       — { <fromVersion>: (payload) => payload } chain.
+ *   defaultTags            — canonical tag labels seeded onto every freshly-
+ *                            created ingredient of this type (optional). Used by
+ *                            the tag-normalization step so a new `scene` row
+ *                            picks up `scene` etc. without the user typing it.
  */
 const REGISTRY = [
   {
@@ -63,6 +67,7 @@ const REGISTRY = [
     extractionShape: 'bible',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
+    defaultTags: [],
   },
   {
     id: 'place',
@@ -76,6 +81,7 @@ const REGISTRY = [
     extractionShape: 'bible',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
+    defaultTags: [],
   },
   {
     id: 'object',
@@ -89,6 +95,7 @@ const REGISTRY = [
     extractionShape: 'bible',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
+    defaultTags: [],
   },
   {
     id: 'idea',
@@ -102,6 +109,7 @@ const REGISTRY = [
     extractionShape: 'light',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
+    defaultTags: [],
   },
   {
     id: 'scene',
@@ -115,6 +123,7 @@ const REGISTRY = [
     extractionShape: 'light',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
+    defaultTags: [],
   },
   {
     id: 'concept',
@@ -128,6 +137,7 @@ const REGISTRY = [
     extractionShape: 'light',
     payloadSchemaVersion: 1,
     payloadUpgraders: {},
+    defaultTags: [],
   },
 ];
 
@@ -151,6 +161,9 @@ for (const t of REGISTRY) {
   }
   if (t.payloadUpgraders && typeof t.payloadUpgraders !== 'object') {
     throw new Error(`catalogTypes: "${t.id}" payloadUpgraders must be an object`);
+  }
+  if (t.defaultTags !== undefined && !Array.isArray(t.defaultTags)) {
+    throw new Error(`catalogTypes: "${t.id}" defaultTags must be an array`);
   }
 }
 
@@ -191,6 +204,41 @@ export const FTS_PAYLOAD_FIELDS = Object.freeze((() => {
 /** Current payload-shape version for a type (1 when the type declares none). */
 export function currentPayloadSchemaVersion(id) {
   return BY_ID[id]?.payloadSchemaVersion ?? 1;
+}
+
+/**
+ * Registry-declared default tags for a type — seeded onto a freshly-created
+ * ingredient so e.g. a new `scene` row picks up its type's default tags
+ * automatically. Returns a fresh array (never the frozen registry array) so a
+ * caller can mutate/merge without poisoning the registry. Unknown type → `[]`.
+ */
+export function defaultTagsForType(id) {
+  return [...(BY_ID[id]?.defaultTags || [])];
+}
+
+// --- Tag taxonomy --------------------------------------------------------
+// `catalog_tags` promotes the freeform `catalog_ingredients.tags TEXT[]` to a
+// first-class table (id, label, description?, color?, parent_id?). The freeform
+// column stays for write-path simplicity; the normalizer below maps user input
+// through a canonical KEY so `Noir` / `noir` / ` noir ` collapse to one row.
+
+/** Mint the `cat-tag-<slug>` deterministic id for a canonical tag key. */
+export function tagIdForKey(key) {
+  return `cat-tag-${key}`;
+}
+
+/**
+ * Canonical key for a freeform tag label — the dedup discriminant for the
+ * `catalog_tags` table. Lowercase + trim + collapse internal whitespace to a
+ * single space. This intentionally does NOT fold `noir` and `film-noir` into
+ * one (that's a synonym judgment the user makes via `parent_id`), but it DOES
+ * collapse `Noir`, `noir`, and `  noir ` so casing/whitespace variants don't
+ * accumulate as separate rows. Returns `''` for empty/non-string input so the
+ * caller can drop it.
+ */
+export function canonicalTagKey(label) {
+  if (typeof label !== 'string') return '';
+  return label.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 /**

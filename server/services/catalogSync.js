@@ -2,13 +2,13 @@
  * Catalog Federation Sync Service
  *
  * Peer-to-peer sync for the Creative Ingredients Catalog. Mirrors
- * server/services/memorySync.js but the envelope carries five kinds
- * (scraps, ingredients, sources, refs, relations) because the catalog is a
- * multi-table relational store, not a single flat row set.
+ * server/services/memorySync.js but the envelope carries six kinds
+ * (scraps, ingredients, sources, refs, relations, tags) because the catalog is
+ * a multi-table relational store, not a single flat row set.
  *
  * Pull protocol:
- *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&...&since[relations]=E&limit=100
- *   → { scraps[], ingredients[], sources[], refs[], relations[], maxSequences, hasMore }
+ *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&...&since[tags]=F&limit=100
+ *   → { scraps[], ingredients[], sources[], refs[], relations[], tags[], maxSequences, hasMore }
  *
  * The BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
  * sources.sync_sequence=50 isn't comparable to ingredients.sync_sequence=50.
@@ -31,16 +31,18 @@ import {
   getSourceChangesSince,
   getRefChangesSince,
   getRelationChangesSince,
+  getTagChangesSince,
   getMaxSequences,
   upsertScrapFromPeer,
   upsertIngredientFromPeer,
   upsertSourceFromPeer,
   upsertRefFromPeer,
   upsertRelationFromPeer,
+  upsertTagFromPeer,
 } from './catalogDB.js';
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
-const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations'];
+const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags'];
 
 // Normalize `since` (scalar string OR per-kind object) into a `{ scraps,
 // ingredients, sources, refs }` cursor map. Scalar form is uniform across
@@ -60,16 +62,18 @@ function normalizeCursors(since) {
 
 export async function getChangesSince(since = '0', limit = 100) {
   const cursors = normalizeCursors(since);
-  const [scraps, ingredients, sources, refs, relations] = await Promise.all([
+  const [scraps, ingredients, sources, refs, relations, tags] = await Promise.all([
     getScrapChangesSince(cursors.scraps, limit),
     getIngredientChangesSince(cursors.ingredients, limit),
     getSourceChangesSince(cursors.sources, limit),
     getRefChangesSince(cursors.refs, limit),
     getRelationChangesSince(cursors.relations, limit),
+    getTagChangesSince(cursors.tags, limit),
   ]);
 
   const hasMore =
-    scraps.hasMore || ingredients.hasMore || sources.hasMore || refs.hasMore || relations.hasMore;
+    scraps.hasMore || ingredients.hasMore || sources.hasMore || refs.hasMore ||
+    relations.hasMore || tags.hasMore;
 
   // Per-kind cursor advance — fall back to the inbound cursor so the next pull
   // doesn't move backward on a quiet kind.
@@ -82,12 +86,14 @@ export async function getChangesSince(since = '0', limit = 100) {
     sources: sources.items,
     refs: refs.items,
     relations: relations.items,
+    tags: tags.items,
     maxSequences: {
       scraps:      maxOf(scraps.items,      cursors.scraps),
       ingredients: maxOf(ingredients.items, cursors.ingredients),
       sources:     maxOf(sources.items,     cursors.sources),
       refs:        maxOf(refs.items,        cursors.refs),
       relations:   maxOf(relations.items,   cursors.relations),
+      tags:        maxOf(tags.items,        cursors.tags),
     },
     hasMore,
   };
@@ -120,6 +126,7 @@ export async function applyRemoteChanges(envelope = {}) {
     sources: { applied: 0, failed: 0 },
     refs: { applied: 0, failed: 0 },
     relations: { applied: 0, failed: 0 },
+    tags: { inserted: 0, updated: 0, skipped: 0, failed: 0 },
     errors: [],
   };
 
@@ -128,7 +135,24 @@ export async function applyRemoteChanges(envelope = {}) {
     console.error(`❌ catalog sync ${kind} ${id || '?'} failed: ${err?.message || err}`);
   };
 
-  // Scraps first (sources FK to BOTH so we want the parents present before
+  // Tags first — they carry a `parent_id` self-FK (handled by the parent-less
+  // retry in upsertTagFromPeer) and are referenced by the freeform tag arrays
+  // on ingredients, so we want the canonical rows present before the ingredient
+  // rows land. They have no FK to scraps/ingredients, so ordering is otherwise
+  // free. Each row in its own try/catch.
+  for (const tag of envelope.tags || []) {
+    try {
+      const res = await upsertTagFromPeer(tag);
+      if (!res.applied) stats.tags.skipped++;
+      else if (res.isInsert) stats.tags.inserted++;
+      else stats.tags.updated++;
+    } catch (err) {
+      stats.tags.failed++;
+      recordFailure('tag', tag?.id, err);
+    }
+  }
+
+  // Scraps next (sources FK to BOTH so we want the parents present before
   // the join rows land). Each row in its own try/catch — one malformed row
   // must NOT abort the rest of the envelope.
   for (const scrap of envelope.scraps || []) {

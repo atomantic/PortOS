@@ -273,6 +273,30 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_to ON catalog_ingredient_relations (to_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_sync_seq ON catalog_ingredient_relations (sync_sequence);
 
+-- First-class canonical tag table. The freeform `catalog_ingredients.tags
+-- TEXT[]` column stays as-is for write-path simplicity; this table is an
+-- additive index that the normalizer (catalogDB.normalizeTags) populates on
+-- first use of a tag. `id` is deterministic (`cat-tag-<canonical-key>`) so the
+-- same logical tag has the same id on every install. `parent_id` is an optional
+-- self-FK enabling tag hierarchies (genre/tone vs structural). Federates via
+-- sync_sequence BIGSERIAL + LWW on created_at (tags are append-mostly; the
+-- mutable fields — label/description/color/parent_id — round-trip through the
+-- trigger below). `ON DELETE SET NULL` on the parent self-FK keeps orphaned
+-- children rather than cascading a whole subtree away.
+CREATE TABLE IF NOT EXISTS catalog_tags (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,                         -- canonical display label (first-seen casing)
+  description TEXT,
+  color VARCHAR(32),
+  parent_id TEXT REFERENCES catalog_tags(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  sync_sequence BIGSERIAL
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_label ON catalog_tags (label);
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_parent ON catalog_tags (parent_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_sync_seq ON catalog_tags (sync_sequence);
+
 -- Auto-update updated_at and bump sync_sequence on content/metadata changes.
 -- Mirrors update_memory_timestamp's pattern: skip the bump on no-content-change
 -- so cosmetic touches don't trigger sync. Respects explicit updated_at (used by
@@ -405,3 +429,38 @@ CREATE TRIGGER trg_catalog_relation_sync_seq
   BEFORE UPDATE ON catalog_ingredient_relations
   FOR EACH ROW
   EXECUTE FUNCTION update_catalog_relation_sync_seq();
+
+-- Tag UPDATE bumps sync_sequence + updated_at when a mutable field changes
+-- (label/description/color/parent_id) so peers receive the edit on their next
+-- pull. Respects an explicit updated_at (the sync apply path preserves the
+-- originating timestamp during LWW merges). Mirrors the scrap timestamp trigger.
+CREATE OR REPLACE FUNCTION update_catalog_tag_timestamp()
+RETURNS TRIGGER AS $$
+DECLARE
+  content_changed BOOLEAN;
+BEGIN
+  content_changed := (
+    NEW.label IS DISTINCT FROM OLD.label OR
+    NEW.description IS DISTINCT FROM OLD.description OR
+    NEW.color IS DISTINCT FROM OLD.color OR
+    NEW.parent_id IS DISTINCT FROM OLD.parent_id OR
+    NEW.updated_at IS DISTINCT FROM OLD.updated_at
+  );
+
+  IF NOT content_changed THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+    NEW.updated_at := NOW();
+  END IF;
+  NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_tags', 'sync_sequence'));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_catalog_tag_updated_at ON catalog_tags;
+CREATE TRIGGER trg_catalog_tag_updated_at
+  BEFORE UPDATE ON catalog_tags
+  FOR EACH ROW
+  EXECUTE FUNCTION update_catalog_tag_timestamp();

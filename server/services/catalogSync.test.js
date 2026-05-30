@@ -18,12 +18,14 @@ vi.mock('./catalogDB.js', () => ({
   getSourceChangesSince: vi.fn(),
   getRefChangesSince: vi.fn(),
   getRelationChangesSince: vi.fn(),
+  getTagChangesSince: vi.fn(),
   getMaxSequences: vi.fn(),
   upsertScrapFromPeer: vi.fn(),
   upsertIngredientFromPeer: vi.fn(),
   upsertSourceFromPeer: vi.fn(),
   upsertRefFromPeer: vi.fn(),
   upsertRelationFromPeer: vi.fn(),
+  upsertTagFromPeer: vi.fn(),
 }));
 
 vi.mock('../lib/schemaVersions.js', async () => {
@@ -51,6 +53,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     catalogDB.upsertSourceFromPeer.mockResolvedValueOnce(undefined);
     catalogDB.upsertRefFromPeer.mockResolvedValueOnce(undefined);
     catalogDB.upsertRelationFromPeer.mockResolvedValueOnce(undefined);
+    catalogDB.upsertTagFromPeer.mockResolvedValueOnce({ applied: true, isInsert: true });
 
     const stats = await applyRemoteChanges({
       scraps:      [{ id: 's1', rawText: 'x', createdAt: 't', updatedAt: 't' }],
@@ -61,6 +64,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
       sources: [{ ingredientId: 'i1', scrapId: 's1', extractedAt: 't' }],
       refs: [{ ingredientId: 'i1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: 't' }],
       relations: [{ fromId: 'i1', toId: 'i2', kind: 'lives-in', createdAt: 't' }],
+      tags: [{ id: 'cat-tag-noir', label: 'Noir', createdAt: 't', updatedAt: 't' }],
     });
 
     expect(stats.scraps.inserted).toBe(1);
@@ -69,7 +73,27 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     expect(stats.sources.applied).toBe(1);
     expect(stats.refs.applied).toBe(1);
     expect(stats.relations.applied).toBe(1);
+    expect(stats.tags.inserted).toBe(1);
     expect(stats.errors).toHaveLength(0);
+  });
+
+  it('counts tag inserts / updates / skips and isolates a failing tag row', async () => {
+    catalogDB.upsertTagFromPeer.mockResolvedValueOnce({ applied: true, isInsert: false }); // LWW update
+    catalogDB.upsertTagFromPeer.mockResolvedValueOnce({ applied: false });                 // LWW skip
+    catalogDB.upsertTagFromPeer.mockRejectedValueOnce(new Error('bad tag'));
+
+    const stats = await applyRemoteChanges({
+      tags: [
+        { id: 'cat-tag-noir', label: 'Noir', createdAt: 't', updatedAt: 't2' },
+        { id: 'cat-tag-pulp', label: 'Pulp', createdAt: 't', updatedAt: 't' },
+        { id: 'cat-tag-bad', label: 'Bad', createdAt: 't', updatedAt: 't' },
+      ],
+    });
+
+    expect(stats.tags.updated).toBe(1);
+    expect(stats.tags.skipped).toBe(1);
+    expect(stats.tags.failed).toBe(1);
+    expect(stats.errors[0]).toMatchObject({ kind: 'tag', id: 'cat-tag-bad', message: 'bad tag' });
   });
 
   it('isolates a failing relation row and records it', async () => {
@@ -117,6 +141,10 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     catalogDB.upsertRelationFromPeer.mockImplementation(async () => {
       order.push('relation');
     });
+    catalogDB.upsertTagFromPeer.mockImplementation(async () => {
+      order.push('tag');
+      return { applied: true, isInsert: true };
+    });
 
     await applyRemoteChanges({
       relations:   [{ fromId: 'i1', toId: 'i2', kind: 'lives-in', createdAt: 't' }],
@@ -124,11 +152,13 @@ describe('applyRemoteChanges — dispatch + stats', () => {
       sources:     [{ ingredientId: 'i1', scrapId: 's1', extractedAt: 't' }],
       ingredients: [{ id: 'i1', type: 'character', name: 'A', createdAt: 't', updatedAt: 't' }],
       scraps:      [{ id: 's1', rawText: 'x', createdAt: 't', updatedAt: 't' }],
+      tags:        [{ id: 'cat-tag-noir', label: 'Noir', createdAt: 't', updatedAt: 't' }],
     });
 
-    // Relations land last so both FK ends are present from the ingredient
-    // upserts.
-    expect(order).toEqual(['scrap', 'ingredient', 'source', 'ref', 'relation']);
+    // Tags land FIRST (canonical rows present before the ingredient tag arrays
+    // reference them); relations land last so both FK ends are present from the
+    // ingredient upserts.
+    expect(order).toEqual(['tag', 'scrap', 'ingredient', 'source', 'ref', 'relation']);
   });
 });
 
@@ -178,33 +208,37 @@ describe('getChangesSince — cursor normalization + per-kind advance', () => {
     catalogDB.getSourceChangesSince.mockResolvedValue({ items: [], hasMore: false });
     catalogDB.getRefChangesSince.mockResolvedValue({ items: [], hasMore: false });
     catalogDB.getRelationChangesSince.mockResolvedValue({ items: [], hasMore: false });
+    catalogDB.getTagChangesSince.mockResolvedValue({ items: [], hasMore: false });
   });
 
-  it('accepts a scalar since and applies it uniformly to all five kinds', async () => {
+  it('accepts a scalar since and applies it uniformly to all six kinds', async () => {
     await getChangesSince('42', 100);
     expect(catalogDB.getScrapChangesSince).toHaveBeenCalledWith('42', 100);
     expect(catalogDB.getIngredientChangesSince).toHaveBeenCalledWith('42', 100);
     expect(catalogDB.getSourceChangesSince).toHaveBeenCalledWith('42', 100);
     expect(catalogDB.getRefChangesSince).toHaveBeenCalledWith('42', 100);
     expect(catalogDB.getRelationChangesSince).toHaveBeenCalledWith('42', 100);
+    expect(catalogDB.getTagChangesSince).toHaveBeenCalledWith('42', 100);
   });
 
   it('accepts a per-kind cursor object', async () => {
-    await getChangesSince({ scraps: '5', ingredients: '10', sources: '15', refs: '20', relations: '25' }, 100);
+    await getChangesSince({ scraps: '5', ingredients: '10', sources: '15', refs: '20', relations: '25', tags: '30' }, 100);
     expect(catalogDB.getScrapChangesSince).toHaveBeenCalledWith('5', 100);
     expect(catalogDB.getIngredientChangesSince).toHaveBeenCalledWith('10', 100);
     expect(catalogDB.getSourceChangesSince).toHaveBeenCalledWith('15', 100);
     expect(catalogDB.getRefChangesSince).toHaveBeenCalledWith('20', 100);
     expect(catalogDB.getRelationChangesSince).toHaveBeenCalledWith('25', 100);
+    expect(catalogDB.getTagChangesSince).toHaveBeenCalledWith('30', 100);
   });
 
   it('rejects non-numeric cursor values, falling back to "0"', async () => {
-    await getChangesSince({ scraps: '5', ingredients: 'NaN', sources: null, refs: undefined, relations: 'x' }, 100);
+    await getChangesSince({ scraps: '5', ingredients: 'NaN', sources: null, refs: undefined, relations: 'x', tags: 'y' }, 100);
     expect(catalogDB.getScrapChangesSince).toHaveBeenCalledWith('5', 100);
     expect(catalogDB.getIngredientChangesSince).toHaveBeenCalledWith('0', 100);
     expect(catalogDB.getSourceChangesSince).toHaveBeenCalledWith('0', 100);
     expect(catalogDB.getRefChangesSince).toHaveBeenCalledWith('0', 100);
     expect(catalogDB.getRelationChangesSince).toHaveBeenCalledWith('0', 100);
+    expect(catalogDB.getTagChangesSince).toHaveBeenCalledWith('0', 100);
   });
 
   it('per-kind maxSequence falls back to the inbound cursor on quiet kinds', async () => {
@@ -214,7 +248,7 @@ describe('getChangesSince — cursor normalization + per-kind advance', () => {
     });
     catalogDB.getIngredientChangesSince.mockResolvedValue({ items: [], hasMore: false });
 
-    const res = await getChangesSince({ scraps: '50', ingredients: '99', sources: '88', refs: '77', relations: '66' }, 100);
+    const res = await getChangesSince({ scraps: '50', ingredients: '99', sources: '88', refs: '77', relations: '66', tags: '55' }, 100);
 
     // Quiet kinds reflect the inbound cursor — NOT 0 — so the next pull
     // doesn't move backward.
@@ -223,6 +257,21 @@ describe('getChangesSince — cursor normalization + per-kind advance', () => {
     expect(res.maxSequences.sources).toBe('88');
     expect(res.maxSequences.refs).toBe('77');
     expect(res.maxSequences.relations).toBe('66');
+    expect(res.maxSequences.tags).toBe('55');
+  });
+
+  it('advances the tags cursor to the last tag row + hasMore when only tags report more', async () => {
+    catalogDB.getTagChangesSince.mockResolvedValue({
+      items: [
+        { id: 'cat-tag-noir', label: 'Noir', syncSequence: '7' },
+        { id: 'cat-tag-pulp', label: 'Pulp', syncSequence: '8' },
+      ],
+      hasMore: true,
+    });
+    const res = await getChangesSince({ scraps: '0', ingredients: '0', sources: '0', refs: '0', relations: '0', tags: '0' }, 100);
+    expect(res.tags).toHaveLength(2);
+    expect(res.maxSequences.tags).toBe('8');
+    expect(res.hasMore).toBe(true);
   });
 
   it('advances the relations cursor to the last relation row', async () => {
