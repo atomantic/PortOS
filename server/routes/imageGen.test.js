@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import imageGenRoutes from './imageGen.js';
@@ -679,6 +679,73 @@ describe('Image Gen Routes', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('GET /setup/check (arch fields)', () => {
+    // The route's archMismatch logic gates on `process.platform === 'darwin'` —
+    // override it so the assertions run identically on Linux CI and a dev Mac.
+    const originalPlatform = process.platform;
+    let probePythonHealth, detectArm64Python;
+
+    beforeEach(async () => {
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      const mod = await import('../lib/pythonSetup.js');
+      probePythonHealth = mod.probePythonHealth;
+      detectArm64Python = mod.detectArm64Python;
+      mockStat.mockReset();
+      mockStat.mockResolvedValue({ mtimeMs: 1_700_000_000_000 });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    });
+
+    it('exposes hostArch + archMismatch + suggestedArm64Python on matched arch', async () => {
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-match')}`);
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({
+        hostArch: 'arm64',
+        archMismatch: false,
+        suggestedArm64Python: null,
+        interpreterArch: 'arm64',
+      });
+    });
+
+    it('flips archMismatch true and includes the suggested arm64 python on an x86_64 interpreter', async () => {
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      detectArm64Python.mockResolvedValueOnce('/opt/homebrew/bin/python3');
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-x86')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.archMismatch).toBe(true);
+      expect(r.body.suggestedArm64Python).toBe('/opt/homebrew/bin/python3');
+    });
+
+    it('returns suggestedArm64Python null when no arm64 interpreter is available to suggest', async () => {
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      detectArm64Python.mockResolvedValueOnce(null);
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-no-arm64')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.archMismatch).toBe(true);
+      expect(r.body.suggestedArm64Python).toBeNull();
+    });
+
+    it('does not flag archMismatch on non-darwin even when interpreter arch differs', async () => {
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-linux')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.archMismatch).toBe(false);
+      expect(r.body.suggestedArm64Python).toBeNull();
     });
   });
 });
