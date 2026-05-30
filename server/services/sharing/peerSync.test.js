@@ -2534,6 +2534,42 @@ describe('peerSync', () => {
         expect(retryPayload.sourceInstanceId).toBe(firstPayload.sourceInstanceId);
       });
 
+      it('falls back without catalogBundle when an older peer rejects the new key, keeping portosMeta', async () => {
+        // A peer that supports portosMeta but predates catalog federation
+        // rejects the new `catalogBundle` key with a strict VALIDATION_ERROR.
+        // The sender must strip ONLY catalogBundle (not portosMeta, which the
+        // peer supports) and retry, so the universe push still lands — the
+        // receiver re-derives the catalog enrichments from the embedded canon.
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(getCatalogBundleForRef).mockResolvedValue({
+          ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+        });
+        const firstCallBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: '', message: "Unrecognized key(s) in object: 'catalogBundle'" }] },
+        }) };
+        firstCallBody.clone = () => firstCallBody;
+        const retryBody = { ok: true, status: 200, json: async () => ({}) };
+        vi.mocked(peerFetch).mockResolvedValueOnce(firstCallBody).mockResolvedValueOnce(retryBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(true);
+        const calls = vi.mocked(peerFetch).mock.calls;
+        expect(calls.length).toBe(2);
+        const firstPayload = JSON.parse(calls[0][1].body);
+        const retryPayload = JSON.parse(calls[1][1].body);
+        expect(firstPayload.catalogBundle).toBeDefined();
+        expect(retryPayload.catalogBundle).toBeUndefined();
+        // Surgical strip: portosMeta survives because the peer didn't reject it.
+        expect(retryPayload.portosMeta).toBeDefined();
+        expect(retryPayload.record.id).toBe('u1');
+      });
+
       it('does NOT retry on a 400 whose validation error is unrelated to portosMeta', async () => {
         // The retry is keyed on the `portosMeta` mention in the validation
         // details — any other 400 (oversized field, unknown record key, etc.)

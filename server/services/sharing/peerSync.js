@@ -847,15 +847,27 @@ export async function pushRecordToPeer(sub, options = {}) {
   // see schemaVersions, but until the user upgrades it that's the
   // best-effort behavior we want (vs. permanently stranded pushes). Once
   // they upgrade, the next push round naturally re-includes `portosMeta`.
-  if (res && res.status === 400 && payload.portosMeta) {
+  // `catalogBundle` (catalog-federation push enrichment) is a second new
+  // top-level key an even-newer-than-version-gate-but-pre-catalog peer's strict
+  // schema also rejects. Strip whichever key(s) the receiver actually named —
+  // surgically, so a peer that supports `portosMeta` but not `catalogBundle`
+  // keeps its version-gate handshake. Zod `.strict()` lists all unrecognized
+  // keys in one issue, so a single retry covers both.
+  if (res && res.status === 400 && (payload.portosMeta || payload.catalogBundle)) {
     const errBody = await res.clone().json().catch(() => null);
     const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
-    const mentionsMeta = details.some((d) => /portosMeta/.test(`${d?.path || ''} ${d?.message || ''}`));
-    if (errBody?.code === 'VALIDATION_ERROR' && mentionsMeta) {
+    const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
+    if (errBody?.code === 'VALIDATION_ERROR' && (mentions('portosMeta') || mentions('catalogBundle'))) {
+      const legacyPayload = { ...payload };
+      const stripped = [];
+      if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
+      if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
+      // The universe record still lands; on a pre-catalog peer the catalog
+      // enrichments simply re-derive from the embedded canon on its backfill,
+      // and a re-push after it upgrades re-includes the stripped key(s).
       console.log(
-        `ℹ️ peerSync: ${peer.name || peer.instanceId} is on a pre-version-gate PortOS — retrying push without portosMeta envelope`,
+        `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
-      const { portosMeta: _strip, ...legacyPayload } = payload;
       res = await postPayload(legacyPayload);
     }
   }
