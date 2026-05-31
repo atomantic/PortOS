@@ -34,6 +34,27 @@ describe('mapWithConcurrency', () => {
     expect(maxActive).toBe(1);
   });
 
+  it('falls back to one worker when concurrency is not finite', async () => {
+    // NaN/undefined hit the `Number.isFinite(x) ? … : 1` else-branch. The
+    // concurrency-0 case above only exercises `Math.max(1, floor(0))` (0 is
+    // finite), so without this case a regression that broke the isFinite
+    // guard — yielding workerCount 0 and a Promise.all([]) that leaves every
+    // result undefined — would pass unnoticed.
+    let active = 0;
+    let maxActive = 0;
+
+    const out = await mapWithConcurrency([1, 2, 3], undefined, async (item) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return item * 10;
+    });
+
+    expect(out).toEqual([10, 20, 30]);
+    expect(maxActive).toBe(1);
+  });
+
   it('returns an empty array without invoking the mapper', async () => {
     let calls = 0;
 
