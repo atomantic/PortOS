@@ -27,7 +27,7 @@ const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 const SERIES_DIR = join(tempRoot, 'pipeline-series');
 const ISSUES_DIR = join(tempRoot, 'pipeline-issues');
 const UNIVERSES_DIR = join(tempRoot, 'universes');
-const MEDIA_COLLECTIONS_PATH = join(tempRoot, 'media-collections.json');
+const MEDIA_COLLECTIONS_DIR = join(tempRoot, 'media-collections');
 const PEER_SUBS_PATH = join(tempRoot, 'sharing', 'peer_subscriptions.json');
 const VIDEO_HISTORY_PATH = join(tempRoot, 'video-history.json');
 
@@ -75,6 +75,16 @@ function readCollectionState(dir) {
   return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => readJSON(join(dir, entry.name, 'index.json')));
+}
+
+// media-collections moved to the per-record collectionStore layout (migration
+// 059); these adapters keep the `{ collections: [...] }`-shaped call sites below
+// working against the split dir.
+function writeMediaCollections({ collections = [] } = {}) {
+  writeCollectionState(MEDIA_COLLECTIONS_DIR, 'mediaCollections', collections);
+}
+function readMediaCollections() {
+  return { collections: readCollectionState(MEDIA_COLLECTIONS_DIR) };
 }
 
 const writeSeriesState = (series) => writeCollectionState(SERIES_DIR, 'pipelineSeries', series);
@@ -385,7 +395,7 @@ describe('dataSync — mediaCollections category', () => {
   });
 
   it('snapshot returns sanitized collections array', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [{
         id: 'c1',
         name: 'Universe: Echoes',
@@ -405,7 +415,7 @@ describe('dataSync — mediaCollections category', () => {
   });
 
   it('snapshot checksum is stable across reads when state is unchanged', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [{
         id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
         items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
@@ -423,7 +433,7 @@ describe('dataSync — mediaCollections category', () => {
   });
 
   it('applyRemote inserts a new collection', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, { collections: [] });
+    writeMediaCollections({ collections: [] });
     const result = await dataSync.applyRemote('mediaCollections', {
       collections: [{
         id: 'c-new', name: 'Universe: New', description: '', coverKey: null,
@@ -434,13 +444,13 @@ describe('dataSync — mediaCollections category', () => {
     });
     expect(result.applied).toBe(true);
     expect(result.count).toBe(1);
-    const persisted = readJSON(MEDIA_COLLECTIONS_PATH);
+    const persisted = readMediaCollections();
     expect(persisted.collections).toHaveLength(1);
     expect(persisted.collections[0].id).toBe('c-new');
   });
 
   it('applyRemote unions items by kind:ref — never loses a render', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [{
         id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
         items: [{ kind: 'image', ref: 'local.png', addedAt: '2026-05-22T01:00:00Z' }],
@@ -454,13 +464,13 @@ describe('dataSync — mediaCollections category', () => {
         createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T02:00:00Z',
       }],
     });
-    const persisted = readJSON(MEDIA_COLLECTIONS_PATH);
+    const persisted = readMediaCollections();
     const refs = persisted.collections[0].items.map(i => i.ref).sort();
     expect(refs).toEqual(['local.png', 'remote.png']);
   });
 
   it('checksum changes after applyRemote bumps file mtime', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [{
         id: 'c1', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
         items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
@@ -484,7 +494,7 @@ describe('dataSync — mediaCollections category', () => {
     // canonicalization in getMediaCollectionsSnapshot, their checksums
     // diverge permanently and the UI reads "behind" forever even though
     // they're converged.
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [
         {
           id: 'c-b', name: 'B', description: '', coverKey: null, universeId: null, seriesId: null,
@@ -508,7 +518,7 @@ describe('dataSync — mediaCollections category', () => {
 
     // Same SET, reversed order at every level.
     await new Promise((r) => setTimeout(r, 5)); // ensure mtime changes
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [
         {
           id: 'c-a', name: 'A', description: '', coverKey: null, universeId: null, seriesId: null,
@@ -604,7 +614,7 @@ describe('dataSync — per-peer snapshot scoping (forPeerId exclude-set)', () =>
   });
 
   it('mediaCollections: excludes the requesting peer\'s subscribed collection ids', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, {
+    writeMediaCollections({
       collections: [
         { id: 'col-sub', name: 'Subbed', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-25T00:00:00Z', updatedAt: '2026-05-25T01:00:00Z' },
         { id: 'col-free', name: 'Free', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-25T00:00:00Z', updatedAt: '2026-05-25T01:00:00Z' },
@@ -856,7 +866,7 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
   });
 
   it('does NOT block a mediaCollections snapshot when the sender is ahead on universes', async () => {
-    writeJSON(MEDIA_COLLECTIONS_PATH, { collections: [] });
+    writeMediaCollections({ collections: [] });
     const result = await dataSync.applyRemote('mediaCollections', {
       collections: [{
         id: 'c-new', name: 'New', description: '', coverKey: null, universeId: null, seriesId: null,

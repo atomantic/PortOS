@@ -42,7 +42,10 @@ const PIPELINE_ISSUES_DIR = join(PATHS.data, 'pipeline-issues');
 // (listUniverses, below) and for fingerprint-based checksum caching — the
 // fingerprint walker descends into the dir so per-record edits invalidate.
 const UNIVERSE_BUILDER_DIR = join(PATHS.data, 'universes');
-const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
+// Migration 059 split the monolithic media-collections.json into per-record
+// `data/media-collections/<id>/index.json`. The fingerprint walker descends
+// into the dir so per-record edits invalidate the snapshot checksum cache.
+const MEDIA_COLLECTIONS_DIR = join(PATHS.data, 'media-collections');
 // Outbound peer subscriptions drive the per-peer snapshot exclude-set (see
 // getSnapshot's `forPeerId` scoping). A subscribe/unsubscribe changes which
 // records ride the scoped snapshot, so it must invalidate the per-peer
@@ -704,7 +707,7 @@ const CHECKSUM_PATHS = {
   // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
   // must re-checksum the collections snapshot even though
   // media-collections.json itself didn't move. Same goes for un-ephemeral.
-  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
+  mediaCollections: [MEDIA_COLLECTIONS_DIR, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
   // videoHistory is a flat history file with no parent-record dependency —
   // its checksum invalidates only when video-history.json itself moves.
   videoHistory: [VIDEO_HISTORY_FILE],

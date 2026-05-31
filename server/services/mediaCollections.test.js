@@ -1,15 +1,22 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { writeFile, mkdir, readFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
-const fileStore = new Map();
+// Real per-suite tmpdir backing the per-record media-collections/ layout that
+// migration 059 produces. The fileUtils mock below overrides PATHS.data so the
+// service + collectionStore land here instead of the real ./data; everything
+// else (atomicWrite/readJSONFile/ensureDir) uses the real impl so the store's
+// readdir/lstat/rm operate against a real fs tree.
+const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'media-collections-test-'));
+const COLLECTIONS_DIR = join(TEST_DATA_ROOT, 'media-collections');
 
-vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: '/mock/data' },
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
-  readJSONFile: vi.fn(async (path, fallback) => fileStore.has(path) ? fileStore.get(path) : fallback),
-}));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+});
 
 // Suppress the fire-and-forget dynamic import so tests don't load the real
 // peerSync module graph (which reads the live peer registry and imports
@@ -24,11 +31,43 @@ vi.mock('crypto', async () => {
 
 const svc = await import('./mediaCollections.js');
 
+// Wipe + recreate the collections dir before every test so each starts clean.
+// The empty dir means collectionStore's readdir is the source of truth and its
+// process-local knownIds fallback never leaks ids across tests.
+function resetStore() {
+  rmSync(COLLECTIONS_DIR, { recursive: true, force: true });
+  mkdirSync(COLLECTIONS_DIR, { recursive: true });
+  uuidCounter = 0;
+}
+
+// Seed per-record files exactly as migration 059 would (one dir per record +
+// a type-level index.json). Takes the same `{ collections: [...] }` shape the
+// suite previously handed to the monolithic file store.
+async function seedState({ collections = [] } = {}) {
+  await mkdir(COLLECTIONS_DIR, { recursive: true });
+  for (const c of collections) {
+    const recDir = join(COLLECTIONS_DIR, c.id);
+    await mkdir(recDir, { recursive: true });
+    await writeFile(join(recDir, 'index.json'), JSON.stringify(c, null, 2));
+  }
+  await writeFile(join(COLLECTIONS_DIR, 'index.json'), JSON.stringify({
+    schemaVersion: 1, type: 'mediaCollections', updatedAt: new Date().toISOString(), config: {},
+  }, null, 2));
+}
+
+// Read the raw persisted record (pre-sanitize) for storage-level assertions.
+async function readStored(id) {
+  const raw = await readFile(join(COLLECTIONS_DIR, id, 'index.json'), 'utf-8').catch(() => null);
+  return raw ? JSON.parse(raw) : null;
+}
+
+afterAll(() => {
+  rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+});
+
+beforeEach(() => resetStore());
+
 describe('mediaCollections service', () => {
-  beforeEach(() => {
-    fileStore.clear();
-    uuidCounter = 0;
-  });
 
   it('listCollections returns [] for fresh state', async () => {
     expect(await svc.listCollections()).toEqual([]);
@@ -115,7 +154,7 @@ describe('mediaCollections service', () => {
     await svc.deleteCollection(c.id);
     // Assert on the PERSISTED record — listCollections' sanitizer would null a
     // dangling coverKey on read regardless, so inspect storage directly.
-    const stored = fileStore.get('/mock/data/media-collections.json').collections.find((x) => x.id === c.id);
+    const stored = await readStored(c.id);
     expect(stored.deleted).toBe(true);
     expect(stored.items).toEqual([]);
     expect(stored.coverKey).toBeNull();
@@ -293,7 +332,7 @@ describe('mediaCollections service', () => {
       const fat = { ...all[0], items: Array.from({ length: svc.ITEMS_MAX }, (_, i) => ({
         kind: 'image', ref: `r${i}.png`, addedAt: new Date().toISOString(),
       })) };
-      fileStore.set('/mock/data/media-collections.json', { collections: [fat] });
+      await seedState({ collections: [fat] });
       await expect(svc.bulkUpdateCollectionItems(c.id, {
         add: [{ kind: 'image', ref: 'overflow.png' }],
       })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
@@ -381,7 +420,7 @@ describe('mediaCollections service', () => {
       const a = await svc.findOrCreateCollectionByName({
         name: 'Universe: OldName', universeId: 'u-1',
       });
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [
           a,
           { ...a, id: 'dup-id', name: 'Universe: OldName' },
@@ -419,7 +458,7 @@ describe('mediaCollections service', () => {
     it('unlinkCollectionsForUniverse preserves updatedAt (cascade side-effect, not a user edit)', async () => {
       // The bump would let the unlinked bucket out-race its own tombstone on a
       // peer during a universe merge — see unlinkCollectionsForUniverse's note.
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [{
           id: 'uc-u1', name: 'Universe: Foo', description: '', coverKey: null,
           universeId: 'u-1', seriesId: null,
@@ -584,7 +623,7 @@ describe('mediaCollections service', () => {
         });
         const current = await svc.listCollections();
         current[0] = { ...current[0], name: 'Universe: SomeOtherName' };
-        fileStore.set('/mock/data/media-collections.json', { collections: current });
+        await seedState({ collections: current });
         const found = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'NewName',
         });
@@ -747,7 +786,7 @@ describe('mediaCollections service', () => {
     });
 
     it('unlinkCollectionsForSeries preserves updatedAt (cascade side-effect, not a user edit)', async () => {
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [{
           id: 'sc-ser1', name: 'Series: Foo', description: '', coverKey: null,
           universeId: null, seriesId: 'ser-1',
@@ -797,7 +836,7 @@ describe('mediaCollections service', () => {
     });
 
     it('sanitizer drops seriesId when universeId is also set (universeId wins)', async () => {
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [{
           id: 'c1', name: 'Mixed', items: [],
           universeId: 'u-1', seriesId: 'ser-1',
@@ -811,7 +850,7 @@ describe('mediaCollections service', () => {
   });
 
   it('sanitizes hand-edited JSON with bogus items', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [
         { id: 'c1', name: 'OK', items: [
           { kind: 'image', ref: 'a.png' },
@@ -828,11 +867,6 @@ describe('mediaCollections service', () => {
 });
 
 describe('mergeMediaCollectionsFromSync', () => {
-  beforeEach(() => {
-    fileStore.clear();
-    uuidCounter = 0;
-  });
-
   it('returns {applied:false,count:0} for empty / non-array input', async () => {
     expect(await svc.mergeMediaCollectionsFromSync(null)).toEqual({ applied: false, count: 0 });
     expect(await svc.mergeMediaCollectionsFromSync('nope')).toEqual({ applied: false, count: 0 });
@@ -861,7 +895,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('unions items by kind:ref so neither side ever loses a render', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'A',
@@ -902,7 +936,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('LWW: newer remote wins on top-level scalars (name, description, coverKey)', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'Old Name',
@@ -935,7 +969,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('LWW: older remote loses on scalars, but items still union', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'Local',
@@ -978,7 +1012,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // own (older) tombstone would then lose LWW and a live duplicate would
     // survive. Because the cascade unlink preserves updatedAt, the tombstone
     // still wins and converges to deleted.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'uc-loser',
         name: 'Universe: Clandestiny',
@@ -1018,7 +1052,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('reports count:0 when nothing actually changes (no-op no-op)', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'A',
@@ -1047,7 +1081,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('drops dangling coverKey that points at an item missing post-union', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'A',
@@ -1124,7 +1158,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // wrong way. The slash-format timestamp here ('05/22/2026 18:00 UTC')
     // sorts BEFORE the ISO timestamp lexicographically ('0' < '2'), but
     // it's actually LATER in real time — so remote should win.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'Local', description: 'local', coverKey: null,
         universeId: null, seriesId: null,
@@ -1150,7 +1184,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // Defense in depth — a hand-edit or corrupted record shipping a
     // garbage `updatedAt` shouldn't be able to claim "newer" than a valid
     // local record and overwrite its scalars.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'Local', description: 'local', coverKey: null,
         universeId: null, seriesId: null,
@@ -1254,7 +1288,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // deletedAt. The effective deletion time should align with the most-recent
     // timestamp (updatedAt), not createdAt — otherwise LWW + GC see it as far
     // older than it really is.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'Gone', description: '', coverKey: null,
         universeId: null, seriesId: null, items: [],
@@ -1275,7 +1309,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // digit '0' sorts before '2'), but as parsed timestamps the slash-format
     // is actually EARLIER here. Numeric compare keeps "earlier wins" honest
     // across formats.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'A', description: '', coverKey: null,
         universeId: null, seriesId: null,
@@ -1403,26 +1437,14 @@ describe('mutators — mediaCollection updated emission (standalone per-record s
 });
 
 describe('pruneTombstonedCollections', () => {
-  beforeEach(() => {
-    fileStore.clear();
-    uuidCounter = 0;
-  });
-
   it('prunes tombstoned collections older than the cutoff and returns the count', async () => {
     // Create a live collection and soft-delete it with an old timestamp by
     // injecting the tombstone directly into the file store.
     const c = await svc.createCollection({ name: 'ToDelete' });
     const oldTs = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    // Overwrite the file store with a tombstone carrying an old deletedAt.
-    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-    const path = '/mock/data/media-collections.json';
-    const current = await readJSONFile(path, { collections: [] });
-    const withTombstone = current.collections.map((col) =>
-      col.id === c.id
-        ? { ...col, deleted: true, deletedAt: oldTs, updatedAt: oldTs, items: [] }
-        : col,
-    );
-    await atomicWrite(path, { collections: withTombstone });
+    // Re-seed the record as a tombstone carrying an old deletedAt.
+    const stored = await readStored(c.id);
+    await seedState({ collections: [{ ...stored, deleted: true, deletedAt: oldTs, updatedAt: oldTs, items: [] }] });
 
     const result = await svc.pruneTombstonedCollections(Date.now());
     expect(result).toEqual({ pruned: 1 });
@@ -1438,17 +1460,10 @@ describe('pruneTombstonedCollections', () => {
 
   it('does NOT prune a tombstone newer than the cutoff', async () => {
     const c = await svc.createCollection({ name: 'RecentDelete' });
-    // Soft-delete with a future timestamp (simulating a delete that just happened).
-    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-    const path = '/mock/data/media-collections.json';
-    const current = await readJSONFile(path, { collections: [] });
+    // Re-seed as a tombstone with a future timestamp (simulating a delete that just happened).
     const futureTs = new Date(Date.now() + 60 * 1000).toISOString();
-    const withTombstone = current.collections.map((col) =>
-      col.id === c.id
-        ? { ...col, deleted: true, deletedAt: futureTs, updatedAt: futureTs, items: [] }
-        : col,
-    );
-    await atomicWrite(path, { collections: withTombstone });
+    const stored = await readStored(c.id);
+    await seedState({ collections: [{ ...stored, deleted: true, deletedAt: futureTs, updatedAt: futureTs, items: [] }] });
 
     // Cut-off is now; the tombstone's deletedAt is in the future → not pruned.
     const result = await svc.pruneTombstonedCollections(Date.now());

@@ -2,35 +2,33 @@
  * Media Collections
  *
  * User-named buckets for image filenames + video ids. Many-to-many: the same
- * media item can live in any number of collections at once. Persisted to
- * data/media-collections.json as a single { collections: [...] } document.
+ * media item can live in any number of collections at once. Persisted via the
+ * per-record `createCollectionStore` layout under data/media-collections/ —
+ * one `{id}/index.json` per collection plus a type-level `index.json` stamping
+ * the storage `schemaVersion`. (Migrated from the legacy monolithic
+ * data/media-collections.json by scripts/migrations/059-split-media-collections.js.)
  *
  * An item is identified by `{ kind: 'image'|'video', ref: <filename|videoId> }`.
  * A collection's `coverKey` is `null` (auto: newest item) or `"<kind>:<ref>"`
  * to pin a specific item as the cover thumbnail.
  *
- * **Concurrency.** Every public mutator routes through `serializeFileWrite`
- * (a single-tail queue keyed on the shared media-collections.json file).
- * Without it, parallel write paths — e.g. the pipeline cover filer's
- * `addItem` running alongside Universe Builder's completion-hook `addItem`,
- * or a `deleteUniverse` unlink racing with an in-flight cover completion —
- * each do a `listCollections → modify → atomicWrite(entire array)` round
- * and the second write silently clobbers the first. Built on
- * `createFileWriteQueue()` in `server/lib/fileWriteQueue.js`.
+ * **Concurrency.** Every public mutator routes its read-modify-write through
+ * the store's per-record queue (`store().queueRecordWrite(id, fn)`), so two
+ * writes against the SAME collection serialize while writes against DIFFERENT
+ * collections run in parallel. This replaces the legacy single-tail file queue
+ * that serialized every unrelated write and rewrote the whole ~200 KB document
+ * per item. The hot render-filing paths (pipeline cover filer, Universe Builder
+ * completion hook, image-gen auto-file) all target deterministic `uc-`/`sc-`
+ * ids, so concurrent `addItem`s to the same bucket still serialize correctly.
  */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
-import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { createCollectionStore } from '../lib/collectionStore.js';
 import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
-
-// Lazy resolution — PATHS.data may not be available at module-load time
-// (e.g. tests that swap it through a Proxy mock so different cases get
-// different temp roots). See universeBuilder.js for the same pattern.
-const statePath = () => join(PATHS.data, 'media-collections.json');
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
@@ -42,8 +40,6 @@ export const DESCRIPTION_MAX_LENGTH = 500;
 export const ITEMS_MAX = 5000;
 
 export { REF_MAX_LENGTH, itemKey };
-
-const DEFAULT_STATE = { collections: [] };
 
 const sanitizeItem = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -134,38 +130,46 @@ const sanitizeCollection = (raw) => {
   return { id: raw.id, name, description, coverKey, universeId, seriesId, items, createdAt, updatedAt, deleted, deletedAt };
 };
 
+// Storage-layout (type-level) schema version stamped on
+// data/media-collections/index.json. Distinct from the wire schemaVersion in
+// server/lib/schemaVersions.js (the on-disk split doesn't change the wire
+// payload shape, so that stays at 1). Bump only on a future layout change.
+const TYPE_SCHEMA_VERSION = 1;
+
+// Lazy store getter — PATHS.data may not be available at module-load time
+// (tests swap it through a Proxy mock so different cases get different temp
+// roots). Mirrors universeBuilder.js's `store()` pattern: re-create when the
+// resolved dir changes so a remapped data root takes effect.
+let _store = null;
+const store = () => {
+  const dir = join(PATHS.data, 'media-collections');
+  if (_store && _store.dir === dir) return _store;
+  _store = createCollectionStore({
+    dir,
+    type: 'mediaCollections',
+    schemaVersion: TYPE_SCHEMA_VERSION,
+    // Runs on every loadOne/loadAll. Tombstones (deleted:true) survive
+    // sanitization so the mutators and merge path can see them.
+    sanitizeRecord: sanitizeCollection,
+  });
+  return _store;
+};
+
+// Exposed for the boot-time verifier in server/index.js.
+export const mediaCollectionStore = () => store();
+
 export async function listCollections({ includeDeleted = false } = {}) {
-  await ensureDir(PATHS.data);
-  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
-  if (!Array.isArray(raw.collections)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const c of raw.collections) {
-    const s = sanitizeCollection(c);
-    if (!s || seen.has(s.id)) continue;
-    seen.add(s.id);
-    if (!includeDeleted && s.deleted === true) continue;
-    out.push(s);
-  }
-  return out;
+  const all = await store().loadAll();
+  if (includeDeleted) return all;
+  return all.filter((c) => c.deleted !== true);
 }
 
 export async function getCollection(id, { includeDeleted = false } = {}) {
-  const all = await listCollections({ includeDeleted });
-  const c = all.find((x) => x.id === id);
+  const c = await store().loadOne(id);
   if (!c) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+  if (c.deleted === true && !includeDeleted) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
   return c;
 }
-
-// Every public mutator wraps its read-modify-write in `serializeFileWrite`
-// so the read always sees the freshest persisted state and the write
-// completes before the next task's read begins. `writeAll` is the only
-// persistence call and must only be invoked from inside a serialized task.
-const serializeFileWrite = createFileWriteQueue();
-const writeAll = async (collections) => {
-  await atomicWrite(statePath(), { collections });
-  return collections;
-};
 
 // Announce a newly-created collection to the per-record peer-sync pipeline:
 // emit the 'updated' event so any existing subscription pushes it, AND
@@ -193,11 +197,11 @@ export async function createCollection({ name, description = '' }) {
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  const created = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
+  const id = randomUUID();
+  const created = await store().queueRecordWrite(id, async () => {
     const now = new Date().toISOString();
     const next = {
-      id: randomUUID(),
+      id,
       name: trimmedName,
       description: trimmedDescription,
       coverKey: null,
@@ -205,7 +209,7 @@ export async function createCollection({ name, description = '' }) {
       createdAt: now,
       updatedAt: now,
     };
-    await writeAll([...all, next]);
+    await store().saveOneNow(id, next);
     return next;
   });
   announceNewCollection(created.id);
@@ -240,9 +244,14 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   const normalizedUniverseId = typeof universeId === 'string' && universeId.trim()
     ? universeId.trim().slice(0, UNIVERSE_ID_MAX)
     : null;
+  // Deterministic id when universe-linked (cross-machine convergence); a fresh
+  // random id otherwise. Queue on whichever id this call would create/adopt so
+  // two concurrent calls for the same universe serialize on the same record.
+  const canonId = linkedCollectionId({ universeId: normalizedUniverseId });
+  const queueId = canonId || randomUUID();
   let createdId = null;
-  const result = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
+  const result = await store().queueRecordWrite(queueId, async () => {
+    const all = await store().loadAll();
     const needle = trimmed.toLowerCase();
     // Do not match (or reuse) tombstoned records — a deleted collection
     // should not be resurrected by name.
@@ -254,7 +263,7 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
         // DETERMINISTIC id at the same time — keeping the old random id would
         // leave a universe-linked collection that can't converge across peers
         // (the very bug deterministic ids fix).
-        const canonId = linkedCollectionId({ universeId: normalizedUniverseId });
+        //
         // If the universe ALREADY has its canonical collection, don't promote a
         // same-named orphan over it (that would clobber the canonical record's
         // items) — return the canonical one; the orphan is a duplicate the merge
@@ -262,19 +271,21 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
         const liveCanonical = all.find((c) => c.id === canonId && !c.deleted);
         if (liveCanonical) return liveCanonical;
         // No live canonical — rename the orphan to the deterministic id,
-        // reclaiming a tombstone at that id if one exists.
+        // reclaiming a tombstone at that id if one exists (saveOneNow overwrites
+        // the canonId record), then drop the old random-id record.
         const linked = { ...existing, id: canonId, universeId: normalizedUniverseId, updatedAt: new Date().toISOString() };
-        await writeAll([...all.filter((c) => c.id !== existing.id && c.id !== canonId), linked]);
-        if (canonId !== existing.id) createdId = canonId; // announce the newly-linked record
+        await store().saveOneNow(canonId, linked);
+        if (canonId !== existing.id) {
+          await store().deleteOneNow(existing.id);
+          createdId = canonId; // announce the newly-linked record
+        }
         return linked;
       }
       return existing;
     }
     const now = new Date().toISOString();
     const next = {
-      // Deterministic id when universe-linked (cross-machine convergence);
-      // standalone (no link) keeps a random id. See linkedCollectionId.
-      id: linkedCollectionId({ universeId: normalizedUniverseId }) || randomUUID(),
+      id: queueId,
       name: trimmed,
       description: trimmedDescription,
       coverKey: null,
@@ -284,11 +295,9 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
       updatedAt: now,
     };
     createdId = next.id;
-    // Reclaim the deterministic id if a tombstone already holds it (re-creating
-    // a previously-deleted universe/series collection). A plain append would
-    // leave two records at the same id and listCollections' dedup keeps the
-    // tombstone (it's first), silently dropping this fresh live record.
-    await writeAll([...all.filter((c) => c.id !== next.id), next]);
+    // saveOneNow overwrites any tombstone already at this deterministic id
+    // (re-creating a previously-deleted universe/series collection).
+    await store().saveOneNow(next.id, next);
     return next;
   });
   if (createdId) announceNewCollection(createdId);
@@ -376,9 +385,15 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
+  // Deterministic id so this universe's collection has the SAME id on every
+  // peer (per-record sync keys on id) — see linkedCollectionId. Queue on it so
+  // two concurrent provisions for the same universe serialize.
+  const id = linkedCollectionId({ universeId: normalizedUniverseId });
   let createdId = null;
-  const result = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
+  const result = await store().queueRecordWrite(id, async () => {
+    // Scan by stamp (not a direct loadOne) so a legacy unconverged collection
+    // carrying this universeId at a random id is still found, not duplicated.
+    const all = await store().loadAll();
     // Do not adopt a tombstoned universe-linked collection — deleted means gone.
     const linked = all.find((c) => !c.deleted && c.universeId === normalizedUniverseId);
     if (linked) return linked;
@@ -395,9 +410,7 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
     // migration belong to "ambiguous, leave it" rather than "auto-adopt."
     const now = new Date().toISOString();
     const next = {
-      // Deterministic id so this universe's collection has the SAME id on every
-      // peer (per-record sync keys on id) — see linkedCollectionId.
-      id: linkedCollectionId({ universeId: normalizedUniverseId }),
+      id,
       name: desiredName,
       description: trimmedDescription,
       coverKey: null,
@@ -407,11 +420,9 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
       updatedAt: now,
     };
     createdId = next.id;
-    // Reclaim the deterministic id if a tombstone already holds it (re-creating
-    // a previously-deleted universe/series collection). A plain append would
-    // leave two records at the same id and listCollections' dedup keeps the
-    // tombstone (it's first), silently dropping this fresh live record.
-    await writeAll([...all.filter((c) => c.id !== next.id), next]);
+    // saveOneNow overwrites any tombstone already at this deterministic id
+    // (re-creating a previously-deleted universe collection).
+    await store().saveOneNow(next.id, next);
     return next;
   });
   // Announce only when a NEW record was persisted (not a find-existing hit), so
@@ -448,16 +459,17 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
+  // Deterministic id — same series collection id on every peer (see linkedCollectionId).
+  const id = linkedCollectionId({ seriesId: normalizedSeriesId });
   let createdId = null;
-  const result = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
+  const result = await store().queueRecordWrite(id, async () => {
+    const all = await store().loadAll();
     // Do not adopt a tombstoned series-linked collection — deleted means gone.
     const linked = all.find((c) => !c.deleted && c.seriesId === normalizedSeriesId);
     if (linked) return linked;
     const now = new Date().toISOString();
     const next = {
-      // Deterministic id — same series collection id on every peer (see linkedCollectionId).
-      id: linkedCollectionId({ seriesId: normalizedSeriesId }),
+      id,
       name: desiredName,
       description: trimmedDescription,
       coverKey: null,
@@ -467,65 +479,76 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
       updatedAt: now,
     };
     createdId = next.id;
-    // Reclaim the deterministic id if a tombstone already holds it (re-creating
-    // a previously-deleted universe/series collection). A plain append would
-    // leave two records at the same id and listCollections' dedup keeps the
-    // tombstone (it's first), silently dropping this fresh live record.
-    await writeAll([...all.filter((c) => c.id !== next.id), next]);
+    // saveOneNow overwrites any tombstone already at this deterministic id
+    // (re-creating a previously-deleted series collection).
+    await store().saveOneNow(next.id, next);
     return next;
   });
   if (createdId) announceNewCollection(createdId);
   return result;
 }
 
-// Series mirror of `unlinkCollectionsForUniverse` — same cascade semantics,
-// same reason for preserving `updatedAt` (see that function's note). A series
-// merge tombstones the loser series-collection and the loser series; the
-// series-tombstone cascade must not bump the collection past its own tombstone.
-export async function unlinkCollectionsForSeries(seriesId) {
-  if (typeof seriesId !== 'string' || !seriesId) return [];
-  const needle = seriesId.slice(0, SERIES_ID_MAX);
-  return serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const matches = all
-      .map((c, i) => (c.seriesId === needle ? i : -1))
-      .filter((i) => i >= 0);
-    if (!matches.length) return [];
-    const next = [...all];
-    const unlinkedIds = [];
-    for (const i of matches) {
-      next[i] = { ...all[i], seriesId: null };
-      unlinkedIds.push(all[i].id);
-    }
-    await writeAll(next);
-    return unlinkedIds;
-  });
+// Both cascade families below — unlink (clear the owner link) and rename
+// (cascade the owner's display name) — share the same shape: scan all records
+// by their owner stamp, then per-match queue a load→re-check→save. The
+// re-check inside the queue (`cur[field] !== needle`) is the concurrency-safety
+// invariant now that there's no single file lock spanning the whole sweep —
+// keep it in these two helpers so the universe/series variants can't drift.
+
+// Clear an owner-link field (`universeId` / `seriesId`) on every collection
+// stamped with `needle`. Returns the cleared ids. Deliberately does NOT bump
+// `updatedAt` — see `unlinkCollectionsForUniverse`'s note.
+async function clearOwnerLink(field, rawValue, maxLen) {
+  if (typeof rawValue !== 'string' || !rawValue) return [];
+  const needle = rawValue.slice(0, maxLen);
+  const matches = (await store().loadAll()).filter((c) => c[field] === needle);
+  const clearedIds = [];
+  for (const c of matches) {
+    await store().queueRecordWrite(c.id, async () => {
+      const cur = await store().loadOne(c.id);
+      if (!cur || cur[field] !== needle) return;
+      await store().saveOneNow(c.id, { ...cur, [field]: null });
+    });
+    clearedIds.push(c.id);
+  }
+  return clearedIds;
 }
 
-export async function renameCollectionForSeries(seriesId, newSeriesName) {
-  if (typeof seriesId !== 'string' || !seriesId) return null;
-  const needle = seriesId.slice(0, SERIES_ID_MAX);
-  return serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const matchIdxs = all
-      .map((c, i) => (c.seriesId === needle ? i : -1))
-      .filter((i) => i >= 0);
-    if (!matchIdxs.length) return null;
-    const desired = seriesCollectionNameFor(newSeriesName);
-    if (!desired) return all[matchIdxs[0]];
-    const now = new Date().toISOString();
-    const next = [...all];
-    let changed = false;
-    for (const i of matchIdxs) {
-      if (next[i].name === desired) continue;
-      next[i] = { ...next[i], name: desired, updatedAt: now };
-      changed = true;
-    }
-    if (!changed) return all[matchIdxs[0]];
-    await writeAll(next);
-    return next[matchIdxs[0]];
-  });
+// Cascade an owner rename onto EVERY collection stamped with `needle` (not just
+// the first match — hand-edited state or a pre-serialization race could leave
+// duplicate linked rows that would otherwise stay rename-locked under the stale
+// name). Returns the first updated collection (back-compat).
+async function renameOwnerLinked(field, rawValue, maxLen, nameFor, newOwnerName) {
+  if (typeof rawValue !== 'string' || !rawValue) return null;
+  const needle = rawValue.slice(0, maxLen);
+  const matches = (await store().loadAll()).filter((c) => c[field] === needle);
+  if (!matches.length) return null;
+  const desired = nameFor(newOwnerName);
+  if (!desired) return matches[0];
+  const now = new Date().toISOString();
+  let first = null;
+  for (const c of matches) {
+    const updated = await store().queueRecordWrite(c.id, async () => {
+      const cur = await store().loadOne(c.id);
+      if (!cur || cur[field] !== needle || cur.name === desired) return cur;
+      const nextRec = { ...cur, name: desired, updatedAt: now };
+      await store().saveOneNow(c.id, nextRec);
+      return nextRec;
+    });
+    if (first === null) first = updated;
+  }
+  return first;
 }
+
+// Series mirror of `unlinkCollectionsForUniverse` — same cascade semantics,
+// same reason for preserving `updatedAt`. A series merge tombstones the loser
+// series-collection and the loser series; the series-tombstone cascade must not
+// bump the collection past its own tombstone.
+export const unlinkCollectionsForSeries = (seriesId) =>
+  clearOwnerLink('seriesId', seriesId, SERIES_ID_MAX);
+
+export const renameCollectionForSeries = (seriesId, newSeriesName) =>
+  renameOwnerLinked('seriesId', seriesId, SERIES_ID_MAX, seriesCollectionNameFor, newSeriesName);
 
 // Clear the `universeId` link on any collection bound to this universe.
 // Used by deleteUniverse to release the rename-lock so the orphaned bucket
@@ -543,66 +566,20 @@ export async function renameCollectionForSeries(seriesId, newSeriesName) {
 // collection tombstone under pure LWW and strand a live duplicate on the peer.
 // Items always union on merge (`mergeCollectionItems`), so preserving the
 // timestamp can't lose renders.
-export async function unlinkCollectionsForUniverse(universeId) {
-  if (typeof universeId !== 'string' || !universeId) return [];
-  const needle = universeId.slice(0, UNIVERSE_ID_MAX);
-  return serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const matches = all
-      .map((c, i) => (c.universeId === needle ? i : -1))
-      .filter((i) => i >= 0);
-    if (!matches.length) return [];
-    const next = [...all];
-    const unlinkedIds = [];
-    for (const i of matches) {
-      next[i] = { ...all[i], universeId: null };
-      unlinkedIds.push(all[i].id);
-    }
-    await writeAll(next);
-    return unlinkedIds;
-  });
-}
+export const unlinkCollectionsForUniverse = (universeId) =>
+  clearOwnerLink('universeId', universeId, UNIVERSE_ID_MAX);
 
-// Cascade a universe rename to its linked collection(s). Skips the
-// rename-lock guard in updateCollection by writing the name directly — the
-// lock exists to block user-driven renames, not system-driven cascades from
-// the universe rename itself. Renames EVERY collection linked to this
-// universe, not just the first match: hand-edited state or a pre-
-// serialization race could have left duplicate linked rows behind, and the
-// stragglers would otherwise stay rename-locked under the old name forever.
-// Returns the first updated collection (back-compat) — callers that need the
-// full list can re-read after.
-export async function renameCollectionForUniverse(universeId, newUniverseName) {
-  if (typeof universeId !== 'string' || !universeId) return null;
-  const needle = universeId.slice(0, UNIVERSE_ID_MAX);
-  return serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const matchIdxs = all
-      .map((c, i) => (c.universeId === needle ? i : -1))
-      .filter((i) => i >= 0);
-    if (!matchIdxs.length) return null;
-    const desired = universeCollectionNameFor(newUniverseName);
-    if (!desired) return all[matchIdxs[0]];
-    const now = new Date().toISOString();
-    const next = [...all];
-    let changed = false;
-    for (const i of matchIdxs) {
-      if (next[i].name === desired) continue;
-      next[i] = { ...next[i], name: desired, updatedAt: now };
-      changed = true;
-    }
-    if (!changed) return all[matchIdxs[0]];
-    await writeAll(next);
-    return next[matchIdxs[0]];
-  });
-}
+// Cascade a universe rename to its linked collection(s). Skips the rename-lock
+// guard in updateCollection by writing the name directly — the lock exists to
+// block user-driven renames, not system-driven cascades from the universe
+// rename itself.
+export const renameCollectionForUniverse = (universeId, newUniverseName) =>
+  renameOwnerLinked('universeId', universeId, UNIVERSE_ID_MAX, universeCollectionNameFor, newUniverseName);
 
 export async function updateCollection(id, patch) {
-  const merged = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const idx = all.findIndex((c) => c.id === id);
-    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    const cur = all[idx];
+  const merged = await store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // Product/UI constraint: universe-linked collections own their visible
     // name. The name is the user-facing identity of a universe's bucket, so
@@ -636,9 +613,7 @@ export async function updateCollection(id, patch) {
       ...('coverKey' in patch ? { coverKey: patch.coverKey } : {}),
       updatedAt: new Date().toISOString(),
     };
-    const next = [...all];
-    next[idx] = merged;
-    await writeAll(next);
+    await store().saveOneNow(id, merged);
     return merged;
   });
   // A standalone collection (no universe/series link) reaches peers ONLY via a
@@ -653,22 +628,20 @@ export async function updateCollection(id, patch) {
 }
 
 export async function deleteCollection(id) {
-  const { universeId: deletedUniverseId, seriesId: deletedSeriesId, alreadyDeleted } = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const idx = all.findIndex((c) => c.id === id);
-    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    const target = all[idx];
+  const { universeId: deletedUniverseId, seriesId: deletedSeriesId, alreadyDeleted } = await store().queueRecordWrite(id, async () => {
+    const target = await store().loadOne(id);
+    if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // Idempotent on an already-tombstoned record: re-stamping deletedAt/
     // updatedAt would make an old tombstone look "newer" to a peer's LWW (and
     // re-emitting churns the sync pipeline). Return without rewriting or
     // re-emitting.
     if (target.deleted === true) return { universeId: null, seriesId: null, alreadyDeleted: true };
     const now = new Date().toISOString();
-    const next = [...all];
-    // Clear coverKey too — with items emptied it would otherwise dangle
-    // (point at a non-existent item) and leak into the tombstone's wire payload.
-    next[idx] = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], coverKey: null, universeId: null, seriesId: null };
-    await writeAll(next);
+    // Soft-delete: keep the record on disk as a tombstone (NOT deleteOne) so it
+    // still syncs to peers as a deletion. Clear coverKey/items too — with items
+    // emptied the cover would otherwise dangle and leak into the wire payload.
+    const tombstone = { ...target, deleted: true, deletedAt: now, updatedAt: now, items: [], coverKey: null, universeId: null, seriesId: null };
+    await store().saveOneNow(id, tombstone);
     return { universeId: target.universeId || null, seriesId: target.seriesId || null, alreadyDeleted: false };
   });
   if (alreadyDeleted) return { id };
@@ -712,11 +685,9 @@ const validateItemInput = (item) => {
 
 export async function addItem(id, item) {
   const { kind, ref } = validateItemInput(item);
-  const merged = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const idx = all.findIndex((c) => c.id === id);
-    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    const cur = all[idx];
+  const merged = await store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
     if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -732,9 +703,7 @@ export async function addItem(id, item) {
       items: [...cur.items, { kind, ref, addedAt: new Date().toISOString() }],
       updatedAt: new Date().toISOString(),
     };
-    const next = [...all];
-    next[idx] = updated;
-    await writeAll(next);
+    await store().saveOneNow(id, updated);
     return updated;
   });
   // Emit outside the serialized critical section — subscribers may issue
@@ -778,11 +747,9 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     }
   }
 
-  const result = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const idx = all.findIndex((c) => c.id === id);
-    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    const cur = all[idx];
+  const result = await store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
     if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -820,9 +787,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
       coverKey,
       updatedAt: now,
     };
-    const next = [...all];
-    next[idx] = merged;
-    await writeAll(next);
+    await store().saveOneNow(id, merged);
     return { collection: merged, added: additions.length, removed };
   });
   if (result.added || result.removed) {
@@ -834,11 +799,9 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
 }
 
 export async function removeItem(id, key) {
-  const merged = await serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const idx = all.findIndex((c) => c.id === id);
-    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-    const cur = all[idx];
+  const merged = await store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     // A soft-deleted collection behaves as not-found for mutations (matches
     // updateCollection) — never resurrect a tombstone or churn its timestamps.
     if (cur.deleted === true) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -854,9 +817,7 @@ export async function removeItem(id, key) {
       coverKey: cur.coverKey === key ? null : cur.coverKey,
       updatedAt: new Date().toISOString(),
     };
-    const next = [...all];
-    next[idx] = updated;
-    await writeAll(next);
+    await store().saveOneNow(id, updated);
     return updated;
   });
   emitRecordUpdated('mediaCollection', merged.id);
@@ -869,17 +830,26 @@ export async function removeItem(id, key) {
 // Called by tombstoneGc once every subscribed peer has acked the deletion.
 export async function pruneTombstonedCollections(olderThanMs) {
   if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
-  return serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const keep = all.filter((c) => {
-      if (c.deleted !== true) return true;
-      const ms = Date.parse(c.deletedAt || '');
-      return !(Number.isFinite(ms) && ms < olderThanMs);
-    });
-    if (keep.length === all.length) return { pruned: 0 };
-    await writeAll(keep);
-    return { pruned: all.length - keep.length };
+  const all = await store().loadAll();
+  const candidates = all.filter((c) => {
+    if (c.deleted !== true) return false;
+    const ms = Date.parse(c.deletedAt || '');
+    return Number.isFinite(ms) && ms < olderThanMs;
   });
+  let pruned = 0;
+  for (const c of candidates) {
+    await store().queueRecordWrite(c.id, async () => {
+      // Re-check inside the queue (deleteOneNow spans the load→delete boundary)
+      // so a concurrent re-create at the same id isn't blown away.
+      const cur = await store().loadOne(c.id);
+      if (!cur || cur.deleted !== true) return;
+      const ms = Date.parse(cur.deletedAt || '');
+      if (!(Number.isFinite(ms) && ms < olderThanMs)) return;
+      await store().deleteOneNow(c.id);
+      pruned += 1;
+    });
+  }
+  return { pruned };
 }
 
 /**
@@ -896,24 +866,22 @@ export async function pruneTombstonedCollections(olderThanMs) {
  *     should retain both rather than discard whichever has the older
  *     collection-level updatedAt.
  *
- * Mutating writes go through the same `serializeFileWrite` tail as every
- * other mediaCollections mutator so a concurrent local `addItem` and remote
- * apply can't interleave on the JSON file.
+ * Each remote collection's merge runs inside the store's per-record queue
+ * (`queueRecordWrite(id)`), so a concurrent local `addItem` and a remote apply
+ * against the SAME collection can't interleave, while merges of DIFFERENT
+ * collections proceed in parallel.
  */
 export async function mergeMediaCollectionsFromSync(remoteCollections) {
   if (!Array.isArray(remoteCollections)) return { applied: false, count: 0 };
-  return serializeFileWrite(async () => {
-    const all = await listCollections({ includeDeleted: true });
-    const localById = new Map(all.map((c) => [c.id, c]));
-    let changed = 0;
-    for (const remote of remoteCollections) {
-      const sanitized = sanitizeCollection(remote);
-      if (!sanitized) continue;
-      const local = localById.get(sanitized.id);
+  let changed = 0;
+  for (const remote of remoteCollections) {
+    const sanitized = sanitizeCollection(remote);
+    if (!sanitized) continue;
+    const didChange = await store().queueRecordWrite(sanitized.id, async () => {
+      const local = await store().loadOne(sanitized.id);
       if (!local) {
-        localById.set(sanitized.id, sanitized);
-        changed++;
-        continue;
+        await store().saveOneNow(sanitized.id, sanitized);
+        return true;
       }
       const mergedItems = mergeCollectionItems(local.items, sanitized.items);
       // LWW on collection-level scalars. Parse to epoch ms (not lexicographic
@@ -949,14 +917,14 @@ export async function mergeMediaCollectionsFromSync(remoteCollections) {
         deleted: scalarDeleted,
         deletedAt: scalarDeleted ? (scalarSource.deletedAt || (remoteWins ? remoteTs : localTs)) : null,
       };
-      if (collectionsEqual(local, next)) continue;
-      localById.set(sanitized.id, next);
-      changed++;
-    }
-    if (changed === 0) return { applied: false, count: 0 };
-    await writeAll(Array.from(localById.values()));
-    return { applied: true, count: changed };
-  });
+      if (collectionsEqual(local, next)) return false;
+      await store().saveOneNow(sanitized.id, next);
+      return true;
+    });
+    if (didChange) changed++;
+  }
+  if (changed === 0) return { applied: false, count: 0 };
+  return { applied: true, count: changed };
 }
 
 function mergeCollectionItems(localItems, remoteItems) {
