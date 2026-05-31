@@ -46,6 +46,13 @@ export const buildStyleClause = (universe) => {
  * `opts.source` / `opts.autoLock` / `opts.sourceSeriesId` stamp NEW inserts
  * only — existing entries are not touched by these options (locked existing
  * entries are protected by mergeExtractedBible itself).
+ *
+ * `opts.providerOverride` / `opts.modelOverride` pick the LLM for every kind so
+ * the caller can retry a failed extraction with a different model.
+ *
+ * Returns `{ universe, results, failures }`. `failures` is `[{ kind, error }]`
+ * for kinds that threw — the successful kinds are still merged. Throws only
+ * when EVERY kind fails.
  */
 export async function extractCanonFromProse(universeId, opts = {}) {
   const universe = await getUniverse(universeId);
@@ -65,12 +72,45 @@ export async function extractCanonFromProse(universeId, opts = {}) {
     existing: universe[BIBLE_FIELD[kind]] || [],
     context: { universe: { id: universe.id, name: universe.name } },
     providerOverride: opts.providerOverride,
+    modelOverride: opts.modelOverride,
     source: `universe-canon-${kind}`,
   }).then((result) => ({ kind, result }));
 
-  const completed = opts.parallel
-    ? await Promise.all(kinds.map(runOne))
-    : await kinds.reduce(async (acc, kind) => [...(await acc), await runOne(kind)], Promise.resolve([]));
+  // Per-kind resilience: one kind failing (e.g. Codex safety-refusing
+  // `object`) must NOT discard the kinds that succeeded. Settle every kind,
+  // merge the successes, and report the rest as `failures` so the caller can
+  // persist what went wrong and let the user retry just the failed kinds with
+  // a different provider/model. Only throw when EVERY kind fails — a total
+  // wipe is a real error the caller should surface.
+  // Settle-shaped wrapper so parallel and serial paths produce the same
+  // `{ status, value | reason }` entries — runOne never rejects through this.
+  const runSettled = (kind) => runOne(kind).then(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason) => ({ status: 'rejected', reason }),
+  );
+  const settled = opts.parallel
+    ? await Promise.all(kinds.map(runSettled))
+    : await kinds.reduce(
+      async (acc, kind) => [...(await acc), await runSettled(kind)],
+      Promise.resolve([]),
+    );
+
+  const completed = [];
+  const failures = [];
+  settled.forEach((outcome, i) => {
+    if (outcome.status === 'fulfilled') {
+      completed.push(outcome.value);
+    } else {
+      const err = outcome.reason;
+      failures.push({ kind: kinds[i], error: (err?.message || String(err)).slice(0, 2000) });
+    }
+  });
+  if (completed.length === 0) {
+    const detail = failures.map((f) => `${f.kind}: ${f.error}`).join(' | ');
+    throw new ServerError(`Canon extraction failed for all kinds — ${detail}`, {
+      status: 502, code: 'UNIVERSE_CANON_EXTRACT_ALL_FAILED',
+    });
+  }
 
   const wantsLock = opts.autoLock !== false;
   const mergeOpts = {
@@ -119,7 +159,47 @@ export async function extractCanonFromProse(universeId, opts = {}) {
     };
   }
   const updated = await updateUniverse(universe.id, patch);
-  return { universe: updated, results };
+  return { universe: updated, results, failures };
+}
+
+// All three canon kinds, used when a hard (all-kinds) failure leaves us
+// without per-kind detail. Mirrors the BIBLE_KIND values stamped on `failures`.
+const ALL_CANON_KINDS = [BIBLE_KIND.CHARACTER, BIBLE_KIND.PLACE, BIBLE_KIND.OBJECT];
+
+/**
+ * Collapse an `extractCanonFromProse` outcome into the persisted
+ * `stage.canonExtraction` marker (sanitized by issues.sanitizeCanonExtraction).
+ * Pass `error` for a hard failure (the whole call threw); otherwise pass the
+ * `{ results, failures }` from a resolved call. `provider`/`model` record what
+ * was actually used so the UI banner can say "failed with X".
+ */
+export function summarizeCanonExtraction({ results, failures, provider, model, error } = {}) {
+  const at = new Date().toISOString();
+  const base = { provider: provider || '', model: model || '', at };
+  if (error) {
+    return {
+      ...base,
+      status: 'failed',
+      error: (error?.message || String(error)).slice(0, 4000),
+      failedKinds: ALL_CANON_KINDS,
+      extracted: { characters: 0, places: 0, objects: 0 },
+    };
+  }
+  const failedKinds = (failures || []).map((f) => f.kind);
+  const extracted = {
+    characters: results?.characters?.extracted?.length || 0,
+    places: results?.places?.extracted?.length || 0,
+    objects: results?.objects?.extracted?.length || 0,
+  };
+  return {
+    ...base,
+    status: failedKinds.length ? 'partial' : 'ok',
+    error: failedKinds.length
+      ? (failures || []).map((f) => `${f.kind}: ${f.error}`).join(' | ').slice(0, 4000)
+      : '',
+    failedKinds,
+    extracted,
+  };
 }
 
 /**

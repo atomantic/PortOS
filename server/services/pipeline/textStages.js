@@ -16,7 +16,7 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries } from './series.js';
-import { extractCanonFromProse } from '../universeCanon.js';
+import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -300,7 +300,7 @@ export async function generateStage(issueId, stageId, options = {}) {
   }
 
   const output = (result.content || '').trim();
-  const { issue: updatedIssue, stage } = await updateStage(issueId, stageId, {
+  let { issue: updatedIssue, stage } = await updateStage(issueId, stageId, {
     status: output ? 'ready' : 'error',
     output,
     lastRunId: result.runId,
@@ -322,15 +322,43 @@ export async function generateStage(issueId, stageId, options = {}) {
     // sourceSeriesId attributes them to the triggering series. Matches the
     // pre-B.4 `extractAndMergeIntoSeries` semantics so existing-data behavior
     // is preserved.
-    await extractCanonFromProse(series.universeId, {
+    // Persist the extraction outcome on the prose stage (success, partial, or
+    // failed) so the Nouns UI can surface a banner and let the user retry with
+    // a different provider/model. Still non-fatal — a noisy extract shouldn't
+    // roll back the user's accepted prose draft. The stamp is best-effort: if
+    // even the stamp write fails we only warn (no throw out of the prose path).
+    //
+    // Record only the override actually forwarded to the extractor (not a
+    // series.llm fallback) — the extract call below passes bare
+    // `options.providerId`/`options.model`, so when those are undefined the
+    // extractor resolves to the global active provider. Claiming
+    // `series.llm.provider` here would make the banner misreport which provider
+    // failed. Empty string = "used the default/active provider".
+    const provider = options.providerId || '';
+    const model = options.model || '';
+    const marker = await extractCanonFromProse(series.universeId, {
       corpus: output,
       providerOverride: options.providerId,
+      modelOverride: options.model,
       parallel: true,
       autoLock: true,
       sourceSeriesId: series.id,
-    }).catch((err) => {
-      console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
+    }).then(
+      ({ results, failures }) => summarizeCanonExtraction({ results, failures, provider, model }),
+      (err) => {
+        console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
+        return summarizeCanonExtraction({ error: err, provider, model });
+      },
+    );
+    // Use the stamped issue/stage as the return value so callers (and the
+    // socket update) carry the fresh canonExtraction marker, not the pre-stamp
+    // snapshot. Best-effort: on a stamp-write failure we keep the pre-stamp
+    // values.
+    const stamped = await updateStage(issueId, 'prose', { canonExtraction: marker }).catch((err) => {
+      console.warn(`⚠️ Failed to record canon-extraction status for issue ${issueId.slice(0, 8)}: ${err.message}`);
+      return null;
     });
+    if (stamped) ({ issue: updatedIssue, stage } = stamped);
   }
 
   return { issue: updatedIssue, stage, runId: result.runId };

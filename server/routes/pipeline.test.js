@@ -897,6 +897,30 @@ describe('pipeline routes', () => {
     spy.mockRestore();
   });
 
+  it('POST /issues/:id/stages/storyboards/extract-scenes does NOT pair a new providerOverride with the stale series model', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
+      extracted: { title: 'T', logline: 'L', scenes: [] },
+      runId: 'r', providerId: 'mock', model: 'mock-model',
+    });
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: uni.id, llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { teleplay: { status: 'ready', output: '## TEASER\n\n**INT. VAULT — NIGHT**\n\nThey break in.' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay', providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    // Provider switched to anthropic — the codex model must NOT ride along.
+    expect(spy.mock.calls[0][0].providerOverride).toBe('anthropic');
+    expect(spy.mock.calls[0][0].modelOverride).toBeUndefined();
+    spy.mockRestore();
+  });
+
   it('POST /issues/:id/stages/storyboards/extract-scenes with from=prose routes to the prose stage output', async () => {
     const extractor = await import('../lib/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
@@ -1112,12 +1136,13 @@ describe('pipeline routes', () => {
 
   // ---- :stageId/extract-canon (manual canon extraction from comicScript / teleplay) ----
 
-  it('POST /issues/:id/stages/:stageId/extract-canon 400s when stage is not comicScript or teleplay', async () => {
+  it('POST /issues/:id/stages/:stageId/extract-canon 400s for a stage that cannot source canon', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // `idea` is not a canon-extraction source (prose/comicScript/teleplay are).
     const r = await request(app)
-      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/idea/extract-canon`)
       .send({});
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('PIPELINE_CANON_EXTRACT_BAD_STAGE');
@@ -1251,6 +1276,118 @@ describe('pipeline routes', () => {
     expect(r.body.sourceStage).toBe('teleplay');
     expect(r.body.extracted).toEqual({ characters: 2, places: 1, objects: 0 });
     expect(spy.mock.calls[0][1].corpus).toContain('VELVET ROOM');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon allows prose, forwards model, and stamps a partial canonExtraction marker', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u', characters: [{ id: 'c1', name: 'Barkeep' }], places: [], objects: [] },
+      results: {
+        characters: { extracted: [{ name: 'Barkeep' }] },
+        places: { extracted: [] },
+        objects: { extracted: [] },
+      },
+      failures: [{ kind: 'object', error: 'safety refused' }],
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'A barkeep slides a glass to Lina.' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({ providerOverride: 'anthropic', model: 'claude-x' });
+    expect(r.status).toBe(200);
+    expect(r.body.sourceStage).toBe('prose');
+    expect(r.body.canonExtraction.status).toBe('partial');
+    expect(r.body.canonExtraction.failedKinds).toEqual(['object']);
+    expect(r.body.failures).toEqual([{ kind: 'object', error: 'safety refused' }]);
+    // Marker is persisted on the returned issue (survives reload).
+    expect(r.body.issue.stages.prose.canonExtraction.status).toBe('partial');
+    // provider/model forwarded to the service.
+    expect(spy.mock.calls[0][1].providerOverride).toBe('anthropic');
+    expect(spy.mock.calls[0][1].modelOverride).toBe('claude-x');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon does NOT pair a new providerOverride with the stale series model', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+      failures: [],
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    // Series LLM is codex/gpt-5-codex; the retry picks anthropic + Default model.
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: uni.id, llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'some prose' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({ providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    // Provider switched, but the series' codex model must NOT be forwarded to
+    // anthropic — leave modelOverride unset so anthropic's default resolves.
+    expect(spy.mock.calls[0][1].providerOverride).toBe('anthropic');
+    expect(spy.mock.calls[0][1].modelOverride).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon keeps the series model when the override matches the series provider', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+      failures: [],
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: uni.id, llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'some prose' } },
+    });
+    // No override at all → inherit both series provider and model.
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(spy.mock.calls[0][1].providerOverride).toBe('codex');
+    expect(spy.mock.calls[0][1].modelOverride).toBe('gpt-5-codex');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon stamps `failed` before re-throwing on a hard failure', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const issuesSvc = await import('../services/pipeline/issues.js');
+    const err = Object.assign(new Error('all kinds failed'), { status: 502, code: 'UNIVERSE_CANON_EXTRACT_ALL_FAILED' });
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockRejectedValue(err);
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'some prose' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({});
+    expect(r.status).toBe(502);
+    // The marker was still stamped so the UI banner survives the 5xx.
+    const after = await issuesSvc.getIssue(iss.body.id);
+    expect(after.stages.prose.canonExtraction.status).toBe('failed');
     spy.mockRestore();
   });
 

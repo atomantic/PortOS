@@ -293,6 +293,78 @@ describe('universeCanon — extractCanonFromProse passes autoLock + sourceSeries
   });
 });
 
+describe('universeCanon — extractCanonFromProse per-kind resilience', () => {
+  it('one kind failing still merges the others and reports failures[]', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    extractBibleMock.mockImplementation(async ({ kind }) => {
+      if (kind === 'object') throw new Error('safety refused');
+      return {
+        extracted: [{ name: `New-${kind}` }],
+        runId: 'r', providerId: 'p', model: 'm',
+      };
+    });
+    const result = await canonSvc.extractCanonFromProse(w.id, {
+      corpus: 'some prose',
+      parallel: true,
+    });
+    // Characters + places landed despite objects throwing.
+    expect(result.universe.characters.some((c) => c.name === 'New-character')).toBe(true);
+    expect(result.universe.places.some((p) => p.name === 'New-place')).toBe(true);
+    expect(result.failures).toEqual([{ kind: 'object', error: 'safety refused' }]);
+    // `results` only carries the kinds that succeeded.
+    expect(result.results.objects).toBeUndefined();
+  });
+
+  it('throws UNIVERSE_CANON_EXTRACT_ALL_FAILED only when EVERY kind fails', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    extractBibleMock.mockImplementation(async () => { throw new Error('boom'); });
+    await expect(canonSvc.extractCanonFromProse(w.id, { corpus: 'p', parallel: true }))
+      .rejects.toMatchObject({ code: 'UNIVERSE_CANON_EXTRACT_ALL_FAILED' });
+  });
+
+  it('forwards modelOverride to extractBible', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    extractBibleMock.mockImplementation(async () => ({ extracted: [], runId: 'r', providerId: 'p', model: 'm' }));
+    await canonSvc.extractCanonFromProse(w.id, {
+      corpus: 'p', kinds: ['character'], providerOverride: 'anthropic', modelOverride: 'claude-x',
+    });
+    expect(extractBibleMock).toHaveBeenCalledWith(expect.objectContaining({
+      providerOverride: 'anthropic', modelOverride: 'claude-x',
+    }));
+  });
+});
+
+describe('universeCanon — summarizeCanonExtraction', () => {
+  it('ok when no failures', () => {
+    const m = canonSvc.summarizeCanonExtraction({
+      results: { characters: { extracted: [1, 2] }, places: { extracted: [3] }, objects: { extracted: [] } },
+      provider: 'codex', model: 'default',
+    });
+    expect(m.status).toBe('ok');
+    expect(m.failedKinds).toEqual([]);
+    expect(m.extracted).toEqual({ characters: 2, places: 1, objects: 0 });
+    expect(m.provider).toBe('codex');
+  });
+
+  it('partial when some kinds failed', () => {
+    const m = canonSvc.summarizeCanonExtraction({
+      results: { characters: { extracted: [1] } },
+      failures: [{ kind: 'object', error: 'safety refused' }],
+      provider: 'codex',
+    });
+    expect(m.status).toBe('partial');
+    expect(m.failedKinds).toEqual(['object']);
+    expect(m.error).toContain('object: safety refused');
+  });
+
+  it('failed (all kinds) when passed an error', () => {
+    const m = canonSvc.summarizeCanonExtraction({ error: new Error('401 bad creds'), provider: 'claude' });
+    expect(m.status).toBe('failed');
+    expect(m.error).toContain('401 bad creds');
+    expect(m.failedKinds).toEqual(['character', 'place', 'object']);
+  });
+});
+
 describe('universeCanon — purgeReferenceSheetFromAllUniverses', () => {
   it('nulls referenceSheetImageRef on every matching character across every universe', async () => {
     const w1 = await seedUniverseWithCharacters([

@@ -181,6 +181,39 @@ describe('pipeline issues service', () => {
     });
   });
 
+  describe('canonExtraction marker', () => {
+    it('defaults to null on a fresh stage', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'C' });
+      expect(i.stages.prose.canonExtraction).toBeNull();
+    });
+
+    it('round-trips a sanitized marker through updateStage', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'C' });
+      const { stage } = await svc.updateStage(i.id, 'prose', {
+        canonExtraction: {
+          status: 'partial',
+          error: 'object: safety refused',
+          failedKinds: ['object', 'bogus'],
+          extracted: { characters: 3, places: 1, objects: 0 },
+          provider: 'codex', model: 'default',
+          at: '2026-05-30T00:00:00.000Z',
+        },
+      });
+      expect(stage.canonExtraction.status).toBe('partial');
+      expect(stage.canonExtraction.failedKinds).toEqual(['object']); // unknown kind filtered
+      expect(stage.canonExtraction.extracted).toEqual({ characters: 3, places: 1, objects: 0 });
+      expect(stage.canonExtraction.provider).toBe('codex');
+    });
+
+    it('drops a marker with an invalid status (treated as never-attempted)', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'C' });
+      const { stage } = await svc.updateStage(i.id, 'prose', {
+        canonExtraction: { status: 'whoops' },
+      });
+      expect(stage.canonExtraction).toBeNull();
+    });
+  });
+
   it('updateStage patches only the named stage', async () => {
     const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
     const { issue, stage } = await svc.updateStage(i.id, 'idea', {

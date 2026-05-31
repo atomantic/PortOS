@@ -182,6 +182,35 @@ const sanitizeRunHistory = (raw) => {
     .slice(0, STAGE_RUN_HISTORY_MAX);
 };
 
+export const CANON_EXTRACTION_STATUSES = Object.freeze(['ok', 'partial', 'failed']);
+const CANON_KINDS = Object.freeze(['character', 'place', 'object']);
+
+// Normalize a canon-extraction outcome marker. Returns `null` for absent /
+// malformed input (the "never attempted" state) so the field stays falsy in
+// the UI until a real extraction runs. `extracted` counts are coerced to
+// non-negative integers; `failedKinds` is filtered to the known kinds.
+const sanitizeCanonExtraction = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!CANON_EXTRACTION_STATUSES.includes(raw.status)) return null;
+  const count = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+  const ex = raw.extracted && typeof raw.extracted === 'object' ? raw.extracted : {};
+  return {
+    status: raw.status,
+    error: trimTo(raw.error, STAGE_NOTES_MAX),
+    failedKinds: Array.isArray(raw.failedKinds)
+      ? [...new Set(raw.failedKinds.filter((k) => CANON_KINDS.includes(k)))]
+      : [],
+    extracted: {
+      characters: count(ex.characters),
+      places: count(ex.places),
+      objects: count(ex.objects),
+    },
+    provider: trimTo(raw.provider, 80),
+    model: trimTo(raw.model, 128),
+    at: isStr(raw.at) ? raw.at : null,
+  };
+};
+
 const sanitizeStage = (raw) => {
   if (!raw || typeof raw !== 'object') return emptyStage();
   const status = STAGE_STATUSES.includes(raw.status) ? raw.status : 'empty';
@@ -200,6 +229,16 @@ const sanitizeStage = (raw) => {
     runHistory: sanitizeRunHistory(raw.runHistory),
   };
 };
+
+// Text stages (idea/prose/comicScript/teleplay) carry one extra field beyond
+// the shared stage shape: `canonExtraction`, the persisted outcome of the last
+// characters/places/objects extraction run against the stage output (used on
+// `prose`). Layered here rather than in `sanitizeStage` so visual/audio shapes
+// never inherit a concern that doesn't apply to them. `null` = never attempted.
+const sanitizeTextStage = (raw) => ({
+  ...sanitizeStage(raw),
+  canonExtraction: sanitizeCanonExtraction(raw?.canonExtraction),
+});
 
 /**
  * Decide whether `patch` represents a generate-replacement on `prevStage` and,
@@ -301,7 +340,8 @@ const sanitizeGenConfig = (raw) => {
 
 const sanitizeVisualStage = (raw, stageId = null) => {
   // Visual stages keep arbitrary structured artifact lists. Sanitize the
-  // wrapper but pass through known shapes.
+  // wrapper but pass through known shapes. `canonExtraction` is text-stage-only
+  // (it lives on `sanitizeTextStage`), so the visual shape never carries it.
   const base = sanitizeStage(raw);
   return {
     ...base,
@@ -366,6 +406,8 @@ const sanitizeMusicTrack = (raw) => {
 };
 
 const sanitizeAudioStage = (raw) => {
+  // `canonExtraction` is text-stage-only (see sanitizeTextStage) — the audio
+  // shape never carries it.
   const base = sanitizeStage(raw);
   return {
     ...base,
@@ -378,7 +420,7 @@ const sanitizeAudioStage = (raw) => {
 
 const sanitizeStages = (raw = {}) => {
   const out = {};
-  for (const id of TEXT_STAGE_IDS) out[id] = sanitizeStage(raw[id]);
+  for (const id of TEXT_STAGE_IDS) out[id] = sanitizeTextStage(raw[id]);
   for (const id of VISUAL_STAGE_IDS) out[id] = sanitizeVisualStage(raw[id], id);
   for (const id of AUDIO_STAGE_IDS) out[id] = sanitizeAudioStage(raw[id]);
   return out;
@@ -971,7 +1013,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
     let next;
     if (isVisual) next = sanitizeVisualStage(merged, stageId);
     else if (isAudio) next = sanitizeAudioStage(merged);
-    else next = sanitizeStage(merged);
+    else next = sanitizeTextStage(merged);
     const mergedIssue = sanitizeIssue({
       ...cur,
       stages: { ...cur.stages, [stageId]: next },

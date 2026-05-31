@@ -171,17 +171,21 @@ export const extractPipelineComicPages = (issueId, { force } = {}) =>
     body: JSON.stringify({ force }),
   });
 
-// Run canon extraction (characters/places/objects) against an issue's
-// comicScript or teleplay stage output and merge the result into the series'
-// linked universe. Auto-extract only fires after prose; this lets the writer
-// pull in minor entities introduced only in script-stage panel directions or
-// dialogue cues. Returns { universe, extracted: { characters, places, objects },
-// sourceStage, truncated } — `truncated` is true when the script exceeded
-// the server's 200K-char extract cap and was clamped before being sent to the LLM.
-export const extractPipelineCanonFromScript = (issueId, stageId, { providerOverride } = {}, options = {}) =>
+// Run canon extraction (characters/places/objects) against an issue's prose,
+// comicScript, or teleplay stage output and merge the result into the series'
+// linked universe. Auto-extract fires after prose; this lets the writer re-run
+// it (e.g. after a provider failure) with a chosen provider/model, or pull in
+// minor entities introduced only in script-stage panel directions / dialogue
+// cues. `providerOverride`/`model` override the series' configured LLM for this
+// run so the user can keep trying models until extraction succeeds. Returns
+// { universe, issue, canonExtraction, failures, extracted: { characters, places,
+// objects }, sourceStage, truncated } — `canonExtraction` is the persisted
+// outcome marker; `failures` lists kinds that threw; `truncated` is true when
+// the corpus exceeded the server's 200K-char extract cap and was clamped.
+export const extractPipelineCanonFromScript = (issueId, stageId, { providerOverride, model } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/extract-canon`, {
     method: 'POST',
-    body: JSON.stringify({ providerOverride }),
+    body: JSON.stringify({ providerOverride, model }),
     ...options,
   });
 

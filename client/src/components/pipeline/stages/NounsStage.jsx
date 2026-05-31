@@ -16,14 +16,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Library, Loader2, Users, MapPin, Package,
-  Settings as SettingsIcon, ChevronDown, ChevronRight,
+  Settings as SettingsIcon, ChevronDown, ChevronRight, AlertTriangle,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   getUniverse, updateUniverse,
-  extractUniverseCanon, refineUniverseCharacter,
+  refineUniverseCharacter,
   getUniverseSeriesNames,
 } from '../../../services/apiUniverseBuilder';
+import { extractPipelineCanonFromScript } from '../../../services/apiPipeline';
+import { getProviders } from '../../../services/apiProviders';
 import { getSettings, patchSettingsSlice, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import {
@@ -70,7 +72,7 @@ const KINDS = [
   },
 ];
 
-export default function NounsStage({ issue, series }) {
+export default function NounsStage({ issue, series, onStageUpdate }) {
   const mountedRef = useMounted();
   const prose = (issue.stages?.prose?.output || '').trim();
   const proseReady = prose.length > 0;
@@ -200,6 +202,39 @@ export default function NounsStage({ issue, series }) {
 
   const [extracting, setExtracting] = useState(false);
 
+  // Provider/model picker for the extraction run. Seeded from the series'
+  // configured LLM but overridable per attempt so the user can keep trying
+  // different models until extraction succeeds (e.g. after a Codex safety
+  // refusal or a malformed-JSON response). Empty string = "series default".
+  const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState(null);
+  const [extractProvider, setExtractProvider] = useState(series?.llm?.provider || '');
+  const [extractModel, setExtractModel] = useState(series?.llm?.model || '');
+  useEffect(() => {
+    getProviders()
+      .then((data) => {
+        if (!mountedRef.current) return;
+        setProviders(data?.providers || []);
+        setActiveProviderId(data?.activeProvider || null);
+      })
+      .catch(() => { /* dropdowns fall back to the series-default label */ });
+  }, [mountedRef]);
+
+  // Persisted outcome of the last prose→canon extraction. Read straight from
+  // the issue prop — it survives reload and is refreshed via `onStageUpdate`
+  // after a retry (success or failure), so no local mirror/effect is needed.
+  const canonExtraction = issue.stages?.prose?.canonExtraction || null;
+
+  // Models offered for the currently-picked extraction provider (or the series
+  // default when none is explicitly picked). Mirrors SeriesLlmPicker.
+  const seriesDefaultProviderId = series?.llm?.provider || activeProviderId;
+  const providerLabel = (pid) => providers.find((p) => p.id === pid)?.name || pid || 'Active provider';
+  const extractProviderModels = useMemo(() => {
+    const p = providers.find((x) => x.id === extractProvider)
+      || providers.find((x) => x.id === seriesDefaultProviderId);
+    return p?.models || [];
+  }, [providers, extractProvider, seriesDefaultProviderId]);
+
   // Per-character in-flight refine. Tracking by id (not a single bool) so
   // the user can fire refines in serial without the spinner jumping cards.
   const [refiningCharacterId, setRefiningCharacterId] = useState(null);
@@ -220,15 +255,45 @@ export default function NounsStage({ issue, series }) {
   const handleExtract = async () => {
     if (!universe || !proseReady) return;
     setExtracting(true);
-    const result = await extractUniverseCanon(universe.id, { corpus: prose })
-      .catch((err) => { toast.error(err.message || 'Extraction failed'); return null; });
+    // Route through the pipeline endpoint (not the universe one) so the server
+    // stamps the prose stage's canonExtraction marker — single source of truth
+    // shared with the post-prose auto-extract. Pass the picker's provider/model
+    // so a retry can use a different model than the one that just failed.
+    const result = await extractPipelineCanonFromScript(issue.id, 'prose', {
+      providerOverride: extractProvider || undefined,
+      model: extractModel || undefined,
+    }, { silent: true }).catch((err) => {
+      // A hard failure (every kind threw) is stamped `failed` server-side
+      // before the throw — mirror that onto the parent issue so the banner
+      // updates without a refetch and the user sees what to retry.
+      if (mountedRef.current) {
+        const failedMarker = {
+          status: 'failed',
+          error: err.message || 'Extraction failed',
+          failedKinds: KINDS.map((k) => k.singular),
+          provider: extractProvider, model: extractModel,
+          extracted: { characters: 0, places: 0, objects: 0 },
+          at: new Date().toISOString(),
+        };
+        onStageUpdate?.('prose', { ...issue.stages?.prose, canonExtraction: failedMarker });
+        toast.error(err.message || 'Extraction failed');
+      }
+      return null;
+    });
     if (mountedRef.current) setExtracting(false);
     if (!result || !mountedRef.current) return;
     if (result.universe) setUniverse(result.universe);
-    const counts = KINDS
-      .map((k) => `${result.universe?.[k.key]?.length ?? 0} ${k.key}`)
-      .join(', ');
-    toast.success(`Bibles updated — ${counts}`);
+    // Propagate the stamped prose stage (with the fresh canonExtraction marker)
+    // up so the banner + retry-label update without a refetch.
+    if (result.issue?.stages?.prose) onStageUpdate?.('prose', result.issue.stages.prose, result.issue);
+    const e = result.extracted || {};
+    const counts = `${e.characters || 0} characters, ${e.places || 0} places, ${e.objects || 0} objects`;
+    if (result.canonExtraction?.status === 'partial') {
+      const failed = (result.canonExtraction.failedKinds || []).join(', ') || 'some kinds';
+      toast.error(`Extracted ${counts}, but ${failed} failed — pick a different model and retry`);
+    } else {
+      toast.success(`Bibles updated — ${counts}`);
+    }
   };
 
   // Queue a reference render. The filename ISN'T persisted onto the entry's
@@ -375,7 +440,7 @@ export default function NounsStage({ issue, series }) {
             that universe.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={openSettings}
@@ -384,6 +449,37 @@ export default function NounsStage({ issue, series }) {
           >
             <SettingsIcon size={12} /> Image gen
           </button>
+          {/* Per-attempt provider/model override. Empty = series default, so a
+              first extract behaves exactly as before; the user only reaches for
+              these when retrying after a provider failure. */}
+          <select
+            value={extractProvider}
+            onChange={(e) => { setExtractProvider(e.target.value); setExtractModel(''); }}
+            disabled={extracting}
+            title="AI provider for extraction"
+            aria-label="Extraction provider"
+            className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40"
+          >
+            <option value="">Series default ({providerLabel(seriesDefaultProviderId)})</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={extractModel}
+            onChange={(e) => setExtractModel(e.target.value)}
+            disabled={extracting || extractProviderModels.length === 0}
+            title="Model for extraction"
+            aria-label="Extraction model"
+            className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40 max-w-[160px]"
+          >
+            <option value="">Default model</option>
+            {extractProviderModels.map((m) => {
+              const mid = typeof m === 'string' ? m : m.id;
+              const label = typeof m === 'string' ? m : (m.name || m.id);
+              return <option key={mid} value={mid}>{label}</option>;
+            })}
+          </select>
           <button
             type="button"
             onClick={handleExtract}
@@ -392,10 +488,14 @@ export default function NounsStage({ issue, series }) {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-40"
           >
             {extracting ? <Loader2 size={14} className="animate-spin" /> : <Library size={14} />}
-            Extract from prose
+            {canonExtraction && canonExtraction.status !== 'ok' ? 'Retry extraction' : 'Extract from prose'}
           </button>
         </div>
       </header>
+
+      {canonExtraction && canonExtraction.status !== 'ok' ? (
+        <CanonExtractionBanner extraction={canonExtraction} />
+      ) : null}
 
       {!proseReady ? (
         <p className="text-sm text-gray-400 italic">
@@ -432,6 +532,39 @@ export default function NounsStage({ issue, series }) {
       </Drawer>
 
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
+    </div>
+  );
+}
+
+// Persisted failure/partial banner for the prose→canon extraction. `partial`
+// (some kinds landed, others failed — e.g. Codex safety-refused `object`) is a
+// warning; `failed` (nothing extracted) is an error. Both name the failed
+// kinds + the provider/model used and tell the user to retry with a different
+// model via the picker above.
+function CanonExtractionBanner({ extraction }) {
+  const partial = extraction.status === 'partial';
+  const failed = (extraction.failedKinds || []).join(', ') || 'extraction';
+  const used = [extraction.provider, extraction.model].filter(Boolean).join(' / ') || 'the configured model';
+  const tone = partial
+    ? 'border-port-warning/40 bg-port-warning/5 text-port-warning'
+    : 'border-port-error/40 bg-port-error/5 text-port-error';
+  return (
+    <div className={`rounded-lg border p-3 flex items-start gap-2 ${tone}`} role="alert">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+      <div className="space-y-1 min-w-0">
+        <p className="text-sm font-medium">
+          {partial
+            ? `Some canon extracted, but ${failed} failed with ${used}.`
+            : `Canon extraction failed with ${used}.`}
+        </p>
+        {extraction.error ? (
+          <p className="text-xs text-gray-400 break-words">{extraction.error}</p>
+        ) : null}
+        <p className="text-xs text-gray-400">
+          Pick a different provider/model above and retry — the entries that already
+          landed are kept.
+        </p>
+      </div>
     </div>
   );
 }
