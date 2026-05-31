@@ -191,7 +191,9 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
   const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX;
   const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
-  const progressPct = typeof job.progress === 'number'
+  // Number.isFinite (not typeof === 'number') so a NaN from a hand-edited
+  // media-jobs.json can't render as `NaN%` / `width: NaN%`.
+  const progressPct = Number.isFinite(job.progress)
     ? Math.max(0, Math.min(100, Math.round(job.progress * 100)))
     : 0;
   // Inline edit form for retry-with-overrides.

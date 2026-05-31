@@ -564,6 +564,9 @@ async function runJob(job) {
       job.progress = 1;
       job.statusMsg = 'Completed';
     }
+    // failed/canceled intentionally retain the last mid-render progress/statusMsg
+    // (how far it got) — consumers gate the progress UI on status === 'running',
+    // so the residual values are not displayed for terminal jobs.
     job.completedAt = new Date().toISOString();
     const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
     const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
