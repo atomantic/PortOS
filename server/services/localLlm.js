@@ -22,13 +22,13 @@
 
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
-import { readFileSync, writeFileSync, createWriteStream } from 'fs'
+import { readFileSync, createWriteStream } from 'fs'
 import { stat, mkdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { PATHS } from '../lib/fileUtils.js'
+import { PATHS, atomicWrite } from '../lib/fileUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import * as ollamaManager from './ollamaManager.js'
@@ -145,7 +145,7 @@ export function getBackend() {
   return DEFAULT_BACKEND
 }
 
-function writeBackend(backend) {
+async function writeBackend(backend) {
   let content = ''
   try { content = readFileSync(ENV_PATH, 'utf8') } catch { /* no .env yet */ }
   if (/^LLM_BACKEND=/m.test(content)) {
@@ -153,7 +153,7 @@ function writeBackend(backend) {
   } else {
     content = `LLM_BACKEND=${backend}\n${content}`
   }
-  writeFileSync(ENV_PATH, content)
+  await atomicWrite(ENV_PATH, content)
 }
 
 /**
@@ -651,7 +651,7 @@ export async function deleteModel(backend, modelId) {
  */
 export async function switchBackend(to) {
   if (!isBackend(to)) return { success: false, error: `Unknown backend: ${to}` }
-  writeBackend(to)
+  await writeBackend(to)
   await ensureBackendProvider(to)
   console.log(`🔀 Active local LLM backend → ${to}`)
   return { success: true, backend: to }

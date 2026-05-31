@@ -2,8 +2,10 @@
  * SyncBadge — presentational-only sync status badge.
  *
  * Props:
- *   status   — 'in-parity' | 'diverged' | 'assets-missing' | 'local-only' |
- *              'peer-only' | 'not-syncing' | 'unknown' | null | undefined
+ *   status   — 'in-parity' | 'diverged' | 'assets-missing' |
+ *              'metadata-missing' | 'local-only' | 'peer-only' |
+ *              'peer-unreachable' | 'peer-too-old' | 'fetch-failed' |
+ *              'not-syncing' | 'unknown' | null | undefined
  *   onClick  — called when the badge button is clicked (e.g. open detail drawer)
  */
 
@@ -27,6 +29,12 @@ const STATUS_CONFIG = {
     className: 'bg-port-warning/15 text-port-warning hover:bg-port-warning/25',
     Icon: AlertTriangle,
     title: 'Record present but associated files are missing on a peer',
+  },
+  'metadata-missing': {
+    label: 'Metadata missing',
+    className: 'bg-port-warning/15 text-port-warning hover:bg-port-warning/25',
+    Icon: AlertTriangle,
+    title: 'One or more synced images is missing generation prompt metadata',
   },
   'local-only': {
     label: 'Local only',
@@ -55,6 +63,24 @@ const STATUS_CONFIG = {
     // Sync IS configured, but every eligible peer was unreachable / too-old /
     // errored, so we couldn't compute parity. Distinct from 'not-syncing'.
     title: 'Sync status unavailable — peer offline, unreachable, or on an older PortOS',
+  },
+  'peer-unreachable': {
+    label: 'Peer offline',
+    className: 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30',
+    Icon: WifiOff,
+    title: 'Sync status unavailable — peer is offline or unreachable',
+  },
+  'peer-too-old': {
+    label: 'Peer update needed',
+    className: 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30',
+    Icon: HelpCircle,
+    title: 'Sync status unavailable — peer is running an older PortOS without integrity manifests',
+  },
+  'fetch-failed': {
+    label: 'Sync check failed',
+    className: 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30',
+    Icon: HelpCircle,
+    title: 'Sync status unavailable — peer returned an error during integrity check',
   },
 };
 

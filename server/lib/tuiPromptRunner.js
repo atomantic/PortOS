@@ -1,7 +1,7 @@
 /**
  * One-shot TUI prompt runner.
  *
- * Spawns a TUI binary (Claude Code, Codex, Gemini, etc.) in a PTY, waits for
+ * Spawns a TUI binary (Claude Code, Codex, Antigravity, etc.) in a PTY, waits for
  * the prompt cursor to become input-ready, bracketed-pastes the prompt + Enter,
  * watches for the model response to complete via sustained output-idle, then
  * strips ANSI and returns the captured text. Persists a run record under

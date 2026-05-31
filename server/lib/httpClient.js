@@ -90,7 +90,9 @@ export function insecureFetch(agent) {
               has: n => Object.prototype.hasOwnProperty.call(res.headers, n.toLowerCase()),
             },
             text: () => Promise.resolve(buffer.toString('utf-8')),
-            json: () => Promise.resolve(JSON.parse(buffer.toString('utf-8'))),
+            // Defer JSON.parse so a malformed body becomes a promise rejection
+            // (matching Fetch) rather than a synchronous throw from `res.json()`.
+            json: async () => JSON.parse(buffer.toString('utf-8')),
             // ArrayBuffer view matching Fetch's Response so call sites can
             // `Buffer.from(await res.arrayBuffer())` without branching on
             // transport.

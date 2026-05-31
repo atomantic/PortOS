@@ -57,6 +57,8 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useSocket` | Shared socket instance + connection status. | You need to subscribe to a socket event. |
 | `useUpdateChecker` | Detect stale client bundle; show reload toast. | Wire once at app root. |
 | `useMounted` | `mountedRef` whose `.current` is true while mounted. | Async deferred work that must abort on unmount. |
+| `usePrevious` | Returns the value from the previous render — snapshot updated in a `useEffect`. | Compare-and-act on prop/state change from inside a `useEffect`. |
+| `usePreviousSync` | Same shape, but snapshot updated *during* render. | The prior value gates an in-render `setState` (React's "adjusting state on prop change" pattern); the during-render update avoids an extra discard/rerun cycle. |
 | `useTimeTick` | Singleton-backed wall-clock tick (`Date.now()`); N subscribers at the same cadence share one `setInterval`. | A widget renders something derived from `Date.now()` (relative timestamps, threshold-based health labels, countdowns) and is also fed by a deduped `useAutoRefetch` — without this the label goes stale until the data changes. |
 | `useVisibilityEvent` | Singleton-backed `document.visibilitychange` subscription (N subscribers share one listener). | Reacting to tab show/hide without spawning a per-component listener. `useAutoRefetch` already builds on this. |
 
@@ -96,6 +98,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useCodeReviewDefaults` | Global Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model) via a small Provider/hook pair. | TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown. |
+| `useCatalogTypes` | Catalog ingredient type registry (system + user-defined) merged with the static fallback via a Provider/hook pair; synchronous fallback to the built-in six so first render never blanks. | Catalog list/picker/editor; anywhere the catalog type list/lookup is needed. |
 | `useDeathClock` | 1-second countdown for death-clock display. | Mortality / death-clock surfaces. |
 | `useNextEvalCountdown` | 1-second countdown to the next CoS evaluation tick. | Chief of Staff "next eval in Xs" displays. |
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |

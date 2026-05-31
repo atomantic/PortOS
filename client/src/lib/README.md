@@ -31,6 +31,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `sheetPointers.js` | Mirror of the character-sheet pointer helpers from `server/lib/storyBible.js`. `LEGACY_SHEET_VARIANT_ID` + `readSheetPointer` / `listSheetPointers` / `applySheetPointer` for traversing both the legacy `referenceSheetImageRef` field and the `referenceSheets` map. |
 | `universeStylePreset.js` | Build the client-side style preset that `composeStyledPrompt` layers on top. |
 | `bibleLimits.js` | Mirror of `server/lib/storyBible.js` `BIBLE_LIMITS`. |
+| `catalogTypes.js` | Client mirror of `server/lib/catalogTypes.js` — catalog ingredient type registry (label, badge color, primary-content key/label, snippet fallback chain, per-type editor field list) for the Catalog list/picker/editor. |
 | `editorialRoadmap.js` | `projectAnalyzedPoints` (aggregate roadmap → analyzed chart points with arc-position `frac`) + `dominant` (most-frequent string). Shared by EditorialRoadmapPanel and the Reader Map page. |
 | `imageCleaners.js` | Mirror of `resolveCleanersFromConfig` from `server/lib/imageClean.js`. Reads `{cleanC2PA, denoise}` off a per-mode settings record. `cleanC2PA` defaults are mode-aware (on for `codex` + `external` — the backends that emit C2PA chunks today — off otherwise, as an allow-list rather than a deny-list); `denoise` defaults off everywhere (lossy, opt-in only). |
 | `runnerFamilies.js` | Mirror of `server/lib/runners.js`. |
@@ -58,6 +59,7 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | Module | Purpose |
 |---|---|
+| `audioRecorder.js` | `startMemoRecording()` → `{ stop, cancel }` handle whose `stop()` resolves to `{ audioBase64, mimeType, peak, durationMs }` (16 kHz mono WAV, base64). Plus `blobToWav16k`, `encodePcmToWav`, `pickRecordingMimeType`, `arrayBufferToBase64`. Standalone one-shot memo capture for catalog voice ingest — NOT the live voice-agent recorder in `services/voiceClient.js`. |
 | `clientErrorReporter.js` | `reportClientError({ type, error?, message?, ... })` — POSTs window.onerror + unhandledrejection events to `/api/client-errors` with throttle + dedup. Wired from `main.jsx`; never call directly from React components. |
 | `clipboard.js` | `copyToClipboard`, `writeClipboardSilently`, `readClipboard` — safe across insecure-origin contexts. Use these instead of `navigator.clipboard.writeText` inline. |
 | `compareHelpers.js` | `equalByKeys(a, b, keys)` / `equalListByKeys(a, b, keys)` — typed key-based equality for `useAutoRefetch`'s `compare`. Keys are property names, dotted paths (`'context.running'`), or `(item) => value` accessors. The typed alternative to `sameJsonShape` when a monotonic timestamp or unrendered field would break stringify-equality dedup. |

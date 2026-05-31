@@ -1,13 +1,27 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
+import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
+import { isSafeIngestUrl } from '../lib/catalogValidation.js';
 import * as browserService from '../services/browserService.js';
 
 const router = express.Router();
 
 // Validation schemas
+// SSRF guard (shared with catalog URL ingest): reject non-http(s) schemes
+// (file:/chrome:/javascript:) and loopback / link-local / cloud-metadata host
+// LITERALS so an agent-driven navigate can't directly target local-file
+// exfiltration or a metadata endpoint. Private/LAN + Tailscale hosts stay
+// allowed (a single-user tool legitimately drives its browser there);
+// `localhost`/`127.x` are blocked — navigate by LAN IP/hostname for a local app.
+// This is a host-literal guard, not a DNS-resolution / post-redirect check: a
+// hostname that RESOLVES to loopback, or a server-side redirect the CDP browser
+// then follows to a blocked host, is out of scope here (the browser, not this
+// route, performs the redirect fetch).
 const navigateSchema = z.object({
   url: z.string().url()
+    .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed')
 });
 
 // Empty string from a "clear" UI action → unset (undefined), so the launcher
@@ -19,6 +33,16 @@ const optionalPath = z.preprocess(
     { message: 'path must not contain path traversal' }
   ).optional()
 );
+
+const chromePathSchema = optionalPath.superRefine((value, ctx) => {
+  const message = validateChromePath(value);
+  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+});
+
+const macAppBundleSchema = optionalPath.superRefine((value, ctx) => {
+  const message = validateMacAppBundle(value);
+  if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+});
 
 const updateConfigSchema = z.object({
   cdpPort: z.number().int().min(1024).max(65535).optional(),
@@ -35,10 +59,11 @@ const updateConfigSchema = z.object({
   // back to the platform default (`/Applications/Google Chrome.app/...` on
   // macOS, `C:\Program Files\Google\Chrome\...` on Windows, `google-chrome`
   // on Linux).
-  chromePath: optionalPath,
+  chromePath: chromePathSchema,
   // macOS headed mode launches via `open -na <app-bundle>` for TCC reasons,
   // so the bundle (`.app`) path is tracked separately from the executable.
-  macAppBundle: optionalPath
+  macAppBundle: macAppBundleSchema,
+  canaryPromptDeclined: z.boolean().optional()
 });
 
 // GET /api/browser - Full browser status
@@ -83,8 +108,9 @@ router.post('/restart', asyncHandler(async (req, res) => {
 
 // POST /api/browser/navigate - Open a URL in the CDP browser
 router.post('/navigate', asyncHandler(async (req, res) => {
-  const { url } = navigateSchema.parse(req.body);
-  console.log(`🌐 Navigate requested: ${url}`);
+  const caller = req.headers['referer'] || req.headers['origin'] || 'unknown';
+  console.log(`🌐 Navigate: ${req.body?.url} (from ${caller})`);
+  const { url } = validateRequest(navigateSchema, req.body);
   const page = await browserService.navigateToUrl(url);
   res.json(page);
 }));

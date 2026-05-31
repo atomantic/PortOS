@@ -75,7 +75,7 @@ The AI provider/runner/prompt toolkit is vendored in-tree at `server/lib/aiToolk
 - When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update `createProvider()` in `server/lib/aiToolkit/providers.js`
 - `updateProvider()` uses spread so existing providers preserve custom fields, but `createProvider()` has an explicit field list
 
-**Override consistency.** PortOS replaces `aiToolkit.services.runner.executeCliRun` in `server/index.js` with a stdin-based variant that knows the per-CLI argv conventions (Codex `exec -`, Gemini stdin piping, Claude Code `-p -`). Two patches follow from this:
+**Override consistency.** PortOS replaces `aiToolkit.services.runner.executeCliRun` in `server/index.js` with a stdin-based variant that knows the per-CLI argv conventions (Codex `exec -`, Antigravity `agy --print`, Claude Code `-p -`). Two patches follow from this:
 
 - The PortOS variant tracks live child processes in `_portosActiveRuns`, not the toolkit's internal `activeRuns`. **Every sibling method that reads or writes the runner's process map must be patched together** — `stopRun` and `isRunActive` are already overridden alongside `executeCliRun`; if you add a new method (e.g. `pauseRun`, `getActiveRunCount`), add a matching override or the runs router will report inconsistent state.
 - Time-based state transitions need read-side mirrors. `providerStatus.init()` clears expired `estimatedRecovery` entries; every reader (`getStatus`, `getAllStatuses`, `isAvailable`) must re-apply the same recovery check on read — otherwise providers stay "unavailable" past their recovery deadline until the next process restart.

@@ -26,6 +26,7 @@ export default function HealthTab() {
   const [availableMetrics, setAvailableMetrics] = useState(new Set());
   const [expandedSections, setExpandedSections] = useState(new Set());
   const [correlationData, setCorrelationData] = useState(null);
+  const [workouts, setWorkouts] = useState([]);
   const [initialized, setInitialized] = useState(false);
   const sectionRefs = useRef({});
 
@@ -69,6 +70,12 @@ export default function HealthTab() {
       .catch(() => setCorrelationData(null));
   }, [from, to]);
 
+  useEffect(() => {
+    api.getWorkouts()
+      .then((data) => setWorkouts(data?.workouts || []))
+      .catch(() => setWorkouts([]));
+  }, []);
+
   const setRange = useCallback((newRange) => {
     const params = new URLSearchParams(searchParams);
     params.set('range', newRange);
@@ -109,6 +116,33 @@ export default function HealthTab() {
           </button>
         ))}
       </div>
+
+      <section className="border border-port-border rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-port-border bg-port-bg/40">
+          <h3 className="text-sm font-medium text-white">Workouts</h3>
+        </div>
+        {workouts.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-gray-500">No workouts logged yet.</p>
+        ) : (
+          <div className="divide-y divide-port-border/70">
+            {workouts.slice(0, 8).map((workout, index) => (
+              <div key={`${workout.date}-${workout.type}-${index}`} className="px-4 py-3 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm text-white truncate">{workout.type}</p>
+                  {workout.notes && <p className="text-xs text-gray-500 truncate">{workout.notes}</p>}
+                </div>
+                <div className="shrink-0 text-right text-xs text-gray-400">
+                  <div>{workout.date}</div>
+                  <div>
+                    {workout.durationMinutes != null ? `${workout.durationMinutes} min` : 'Duration n/a'}
+                    {workout.intensity ? ` · ${workout.intensity}` : ''}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Category sections */}
       {METRIC_CATEGORIES.map(category => (

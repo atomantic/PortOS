@@ -47,6 +47,80 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // pauses with old peers; issues/universes keep flowing.
   pipelineSeries: 2,
   mediaCollections: 1,
+  // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
+  // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
+  // v2 = `catalog_ingredients.search_tsv` expanded to also index the
+  // character canon fields (physicalDescription, personality) and the
+  // type-specific role/motivations/significance fields, so bible-promoted
+  // characters become searchable on their main narrative text. The schema
+  // is a DROP+re-ADD of the STORED generated column (Postgres can't ALTER
+  // its expression); applied in lockstep by `ensureSchema`.
+  // v3 = `catalog_ingredient_refs` gained `deleted`/`deleted_at` soft-delete
+  // tombstones + an UPDATE trigger that bumps sync_sequence on delete/revive.
+  // Older peers (≤v2) hard-DELETE on unlink and never tombstone, so the
+  // version gate prevents a v3 receiver from accepting an older sender's
+  // payload that would silently miss tombstones.
+  //
+  // Per-category gate so a new peer can sync its catalog independently of
+  // whether other categories are version-locked. Older peers are
+  // sender-behind on `catalog` (not ahead), so the receiver still accepts
+  // their pushes; newer peers pushing to older receivers are sender-ahead
+  // and get 412. `cat-ingredient` and `cat-scrap` record kinds map back
+  // here via RECORD_KIND_SCHEMA_CATEGORIES.
+  //
+  // NOT bumped for the per-record `payload.schemaVersion` stamp added by
+  // catalog-payload-schemaversion: that key is additive JSONB that both old
+  // and new peers store verbatim (`upsertIngredientFromPeer` writes payload
+  // as-is — no sanitizer strips it), and all types are payload-v1 today so no
+  // shape actually changed on the wire. The FIRST type that bumps its
+  // registry `payloadSchemaVersion` to 2 with a genuine shape change (a peer
+  // ≤ that version would round-trip the new shape through an unaware
+  // sanitizer) MUST bump `catalog` here in lockstep.
+  //
+  // v4 = `catalog_ingredient_relations` table (ingredient↔ingredient edges)
+  // + a new `relations: [...]` block in the catalog sync envelope. An older
+  // (≤v3) receiver doesn't understand the relations block, so a v4 sender
+  // pushing to it is sender-ahead on `catalog` and gets a 412 — correct,
+  // since the older peer would silently drop every relation edge. v4 receivers
+  // still accept ≤v3 senders (sender-behind): those envelopes simply carry no
+  // `relations` block and the receiver applies the other four kinds as before.
+  // v5 = `catalog_tags` first-class table (id, label, description?, color?,
+  // parent_id?, created_at, sync_sequence) + a new `tags: [...]` block in the
+  // catalog sync envelope. Same gating rationale as v4: a ≤v4 receiver doesn't
+  // understand the `tags` block, so a v5 sender pushing to it is sender-ahead
+  // and gets a 412 (otherwise the older peer would silently drop every canonical
+  // tag row + its parent hierarchy). The freeform `catalog_ingredients.tags
+  // TEXT[]` column is unchanged — canonical tag rows are an additive index, so
+  // a v5 receiver still accepts ≤v4 ingredient/scrap/ref/relation pushes; those
+  // envelopes simply carry no `tags` block.
+  // v6 = `catalog_ingredient_media` join table (typed image/audio/video/doc
+  // attachments) + a new `media: [...]` block in the catalog sync envelope.
+  // Each media row ships a `media_key` REFERENCE into the receiver's own media
+  // library (data/images + history.jsonl sidecar) — never the bytes. Same
+  // gating rationale as v4/v5: a ≤v5 receiver doesn't understand the `media`
+  // block, so a v6 sender pushing to it is sender-ahead on `catalog` and gets
+  // a 412 (otherwise the older peer would silently drop every attachment). A v6
+  // receiver still accepts ≤v5 senders (sender-behind); those envelopes carry
+  // no `media` block. Media keys that don't resolve against the receiver's own
+  // library surface via the metadata-missing integrity endpoint rather than
+  // failing the apply.
+  // v7 = `catalog_scraps` gained `chunk_index` + `parent_scrap_id` (a long paste
+  // chunks into a parent + N child rows; the extractor unions per-child drafts).
+  // Both fields ride the scrap sync envelope. Same gating rationale as v4–v6: a
+  // ≤v6 receiver doesn't understand child scrap rows, so a v7 sender pushing to
+  // it is sender-ahead and gets a 412. A v7 receiver still accepts ≤v6 senders
+  // (their scraps carry no chunk fields → chunkIndex 0 / parentScrapId null).
+  // v8 = user-defined ingredient types. The definitions live in settings.json
+  // (`catalogUserTypes`), merge into the active type registry at boot/runtime,
+  // and ride a new additive `catalogTypes: [...]` block in the catalog sync
+  // envelope (LWW-merged into the receiver's own settings slice). Same gating
+  // rationale as v4–v7: a ≤v7 receiver doesn't understand the `catalogTypes`
+  // block, so a v8 sender pushing to it is sender-ahead and gets a 412
+  // (otherwise the older peer would silently drop every user-type definition,
+  // then reject every ingredient row carrying one of those unknown types). A v8
+  // receiver still accepts ≤v7 senders (sender-behind); their envelopes carry no
+  // `catalogTypes` block and the receiver applies the other kinds as before.
+  catalog: 8,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -83,6 +157,8 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   series: Object.freeze(['pipelineSeries']),
   issue: Object.freeze(['pipelineIssues']),
   mediaCollection: Object.freeze(['mediaCollections']),
+  'cat-ingredient': Object.freeze(['catalog']),
+  'cat-scrap': Object.freeze(['catalog']),
 });
 
 /**

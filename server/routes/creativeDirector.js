@@ -35,8 +35,8 @@ router.get('/', asyncHandler(async (_req, res) => {
 }));
 
 // Slim projection of a project for polling consumers (pipeline EpisodeVideoStage
-// polls every 4s; the full project carries an unbounded `runs[]` history that
-// grows with every render operation). The shape covers exactly what the
+// polls every 4s; the full project carries `runs[]` history and the full
+// treatment text the poll doesn't need). The shape covers exactly what the
 // polling UI consumes: status, updatedAt (change-detect key), per-scene
 // sceneId/order/status, finalVideoId, failureReason. `sceneId` (not `id`) is
 // the canonical scene identifier per services/creativeDirector/local.js.

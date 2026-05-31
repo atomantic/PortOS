@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid } from 'lucide-react';
+import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
 import { useScrollLock } from '../hooks/useScrollLock';
-import { search, getPaletteManifest, runPaletteAction, getDashboardLayouts, setActiveDashboardLayout } from '../services/api';
+import { search, getPaletteManifest, runPaletteAction, getDashboardLayouts, setActiveDashboardLayout, listCatalogIngredients } from '../services/api';
 import toast from './ui/Toast';
 import { modKey } from '../utils/platform';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
@@ -67,6 +67,7 @@ export default function CmdKSearch() {
   const [query, setQuery] = useState('');
   const [manifest, setManifest] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
+  const [catalogResults, setCatalogResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [expandedSources, setExpandedSources] = useState(new Set());
@@ -82,6 +83,7 @@ export default function CmdKSearch() {
     if (!open) {
       setQuery('');
       setSearchResults([]);
+      setCatalogResults([]);
       setFocusedIndex(0);
       setExpandedSources(new Set());
       resultRefs.current = [];
@@ -166,8 +168,22 @@ export default function CmdKSearch() {
   }, [query]);
 
   useEffect(() => {
+    if (query.length < 2) {
+      setCatalogResults([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      listCatalogIngredients({ q: query, limit: 5 }, { silent: true })
+        .then((data) => { if (!cancelled) setCatalogResults(data?.items ?? []); })
+        .catch(() => { if (!cancelled) setCatalogResults([]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query]);
+
+  useEffect(() => {
     setFocusedIndex(0);
-  }, [searchResults, query]);
+  }, [searchResults, catalogResults, query]);
 
   const combined = useMemo(() => {
     if (!manifest) return { nav: [], actions: [], layouts: [], commandCount: 0 };
@@ -197,9 +213,20 @@ export default function CmdKSearch() {
     [searchResults, expandedSources]
   );
 
+  const catalogHits = useMemo(
+    () => catalogResults.map((ing) => ({
+      kind: 'catalog',
+      id: ing.id,
+      name: ing.name,
+      type: ing.type,
+      path: `/catalog/${encodeURIComponent(ing.type)}/${encodeURIComponent(ing.id)}`,
+    })),
+    [catalogResults]
+  );
+
   const focusable = useMemo(
-    () => [...combined.nav, ...combined.actions, ...combined.layouts, ...flatSearchResults],
-    [combined, flatSearchResults]
+    () => [...combined.nav, ...combined.actions, ...combined.layouts, ...catalogHits, ...flatSearchResults],
+    [combined, catalogHits, flatSearchResults]
   );
 
   useEffect(() => {
@@ -212,6 +239,7 @@ export default function CmdKSearch() {
   const DISPATCH = useMemo(() => ({
     nav: (item) => { navigate(item.path); close(); },
     search: (item) => { navigate(item.url); close(); },
+    catalog: (item) => { navigate(item.path); close(); },
     layout: async (item) => {
       // request() toasts errors centrally; swallow the rejection here so
       // clicks from sync event handlers don't bubble as unhandled. On
@@ -356,13 +384,21 @@ export default function CmdKSearch() {
             )
           )}
 
+          {renderGroup(
+            <BookMarked size={14} />,
+            'Catalog',
+            catalogHits.map((c) =>
+              renderRow(c, { icon: BookMarked, title: c.name, subtitle: c.type, badge: c.type.toUpperCase() })
+            )
+          )}
+
           {loading && (
             <div className="flex items-center justify-center py-4">
               <Loader2 size={18} className="animate-spin text-gray-400" />
             </div>
           )}
 
-          {!loading && query.length >= 2 && searchResults.length === 0 && combined.commandCount === 0 && (
+          {!loading && query.length >= 2 && searchResults.length === 0 && catalogHits.length === 0 && combined.commandCount === 0 && (
             <div className="text-center text-sm text-gray-500 py-8">
               No results for &ldquo;{query}&rdquo;
             </div>

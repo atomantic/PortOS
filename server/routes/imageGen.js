@@ -35,7 +35,7 @@ import {
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { join } from 'node:path';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, stat } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer } from '../lib/imageClean.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
@@ -740,11 +740,18 @@ router.delete('/setup/hf-token', asyncHandler(async (_req, res) => {
 
 const checkSchema = z.object({ pythonPath: z.string().min(1) });
 
-router.get('/setup/check', asyncHandler(async (req, res) => {
-  const { pythonPath } = validateRequest(checkSchema, req.query);
-  if (!isAllowedPython(pythonPath)) {
-    return res.status(400).json({ error: 'pythonPath must be a python interpreter (basename python/python3/python3.NN)' });
-  }
+// /setup/check is called on every keystroke in the python-path input (debounced
+// to 400ms), on mount, AND on the refresh button — each call spawns a python
+// subprocess (~0.5-1s warm) plus the optional `detectArm64Python` walk. A
+// modest in-memory cache, keyed by (pythonPath, stat.mtimeMs) and bounded by
+// SETUP_CHECK_TTL_MS, collapses the typing-flow repeats to memo hits without
+// risking stale data — the key changes the moment the interpreter is swapped
+// (venv create, brew upgrade) and the install path explicitly busts on
+// completion.
+const SETUP_CHECK_TTL_MS = 30_000;
+const setupCheckCache = new Map();
+
+const buildSetupCheck = async (pythonPath) => {
   const health = await probePythonHealth(pythonPath);
   // The arch warning is specifically about mlx wheels (arm64-only) on Apple
   // Silicon. A generic interpreterArch !== HOST_ARCH compare would false-
@@ -754,14 +761,53 @@ router.get('/setup/check', asyncHandler(async (req, res) => {
     && HOST_ARCH === 'arm64'
     && health.interpreterArch === 'x86_64';
   const suggestedArm64Python = archMismatch ? await detectArm64Python() : null;
-  res.json({
+  return {
     pythonPath,
     required: REQUIRED_PACKAGES,
     hostArch: HOST_ARCH,
     archMismatch,
     suggestedArm64Python,
     ...health,
-  });
+  };
+};
+
+const invalidateSetupCheck = (pythonPath) => {
+  if (!pythonPath) {
+    setupCheckCache.clear();
+    return;
+  }
+  const prefix = `${pythonPath}|`;
+  for (const key of setupCheckCache.keys()) {
+    if (key.startsWith(prefix)) setupCheckCache.delete(key);
+  }
+};
+
+router.get('/setup/check', asyncHandler(async (req, res) => {
+  const { pythonPath } = validateRequest(checkSchema, req.query);
+  if (!isAllowedPython(pythonPath)) {
+    return res.status(400).json({ error: 'pythonPath must be a python interpreter (basename python/python3/python3.NN)' });
+  }
+  // mtime keys auto-bust when the interpreter binary itself changes (rare but
+  // surfaces brew upgrades / re-symlinks). A stat() failure (path not found)
+  // skips the cache rather than poisoning it with a `mtime=missing` entry.
+  const mtimeMs = await stat(pythonPath).then((s) => s.mtimeMs).catch(() => null);
+  const key = mtimeMs !== null ? `${pythonPath}|${mtimeMs}` : null;
+  if (key) {
+    const hit = setupCheckCache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return res.json(hit.result);
+  }
+  const result = await buildSetupCheck(pythonPath);
+  if (key) {
+    // Sweep expired entries on every write so a long-running process doesn't
+    // accumulate stale (path, mtime) combos from intermediate keystrokes
+    // (each typed character of a path string lands a unique key here).
+    const now = Date.now();
+    for (const [k, v] of setupCheckCache) {
+      if (v.expiresAt <= now) setupCheckCache.delete(k);
+    }
+    setupCheckCache.set(key, { result, expiresAt: now + SETUP_CHECK_TTL_MS });
+  }
+  res.json(result);
 }));
 
 const venvSchema = z.object({
@@ -779,6 +825,12 @@ router.post('/setup/create-venv', asyncHandler(async (req, res) => {
   }
   const target = join(PATHS.data, 'python', 'venv');
   const venvPython = await createVenv(base, target);
+  // Bust the setup-check cache for both the base interpreter and the new
+  // venv python — the venv inherits the base's mtime-key but its packages
+  // differ, and a subsequent /setup/check would otherwise return the base's
+  // pre-venv snapshot.
+  invalidateSetupCheck(base);
+  invalidateSetupCheck(venvPython);
   res.json({ pythonPath: venvPython, target });
 }));
 
@@ -847,7 +899,13 @@ router.get('/setup/install', (req, res) => {
   const safeEnd = () => { if (!res.writableEnded) res.end(); };
 
   const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, send);
-  promise.then(safeEnd);
+  promise.then(() => {
+    // Drop the now-stale setup-check snapshot before the client re-runs the
+    // probe on `complete` — without this it would read the pre-install
+    // missing-packages list back from cache.
+    invalidateSetupCheck(parsed.data.pythonPath);
+    safeEnd();
+  });
 
   // Client navigation away should kill pip — a torch upgrade can run for
   // 10+ minutes and would otherwise keep going invisibly.

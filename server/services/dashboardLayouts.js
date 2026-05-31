@@ -80,7 +80,7 @@ const DEFAULT_LAYOUTS = [
     name: 'Everything',
     builtIn: true,
     widgets: [
-      'quick-brain', 'quick-image', 'quick-task',
+      'quick-brain', 'quick-idea', 'quick-image', 'quick-task',
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
       'proactive-alerts', 'review-hub', 'system-health', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
@@ -113,6 +113,10 @@ const DEFAULT_LAYOUTS = [
       // Row 18+: full-width visualizations + apps
       { id: 'hourly-activity',  x: 0,  y: 18, w: 12, h: 3 },
       { id: 'apps',             x: 0,  y: 21, w: 12, h: 8 },
+      // Quick-idea (catalog) is positioned below apps so the seeded layout
+      // doesn't collide with the tightly-packed above-the-fold rows.
+      // Reorderable via the Arrange button on the dashboard.
+      { id: 'quick-idea',       x: 0,  y: 29, w: 4,  h: 4 },
     ],
   },
   {

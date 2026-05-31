@@ -161,16 +161,18 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
-# Kill PM2 daemon entirely — pm2 stop/restart only signal app processes but
-# leave the daemon alive. If the daemon was originally launched from a different
-# project, it can cache a stale ProcessContainerFork.js path and crash future
-# fork() calls with MODULE_NOT_FOUND. Killing the daemon mirrors update.sh and
-# forces a fresh launch from this checkout on restart.
+# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
+# tears down the daemon and stops EVERY other project's apps on this machine.
+# `pm2 update` then reloads the daemon in place from this checkout's node_modules,
+# refreshing its cached ProcessContainerFork.js path (a stale path from a daemon
+# originally launched by another project — e.g. a Yarn PnP zip cache — makes
+# future fork() calls crash with MODULE_NOT_FOUND) while leaving other projects'
+# apps running instead of killing them.
 Step "pm2-stop" "running" "Stopping PortOS apps..."
-Invoke-Logged node ./node_modules/pm2/bin/pm2 kill
-if ($LASTEXITCODE -ne 0) {
-    Write-SafeHost "⚠️  PM2 daemon was not running or could not be killed; continuing update" -ForegroundColor Yellow
-}
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
+$global:LASTEXITCODE = 0
+Invoke-Logged node ./node_modules/pm2/bin/pm2 update
+$global:LASTEXITCODE = 0
 Step "pm2-stop" "done" "Apps stopped"
 Write-SafeHost ""
 
@@ -256,8 +258,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$RootDir\data\update-complete.json.tmp", $marker, $utf8NoBom)
 Move-Item -Force "$RootDir\data\update-complete.json.tmp" "$RootDir\data\update-complete.json"
 
-# Start PM2 apps — `pm2 kill` above tore down the daemon, so use `start` not
-# `restart` (restart against a config doesn't reliably start processes that
+# Start PM2 apps — use `start` not `restart` (restart against a config doesn't
+# reliably start processes that
 # aren't currently managed, leaving the app stopped after an update that ran
 # while PortOS wasn't running). `delete --silent` first so a partial prior
 # state doesn't make `start` a no-op, then `save` so the apps come back on

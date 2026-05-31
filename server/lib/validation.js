@@ -6,6 +6,7 @@ import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { STEP_IDS as STORY_STEP_IDS } from './storyBuilderSteps.js';
+import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogValidation.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -560,12 +561,13 @@ export const searchQuerySchema = z.object({
 // =============================================================================
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
-// Copilot review; `claude`/`gemini`/`codex` instruct the review-loop follow-up
+// Copilot review; `claude`/`antigravity`/`codex` instruct the review-loop follow-up
 // agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
 // route the diff through PortOS's local code-review endpoint
 // (`POST /api/code-review/local`) which runs the configured local LLM model.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'gemini', 'codex', 'lmstudio', 'ollama'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'lmstudio', 'ollama'];
+export const REVIEWER_ALIASES = { gemini: 'antigravity' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 // Reviewers that resolve to a local-LLM backend (rather than a CLI or GitHub
@@ -593,10 +595,19 @@ export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
   const seen = new Set();
   const out = [];
   for (const r of source) {
-    if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); out.push(r); }
+    const normalized = REVIEWER_ALIASES[r] || r;
+    if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
   }
   if (out.length) return out;
-  const fallbackList = Array.isArray(fallback) ? fallback.filter((r) => REVIEWER_VALUES.includes(r)) : [];
+  const fallbackList = [];
+  const fallbackSeen = new Set();
+  for (const r of Array.isArray(fallback) ? fallback : []) {
+    const normalized = REVIEWER_ALIASES[r] || r;
+    if (REVIEWER_VALUES.includes(normalized) && !fallbackSeen.has(normalized)) {
+      fallbackSeen.add(normalized);
+      fallbackList.push(normalized);
+    }
+  }
   return fallbackList.length ? [...fallbackList] : [...DEFAULT_REVIEWERS];
 }
 
@@ -655,10 +666,13 @@ export const createCosTaskSchema = z.object({
     z.boolean().optional()
   ),
   reviewer: z.preprocess(
-    v => v === '' ? undefined : v,
+    v => v === '' ? undefined : (typeof v === 'string' ? (REVIEWER_ALIASES[v] ?? v) : v),
     z.enum(REVIEWER_VALUES).optional()
   ),
-  reviewers: z.array(z.enum(REVIEWER_VALUES)).optional(),
+  reviewers: z.preprocess(
+    v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
+    z.array(z.enum(REVIEWER_VALUES)).optional()
+  ),
   reviewStopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
@@ -782,7 +796,10 @@ export const featureProviderConfigSchema = z.object({
 // `lmstudioModel` / `ollamaModel` are the installed model ids the local-LLM
 // reviewer should run with (empty/undefined = pick the active default model).
 export const codeReviewSettingsSchema = z.object({
-  reviewers: z.array(z.enum(REVIEWER_VALUES)).optional(),
+  reviewers: z.preprocess(
+    v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
+    z.array(z.enum(REVIEWER_VALUES)).optional()
+  ),
   stopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.boolean().optional(),
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -834,7 +851,13 @@ export const writersRoomWorkUpdateSchema = z.object({
 }).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
-  body: z.string().max(5_000_000) // 5 MB ceiling — well over a long novel in plain text
+  body: z.string().max(5_000_000), // 5 MB ceiling — well over a long novel in plain text
+  // Catalog ingredient ids this draft version references. Optional: when
+  // absent the server scans the prose against the work's linked cast and
+  // derives the list itself; when present (e.g. a client that already knows
+  // the set) it's trusted as the snapshot. Bounded so a malformed body can't
+  // balloon the manifest.
+  referencedIngredientIds: z.array(z.string().trim().min(1).max(128)).max(500).optional(),
 }).strict();
 
 export const writersRoomSnapshotSchema = z.object({
@@ -1214,9 +1237,10 @@ export function sanitizeTaskMetadata(raw) {
       hasKeys = true;
     }
   }
-  // `reviewer` is a legacy single constrained string (copilot/claude/gemini/codex).
-  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && REVIEWER_VALUES.includes(raw.reviewer)) {
-    clean.reviewer = raw.reviewer;
+  // `reviewer` is a legacy single constrained string.
+  const normalizedReviewer = REVIEWER_ALIASES[raw.reviewer] || raw.reviewer;
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && REVIEWER_VALUES.includes(normalizedReviewer)) {
+    clean.reviewer = normalizedReviewer;
     hasKeys = true;
   }
   // `reviewers` is the ordered multi-reviewer list — filter to known values, dedupe, preserve order.
@@ -1224,7 +1248,8 @@ export function sanitizeTaskMetadata(raw) {
     const seen = new Set();
     const list = [];
     for (const r of raw.reviewers) {
-      if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); list.push(r); }
+      const normalized = REVIEWER_ALIASES[r] || r;
+      if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
     }
     if (list.length) { clean.reviewers = list; hasKeys = true; }
   }
@@ -1335,6 +1360,15 @@ export const locationSettingsSchema = z.object({
   { message: 'Provide both lat and lon, or neither.' },
 );
 
+// Provider-agnostic embeddings settings. `provider: 'none'` is the default and
+// makes embedText() a no-op — rows persist without an embedding and a future
+// admin "Re-embed missing" action backfills. Model is optional so the user can
+// pick provider first and choose a model from the live list in the UI.
+export const settingsEmbeddingsSchema = z.object({
+  provider: z.enum(['ollama', 'lmstudio', 'none']),
+  model: z.string().trim().max(200).optional().nullable(),
+}).strict();
+
 // Subscription creation: persistent (bucket, record) tuple. Series + universe
 // are the subscribable kinds (records that change over time and benefit from
 // auto-re-export). Media is one-shot via /buckets/:id/export.
@@ -1437,10 +1471,24 @@ const peerSyncPushBase = {
 // therefore rejects it. See peerSync.js buildPushPayload (never sets it for the
 // mediaCollection kind) and applyIncomingPush.
 const linkedCollectionField = { linkedCollection: peerWireRecordSchema.optional() };
+// Optional bundled catalog rows — a universe push carries the catalog
+// ingredients + universe→ingredient ref links referenced by its embedded
+// canon, so the receiver gets the enriched catalog row (tags, embedding,
+// payload.summary) instead of re-deriving a lossy view. Same wire shapes as
+// the direct catalog-sync envelope. ONLY valid on universe pushes (series /
+// mediaCollection .strict() reject it) — series catalog refs ride their own
+// catalog-sync category; smuggling them here would be a side-channel.
+const catalogBundleField = {
+  catalogBundle: z.object({
+    ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
+    refs: z.array(catalogSyncRefSchema).max(20_000).optional(),
+  }).strict().optional(),
+};
 const universePushSchema = z.object({
   kind: z.literal('universe'),
   ...peerSyncPushBase,
   ...linkedCollectionField,
+  ...catalogBundleField,
 }).strict();
 const seriesPushSchema = z.object({
   kind: z.literal('series'),
@@ -1814,6 +1862,10 @@ export const storySessionUpdateSchema = z.object({
 export const storyStepGenerateSchema = z.object({
   providerId: storyProviderField,
   model: storyModelField,
+  // Backfill toggle: synthesize this (upstream) step from the series' existing
+  // downstream issue content instead of its conventional upstream. Honored by
+  // the idea + plotArc generators (see services/storyBuilder.js generateStep).
+  fromDownstream: z.boolean().optional(),
 }).strict();
 
 export const storyStepRefineSchema = z.object({

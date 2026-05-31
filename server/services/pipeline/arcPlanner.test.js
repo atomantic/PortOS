@@ -1477,3 +1477,216 @@ describe('arcPlanner — refineReaderMap', () => {
     await expect(planner.generateReaderMap(s.id)).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
   });
 });
+
+describe('arcPlanner — manuscript completeness + derive-from-manuscript', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    stageRunnerSpy = undefined;
+  });
+
+  it('issueSynopsisFromSeason joins logline + synopsis (and is empty for nothing)', () => {
+    const { issueSynopsisFromSeason } = planner.__testing;
+    expect(issueSynopsisFromSeason({ logline: 'A', synopsis: 'B' })).toBe('A\n\nB');
+    expect(issueSynopsisFromSeason({ logline: 'A', synopsis: '' })).toBe('A');
+    expect(issueSynopsisFromSeason(null)).toBe('');
+    expect(issueSynopsisFromSeason({})).toBe('');
+  });
+
+  it('shapeCompletenessFindings coerces category/severity and drops empty problems', () => {
+    const { shapeCompletenessFindings } = planner.__testing;
+    const out = shapeCompletenessFindings([
+      { severity: 'high', category: 'missing-content', problem: 'no climax', suggestion: 'add one' },
+      { severity: 'bogus', category: 'invented-category', problem: 'thin cast' },
+      { problem: '   ' }, // dropped — empty after trim
+      { category: 'pacing', problem: 'rushed' }, // default severity medium
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out[0]).toMatchObject({ severity: 'high', category: 'missing-content' });
+    expect(out[1]).toMatchObject({ severity: 'medium', category: 'other' }); // both coerced
+    expect(out[2]).toMatchObject({ severity: 'medium', category: 'pacing' });
+  });
+
+  it('analyzeManuscriptCompleteness reads the manuscript and returns shaped findings', async () => {
+    const s = await setupSeries();
+    await issuesSvc.createIssue({
+      seriesId: s.id, title: 'Act 1', arcPosition: 1,
+      stages: { comicScript: { output: 'PAGE 1\nGiant counts his gold.', status: 'ready' } },
+    });
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      // The pass must see the actual drafted script, not a synopsis.
+      expect(template).toBe('pipeline-manuscript-completeness');
+      expect(ctx.manuscript).toContain('Giant counts his gold');
+      return {
+        content: { issues: [{ severity: 'high', category: 'arc-gap', problem: 'no ending', suggestion: 'write one' }] },
+        runId: 'rc', providerId: 'p', model: 'm',
+      };
+    });
+    const out = await planner.analyzeManuscriptCompleteness(s.id);
+    expect(out.issues).toHaveLength(1);
+    expect(out.issues[0]).toMatchObject({ category: 'arc-gap', severity: 'high' });
+  });
+
+  it('analyzeManuscriptCompleteness refuses when no manuscript exists', async () => {
+    const s = await setupSeries();
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Empty', arcPosition: 1 });
+    await expect(planner.analyzeManuscriptCompleteness(s.id)).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+  });
+
+  it('analyzeManuscriptCompleteness treats an idea-only issue as no manuscript (outline is not a draft)', async () => {
+    const s = await setupSeries();
+    // Only an idea/synopsis seed — no drafted comicScript/prose/teleplay.
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Outline only', arcPosition: 1, stages: { idea: { input: 'a synopsis', status: 'edited' } } });
+    await expect(planner.analyzeManuscriptCompleteness(s.id)).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+  });
+
+  it('analyzeManuscriptCompleteness carries issueNumber + anchorQuote and tolerates their absence', async () => {
+    const s = await setupSeries();
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { prose: { output: 'A short draft.', status: 'ready' } } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { issues: [
+        { severity: 'high', category: 'arc-gap', issueNumber: 1, anchorQuote: '  a quote  ', problem: 'anchored', suggestion: 'fix it' },
+        { severity: 'low', category: 'pacing', problem: 'unanchored', suggestion: '' },
+      ] },
+      runId: 'rc', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.analyzeManuscriptCompleteness(s.id);
+    expect(out.issues[0]).toMatchObject({ issueNumber: 1, anchorQuote: 'a quote' });
+    expect(out.issues[1]).toMatchObject({ issueNumber: null, anchorQuote: '' });
+  });
+
+  it('collectManuscriptSections orders by arcPosition, drops empties, and collectIssueSourceText stays byte-identical', async () => {
+    const s = await setupSeries();
+    // Insert out of arcPosition order to prove sorting (don't assert on the
+    // auto-assigned `number`, which follows creation order, not arcPosition).
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Two', arcPosition: 2, stages: { teleplay: { output: 'TELE two', status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\none', status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Empty', arcPosition: 3 });
+
+    const sections = await planner.collectManuscriptSections(s.id);
+    // Empty issue dropped; remaining two ordered by arcPosition (One before Two).
+    expect(sections.map((x) => x.content)).toEqual(['PAGE 1\none', 'TELE two']);
+    expect(sections.map((x) => x.stageId)).toEqual(['comicScript', 'teleplay']);
+    expect(sections.map((x) => x.title)).toEqual(['One', 'Two']);
+    expect(planner.primaryStageIdOf(sections)).toBeDefined();
+
+    // The corpus join derives from the sections — verify the invariant.
+    const corpus = await planner.collectIssueSourceText(s.id, { stageOrder: planner.MANUSCRIPT_STAGES });
+    const expected = sections
+      .map((x) => `# Issue ${x.number} — ${x.title} (${x.stageId})\n\n${x.content}`)
+      .join('\n\n---\n\n');
+    expect(corpus).toBe(expected);
+  });
+
+  it('deriveFromManuscript proposes a single volume + bible + zipped issue synopses', async () => {
+    const s = await setupSeries();
+    const sea = await seasonsSvc.createSeason(s.id, { title: 'V1', episodeCountTarget: 3 });
+    await issuesSvc.createIssue({ seriesId: s.id, seasonId: sea.id, title: 'Issue 1', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\nopening', status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, seasonId: sea.id, title: 'Issue 2', arcPosition: 2, stages: { comicScript: { output: 'PAGE 1\nmiddle', status: 'ready' } } });
+
+    stageRunnerSpy = vi.fn(async (template) => {
+      expect(template).toBe('importer-arc-extract');
+      return {
+        content: {
+          logline: 'A giant hoards gold.', summary: 'A fairy-tale retold.', themes: ['greed'], protagonistArc: 'arc', shape: null,
+          seasons: [
+            { number: 1, title: 'The Miracle Man', logline: 'Beanstalk begins', synopsis: 'syn1' },
+            { number: 2, title: 'Magic Beans', logline: 'The climb', synopsis: 'syn2' },
+          ],
+        },
+        runId: 'rd', providerId: 'p', model: 'm',
+      };
+    });
+
+    const out = await planner.deriveFromManuscript(s.id);
+    expect(out.bible).toMatchObject({ logline: 'A giant hoards gold.', premise: 'A fairy-tale retold.', issueCountTarget: 2 });
+    expect(out.volume.title).toBe('Salt Run'); // defaults to series name
+    expect(out.issues).toHaveLength(2);
+    expect(out.issues[0].synopsisSuggestion).toContain('Beanstalk begins');
+    expect(out.issues[1].synopsisSuggestion).toContain('The climb');
+  });
+
+  it('commitDerivedManuscript collapses to one volume, pins all issues, fills bible, seeds synopses, leaves scripts intact', async () => {
+    const s = await setupSeries({ logline: '', premise: '', issueCountTarget: 0 });
+    const v1 = await seasonsSvc.createSeason(s.id, { title: 'V1', episodeCountTarget: 1 });
+    const v2 = await seasonsSvc.createSeason(s.id, { title: 'V2', episodeCountTarget: 1 });
+    const v3 = await seasonsSvc.createSeason(s.id, { title: 'V3', episodeCountTarget: 1 });
+    const v4 = await seasonsSvc.createSeason(s.id, { title: 'V4', episodeCountTarget: 1 });
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v1.id, title: 'Issue 1', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\nverbatim one', status: 'ready' } } });
+    const i2 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v2.id, title: 'Issue 2', arcPosition: 2, stages: { comicScript: { output: 'PAGE 1\nverbatim two', status: 'ready' } } });
+    const i3 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v3.id, title: 'Issue 3', arcPosition: 3, stages: { comicScript: { output: 'PAGE 1\nverbatim three', status: 'ready' } } });
+
+    const out = await planner.commitDerivedManuscript(s.id, {
+      arc: { logline: 'LG', summary: 'SM', themes: ['t'], protagonistArc: 'PA', shape: null },
+      bible: { logline: 'LG', premise: 'SM', issueCountTarget: 3 },
+      volume: { title: 'The Giant', logline: 'vlog', synopsis: 'vsyn' },
+      issues: [
+        { id: i1.id, title: 'Act One', synopsis: 'act one synopsis' },
+        { id: i2.id, title: 'Act Two', synopsis: 'act two synopsis' },
+        { id: i3.id, synopsis: 'act three synopsis' },
+      ],
+    });
+
+    // Exactly one volume survives.
+    expect(out.series.seasons).toHaveLength(1);
+    const vol = out.series.seasons[0];
+    expect(vol.title).toBe('The Giant');
+    // Bible filled.
+    expect(out.series).toMatchObject({ logline: 'LG', premise: 'SM', issueCountTarget: 3 });
+
+    // Every issue is under the single volume.
+    const all = await issuesSvc.listIssues({ seriesId: s.id });
+    expect(all.every((iss) => iss.seasonId === vol.id)).toBe(true);
+
+    // Per-issue title + synopsis applied; verbatim comicScript untouched.
+    const f1 = await issuesSvc.getIssue(i1.id);
+    expect(f1.title).toBe('Act One');
+    expect(f1.stages.idea.input).toBe('act one synopsis');
+    expect(f1.stages.comicScript.output).toBe('PAGE 1\nverbatim one');
+    const f3 = await issuesSvc.getIssue(i3.id);
+    expect(f3.stages.idea.input).toBe('act three synopsis');
+    void v4;
+  });
+
+  it('commitDerivedManuscript respects a locked idea stage (does not overwrite synopsis)', async () => {
+    const s = await setupSeries();
+    const v1 = await seasonsSvc.createSeason(s.id, { title: 'V1' });
+    const i1 = await issuesSvc.createIssue({
+      seriesId: s.id, seasonId: v1.id, title: 'Issue 1', arcPosition: 1,
+      stages: { comicScript: { output: 'PAGE 1\nx', status: 'ready' }, idea: { input: 'frozen synopsis', status: 'edited', locked: true } },
+    });
+    await planner.commitDerivedManuscript(s.id, {
+      arc: { logline: 'L', summary: 'S' },
+      bible: { logline: 'L', premise: 'S', issueCountTarget: 1 },
+      volume: { title: 'Vol' },
+      issues: [{ id: i1.id, synopsis: 'should not apply' }],
+    });
+    const f1 = await issuesSvc.getIssue(i1.id);
+    expect(f1.stages.idea.input).toBe('frozen synopsis');
+  });
+
+  it('commitDerivedManuscript does not strip issues out of a locked non-kept volume', async () => {
+    const s = await setupSeries();
+    const v1 = await seasonsSvc.createSeason(s.id, { title: 'V1', number: 1 });
+    const v2 = await seasonsSvc.createSeason(s.id, { title: 'V2 (locked)', number: 2 });
+    await seasonsSvc.updateSeason(s.id, v2.id, { locked: true });
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v1.id, title: 'Issue 1', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\nx', status: 'ready' } } });
+    const iLocked = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v2.id, title: 'Locked vol issue', arcPosition: 2, stages: { comicScript: { output: 'PAGE 1\ny', status: 'ready' } } });
+
+    const out = await planner.commitDerivedManuscript(s.id, {
+      arc: { logline: 'L', summary: 'S' },
+      bible: { logline: 'L', premise: 'S', issueCountTarget: 2 },
+      volume: { title: 'The Giant' },
+      issues: [{ id: i1.id, synopsis: 'a' }, { id: iLocked.id, synopsis: 'b' }],
+    });
+
+    // The locked volume survives (commitSeasonsWithRemap re-inserts it) — so we
+    // did NOT collapse to a single volume, and its issue must stay put.
+    const seasonIds = out.series.seasons.map((x) => x.id);
+    expect(seasonIds).toContain(v2.id);
+    const fLocked = await issuesSvc.getIssue(iLocked.id);
+    expect(fLocked.seasonId).toBe(v2.id); // not stripped onto the target volume
+    const f1 = await issuesSvc.getIssue(i1.id);
+    expect(f1.seasonId).toBe(v1.id); // the kept (lowest, unlocked) volume reused its id
+  });
+});

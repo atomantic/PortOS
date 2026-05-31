@@ -8,7 +8,13 @@ import fs from 'fs';
 // service captures ENV_PATH = join(PATHS.root, '.env') at import time, so each
 // test sets `state.root` to a fresh temp dir and re-imports under resetModules.
 const state = vi.hoisted(() => ({ root: '' }));
-vi.mock('../lib/fileUtils.js', () => ({ PATHS: state }));
+vi.mock('../lib/fileUtils.js', async () => {
+  const fsMod = await import('fs');
+  return {
+    PATHS: state,
+    atomicWrite: async (file, data) => fsMod.writeFileSync(file, data),
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   ollama: {

@@ -5,7 +5,6 @@ import { join, extname } from 'path';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
-import { ensureProviderReady as ensureOllamaProviderReady } from '../../services/ollamaManager.js';
 
 export function createRunnerService(config = {}) {
   const {
@@ -310,7 +309,8 @@ export function createRunnerService(config = {}) {
         messageContent = prompt;
       }
 
-      const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
+      const ensureProviderReady = hooks.ensureProviderReady || (async () => ({ success: true }));
+      const ready = await ensureProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
       const response = ready.success
         ? await fetch(`${provider.endpoint}/chat/completions`, {
             method: 'POST',

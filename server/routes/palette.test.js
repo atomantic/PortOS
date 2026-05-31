@@ -33,6 +33,15 @@ vi.mock('../services/feeds.js', () => ({
   getItems: vi.fn(async () => []),
   getFeeds: vi.fn(async () => []),
 }));
+vi.mock('../services/catalogDB.js', () => ({
+  listIngredients: vi.fn(async () => ({
+    items: [
+      { id: 'character-1', type: 'character', name: 'Mira', payload: { physicalDescription: 'A tall stoic ranger.' }, tags: [] },
+    ],
+    nextOffset: 1,
+  })),
+  listRefsForIngredient: vi.fn(async () => [{ ingredientId: 'character-1', refKind: 'universe', refId: 'u1', role: 'cast' }]),
+}));
 vi.mock('../services/askService.js', () => ({
   VALID_MODES: new Set(['ask', 'advise', 'draft']),
   runAsk: vi.fn(async function* () {
@@ -106,6 +115,18 @@ describe('GET /api/palette/manifest', () => {
     expect(ids).not.toContain('ui_describe_visually');
   });
 
+  it('exposes catalog_lookup with type+query parameters hydrated from the voice tool', async () => {
+    const res = await request(makeApp()).get('/api/palette/manifest');
+    const action = res.body.actions.find((a) => a.id === 'catalog_lookup');
+    expect(action).toBeTruthy();
+    expect(action.section).toBe('Catalog');
+    expect(action.label).toMatch(/look up/i);
+    expect(action.parameters?.properties?.query).toBeTruthy();
+    expect(action.parameters?.properties?.type?.enum).toEqual(
+      expect.arrayContaining(['character', 'place', 'object', 'idea', 'scene', 'concept']),
+    );
+  });
+
   it('exposes ui_ask in the manifest with description hydrated from voice tools', async () => {
     const res = await request(makeApp()).get('/api/palette/manifest');
     const askAction = res.body.actions.find((a) => a.id === 'ui_ask');
@@ -142,6 +163,18 @@ describe('POST /api/palette/action/:id', () => {
       .post('/api/palette/action/ui_click')
       .send({ args: { label: 'Save' } });
     expect(res.status).toBe(404);
+  });
+
+  it('dispatches catalog_lookup and returns shaped results with snippet + refsCount', async () => {
+    const res = await request(makeApp())
+      .post('/api/palette/action/catalog_lookup')
+      .send({ args: { query: 'Mira' } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.result.count).toBe(1);
+    const hit = res.body.result.results[0];
+    expect(hit).toMatchObject({ id: 'character-1', type: 'character', name: 'Mira', refsCount: 1 });
+    expect(hit.snippet).toMatch(/tall stoic ranger/);
   });
 
   it('dispatches ui_ask through the palette and returns the answer + sources', async () => {

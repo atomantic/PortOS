@@ -58,6 +58,13 @@ export async function request(endpoint, options = {}) {
   if (responseType === 'arraybuffer') {
     return response.arrayBuffer();
   }
+  // `responseType: 'text'` returns the raw body so callers (e.g. catalog
+  // export, which may be JSON, markdown, or YAML) get a string they can
+  // wrap in a Blob and trigger a download from. JSON.parse on the caller
+  // side when needed.
+  if (responseType === 'text') {
+    return response.text();
+  }
 
   return response.json();
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
+import Banner from '../../ui/Banner';
 import { generatePipelineVisualImage } from '../../../services/api';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
@@ -282,9 +283,7 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
           </div>
 
           {isFailed && cdProject?.failureReason && (
-            <p className="text-xs text-port-error bg-port-error/10 border border-port-error/30 rounded p-2">
-              {cdProject.failureReason}
-            </p>
+            <Banner tone="error" size="sm">{cdProject.failureReason}</Banner>
           )}
 
           {total > 0 && (

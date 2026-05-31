@@ -5,6 +5,15 @@ import { atomicWrite } from './internal/atomicWrite.js';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import {
+  ANTIGRAVITY_CLI_ID,
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
+  ANTIGRAVITY_TUI_ID,
+  ensureAntigravityPrintArgs,
+  ensureAntigravityTuiArgs,
+  LEGACY_GEMINI_CLI_ID,
+  LEGACY_GEMINI_TUI_ID,
+} from '../antigravity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
@@ -13,6 +22,7 @@ const execFileAsync = promisify(execFile);
 
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 
 // Auto-migrate legacy codex provider configs that pin a real model id
 // (e.g. "gpt-5.2") to the sentinel "codex-configured-default" so the Codex
@@ -38,6 +48,60 @@ function migrateCodexProvider(data) {
       }
     }
   }
+  return changed;
+}
+
+function migrateAntigravityProviders(data) {
+  if (!data?.providers) return false;
+  let changed = false;
+  const mappings = [
+    { legacyId: LEGACY_GEMINI_CLI_ID, targetId: ANTIGRAVITY_CLI_ID, name: 'Antigravity CLI', type: 'cli', timeout: 300000 },
+    { legacyId: LEGACY_GEMINI_TUI_ID, targetId: ANTIGRAVITY_TUI_ID, name: 'Antigravity TUI', type: 'tui', timeout: 600000 },
+  ];
+
+  for (const mapping of mappings) {
+    const legacy = data.providers[mapping.legacyId];
+    if (!legacy) continue;
+
+    if (!data.providers[mapping.targetId]) {
+      const envVars = { ...(legacy.envVars || {}) };
+      delete envVars.GEMINI_SANDBOX;
+      const migrated = {
+        ...legacy,
+        id: mapping.targetId,
+        name: mapping.name,
+        type: mapping.type,
+        command: 'agy',
+        args: mapping.type === 'cli'
+          ? ensureAntigravityPrintArgs(legacy.args || [])
+          : ensureAntigravityTuiArgs(legacy.args || []),
+        models: [ANTIGRAVITY_CONFIGURED_DEFAULT],
+        timeout: legacy.timeout || mapping.timeout,
+        envVars,
+      };
+      for (const key of ANTIGRAVITY_MODEL_KEYS) {
+        migrated[key] = ANTIGRAVITY_CONFIGURED_DEFAULT;
+      }
+      data.providers[mapping.targetId] = migrated;
+    }
+
+    if (data.activeProvider === mapping.legacyId) {
+      data.activeProvider = mapping.targetId;
+    }
+
+    // Rewrite fallbackProvider references on all other providers so
+    // user-defined fallback chains aren't silently broken after the
+    // legacy id is removed from the map.
+    for (const p of Object.values(data.providers)) {
+      if (p.fallbackProvider === mapping.legacyId) {
+        p.fallbackProvider = mapping.targetId;
+      }
+    }
+
+    delete data.providers[mapping.legacyId];
+    changed = true;
+  }
+
   return changed;
 }
 
@@ -89,9 +153,12 @@ export function createProviderService(config = {}) {
     const content = await readFile(PROVIDERS_PATH, 'utf-8');
     const data = await parseOrRescue(content, PROVIDERS_PATH);
 
-    if (migrateCodexProvider(data)) {
+    const migratedCodex = migrateCodexProvider(data);
+    const migratedAntigravity = migrateAntigravityProviders(data);
+    if (migratedCodex || migratedAntigravity) {
       await atomicWrite(PROVIDERS_PATH, data);
-      console.log('🔧 Migrated codex provider config to codex-configured-default sentinel');
+      if (migratedCodex) console.log('🔧 Migrated codex provider config to codex-configured-default sentinel');
+      if (migratedAntigravity) console.log('🔧 Migrated Gemini provider config to Antigravity CLI (agy)');
     }
 
     return data;
@@ -341,6 +408,10 @@ export function createProviderService(config = {}) {
         return await this._fetchAnthropicModels(provider);
       }
 
+      if (providerName.includes('antigravity') || provider.command === 'agy') {
+        return [ANTIGRAVITY_CONFIGURED_DEFAULT];
+      }
+
       if (providerName.includes('gemini') || provider.command === 'gemini') {
         return await this._fetchGeminiModels(provider);
       }
@@ -350,6 +421,7 @@ export function createProviderService(config = {}) {
 
     async _fetchAnthropicModels(_provider) {
       return [
+        'claude-opus-4-8',
         'claude-opus-4-7',
         'claude-sonnet-4-6',
         'claude-opus-4-5-20251101',

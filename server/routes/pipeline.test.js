@@ -45,6 +45,9 @@ let arcGenerateSpy;
 let seasonEpisodesSpy;
 let arcVerifySpy;
 let volumeVerifySpy;
+let deriveSpy;
+let deriveCommitSpy;
+let completenessSpy;
 vi.mock('../services/pipeline/arcPlanner.js', async () => {
   const actual = await vi.importActual('../services/pipeline/arcPlanner.js');
   return {
@@ -53,6 +56,9 @@ vi.mock('../services/pipeline/arcPlanner.js', async () => {
     generateSeasonEpisodes: vi.fn((...args) => seasonEpisodesSpy(...args)),
     verifyArc: vi.fn((...args) => arcVerifySpy(...args)),
     verifyVolume: vi.fn((...args) => volumeVerifySpy(...args)),
+    deriveFromManuscript: vi.fn((...args) => deriveSpy(...args)),
+    commitDerivedManuscript: vi.fn((...args) => deriveCommitSpy(...args)),
+    analyzeManuscriptCompleteness: vi.fn((...args) => completenessSpy(...args)),
   };
 });
 
@@ -533,6 +539,16 @@ describe('pipeline routes', () => {
     expect(r.body.stage.output).toContain('mock-output:idea');
   });
 
+  it('POST /issues/:id/stages/:stageId/generate accepts sourceStageIds and rejects unknown stage ids', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const ok = await request(app).post(`/api/pipeline/issues/${iss.body.id}/stages/prose/generate`).send({ sourceStageIds: ['comicScript'] });
+    expect(ok.status).toBe(200);
+    const bad = await request(app).post(`/api/pipeline/issues/${iss.body.id}/stages/prose/generate`).send({ sourceStageIds: ['bogus'] });
+    expect(bad.status).toBe(400);
+  });
+
   it('POST /issues/:id/stages/:stageId/generate rejects visual stages', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
@@ -887,6 +903,30 @@ describe('pipeline routes', () => {
     spy.mockRestore();
   });
 
+  it('POST /issues/:id/stages/storyboards/extract-scenes does NOT pair a new providerOverride with the stale series model', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
+      extracted: { title: 'T', logline: 'L', scenes: [] },
+      runId: 'r', providerId: 'mock', model: 'mock-model',
+    });
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: uni.id, llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { teleplay: { status: 'ready', output: '## TEASER\n\n**INT. VAULT — NIGHT**\n\nThey break in.' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay', providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    // Provider switched to anthropic — the codex model must NOT ride along.
+    expect(spy.mock.calls[0][0].providerOverride).toBe('anthropic');
+    expect(spy.mock.calls[0][0].modelOverride).toBeUndefined();
+    spy.mockRestore();
+  });
+
   it('POST /issues/:id/stages/storyboards/extract-scenes with from=prose routes to the prose stage output', async () => {
     const extractor = await import('../lib/sceneExtractor.js');
     const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
@@ -1102,12 +1142,13 @@ describe('pipeline routes', () => {
 
   // ---- :stageId/extract-canon (manual canon extraction from comicScript / teleplay) ----
 
-  it('POST /issues/:id/stages/:stageId/extract-canon 400s when stage is not comicScript or teleplay', async () => {
+  it('POST /issues/:id/stages/:stageId/extract-canon 400s for a stage that cannot source canon', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // `idea` is not a canon-extraction source (prose/comicScript/teleplay are).
     const r = await request(app)
-      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/idea/extract-canon`)
       .send({});
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('PIPELINE_CANON_EXTRACT_BAD_STAGE');
@@ -1241,6 +1282,118 @@ describe('pipeline routes', () => {
     expect(r.body.sourceStage).toBe('teleplay');
     expect(r.body.extracted).toEqual({ characters: 2, places: 1, objects: 0 });
     expect(spy.mock.calls[0][1].corpus).toContain('VELVET ROOM');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon allows prose, forwards model, and stamps a partial canonExtraction marker', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u', characters: [{ id: 'c1', name: 'Barkeep' }], places: [], objects: [] },
+      results: {
+        characters: { extracted: [{ name: 'Barkeep' }] },
+        places: { extracted: [] },
+        objects: { extracted: [] },
+      },
+      failures: [{ kind: 'object', error: 'safety refused' }],
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'A barkeep slides a glass to Lina.' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({ providerOverride: 'anthropic', model: 'claude-x' });
+    expect(r.status).toBe(200);
+    expect(r.body.sourceStage).toBe('prose');
+    expect(r.body.canonExtraction.status).toBe('partial');
+    expect(r.body.canonExtraction.failedKinds).toEqual(['object']);
+    expect(r.body.failures).toEqual([{ kind: 'object', error: 'safety refused' }]);
+    // Marker is persisted on the returned issue (survives reload).
+    expect(r.body.issue.stages.prose.canonExtraction.status).toBe('partial');
+    // provider/model forwarded to the service.
+    expect(spy.mock.calls[0][1].providerOverride).toBe('anthropic');
+    expect(spy.mock.calls[0][1].modelOverride).toBe('claude-x');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon does NOT pair a new providerOverride with the stale series model', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+      failures: [],
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    // Series LLM is codex/gpt-5-codex; the retry picks anthropic + Default model.
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: uni.id, llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'some prose' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({ providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    // Provider switched, but the series' codex model must NOT be forwarded to
+    // anthropic — leave modelOverride unset so anthropic's default resolves.
+    expect(spy.mock.calls[0][1].providerOverride).toBe('anthropic');
+    expect(spy.mock.calls[0][1].modelOverride).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon keeps the series model when the override matches the series provider', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+      failures: [],
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: uni.id, llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'some prose' } },
+    });
+    // No override at all → inherit both series provider and model.
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(spy.mock.calls[0][1].providerOverride).toBe('codex');
+    expect(spy.mock.calls[0][1].modelOverride).toBe('gpt-5-codex');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/prose/extract-canon stamps `failed` before re-throwing on a hard failure', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const issuesSvc = await import('../services/pipeline/issues.js');
+    const err = Object.assign(new Error('all kinds failed'), { status: 502, code: 'UNIVERSE_CANON_EXTRACT_ALL_FAILED' });
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockRejectedValue(err);
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { prose: { status: 'ready', output: 'some prose' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({});
+    expect(r.status).toBe(502);
+    // The marker was still stamped so the UI banner survives the 5xx.
+    const after = await issuesSvc.getIssue(iss.body.id);
+    expect(after.stages.prose.canonExtraction.status).toBe('failed');
     spy.mockRestore();
   });
 
@@ -1824,6 +1977,138 @@ describe('pipeline routes', () => {
     expect(r.body.issues).toHaveLength(1);
     expect(r.body.issues[0].location).toBe('episode:3');
     expect(volumeVerifySpy).toHaveBeenCalledWith(ser.body.id, 'sea-fake', expect.objectContaining({ providerOverride: 'anthropic' }));
+  });
+
+  it('POST /series/:id/arc/derive-from-manuscript returns the preview', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    deriveSpy = vi.fn(async () => ({
+      arc: { logline: 'L' }, volume: { title: 'V' }, bible: { logline: 'L', premise: 'P', issueCountTarget: 3 },
+      issues: [{ id: 'i1', number: 1, title: 'One', synopsisSuggestion: 'syn' }],
+      runId: 'rd', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/arc/derive-from-manuscript`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.volume.title).toBe('V');
+    expect(r.body.issues).toHaveLength(1);
+    expect(deriveSpy).toHaveBeenCalledWith(ser.body.id, expect.any(Object));
+  });
+
+  it('POST /series/:id/arc/derive-from-manuscript/commit forwards the edited proposal', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    deriveCommitSpy = vi.fn(async () => ({ series: { id: ser.body.id, seasons: [{ id: 'sea-1' }] }, volumeId: 'sea-1', issueCount: 3 }));
+    const proposal = {
+      arc: { logline: 'L', summary: 'S' },
+      bible: { logline: 'L', premise: 'S', issueCountTarget: 3 },
+      volume: { title: 'The Giant' },
+      issues: [{ id: 'i1', title: 'Act One', synopsis: 'syn one' }],
+    };
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/arc/derive-from-manuscript/commit`).send(proposal);
+    expect(r.status).toBe(200);
+    expect(r.body.issueCount).toBe(3);
+    expect(deriveCommitSpy).toHaveBeenCalledWith(ser.body.id, expect.objectContaining({ volume: { title: 'The Giant' } }));
+  });
+
+  it('POST /series/:id/manuscript/completeness returns categorized findings', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    completenessSpy = vi.fn(async () => ({
+      issues: [{ severity: 'high', category: 'missing-content', location: 'Issue 2', problem: 'no climax', suggestion: 'add one' }],
+      runId: 'rc', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/manuscript/completeness`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.issues[0].category).toBe('missing-content');
+    expect(completenessSpy).toHaveBeenCalledWith(ser.body.id, expect.any(Object));
+    // The completeness pass also seeds a persisted review the editor reads.
+    expect(Array.isArray(r.body.review?.comments)).toBe(true);
+  });
+
+  describe('manuscript editor routes', () => {
+    it('GET /series/:id/manuscript returns sections + primaryStageId; review starts empty', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { prose: { output: 'A drafted scene.', status: 'ready' } },
+      });
+      const ms = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript`);
+      expect(ms.status).toBe(200);
+      expect(ms.body.sections).toHaveLength(1);
+      expect(ms.body.sections[0]).toMatchObject({ stageId: 'prose', content: 'A drafted scene.' });
+      expect(ms.body.primaryStageId).toBe('prose');
+
+      const review = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript/review`);
+      expect(review.status).toBe(200);
+      expect(review.body.comments).toEqual([]);
+    });
+
+    it('switches manuscript format via ?type and reports the pinned primary', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: {
+          prose: { output: 'Prose draft.', status: 'ready' },
+          teleplay: { output: 'INT. ROOM - DAY', status: 'ready' },
+        },
+      });
+      // Default view resolves to the detected dominant format; availableTypes lists both.
+      const def = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript`);
+      expect(def.body.availableTypes.sort()).toEqual(['prose', 'teleplay']);
+      // Explicit format switch.
+      const tele = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript?type=teleplay`);
+      expect(tele.body.viewType).toBe('teleplay');
+      expect(tele.body.sections[0].content).toBe('INT. ROOM - DAY');
+      // Pin a primary in the bible; it round-trips on the next load.
+      await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({ primaryManuscriptType: 'teleplay' });
+      const pinned = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript`);
+      expect(pinned.body.pinnedPrimary).toBe('teleplay');
+      expect(pinned.body.viewType).toBe('teleplay');
+    });
+
+    it('PUT section save versions the edit; restore reverts it', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { prose: { output: 'First draft.', status: 'ready' } },
+      });
+      // Versioned save snapshots the prior text.
+      const saved = await request(app)
+        .put(`/api/pipeline/series/${ser.body.id}/manuscript/sections/${iss.body.id}`)
+        .send({ stageId: 'prose', output: 'Second draft.' });
+      expect(saved.status).toBe(200);
+      expect(saved.body.section.content).toBe('Second draft.');
+      expect(saved.body.section.versions).toHaveLength(1);
+      // Revert through the stage-restore route.
+      const runId = saved.body.section.versions[0].runId;
+      const restored = await request(app)
+        .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/restore`)
+        .send({ runId });
+      expect(restored.status).toBe(200);
+      expect(restored.body.stage.output).toBe('First draft.');
+      // Non-manuscript stage is rejected.
+      const bad = await request(app)
+        .put(`/api/pipeline/series/${ser.body.id}/manuscript/sections/${iss.body.id}`)
+        .send({ stageId: 'idea', output: 'x' });
+      expect(bad.status).toBe(400);
+    });
+
+    it('PATCH unknown comment is a 404; accept rejects a missing find with a 400', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const patch = await request(app)
+        .patch(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope`)
+        .send({ status: 'dismissed' });
+      expect(patch.status).toBe(404);
+
+      const accept = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
+        .send({ replace: 'x' }); // missing required `find`
+      expect(accept.status).toBe(400);
+    });
   });
 
   describe('audio stage routes', () => {

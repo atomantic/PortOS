@@ -21,6 +21,12 @@ describe('SyncBadge', () => {
     expect(screen.getByRole('button').className).toMatch(/port-warning/);
   });
 
+  it('renders "Metadata missing" for metadata-missing status', () => {
+    render(<SyncBadge status="metadata-missing" onClick={() => {}} />);
+    expect(screen.getByText('Metadata missing')).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toMatch(/port-warning/);
+  });
+
   it('renders "Local only" for local-only status', () => {
     render(<SyncBadge status="local-only" onClick={() => {}} />);
     expect(screen.getByText('Local only')).toBeInTheDocument();
@@ -51,6 +57,16 @@ describe('SyncBadge', () => {
     expect(btn.className).not.toMatch(/port-warning/);
     expect(btn.className).not.toMatch(/port-success/);
     expect(btn.className).toMatch(/gray/);
+  });
+
+  it('renders peer-unreachable with distinct offline copy', () => {
+    render(<SyncBadge status="peer-unreachable" onClick={() => {}} />);
+    expect(screen.getByRole('button', { name: /peer offline/i })).toHaveAttribute('title', expect.stringMatching(/offline/i));
+  });
+
+  it('renders peer-too-old with update-needed copy', () => {
+    render(<SyncBadge status="peer-too-old" onClick={() => {}} />);
+    expect(screen.getByRole('button', { name: /peer update needed/i })).toHaveAttribute('title', expect.stringMatching(/older PortOS/i));
   });
 
   it('calls onClick when clicked', () => {

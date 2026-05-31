@@ -52,6 +52,20 @@ vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerSocketOptions: {},
 }));
 
+// Catalog bundle deps are dynamic-imported inside the universe push/apply
+// helpers; mock the backend + DB + sync so the bundle path is exercisable
+// without Postgres. Default backend is non-postgres so existing tests see no
+// bundle; the catalog-bundle suite overrides getBackendName per-test.
+vi.mock('../memoryBackend.js', async () => ({
+  getBackendName: vi.fn(() => 'file'),
+}));
+vi.mock('../catalogDB.js', async () => ({
+  getCatalogBundleForRef: vi.fn(),
+}));
+vi.mock('../catalogSync.js', async () => ({
+  applyRemoteChanges: vi.fn(),
+}));
+
 import {
   PEER_SUBSCRIBABLE_KINDS,
   listPeerSubscriptions,
@@ -65,6 +79,7 @@ import {
   applyIncomingPush,
   diffAssetManifestAgainstLocal,
   buildAssetManifest,
+  assetIntegrityForRecord,
   collectCollectionAssetReferences,
   autoSubscribeRecordToAllPeers,
   autoSubscribePeerToAllRecords,
@@ -91,6 +106,9 @@ import {
   mergeMediaCollectionsFromSync,
 } from '../mediaCollections.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { getBackendName } from '../memoryBackend.js';
+import { getCatalogBundleForRef } from '../catalogDB.js';
+import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 
 let originalDataPath;
@@ -161,6 +179,11 @@ beforeEach(async () => {
   vi.mocked(findCollectionByUniverseId).mockReset().mockResolvedValue(null);
   vi.mocked(findCollectionBySeriesId).mockReset().mockResolvedValue(null);
   vi.mocked(mergeMediaCollectionsFromSync).mockReset().mockResolvedValue({ applied: false, count: 0 });
+  // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
+  // no-op apply. The catalog-bundle suite overrides these per-test.
+  vi.mocked(getBackendName).mockReset().mockReturnValue('file');
+  vi.mocked(getCatalogBundleForRef).mockReset().mockResolvedValue({ ingredients: [], refs: [] });
+  vi.mocked(applyCatalogRemoteChanges).mockReset().mockResolvedValue({ errors: [] });
 
   await __resetForTests();
 });
@@ -174,11 +197,14 @@ afterEach(async () => {
   // delay between them — pushes scheduled by an earlier drain (e.g.
   // ackDeletesUpTo from a settled push) only enqueue on the next tick, so
   // we need more than one pass to fully quiesce the writeTail chains.
+  // __drainForTests double-awaits writeTail (one tick apart) so the
+  // persistPushSuccess that enqueues after peerFetch resolves is captured.
   for (let i = 0; i < 3; i++) {
-    await __resetForTests();
+    await __drainForTests();
     await __drainCursors();
     await new Promise((r) => setTimeout(r, 5));
   }
+  await __resetForTests();
   await rm(tmp, { recursive: true, force: true });
   PATHS.data = originalDataPath;
   PATHS.images = originalImagesPath;
@@ -936,6 +962,24 @@ describe('peerSync', () => {
       const manifest = await buildAssetManifest(record);
       expect(manifest).toHaveLength(1);
       expect(manifest[0]).not.toHaveProperty('sidecarSha256');
+    });
+
+    it('summarizes missing image sidecars for integrity without another asset walk', async () => {
+      await writeFile(join(PATHS.images, 'missing-meta.png'), Buffer.from('image bytes'));
+      const record = { id: 'u1', characters: [{ imageRefs: ['missing-meta.png'] }] };
+      const summary = await assetIntegrityForRecord('universe', record);
+      expect(summary.assetHashes).toHaveLength(1);
+      expect(summary.metadataMissing).toBe(true);
+    });
+
+    it('includes live child issue assets in a series integrity summary', async () => {
+      await writeFile(join(PATHS.images, 'issue-panel.png'), Buffer.from('issue image bytes'));
+      vi.mocked(listIssues).mockResolvedValue([
+        { id: 'i1', seriesId: 's1', stages: { storyboards: { panels: [{ imageRefs: ['issue-panel.png'] }] } } },
+      ]);
+      const summary = await assetIntegrityForRecord('series', { id: 's1', name: 'Series' });
+      expect(summary.assetHashes).toHaveLength(1);
+      expect(summary.metadataMissing).toBe(true);
     });
   });
 
@@ -2001,6 +2045,126 @@ describe('peerSync', () => {
   });
 
   // -------------------------------------------------------------------------
+  // CATALOG BUNDLE — universe push carries referenced catalog ingredients +
+  // refs (catalog-bundled-universe-push). Assembly is gated on Postgres +
+  // non-tombstone + non-empty; the receiver applies via catalogSync.
+  // -------------------------------------------------------------------------
+  describe('catalog bundle (universe push)', () => {
+    const liveUniverse = { id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z', deleted: false, deletedAt: null };
+
+    it('bundles catalog ingredients + refs into a live universe push (Postgres)', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      vi.mocked(getUniverse).mockResolvedValue(liveUniverse);
+      vi.mocked(getCatalogBundleForRef).mockResolvedValue({
+        ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }],
+        refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+      });
+
+      const payload = await getRecordPayloadForPeer('universe', 'u1');
+
+      expect(getCatalogBundleForRef).toHaveBeenCalledWith('universe', 'u1');
+      expect(payload.catalogBundle).toBeDefined();
+      expect(payload.catalogBundle.ingredients).toHaveLength(1);
+      expect(payload.catalogBundle.ingredients[0].id).toBe('cat-chr-1');
+      expect(payload.catalogBundle.refs[0].refId).toBe('u1');
+    });
+
+    it('omits the bundle on a non-Postgres install (nothing to bundle)', async () => {
+      vi.mocked(getBackendName).mockReturnValue('file');
+      vi.mocked(getUniverse).mockResolvedValue(liveUniverse);
+
+      const payload = await getRecordPayloadForPeer('universe', 'u1');
+
+      expect(getCatalogBundleForRef).not.toHaveBeenCalled();
+      expect(payload.catalogBundle).toBeUndefined();
+    });
+
+    it('omits the bundle on a tombstone (deleted) universe push', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      vi.mocked(getUniverse).mockResolvedValue({ ...liveUniverse, deleted: true, deletedAt: '2026-03-01T00:00:00Z' });
+
+      const payload = await getRecordPayloadForPeer('universe', 'u1');
+
+      expect(getCatalogBundleForRef).not.toHaveBeenCalled();
+      expect(payload.catalogBundle).toBeUndefined();
+    });
+
+    it('omits the bundle key when the universe has no catalog rows', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      vi.mocked(getUniverse).mockResolvedValue(liveUniverse);
+      vi.mocked(getCatalogBundleForRef).mockResolvedValue({ ingredients: [], refs: [] });
+
+      const payload = await getRecordPayloadForPeer('universe', 'u1');
+
+      expect(payload.catalogBundle).toBeUndefined();
+    });
+
+    it('does NOT bundle catalog rows on a series push (only universe)', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Ser', updatedAt: '2026-01-01T00:00:00Z', deleted: false, deletedAt: null });
+      vi.mocked(listIssues).mockResolvedValue([]);
+
+      const payload = await getRecordPayloadForPeer('series', 's1');
+
+      expect(getCatalogBundleForRef).not.toHaveBeenCalled();
+      expect(payload.catalogBundle).toBeUndefined();
+    });
+
+    it('receiver applies a bundled catalog payload via catalogSync', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      const catalogBundle = {
+        ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }],
+        refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+      };
+      const portosMeta = { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } };
+
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
+        assetManifest: [],
+        catalogBundle,
+        sourceInstanceId: 'peer-a',
+        portosMeta,
+      });
+
+      expect(applyCatalogRemoteChanges).toHaveBeenCalledTimes(1);
+      const arg = vi.mocked(applyCatalogRemoteChanges).mock.calls[0][0];
+      expect(arg.ingredients).toEqual(catalogBundle.ingredients);
+      expect(arg.refs).toEqual(catalogBundle.refs);
+      // portosMeta forwarded so applyRemoteChanges can run its own gate.
+      expect(arg.portosMeta).toEqual(portosMeta);
+    });
+
+    it('receiver skips the bundle on a tombstone universe push', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', name: 'Foo', deleted: true, deletedAt: '2026-03-01T00:00:00Z' },
+        assetManifest: [],
+        catalogBundle: { ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }], refs: [] },
+        sourceInstanceId: 'peer-a',
+        portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS } },
+      });
+
+      expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+    });
+
+    it('receiver rejects a universe push whose bundle ingredient is schema-ahead on catalog', async () => {
+      vi.mocked(getBackendName).mockReturnValue('postgres');
+      await expect(applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
+        assetManifest: [],
+        catalogBundle: { ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }], refs: [] },
+        sourceInstanceId: 'peer-a',
+        portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS, catalog: PORTOS_SCHEMA_VERSIONS.catalog + 1 }, portosVersion: '99.0.0' },
+      })).rejects.toThrow(/schema is ahead/);
+      // Gated before merge — bundle apply never runs.
+      expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // SCHEMA-VERSION GATING — sender side (handle 409 / cooldown / clear)
   // + receiver side (reject when sender ahead / pass through legacy + behind)
   // -------------------------------------------------------------------------
@@ -2310,6 +2474,40 @@ describe('peerSync', () => {
         expect(vi.mocked(peerFetch).mock.calls.length).toBe(fetchCallsAfterFirst);
       });
 
+      it('bypasses the schema cooldown for tombstone pushes so deletes converge immediately', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: {
+              details: { ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }] },
+            },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        vi.mocked(getUniverse).mockResolvedValue({
+          id: 'u1',
+          name: 'Foo',
+          deleted: true,
+          deletedAt: '2026-05-23T00:00:00.000Z',
+          updatedAt: '2026-05-23T00:00:00.000Z',
+        });
+        vi.mocked(peerFetch).mockResolvedValueOnce({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+        const result = await pushRecordToPeer(blocked);
+
+        expect(result.pushed).toBe(true);
+        const body = JSON.parse(vi.mocked(peerFetch).mock.calls.at(-1)[1].body);
+        expect(body.record.deleted).toBe(true);
+        expect(body.assetManifest).toEqual([]);
+      });
+
       it('bypassSchemaCooldown=true re-probes regardless of recent block', async () => {
         // Simulates the peer:online path: retryPendingPushesForPeer passes
         // bypassSchemaCooldown so the next probe actually hits the wire even
@@ -2390,6 +2588,42 @@ describe('peerSync', () => {
         // Record content is preserved across the retry.
         expect(retryPayload.record.id).toBe('u1');
         expect(retryPayload.sourceInstanceId).toBe(firstPayload.sourceInstanceId);
+      });
+
+      it('falls back without catalogBundle when an older peer rejects the new key, keeping portosMeta', async () => {
+        // A peer that supports portosMeta but predates catalog federation
+        // rejects the new `catalogBundle` key with a strict VALIDATION_ERROR.
+        // The sender must strip ONLY catalogBundle (not portosMeta, which the
+        // peer supports) and retry, so the universe push still lands — the
+        // receiver re-derives the catalog enrichments from the embedded canon.
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(getCatalogBundleForRef).mockResolvedValue({
+          ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }],
+          refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+        });
+        const firstCallBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: '', message: "Unrecognized key(s) in object: 'catalogBundle'" }] },
+        }) };
+        firstCallBody.clone = () => firstCallBody;
+        const retryBody = { ok: true, status: 200, json: async () => ({}) };
+        vi.mocked(peerFetch).mockResolvedValueOnce(firstCallBody).mockResolvedValueOnce(retryBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(true);
+        const calls = vi.mocked(peerFetch).mock.calls;
+        expect(calls.length).toBe(2);
+        const firstPayload = JSON.parse(calls[0][1].body);
+        const retryPayload = JSON.parse(calls[1][1].body);
+        expect(firstPayload.catalogBundle).toBeDefined();
+        expect(retryPayload.catalogBundle).toBeUndefined();
+        // Surgical strip: portosMeta survives because the peer didn't reject it.
+        expect(retryPayload.portosMeta).toBeDefined();
+        expect(retryPayload.record.id).toBe('u1');
       });
 
       it('does NOT retry on a 400 whose validation error is unrelated to portosMeta', async () => {

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import { getSettings, updateSettings } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
+import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
 import Dashboard from './pages/Dashboard';
 import Apps from './pages/Apps';
 import Ambient from './pages/Ambient';
@@ -43,6 +44,9 @@ const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
+const Catalog = lazyWithReload(() => import('./pages/Catalog'));
+const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
+const CatalogIngredient = lazyWithReload(() => import('./pages/CatalogIngredient'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
@@ -80,6 +84,7 @@ const Importer = lazyWithReload(() => import('./pages/Importer'));
 const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
+const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 
 // Loading fallback for lazy-loaded pages
@@ -149,6 +154,7 @@ function useTimezoneBootstrap() {
 export default function App() {
   useTimezoneBootstrap();
   return (
+    <CatalogTypesProvider>
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/ambient" element={<Ambient />} />
@@ -251,6 +257,9 @@ export default function App() {
               at `/universes/:universeId`; `new` is the create-mode sentinel
               (UniverseBuilder treats it as no-id → blank draft). Universe ids are
               UUIDs, so `new` can never collide with a real record. */}
+          <Route path="catalog" element={<Catalog />} />
+          <Route path="catalog/ingest" element={<CatalogIngest />} />
+          <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
           <Route path="universes" element={<Universes />} />
           <Route path="universes/new" element={<UniverseBuilder />} />
           <Route path="universes/:universeId" element={<UniverseBuilder />} />
@@ -273,6 +282,7 @@ export default function App() {
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
+          <Route path="pipeline/series/:seriesId/manuscript" element={<PipelineManuscriptEditor />} />
           <Route path="pipeline/series/:seriesId/sync" element={<SyncView kind="series" param="seriesId" backPath="/pipeline" />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />
           <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />
@@ -284,5 +294,6 @@ export default function App() {
         </Route>
       </Routes>
     </Suspense>
+    </CatalogTypesProvider>
   );
 }

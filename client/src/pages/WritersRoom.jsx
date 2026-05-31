@@ -4,6 +4,7 @@ import { NotebookPen, PanelLeftOpen, BookOpen } from 'lucide-react';
 import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
+import CatalogCastPanel from '../components/CatalogCastPanel';
 import {
   listWritersRoomFolders,
   listWritersRoomWorks,
@@ -201,12 +202,21 @@ export default function WritersRoom() {
             </div>
           )}
           {!loadingWork && activeWork && (
-            <WorkEditor
-              work={activeWork}
-              onChange={handleWorkChange}
-              onToggleExercise={() => setShowExercise((s) => !s)}
-              exerciseOpen={showExercise}
-            />
+            <>
+              <div className="px-3 pt-3">
+                <CatalogCastPanel
+                  refKind="work"
+                  refId={activeWork.id}
+                  refLabel={activeWork.title || 'this work'}
+                />
+              </div>
+              <WorkEditor
+                work={activeWork}
+                onChange={handleWorkChange}
+                onToggleExercise={() => setShowExercise((s) => !s)}
+                exerciseOpen={showExercise}
+              />
+            </>
           )}
         </main>
 

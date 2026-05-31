@@ -79,7 +79,8 @@ def configure_negative_prompt(negative_prompt: str) -> None:
     constant lives in up to three places:
       - ltx_pipelines_mlx.ti2vid_one_stage  (T2V / I2V / A2V one-stage paths)
       - ltx_pipelines_mlx._base             (base class used by Q8/HQ paths)
-      - utils.constants                     (two-stage / extend shared import)
+      - ltx_pipelines_mlx.utils.constants  (two-stage / extend shared import)
+      - ltx_core_mlx.utils.constants       (older upstream layouts)
 
     We overwrite it on every module that already defines it (REPLACE semantics,
     not append). Modules absent at the current LTX2 pin are skipped silently.
@@ -90,7 +91,8 @@ def configure_negative_prompt(negative_prompt: str) -> None:
     _candidates = [
         ("ltx_pipelines_mlx", "ti2vid_one_stage"),
         ("ltx_pipelines_mlx", "_base"),
-        ("utils", "constants"),
+        ("ltx_pipelines_mlx.utils", "constants"),
+        ("ltx_core_mlx.utils", "constants"),
     ]
     patched = 0
     for pkg, mod in _candidates:

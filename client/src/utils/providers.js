@@ -4,6 +4,7 @@
  * model lists so the UI shows the explanatory note instead of a token dropdown.
  */
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
+export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 
 /**
  * Provider-type enum mirrored from server/lib/aiToolkit/constants.js#PROVIDER_TYPES.
@@ -26,7 +27,7 @@ export const PROVIDER_TYPES = Object.freeze({
  * @returns {string[]}
  */
 export const filterSelectableModels = (models) =>
-  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT);
+  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
 
 /**
  * Check if a provider is a TUI-backed agent provider. Mirror of

@@ -46,7 +46,14 @@ vi.mock('./calendarSync.js', () => ({
   getEvents: vi.fn(),
 }));
 
+// catalogDB is mocked so the catalog retriever never touches Postgres; the real
+// catalogTypes lib (getCatalogType) stays unmocked — it's pure.
+vi.mock('./catalogDB.js', () => ({
+  hybridSearchIngredients: vi.fn(),
+}));
+
 const { spawn } = await import('child_process');
+const catalogDB = await import('./catalogDB.js');
 const memoryBackend = await import('./memoryBackend.js');
 const memoryEmbeddings = await import('./memoryEmbeddings.js');
 const brainStorage = await import('./brainStorage.js');
@@ -71,6 +78,7 @@ beforeEach(() => {
   identity.getGoals.mockResolvedValue({ goals: [] });
   character.getCharacter.mockResolvedValue({ name: 'Adam', class: 'Developer' });
   calendarSync.getEvents.mockResolvedValue({ events: [] });
+  catalogDB.hybridSearchIngredients.mockResolvedValue([]);
 });
 
 describe('gatherSources', () => {
@@ -89,6 +97,39 @@ describe('gatherSources', () => {
     expect(sources).toHaveLength(2);
     expect(sources[0].kind).toBe('memory');
     expect(sources[0].id).toBe('memory:mem-1');
+  });
+
+  it('surfaces catalog ingredients with kind/id/href shape and the type primary-content snippet', async () => {
+    catalogDB.hybridSearchIngredients.mockResolvedValue([
+      { ingredient: { id: 'cat-chr-1', type: 'character', name: 'Ada', tags: ['mentor'], payload: { physicalDescription: 'sharp eyes' } }, rrfScore: 0.9 },
+      { ingredient: { id: 'cat-idea-2', type: 'idea', name: 'Heist', tags: [], payload: { summary: 'a clockwork heist' } }, rrfScore: 0.6 },
+      // Character whose only text is in a SECONDARY field (personality) — the
+      // snippet should fall through the registry snippetFallbackKeys, not name.
+      { ingredient: { id: 'cat-chr-3', type: 'character', name: 'Grim', tags: [], payload: { personality: 'brooding and loyal' } }, rrfScore: 0.5 },
+    ]);
+
+    const sources = await askService.gatherSources('who is in my story');
+    const catalog = sources.filter((s) => s.kind === 'catalog');
+    expect(catalog).toHaveLength(3);
+    const ada = catalog.find((s) => s.id === 'catalog:character:cat-chr-1');
+    expect(ada).toBeTruthy();
+    expect(ada.title).toBe('Ada');
+    expect(ada.snippet).toBe('sharp eyes');                 // character primaryContentKey
+    expect(ada.href).toBe('/catalog/character/cat-chr-1');
+    const idea = catalog.find((s) => s.id === 'catalog:idea:cat-idea-2');
+    expect(idea.snippet).toBe('a clockwork heist');         // idea primaryContentKey = summary
+    const grim = catalog.find((s) => s.id === 'catalog:character:cat-chr-3');
+    expect(grim.snippet).toBe('brooding and loyal');        // fell through to personality, not name
+  });
+
+  it('still answers when the catalog retriever throws (isolated by allSettled)', async () => {
+    catalogDB.hybridSearchIngredients.mockRejectedValue(new Error('catalog down'));
+    memoryBackend.hybridSearchMemories.mockResolvedValue({ memories: [{ id: 'mem-1', rrfScore: 0.9 }] });
+    memoryBackend.getMemory.mockResolvedValue({ id: 'mem-1', content: 'x', summary: 's', type: 'fact' });
+
+    const sources = await askService.gatherSources('anything');
+    expect(sources.some((s) => s.kind === 'memory')).toBe(true);
+    expect(sources.some((s) => s.kind === 'catalog')).toBe(false);
   });
 
   it('keeps producing answers when one retriever throws', async () => {

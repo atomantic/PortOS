@@ -559,7 +559,8 @@ describe('validation.js', () => {
     it('should accept a valid reviewer string', () => {
       expect(sanitizeTaskMetadata({ reviewer: 'copilot' })).toEqual({ reviewer: 'copilot' });
       expect(sanitizeTaskMetadata({ reviewer: 'claude' })).toEqual({ reviewer: 'claude' });
-      expect(sanitizeTaskMetadata({ reviewer: 'gemini' })).toEqual({ reviewer: 'gemini' });
+      expect(sanitizeTaskMetadata({ reviewer: 'antigravity' })).toEqual({ reviewer: 'antigravity' });
+      expect(sanitizeTaskMetadata({ reviewer: 'gemini' })).toEqual({ reviewer: 'antigravity' });
       expect(sanitizeTaskMetadata({ reviewer: 'codex' })).toEqual({ reviewer: 'codex' });
       expect(sanitizeTaskMetadata({ reviewLoop: true, reviewer: 'claude' }))
         .toEqual({ reviewLoop: true, reviewer: 'claude' });
@@ -574,10 +575,10 @@ describe('validation.js', () => {
     });
 
     it('should accept an ordered reviewers list, dedupe, and drop unknowns', () => {
-      expect(sanitizeTaskMetadata({ reviewers: ['codex', 'gemini', 'copilot'] }))
-        .toEqual({ reviewers: ['codex', 'gemini', 'copilot'] });
+      expect(sanitizeTaskMetadata({ reviewers: ['codex', 'antigravity', 'copilot'] }))
+        .toEqual({ reviewers: ['codex', 'antigravity', 'copilot'] });
       expect(sanitizeTaskMetadata({ reviewers: ['codex', 'codex', 'bogus', 'gemini'] }))
-        .toEqual({ reviewers: ['codex', 'gemini'] });
+        .toEqual({ reviewers: ['codex', 'antigravity'] });
       expect(sanitizeTaskMetadata({ reviewers: ['nope'] })).toBeNull();
     });
 
@@ -599,7 +600,8 @@ describe('validation.js', () => {
 
     it('prefers reviewers, falls back to legacy reviewer, preserves order + dedupes', () => {
       expect(normalizeReviewers({ reviewer: 'codex' })).toEqual(['codex']);
-      expect(normalizeReviewers({ reviewers: ['gemini', 'codex', 'gemini'] })).toEqual(['gemini', 'codex']);
+      expect(normalizeReviewers({ reviewers: ['antigravity', 'codex', 'antigravity'] })).toEqual(['antigravity', 'codex']);
+      expect(normalizeReviewers({ reviewers: ['gemini', 'codex', 'gemini'] })).toEqual(['antigravity', 'codex']);
       // `reviewers` wins over legacy `reviewer`.
       expect(normalizeReviewers({ reviewers: ['claude'], reviewer: 'codex' })).toEqual(['claude']);
     });
@@ -611,11 +613,12 @@ describe('validation.js', () => {
 
     it('uses the fallback when metadata is empty and falls back to copilot when the fallback is invalid', () => {
       // Settings-derived defaults flow through when the task didn't pin reviewers.
-      expect(normalizeReviewers({}, ['gemini', 'codex'])).toEqual(['gemini', 'codex']);
+      expect(normalizeReviewers({}, ['antigravity', 'codex'])).toEqual(['antigravity', 'codex']);
+      expect(normalizeReviewers({}, ['gemini', 'codex'])).toEqual(['antigravity', 'codex']);
       // An all-bogus fallback collapses to the hardcoded copilot, never an empty list.
       expect(normalizeReviewers({}, ['bogus', null])).toEqual(['copilot']);
       // Explicit task metadata still wins over the fallback.
-      expect(normalizeReviewers({ reviewers: ['claude'] }, ['gemini'])).toEqual(['claude']);
+      expect(normalizeReviewers({ reviewers: ['claude'] }, ['antigravity'])).toEqual(['claude']);
     });
   });
 
@@ -627,7 +630,7 @@ describe('validation.js', () => {
 
     it('emits the ordered comma list when not lone-default', () => {
       expect(buildReviewWithArgs(['codex'])).toBe('--review-with codex');
-      expect(buildReviewWithArgs(['codex', 'gemini', 'copilot'])).toBe('--review-with codex,gemini,copilot');
+      expect(buildReviewWithArgs(['codex', 'antigravity', 'copilot'])).toBe('--review-with codex,antigravity,copilot');
     });
 
     it('adds stop-mode only for 2+ reviewers and reviewer-applies only with a CLI reviewer', () => {
@@ -645,12 +648,12 @@ describe('validation.js', () => {
     it('accepts reviewers/reviewStopMode/reviewerApplies', () => {
       const parsed = createCosTaskSchema.safeParse({
         description: 'do a thing',
-        reviewers: ['codex', 'gemini', 'copilot'],
+        reviewers: ['codex', 'antigravity', 'copilot'],
         reviewStopMode: 'on-clean',
         reviewerApplies: true
       });
       expect(parsed.success).toBe(true);
-      expect(parsed.data.reviewers).toEqual(['codex', 'gemini', 'copilot']);
+      expect(parsed.data.reviewers).toEqual(['codex', 'antigravity', 'copilot']);
       expect(parsed.data.reviewStopMode).toBe('on-clean');
       expect(parsed.data.reviewerApplies).toBe(true);
     });

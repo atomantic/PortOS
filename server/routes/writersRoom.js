@@ -44,6 +44,7 @@ import {
 } from '../services/writersRoom/objects.js';
 import { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } from '../services/writersRoom/promoteToPipeline.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
+import { scanProseForIngredientRefs } from '../services/catalogExtraction.js';
 
 const router = Router();
 
@@ -105,8 +106,21 @@ router.post('/works/:id/promote-to-pipeline', asyncHandler(async (req, res) => {
 // ---------- draft body / versions ----------
 
 router.put('/works/:id/draft', asyncHandler(async (req, res) => {
-  const { body } = validateRequest(writersRoomDraftSaveSchema, req.body);
-  const { manifest, body: persisted } = await saveDraftBody(req.params.id, body);
+  const { body, referencedIngredientIds } = validateRequest(writersRoomDraftSaveSchema, req.body);
+  // Capture which catalog ingredients this version references. The client may
+  // pass the set explicitly; otherwise derive it by scanning the prose against
+  // the cast linked to this work. Best-effort — a catalog DB hiccup must not
+  // block a writer from saving prose, so a scan failure falls through to "no
+  // refs computed" (omitting the field preserves the prior version's snapshot).
+  const refs = Array.isArray(referencedIngredientIds)
+    ? referencedIngredientIds
+    : await scanProseForIngredientRefs(body, { workId: req.params.id }).catch((err) => {
+        console.error(`❌ wr: ingredient-ref scan failed: ${err.message}`);
+        return undefined;
+      });
+  const { manifest, body: persisted } = await saveDraftBody(
+    req.params.id, body, { referencedIngredientIds: refs },
+  );
   res.json({ ...manifest, activeDraftBody: persisted });
 }));
 

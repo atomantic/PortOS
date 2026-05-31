@@ -23,7 +23,7 @@ export const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
  * Parse command string into args, respecting quoted strings.
  * e.g. 'git commit -m "msg with spaces"' → ['git', 'commit', '-m', 'msg with spaces']
  */
-function parseCommandArgs(str) {
+export function parseCommandArgs(str) {
   const args = [];
   let current = '';
   let inQuote = null;

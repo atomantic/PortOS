@@ -14,7 +14,7 @@ Single dashboard for managing active git repos, PM2 processes, logs, and JIRA in
 
 ### 2. Autonomous AI Agent Orchestration
 
-Chief of Staff (CoS) system that autonomously generates tasks from goals, routes them to the best AI provider based on learned success rates, and executes without human intervention. Multi-provider support (Claude, Codex, Gemini, Ollama, LM Studio) with fallback chains, model tier selection, and continuous learning from outcomes. The system should get smarter over time, not just execute.
+Chief of Staff (CoS) system that autonomously generates tasks from goals, routes them to the best AI provider based on learned success rates, and executes without human intervention. Multi-provider support (Claude, Codex, Antigravity, Ollama, LM Studio) with fallback chains, model tier selection, and continuous learning from outcomes. The system should get smarter over time, not just execute.
 
 ### 3. Personal Knowledge Management
 

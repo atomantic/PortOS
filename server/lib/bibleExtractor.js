@@ -23,6 +23,7 @@ const EXISTING_VAR = Object.freeze({
  * @param {Array}  [args.existing]   current bible (sent to the prompt for deference)
  * @param {object} [args.context]    extra prompt variables (work, series, issue, ...)
  * @param {string} [args.providerOverride]
+ * @param {string} [args.modelOverride] explicit model id (beats stage.model)
  * @param {string} [args.source]     run-tracking source tag
  */
 export async function extractBible({
@@ -31,6 +32,7 @@ export async function extractBible({
   existing = [],
   context = {},
   providerOverride,
+  modelOverride,
   source,
 }) {
   const stage = KIND_STAGE[kind];
@@ -48,6 +50,7 @@ export async function extractBible({
 
   const result = await runStagedLLM(stage, variables, {
     providerOverride,
+    modelOverride,
     returnsJson: true,
     source: source || `bible-extract-${kind}`,
   });

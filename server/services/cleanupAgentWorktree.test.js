@@ -557,7 +557,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  // --- non-Copilot reviewer (--review-with claude/gemini/codex) ---
+  // --- non-Copilot reviewer (--review-with claude/antigravity/codex) ---
 
   it('should NOT call the native GH Copilot reviewer API when the list has no copilot', async () => {
     git.push.mockResolvedValue(undefined);
@@ -595,7 +595,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-w' });
 
     await cleanupAgentWorktree('agent-1', true, {
-      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'codex', 'gemini'],
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'codex', 'antigravity'],
       reviewStopMode: 'on-findings', reviewerApplies: true, description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
@@ -603,7 +603,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(git.requestCopilotReview).toHaveBeenCalledTimes(1);
     expect(addTask).toHaveBeenCalledTimes(1);
     const [followUp] = addTask.mock.calls[0];
-    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'gemini']);
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'antigravity']);
     expect(followUp.metadata.reviewLoopStopMode).toBe('on-findings');
     expect(followUp.metadata.reviewLoopReviewerApplies).toBe(true);
   });
@@ -614,7 +614,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-v' });
 
     await cleanupAgentWorktree('agent-1', true, {
-      openPR: true, requestCopilotReview: true, reviewers: ['codex', 'gemini', 'copilot'], description: 'Build',
+      openPR: true, requestCopilotReview: true, reviewers: ['codex', 'antigravity', 'copilot'], description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
@@ -622,7 +622,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(git.requestCopilotReview).not.toHaveBeenCalled();
     expect(addTask).toHaveBeenCalledTimes(1);
     const [followUp] = addTask.mock.calls[0];
-    expect(followUp.metadata.reviewLoopReviewers).toEqual(['codex', 'gemini', 'copilot']);
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['codex', 'antigravity', 'copilot']);
   });
 
   // --- skipMerge tests for review-loop follow-up cleanup ---

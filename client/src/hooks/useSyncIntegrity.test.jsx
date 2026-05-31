@@ -177,6 +177,24 @@ describe('useSyncIntegrity — worst-case status reduction', () => {
     expect(result.current.statusById.get(recId)).toBe('assets-missing');
   });
 
+  it('metadata-missing is worse than in-parity but does not outrank local-only', async () => {
+    const recId = 'rec-meta';
+    fetchSyncIntegrity
+      .mockResolvedValueOnce({
+        available: true,
+        records: [{ id: recId, name: 'R', status: 'metadata-missing' }],
+      })
+      .mockResolvedValueOnce({
+        available: true,
+        records: [{ id: recId, name: 'R', status: 'local-only' }],
+      });
+
+    const { result } = renderWithPeers('universe', [PEER_A, PEER_B]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.statusById.get(recId)).toBe('local-only');
+  });
+
   it('excludes records from unavailable peers', async () => {
     fetchSyncIntegrity
       .mockResolvedValueOnce({ available: false, reason: 'peer-unreachable', records: [] })
@@ -255,6 +273,10 @@ describe('useSyncIntegrity — integrityUnavailable', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.integrityUnavailable).toBe(true);
+    expect(result.current.unavailablePeers).toEqual([
+      { peerId: 'peer-a', peerName: 'Peer Alpha', reason: 'peer-unreachable' },
+      { peerId: 'peer-b', peerName: 'Peer Beta', reason: 'peer-too-old' },
+    ]);
     expect(result.current.noSyncingPeers).toBe(false); // distinct: peers ARE configured
     expect(result.current.statusById.size).toBe(0);
   });
@@ -314,7 +336,21 @@ describe('syncBadgeStatus — badge precedence helper', () => {
     expect(syncBadgeStatus(make({ statusById: new Map([['r', 'diverged']]) }), 'r')).toBe('diverged');
   });
 
-  it('returns unknown when integrity was unavailable and the record has no status', () => {
+  it('returns the precise unavailable badge when all unavailable peers share a reason', () => {
+    expect(syncBadgeStatus(make({
+      integrityUnavailable: true,
+      unavailablePeers: [{ reason: 'peer-unreachable' }],
+    }), 'r')).toBe('peer-unreachable');
+  });
+
+  it('returns unknown when unavailable reasons are mixed and the record has no status', () => {
+    expect(syncBadgeStatus(make({
+      integrityUnavailable: true,
+      unavailablePeers: [{ reason: 'peer-unreachable' }, { reason: 'peer-too-old' }],
+    }), 'r')).toBe('unknown');
+  });
+
+  it('returns unknown when integrity was unavailable without peer details', () => {
     expect(syncBadgeStatus(make({ integrityUnavailable: true }), 'r')).toBe('unknown');
   });
 

@@ -25,6 +25,7 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
+import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -237,7 +238,7 @@ export function buildCliSpawnConfig(provider, model) {
 
   // Codex CLI uses different invocation pattern.
   // `--dangerously-bypass-approvals-and-sandbox` is the Codex equivalent of
-  // Claude's `--dangerously-skip-permissions` / Gemini's `--yolo`: it skips all
+  // Claude/Antigravity's `--dangerously-skip-permissions`: it skips all
   // approval prompts AND disables the sandbox. Without it, `codex exec` runs
   // under the default workspace-write sandbox (network blocked, so `gh pr create`
   // can't resolve api.github.com) and, in non-interactive `exec` mode, any
@@ -258,14 +259,12 @@ export function buildCliSpawnConfig(provider, model) {
     };
   }
 
-  // Gemini CLI — uses --yolo for auto-approval, -p for non-interactive stdin mode
-  if (providerId === 'gemini-cli') {
-    const args = ['--yolo', ...(provider?.args || [])];
-    if (model) {
-      args.push('--model', model);
-    }
+  // Antigravity CLI (`agy`) replaces Gemini CLI. Use print mode for a
+  // headless agent run and keep prompt delivery on stdin.
+  if (isAntigravityCliProvider(provider)) {
+    const args = ensureAntigravityPrintArgs(provider?.args || []);
     return {
-      command: provider?.command || 'gemini',
+      command: provider?.command || 'agy',
       args,
       stdinMode: 'prompt'
     };
@@ -300,7 +299,7 @@ export const isClaudeCliProvider = (provider) =>
 
 /**
  * Check if a provider is a TUI-backed agent provider (Claude Code, Codex,
- * Gemini, etc. that run in a PTY). Used by callers that need to branch
+ * Antigravity, etc. that run in a PTY). Used by callers that need to branch
  * between headless CLI/API runs and TUI shell sessions.
  */
 export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI;

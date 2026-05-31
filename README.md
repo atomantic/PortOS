@@ -60,7 +60,7 @@ Bring your entire portfolio of projects under one roof.
 
 An autonomous AI agent orchestrator that manages your development workflow. Submit a task, and CoS dispatches the right AI agent to handle it — then learns from the result. ([Full docs](./docs/features/chief-of-staff.md))
 
-- **Multi-Agent Orchestration** — Run Claude Code, Codex, Gemini CLI, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling ([Agent Runner docs](./docs/features/cos-agent-runner.md))
+- **Multi-Agent Orchestration** — Run Claude Code, Codex, Antigravity CLI, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling ([Agent Runner docs](./docs/features/cos-agent-runner.md))
 - **Intelligent Routing** — 6 agent skill templates (bug-fix, feature, security-audit, refactor, docs, mobile) route tasks to the best model based on complexity ([Agent Skills docs](./docs/features/agent-skills.md))
 - **Task Learning** — Tracks success rates, error patterns, and model performance to dynamically improve routing decisions ([Memory System docs](./docs/features/memory-system.md))
 - **Goal Tracking** — Define goals and track progress across hundreds of completed tasks with success rate metrics
@@ -212,7 +212,7 @@ Track your biological self alongside your digital one.
 - **Command Palette (⌘K)** — Fuzzy-search every page, action, and dashboard layout in PortOS from one input. The same manifest powers voice navigation (`ui_navigate`)
 - **Dashboard Layouts** — Multiple named dashboard layouts (default, focus, morning-review, ops) with a 12-column drag/resize grid; switch between them from `⌘K`
 - **Theming** — Day/night theme pairs with one-click toggle
-- **Multi-Provider AI** — Configure Claude, OpenAI, Gemini, Ollama, LM Studio, and more with model tiers, fallback chains, and per-provider availability tracking
+- **Multi-Provider AI** — Configure Claude, OpenAI, Antigravity, Ollama, LM Studio, and more with model tiers, fallback chains, and per-provider availability tracking
 - **Secret Management** — Environment variable masking, API key redaction, and PTY shell allowlisting
 - **File Uploads** — Drag-and-drop file storage with preview support
 - **Multi-Instance** — Peer-to-peer networking between PortOS instances with app and agent availability across nodes
@@ -276,7 +276,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 | **Frontend** | React 18, Vite, Tailwind CSS, Three.js, xterm.js |
 | **Backend** | Express.js, Socket.IO, PM2, Zod validation |
 | **Data** | PostgreSQL, JSON file persistence, vector embeddings |
-| **AI** | Claude Code, Codex, Gemini CLI, Ollama, LM Studio (via [portos-ai-toolkit](https://www.npmjs.com/package/portos-ai-toolkit)) |
+| **AI** | Claude Code, Codex, Antigravity CLI, Ollama, LM Studio (via [portos-ai-toolkit](https://www.npmjs.com/package/portos-ai-toolkit)) |
 
 ## Project Structure
 
@@ -315,7 +315,7 @@ Each registered app includes:
 
 ### AI Providers (`data/providers.json`)
 Configure AI providers for the runner and Chief of Staff:
-- **CLI-based**: Claude Code, Codex, Gemini CLI
+- **CLI-based**: Claude Code, Codex, Antigravity CLI
 - **API-based**: OpenAI, Anthropic, Google (with model tier management)
 - **Local models**: Ollama, LM Studio (OpenAI-compatible endpoints)
 

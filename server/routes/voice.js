@@ -65,6 +65,7 @@ const voiceConfigPatchSchema = z.object({
     // custom provider the voice picker happily lets the user select.
     provider: z.string().max(80).optional(),
     model: z.string().max(128).optional(),
+    visionModel: z.string().max(128).optional(),
     systemPrompt: z.string().max(4000).optional(),
     usePersonality: z.boolean().optional(),
     personality: z.object({

@@ -49,6 +49,15 @@ describe('computeRecordIntegrity', () => {
     expect(result[0]).toMatchObject({ id: 'r1', status: INTEGRITY_STATUS.ASSETS_MISSING });
   });
 
+  it('returns METADATA_MISSING when image hashes match but one side lacks sidecar metadata', () => {
+    const ts = '2026-05-23T00:00:00.000Z';
+    const local = makeRow({ updatedAt: ts, assetHashes: ['aaaa'], metadataMissing: true });
+    const remote = makeRow({ updatedAt: ts, assetHashes: ['aaaa'], metadataMissing: false });
+    const result = computeRecordIntegrity([local], [remote]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 'r1', status: INTEGRITY_STATUS.METADATA_MISSING });
+  });
+
   it('treats hash order as irrelevant for IN_PARITY (sorts before compare)', () => {
     const ts = '2026-05-23T00:00:00.000Z';
     const local = makeRow({ updatedAt: ts, assetHashes: ['bbbb', 'aaaa'] });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
   isCodexConfiguredDefault,
   resolveCliModel,
@@ -41,8 +42,8 @@ describe('providerModels', () => {
   });
 
   describe('filterSelectableModels', () => {
-    it('strips the codex sentinel from the list', () => {
-      expect(filterSelectableModels(['a', CODEX_CONFIGURED_DEFAULT, 'b'])).toEqual(['a', 'b']);
+    it('strips configured-default sentinels from the list', () => {
+      expect(filterSelectableModels(['a', CODEX_CONFIGURED_DEFAULT, ANTIGRAVITY_CONFIGURED_DEFAULT, 'b'])).toEqual(['a', 'b']);
     });
 
     it('returns an empty list for nullish input', () => {

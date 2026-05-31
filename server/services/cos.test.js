@@ -852,4 +852,19 @@ describe('addTask — first-line dedup', () => {
     expect(fnBody).toMatch(/firstLine\(taskData\.description\)/);
     expect(fnBody).toMatch(/firstLine\(t\.description\)/);
   });
+
+  it('addTask scopes dedup by metadata.app (regression guard)', () => {
+    // Same description against two different apps must NOT trip the
+    // duplicate check — surfaced by codex review of the
+    // [voice-code-agent-target-managed-app] PR. Without this scope, the
+    // voice tool happily speaks "Queued in BookLoom" while returning the
+    // matched PortOS task.
+    const start = COS_SRC.indexOf('export async function addTask');
+    const end = COS_SRC.indexOf('export async function', start + 1);
+    const fnBody = COS_SRC.slice(start, end === -1 ? undefined : end);
+    // The dedup `tasks.find(...)` predicate must compare the candidate's
+    // `metadata?.app` (or null) against the new task's `taskData.app`.
+    expect(fnBody).toMatch(/t\.metadata\?\.app\s*\|\|\s*null/);
+    expect(fnBody).toMatch(/taskData\.app\s*\|\|\s*null/);
+  });
 });

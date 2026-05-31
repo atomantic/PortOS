@@ -33,6 +33,7 @@ import EpisodeVideoStage from '../components/pipeline/stages/EpisodeVideoStage';
 import AudioStage from '../components/pipeline/stages/AudioStage';
 import SeriesLlmPicker from '../components/pipeline/SeriesLlmPicker';
 import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
+import CatalogCastPanel from '../components/CatalogCastPanel';
 import { VisualGenSettingsPanel } from '../components/pipeline/stages/VisualGenSettings';
 
 // Stages that surface a header-level settings gear. The Comic editor
@@ -401,7 +402,12 @@ export default function PipelineIssue() {
       ) : null}
 
       {/* Active stage panel */}
-      <div className="flex-1 overflow-auto p-4 md:p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4">
+        <CatalogCastPanel
+          refKind="issue"
+          refId={issue.id}
+          refLabel={issue.title ? `#${issue.number} ${issue.title}` : `issue #${issue.number}`}
+        />
         {StageComponent ? (
           <StageComponent
             issue={issue}

@@ -18,6 +18,7 @@
 // names are the canonical PortOS-wide schemas.
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
+export * as catalogValidation from './catalogValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
@@ -31,6 +32,10 @@ export * from './validation.js';
 
 // === Story & narrative ===
 export * from './bibleExtractor.js';
+export * as catalogBulkParsers from './catalogBulkParsers.js';
+export * from './catalogChunking.js';
+export * from './catalogTypes.js';
+export * as catalogUniverseTags from './catalogUniverseTags.js';
 export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
 export * from './composeStyledPrompt.js';
@@ -53,6 +58,10 @@ export * from './writersRoomStylePresets.js';
 export * from './aiProvider.js';
 export * from './aiToolkitState.js';
 export * from './ansiStrip.js';
+// Namespaced: antigravity.js and providerModels.js both export
+// ANTIGRAVITY_CONFIGURED_DEFAULT, so a flat `export *` would trip the
+// barrel's duplicate-identifier collision check.
+export * as antigravity from './antigravity.js';
 export * from './cliProviderArgs.js';
 export * from './cliProviderRun.js';
 export * from './codexAssistantExtract.js';
@@ -91,6 +100,7 @@ export * from './commandSecurity.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
 export * from './gitRemote.js';
+export * from './processEnv.js';
 export * from './pythonSetup.js';
 
 // === Networking ===
@@ -119,6 +129,7 @@ export * from './taskParser.js';
 export * from './curatedGenomeMarkers.js';
 
 // === Domain utilities ===
+export * from './appResolver.js';
 export * from './capabilityMap.js';
 export * from './civitai.js';
 export * from './localLlmCatalog.js';
@@ -132,6 +143,7 @@ export * from './renderSlot.js';
 export * from './telegramClient.js';
 
 // === Model & config ===
+export * from './browserConfig.js';
 export * from './buildId.js';
 export * from './db.js';
 export * from './platform.js';

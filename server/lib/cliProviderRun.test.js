@@ -7,7 +7,7 @@ describe('pickCliProvider', () => {
   const providers = {
     'claude-code': cli('claude-code', { defaultModel: 'claude-opus-4-7', models: ['claude-opus-4-7', 'claude-haiku-4-5'] }),
     'codex': cli('codex', { defaultModel: 'codex-configured-default', models: ['codex-configured-default'] }),
-    'gemini-cli': cli('gemini-cli', { defaultModel: 'gemini-2.5-pro', models: ['gemini-2.5-pro'] }),
+    'antigravity-cli': cli('antigravity-cli', { command: 'agy', defaultModel: 'antigravity-configured-default', models: ['antigravity-configured-default'] }),
     'ollama': { id: 'ollama', type: 'api', enabled: true, defaultModel: 'llama3' },
     'disabled-cli': cli('disabled-cli', { enabled: false }),
   };
@@ -18,8 +18,8 @@ describe('pickCliProvider', () => {
   });
 
   it('accepts an array shape', () => {
-    const { provider } = pickCliProvider(Object.values(providers), { providerId: 'gemini-cli' });
-    expect(provider.id).toBe('gemini-cli');
+    const { provider } = pickCliProvider(Object.values(providers), { providerId: 'antigravity-cli' });
+    expect(provider.id).toBe('antigravity-cli');
   });
 
   it('falls back to claude-code when providerId is unset', () => {
@@ -72,12 +72,12 @@ describe('runCliProviderPrompt', () => {
   });
 
   it('rejects an empty prompt without spawning', async () => {
-    const result = await runCliProviderPrompt({ provider: cli('gemini-cli'), prompt: '' });
+    const result = await runCliProviderPrompt({ provider: cli('antigravity-cli'), prompt: '' });
     expect(result.error).toMatch(/non-empty/);
   });
 
   it('delivers the prompt via stdin and collects stdout', async () => {
-    // gemini-cli with no model → buildCliArgs returns [] (no flags), so `cat`
+    // A legacy gemini-cli test double with no model returns [] (no flags), so `cat`
     // simply echoes stdin back out — a clean end-to-end spawn test.
     const result = await runCliProviderPrompt({
       provider: { id: 'gemini-cli', type: 'cli', command: 'cat', args: [] },

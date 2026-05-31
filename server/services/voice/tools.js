@@ -16,6 +16,8 @@ import { scheduleTimer } from './timers.js';
 import { getUserTimezone, todayInTimezone, getLocalParts, getUtcOffsetMs } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
+import { listIngredients as listCatalogIngredients, listRefsForIngredient } from '../catalogDB.js';
+import { getActiveCatalogTypes, isActiveType } from '../../lib/catalogTypes.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 import * as imageGen from '../imageGen/index.js';
 import { createImageGenWaiter } from '../imageGenWaiter.js';
@@ -203,6 +205,8 @@ const TOOL_GROUPS = {
   pipeline_prev_stage: 'pipeline',
   pipeline_open_stage: 'pipeline',
   dispatch_code_agent: 'code',
+  code_agent_status: 'code',
+  catalog_lookup: 'catalog',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -294,8 +298,12 @@ const GROUP_INTENT = {
   // in speech). A false positive only OFFERS the tool to the LLM (which still
   // has to choose it), and the tool is a no-op unless codeAgent.enabled
   // (pipeline.js strips it from the spec list when off).
-  code: /\b(?:have (?:claude|codex|gemini|the agent|an agent)\b|dispatch (?:a |an )?(?:coding |code )?agent|spin up an agent|code (?:it )?up|open a pr|pull request|refactor|(?:implement|debug|rewrite|patch)\b[^.!?\n]{0,40}\b(?:bug|tests?|function|method|build|lint|type ?error|error|code|file|module|endpoint|route|component|class|api|schema|migration|script|flag|regression|handler|parser|service|hook|query|registry|config)\b|fix (?:the |a |an |my )?(?:bug|test|tests|failing|function|method|build|lint|type|error|code|file|module|endpoint|route|component)|write (?:a |the |some )?(?:unit |integration )?tests?|add (?:a |an |the )?(?:flag|function|method|endpoint|route|test|migration)\b)/i,
+  code: /\b(?:have (?:claude|codex|antigravity|gemini|the agent|an agent)\b|dispatch (?:a |an )?(?:coding |code )?agent|spin up an agent|code (?:it )?up|open a pr|pull request|refactor|(?:implement|debug|rewrite|patch)\b[^.!?\n]{0,40}\b(?:bug|tests?|function|method|build|lint|type ?error|error|code|file|module|endpoint|route|component|class|api|schema|migration|script|flag|regression|handler|parser|service|hook|query|registry|config)\b|fix (?:the |a |an |my )?(?:bug|test|tests|failing|function|method|build|lint|type|error|code|file|module|endpoint|route|component)|write (?:a |the |some )?(?:unit |integration )?tests?|add (?:a |an |the )?(?:flag|function|method|endpoint|route|test|migration)\b|(?:how(?:'s| is| are)?|status of|progress on|what(?:'s| is)? happening (?:with|on)|where (?:are|is) (?:we|it|that|the))\b[^.!?\n]{0,40}\b(?:coding (?:task|agent|job)|code agent|dispatched (?:task|job|agent)|pull request|the agent|the pr|that pr|my pr|the task)\b|\bis (?:the |that |my )?(?:coding |code )?(?:agent|task) (?:still |yet )?(?:running|going|working|done|finished))/i,
   ui: UI_INTENT_RE,
+  // Creative catalog lookups — "find my character X", "what scenes feature Y",
+  // "look up the place named Z", "search my catalog for …". Tight enough that
+  // generic "find" / "search" don't trip it (those still go to brain_search).
+  catalog: /\b(catalog|ingredient|cast|creative library)\b|\b(?:look ?up|find|search|show me|do i have|any)\b[^.!?\n]{0,30}\b(?:character|place|object|scene|concept|idea|prop|setting|location|faction)s?\b/i,
 };
 
 // Fail-fast at import time: any group referenced in TOOL_GROUPS that has no
@@ -441,6 +449,40 @@ const describeWeatherCode = (code) => WEATHER_CODES[code] ?? 'unknown conditions
 // the LLM to pass lat/lon when the user names a place.
 const DEFAULT_LAT = 37.7749;
 const DEFAULT_LON = -122.4194;
+
+// Catalog ingredient kinds. The six built-ins are a STATIC fallback; the live
+// enum advertised to the LLM (and the filter-validity check) resolves through
+// the active type registry at `getToolSpecs()` / call time so user-defined
+// types (Settings → Catalog) are voice-addressable too. `activeCatalogTypeIds`
+// reads the registry fresh each call — it changes on a settings save / peer
+// sync without a process restart.
+const CATALOG_INGREDIENT_TYPES = ['character', 'place', 'object', 'idea', 'scene', 'concept'];
+const activeCatalogTypeIds = () => {
+  const ids = getActiveCatalogTypes().map((t) => t.id);
+  return ids.length ? ids : CATALOG_INGREDIENT_TYPES;
+};
+
+// Escape a freeform string (a user-type label can be anything) for safe use
+// inside a `new RegExp(...)` so a label like "C++ faction" can't throw or inject.
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Pull a short snippet from an ingredient's type-specific payload. Mirrors
+// the fallback chain used by client/src/pages/Catalog.jsx so voice + UI agree
+// on what "the body" of an ingredient is. Trimmed to 200 chars.
+const catalogPayloadSnippet = (payload) => {
+  if (!payload || typeof payload !== 'object') return '';
+  const raw = payload.physicalDescription
+    || payload.description
+    || payload.summary
+    || payload.personality
+    || payload.significance
+    || payload.role
+    || payload.notes
+    || '';
+  const text = String(raw).trim().replace(/\s+/g, ' ');
+  if (text.length <= 200) return text;
+  return `${text.slice(0, 197)}…`;
+};
 
 const TOOLS = [
   {
@@ -1811,7 +1853,7 @@ const TOOLS = [
   {
     name: 'dispatch_code_agent',
     description:
-      'Hand a software-engineering task to an autonomous coding agent that works in an isolated git worktree and opens a pull request for review. Use when the user asks you to write, fix, refactor, debug, or test CODE — e.g. "fix the failing test in X", "add a --dry-run flag to the backup script", "refactor the widget registry". Do NOT use for capturing notes/ideas (that is brain_capture) or for clicking/navigating the UI. The work runs in the background and the user is told when it finishes — do not wait for it. State the task in the user\'s own words with enough detail to act on it. The coding agent and model come from the user\'s configured default; never put a provider or model in this call.',
+      'Hand a software-engineering task to an autonomous coding agent that works in an isolated git worktree and opens a pull request for review. Use when the user asks you to write, fix, refactor, debug, or test CODE — e.g. "fix the failing test in X", "add a --dry-run flag to the backup script", "refactor the widget registry". Do NOT use for capturing notes/ideas (that is brain_capture) or for clicking/navigating the UI. The work runs in the background and the user is told when it finishes — do not wait for it. State the task in the user\'s own words with enough detail to act on it. When the user names a managed app to work in ("…in BookLoom", "fix the bug in the finance tracker"), pass that name as `app`; omit `app` for tasks on PortOS itself. The coding agent and model come from the user\'s configured default; never put a provider or model in this call.',
     parameters: {
       type: 'object',
       properties: {
@@ -1819,14 +1861,19 @@ const TOOLS = [
           type: 'string',
           description: 'The coding task to perform, phrased as a clear, self-contained instruction (file/feature names, the desired outcome). The agent reads this verbatim as its prompt.',
         },
+        app: {
+          type: 'string',
+          description: 'Optional managed-app target ("BookLoom", "finance tracker"). Server fuzzy-matches against the user\'s configured apps; omit to run against PortOS itself.',
+        },
       },
       required: ['task'],
     },
-    execute: async ({ task } = {}) => {
+    execute: async ({ task, app } = {}) => {
       const text = typeof task === 'string' ? task.trim() : '';
       if (!text) {
         return { ok: false, error: 'task is required', summary: "I didn't catch what you want the coding agent to do." };
       }
+      const appPhrase = typeof app === 'string' ? app.trim() : '';
 
       // Backstop for the palette path — pipeline.js already strips this tool
       // from the LLM's spec list when codeAgent is disabled, but the command
@@ -1837,6 +1884,28 @@ const TOOLS = [
         return { ok: false, error: 'code-agent disabled', summary: 'Coding-agent dispatch is off — turn it on under Settings, Voice, Coding agent.' };
       }
 
+      // Reject an explicit-but-unknown app rather than silently falling
+      // through to the PortOS workspace — that's the whole point of asking.
+      let resolvedAppId = null;
+      let resolvedAppName = null;
+      if (appPhrase) {
+        const { getActiveApps } = await import('../apps.js');
+        const { resolveAppByPhrase } = await import('../../lib/appResolver.js');
+        const apps = await getActiveApps().catch(() => []);
+        const match = resolveAppByPhrase(appPhrase, apps);
+        if (!match) {
+          const names = (apps || []).map((a) => a?.name).filter(Boolean);
+          const hint = names.length ? ` Try one of: ${names.slice(0, 4).join(', ')}.` : '';
+          return {
+            ok: false,
+            error: `unknown app "${appPhrase}"`,
+            summary: `I don't see a managed app called ${appPhrase}.${hint}`,
+          };
+        }
+        resolvedAppId = match.id;
+        resolvedAppName = match.name || match.id;
+      }
+
       // Dynamic import: cos.js is a large module with its own import graph;
       // importing it lazily keeps tools.js load-time light and dodges any
       // cos → voice cycle.
@@ -1845,7 +1914,7 @@ const TOOLS = [
       const model = typeof codeAgent.model === 'string' ? codeAgent.model.trim() : '';
 
       // Resolve a code-capable provider. A coding agent must run a CLI/TUI
-      // provider (Claude Code, Codex, Gemini CLI, …); an API backend (LM Studio
+      // provider (Claude Code, Codex, Antigravity CLI, …); an API backend (LM Studio
       // / Ollama / OpenAI-compatible) can't, and the spawner would otherwise
       // fall through to the Claude CLI spawn config with a non-Claude model name
       // (buildCliSpawnConfig defaults to claude). Validate BOTH the inherited
@@ -1872,7 +1941,7 @@ const TOOLS = [
           return {
             ok: false,
             error: 'no code-capable provider',
-            summary: "Your AI provider can't run a coding agent. Enable a CLI provider like Claude Code, Codex, or Gemini under Settings, AI Providers, then try again.",
+            summary: "Your AI provider can't run a coding agent. Enable a CLI provider like Claude Code, Codex, or Antigravity under Settings, AI Providers, then try again.",
           };
         }
         resolvedProvider = codeProvider.id;
@@ -1884,6 +1953,7 @@ const TOOLS = [
         priority: 'HIGH',
         position: 'top',
         voiceDispatch: true,
+        ...(resolvedAppId ? { app: resolvedAppId } : {}),
         // The promise of this tool (and the changelog / spoken copy) is
         // isolated work that opens a PR and never touches the user's working
         // tree. spawnAgentForTask only honors that when the task explicitly
@@ -1908,26 +1978,167 @@ const TOOLS = [
       const running = isRunning();
       const stoppedNote = ' — but the Chief-of-Staff runner is stopped, so start it to run it';
 
+      const appSuffix = resolvedAppName ? ` in ${resolvedAppName}` : '';
+
       if (created?.duplicate) {
         return {
           ok: true,
           taskId: created.id,
           duplicate: true,
-          summary: `That coding task is already queued${running ? ', so I left it as is.' : `${stoppedNote}.`}`,
+          app: resolvedAppId,
+          summary: `That coding task${appSuffix} is already queued${running ? ', so I left it as is.' : `${stoppedNote}.`}`,
         };
       }
 
       const summary = running
-        ? "Queued a coding task — I'll let you know when it's done."
-        : `Queued the coding task${stoppedNote}.`;
-      return { ok: true, taskId: created?.id, running, summary };
+        ? `Queued a coding task${appSuffix} — I'll let you know when it's done.`
+        : `Queued the coding task${appSuffix}${stoppedNote}.`;
+      return { ok: true, taskId: created?.id, running, app: resolvedAppId, summary };
+    },
+  },
+
+  {
+    name: 'code_agent_status',
+    description:
+      "Report the status of in-flight coding tasks the user dispatched by voice (via dispatch_code_agent). Use when the user asks how a coding agent / dispatched task is doing — e.g. \"how's that coding task going?\", \"is the agent still running?\", \"status of the PR\", \"what's happening with the refactor?\". Reads live agent state and reports phase + elapsed per running task. The completion announcement covers the done case proactively; this tool is for mid-task check-ins. Returns an empty-but-ok result when nothing is running — speak the summary verbatim.",
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    execute: async () => {
+      const { loadState } = await import('../cosState.js');
+      const { getAllTasks } = await import('../cos.js');
+      const { isTruthyMeta } = await import('../agentState.js');
+
+      const state = await loadState();
+      const runningAgents = Object.values(state?.agents || {}).filter((a) => a?.status === 'running');
+      if (runningAgents.length === 0) {
+        return { ok: true, count: 0, agents: [], summary: 'No coding tasks are running right now.' };
+      }
+
+      // Read TASKS.md once and index by id, not getTaskById in a loop — that
+      // re-reads both task files per call.
+      const { user, cos } = await getAllTasks();
+      const tasksById = new Map();
+      for (const t of user.tasks || []) tasksById.set(t.id, t);
+      for (const t of cos.tasks || []) tasksById.set(t.id, t);
+
+      const matched = [];
+      for (const agent of runningAgents) {
+        if (!agent?.taskId) continue;
+        const task = tasksById.get(agent.taskId);
+        if (!task) continue;
+        if (!isTruthyMeta(task.metadata?.voiceDispatch)) continue;
+        const startedAt = agent.startedAt ? Date.parse(agent.startedAt) : NaN;
+        const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : null;
+        matched.push({
+          taskId: task.id,
+          agentId: agent.id,
+          description: (task.description || '').split('\n')[0].trim(),
+          phase: agent.metadata?.phase || 'working',
+          app: agent.metadata?.taskAppName || agent.metadata?.taskApp || null,
+          elapsedMs,
+        });
+      }
+
+      if (matched.length === 0) {
+        return { ok: true, count: 0, agents: [], summary: 'No coding tasks are running right now.' };
+      }
+
+      const phaseText = (phase) => (phase === 'initializing' ? 'spinning up' : 'working');
+      const elapsedSpoken = (ms) => {
+        if (!Number.isFinite(ms) || ms < 60_000) return 'less than a minute';
+        const mins = Math.floor(ms / 60_000);
+        if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'}`;
+        const hours = Math.floor(mins / 60);
+        const rem = mins % 60;
+        const h = `${hours} hour${hours === 1 ? '' : 's'}`;
+        return rem === 0 ? h : `${h} ${rem} minute${rem === 1 ? '' : 's'}`;
+      };
+      const clipDesc = (s) => (s.length > 80 ? `${s.slice(0, 77)}…` : s);
+
+      let summary;
+      if (matched.length === 1) {
+        const a = matched[0];
+        const appSuffix = a.app ? ` in ${a.app}` : '';
+        const descPart = a.description ? `: ${clipDesc(a.description)}` : '';
+        summary = `One coding task is ${phaseText(a.phase)}${appSuffix} — ${elapsedSpoken(a.elapsedMs)} in${descPart}.`;
+      } else {
+        const lines = matched.map((a) => {
+          const appSuffix = a.app ? ` in ${a.app}` : '';
+          const descPart = a.description ? ` "${clipDesc(a.description)}"` : '';
+          return `${phaseText(a.phase)}${appSuffix}${descPart}, ${elapsedSpoken(a.elapsedMs)} elapsed`;
+        });
+        summary = `${matched.length} coding tasks are running: ${lines.join('; ')}.`;
+      }
+
+      return { ok: true, count: matched.length, agents: matched, summary };
+    },
+  },
+
+  {
+    name: 'catalog_lookup',
+    description:
+      'Search the creative ingredients catalog (characters, places, objects, ideas, scenes, concepts) by name or content. ' +
+      'Use when the user asks "do I have a character named X?", "find my places", "look up the scene where Y happens", "what concepts are in my catalog about Z". ' +
+      'Returns up to `limit` matches (default 5) with id, name, type, a short snippet, and link count. Pass `type` to narrow to a single kind.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Free-text search across name + payload content. Use the user\'s most distinctive phrasing.' },
+        // enum is filled in at spec-build time (toSpec) from the active type
+        // registry so user-defined types are advertised; this static default
+        // is the fallback shape.
+        type: { type: 'string', enum: CATALOG_INGREDIENT_TYPES, description: 'Optional: restrict to one ingredient kind.' },
+        limit: { type: 'integer', description: 'Max results (default 5, max 20).' },
+      },
+      required: ['query'],
+    },
+    execute: async ({ query, type, limit = 5 } = {}) => {
+      if (typeof query !== 'string' || !query.trim()) throw new Error('query is required');
+      const q = query.trim();
+      const max = clampLimit(limit, 5, 20);
+      // Accept any ACTIVE type (built-in or user-defined); an unknown type
+      // silently drops to an unfiltered search rather than erroring.
+      const filterType = type && isActiveType(type) ? type : undefined;
+      const { items } = await listCatalogIngredients({ query: q, type: filterType, limit: max });
+      const results = await Promise.all(items.map(async (ing) => {
+        const refs = await listRefsForIngredient(ing.id);
+        return {
+          id: ing.id,
+          name: ing.name,
+          type: ing.type,
+          snippet: catalogPayloadSnippet(ing.payload),
+          refsCount: refs.length,
+        };
+      }));
+      const summary = results.length
+        ? `Found ${results.length} catalog match${results.length === 1 ? '' : 'es'} for "${q}"${filterType ? ` (${filterType})` : ''}.`
+        : `No catalog ingredients matched "${q}"${filterType ? ` in ${filterType}` : ''}.`;
+      return { ok: true, count: results.length, results, summary };
     },
   },
 ];
 
+// Resolve a tool's parameter schema at spec-build time. `catalog_lookup`'s
+// `type` enum is widened to the active type registry (built-in + user-defined
+// catalog types) so a user's custom kind ("faction", "wardrobe") is advertised
+// to the LLM and voice "search my factions" can filter on it. Other tools pass
+// their static schema through untouched.
+const resolveParameters = (t) => {
+  if (t.name !== 'catalog_lookup') return t.parameters;
+  return {
+    ...t.parameters,
+    properties: {
+      ...t.parameters.properties,
+      type: { ...t.parameters.properties.type, enum: activeCatalogTypeIds() },
+    },
+  };
+};
+
 const toSpec = (t) => ({
   type: 'function',
-  function: { name: t.name, description: t.description, parameters: t.parameters },
+  function: { name: t.name, description: t.description, parameters: resolveParameters(t) },
 });
 
 export const getToolSpecs = () => TOOLS.map(toSpec);
@@ -1956,6 +2167,26 @@ export const classifyIntent = (userText) => {
   if (!userText) return active;
   for (const [group, re] of Object.entries(GROUP_INTENT)) {
     if (re.test(userText)) active.add(group);
+  }
+  // The static `catalog` regex only knows the six built-in nouns. A user-defined
+  // type (e.g. "wardrobe", "faction") wouldn't trip it, so "search my wardrobes"
+  // would never surface `catalog_lookup` (the enum-widening in resolveParameters
+  // can't help a tool that intent-gating already dropped). Activate the catalog
+  // group when the utterance mentions any active user type's id or label —
+  // singular or simple plural. System types are already covered by the regex.
+  if (!active.has('catalog')) {
+    const customNouns = getActiveCatalogTypes()
+      .filter((t) => t.system === false)
+      .flatMap((t) => [t.id, t.label])
+      .filter((s) => typeof s === 'string' && s.trim().length > 1)
+      .map((s) => s.trim().toLowerCase());
+    if (customNouns.length) {
+      const lower = userText.toLowerCase();
+      // Match the noun as a whole word, optionally pluralized (foo → foos/fooes).
+      if (customNouns.some((n) => new RegExp(`\\b${escapeRegExp(n)}e?s?\\b`).test(lower))) {
+        active.add('catalog');
+      }
+    }
   }
   return active;
 };

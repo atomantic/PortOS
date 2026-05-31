@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { PassThrough } from 'stream';
+import { safeChildProcessEnv } from '../lib/processEnv.js';
 
 let videoProcess = null;
 let audioProcess = null;
@@ -13,7 +14,7 @@ async function listDevices() {
       '-f', 'avfoundation',
       '-list_devices', 'true',
       '-i', ''
-    ]);
+    ], { env: safeChildProcessEnv() });
 
     let output = '';
 
@@ -77,7 +78,7 @@ function startVideoStream(deviceId = '0') {
     '-f', 'mjpeg',
     '-q:v', '5',
     '-'
-  ]);
+  ], { env: safeChildProcessEnv() });
 
   videoProcess.stdout.pipe(videoStream);
 
@@ -118,7 +119,7 @@ function startAudioStream(deviceId = '0') {
     '-ar', '48000',
     '-b:a', '128k',
     '-'
-  ]);
+  ], { env: safeChildProcessEnv() });
 
   audioProcess.stdout.pipe(audioStream);
 

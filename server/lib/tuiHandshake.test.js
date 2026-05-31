@@ -84,7 +84,7 @@ describe('tuiHandshake — paste timing constants', () => {
 
 describe('tuiHandshake.inferTuiCommand', () => {
   // Catch-all default also returns claude; the claude rows just confirm
-  // an explicit match isn't accidentally tagged codex/gemini.
+  // an explicit match isn't accidentally tagged codex/antigravity/gemini.
   it.each([
     ['', 'claude'],
     [null, 'claude'],
@@ -93,6 +93,8 @@ describe('tuiHandshake.inferTuiCommand', () => {
     ['codex', 'codex'],
     ['openai-codex', 'codex'],
     ['codex-cloud', 'codex'],
+    ['antigravity', 'agy'],
+    ['google-antigravity-2', 'agy'],
     ['gemini', 'gemini'],
     ['google-gemini-2', 'gemini'],
     ['claude', 'claude'],
@@ -119,6 +121,12 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     expect(applyCommandDefaults('claude', args)).toBe(args);
     expect(applyCommandDefaults('gemini', args)).toBe(args);
     expect(applyCommandDefaults('something-else', args)).toBe(args);
+  });
+
+  it('adds Antigravity permission bypass and strips legacy Gemini flags', () => {
+    expect(applyCommandDefaults('agy', ['--yolo', '--model', 'gemini-2.5-pro'])).toEqual([
+      '--dangerously-skip-permissions',
+    ]);
   });
 
   it('preserves the original arg list when injecting (caller can still mutate before spawn)', () => {
@@ -184,6 +192,12 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const out = buildTuiInvocation({ id: 'claude' }, 'opus-x');
     expect(out.command).toBe('claude');
     expect(out.args).toEqual(['--model', 'opus-x']);
+  });
+
+  it('does not append --model for Antigravity TUI', () => {
+    const out = buildTuiInvocation({ id: 'antigravity-tui', command: 'agy', args: [] }, 'antigravity-configured-default');
+    expect(out.command).toBe('agy');
+    expect(out.args).toEqual(['--dangerously-skip-permissions']);
   });
 
   it('handles a missing provider with no id (falls back to claude)', () => {

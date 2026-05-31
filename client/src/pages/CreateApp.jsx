@@ -6,6 +6,7 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import IconPicker from '../components/IconPicker';
 import FolderPicker from '../components/FolderPicker';
+import Banner from '../components/ui/Banner';
 import { NON_PM2_TYPES } from '../components/apps/constants';
 
 const DETECTION_STEPS_PM2 = [
@@ -293,32 +294,32 @@ export default function CreateApp() {
 
           {/* App Type Badge */}
           {detected && isNonPm2 && (
-            <div className="mt-3 p-3 bg-port-accent/10 border border-port-accent/30 rounded-lg">
-              <p className="text-sm text-port-accent font-medium">
+            <Banner tone="info" size="md" className="mt-3">
+              <p className="font-medium">
                 {appType === 'ios-native' ? '📱 iOS App' :
                  appType === 'macos-native' ? '🖥️ macOS App' :
                  appType === 'swift' ? '🐦 Swift Package' :
                  '🔨 Xcode Project'} — not managed by PM2
               </p>
-            </div>
+            </Banner>
           )}
 
           {/* PM2 Running Status */}
           {pm2Status && pm2Status.length > 0 && !isNonPm2 && (
-            <div className="mt-3 p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg">
-              <p className="text-sm text-port-warning font-medium flex items-center gap-2">
+            <Banner tone="warning" size="md" className="mt-3">
+              <p className="font-medium flex items-center gap-2">
                 <Play size={14} /> Already running in PM2
               </p>
               <p className="text-xs text-gray-400 mt-1">
                 {pm2Status.map(p => `${p.name} (${p.status})`).join(', ')}
               </p>
-            </div>
+            </Banner>
           )}
 
           {/* Standardization Result */}
           {standardizeResult && (
-            <div className="mt-3 p-3 bg-port-success/10 border border-port-success/30 rounded-lg">
-              <p className="text-sm text-port-success font-medium flex items-center gap-2">
+            <Banner tone="success" size="md" className="mt-3">
+              <p className="font-medium flex items-center gap-2">
                 <Wrench size={14} /> PM2 Config Standardized
               </p>
               {standardizeResult.backupBranch && (
@@ -331,7 +332,7 @@ export default function CreateApp() {
                   Modified: {standardizeResult.filesModified.join(', ')}
                 </p>
               )}
-            </div>
+            </Banner>
           )}
 
           {/* No Provider Warning */}

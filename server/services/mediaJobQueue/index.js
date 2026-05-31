@@ -113,6 +113,22 @@ function getGenModuleForJob(job) {
   return Promise.resolve(null);
 }
 
+// Drop the params snapshot of pythonPath; live settings always win for
+// local-Python jobs so a stale persisted snapshot can't poison the spawn.
+// Future live-resolved fields (e.g. model.runtime-aware overrides) belong
+// here so the seam stays in one place instead of accreting into runJob.
+// Mutates safeParams in place.
+async function resolveLiveParams(job, safeParams) {
+  const usesLocalPython = job.kind === 'video' || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX);
+  if (!usesLocalPython) return;
+  const live = await getSettings().catch(() => null);
+  const livePythonPath = live?.imageGen?.local?.pythonPath || null;
+  if (livePythonPath && livePythonPath !== safeParams.pythonPath) {
+    console.log(`🐍 media-job [${job.id.slice(0, 8)}] pythonPath re-resolved from settings: ${safeParams.pythonPath} → ${livePythonPath}`);
+  }
+  safeParams.pythonPath = livePythonPath;
+}
+
 export const mediaJobEvents = new EventEmitter();
 
 // GPU lane: serialized — `running` holds at most one job (the MLX runtime can't
@@ -603,17 +619,7 @@ async function runJob(job) {
   // to an out-of-range value, bypassing the route-layer Zod validation.
   safeParams.chunks = Math.min(8, Math.max(1, Math.trunc(Number(safeParams.chunks) || 1)));
 
-  // Drop the params snapshot of pythonPath; live settings always win for
-  // local-Python jobs so a stale persisted snapshot can't poison the spawn.
-  const usesLocalPython = job.kind === 'video' || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX);
-  if (usesLocalPython) {
-    const live = await getSettings().catch(() => null);
-    const livePythonPath = live?.imageGen?.local?.pythonPath || null;
-    if (livePythonPath && livePythonPath !== safeParams.pythonPath) {
-      console.log(`🐍 media-job [${job.id.slice(0, 8)}] pythonPath re-resolved from settings: ${safeParams.pythonPath} → ${livePythonPath}`);
-    }
-    safeParams.pythonPath = livePythonPath;
-  }
+  await resolveLiveParams(job, safeParams);
 
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);

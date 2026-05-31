@@ -3,6 +3,7 @@ import { RefreshCw, Download, XCircle, Check, Loader, AlertTriangle, Trash2, Ext
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
+import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
@@ -405,10 +406,7 @@ export default function UpdateTab() {
 
       {/* Update Error */}
       {updateError && (
-        <div className="flex items-start gap-2 p-3 bg-port-error/10 border border-port-error/30 rounded-lg">
-          <AlertTriangle size={16} className="text-port-error shrink-0 mt-0.5" />
-          <span className="text-sm text-port-error">{updateError}</span>
-        </div>
+        <Banner tone="error" size="md" icon={AlertTriangle}>{updateError}</Banner>
       )}
 
       {/* Last Update Result */}

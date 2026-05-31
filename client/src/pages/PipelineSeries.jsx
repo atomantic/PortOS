@@ -14,10 +14,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
-  PanelLeftClose, PanelLeftOpen, Sparkles,
+  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
+import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
 import {
   getPipelineSeries, updatePipelineSeries,
@@ -206,6 +207,13 @@ export default function PipelineSeries() {
                 <NotebookPen size={12} /> Writers Room
               </Link>
             ) : null}
+            <Link
+              to={`/pipeline/series/${series.id}/manuscript`}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="Open the full manuscript editor"
+            >
+              <BookOpen size={12} /> Manuscript
+            </Link>
             <button
               type="button"
               onClick={handleSave}
@@ -299,6 +307,38 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           />
           <StructureHint total={series.issueCountTarget || 0} />
         </div>
+      </Field>
+
+      <Field label="Primary manuscript format (source of truth)">
+        <div className="flex items-center gap-2">
+          <select
+            id="series-primary-manuscript"
+            value={series.primaryManuscriptType || ''}
+            onChange={async (e) => {
+              const value = e.target.value || null;
+              patchSeries({ primaryManuscriptType: value });
+              const updated = await updatePipelineSeries(series.id, { primaryManuscriptType: value }, { silent: true })
+                .catch((err) => { toast.error(err.message || 'Failed to set primary format'); return null; });
+              if (updated) onSeriesUpdate?.(updated);
+            }}
+            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          >
+            <option value="">— Auto-detect —</option>
+            <option value="comicScript">Comic</option>
+            <option value="teleplay">Teleplay</option>
+            <option value="prose">Prose</option>
+          </select>
+          <Link
+            to={`/pipeline/series/${series.id}/manuscript`}
+            className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
+            title="Open the full manuscript editor"
+          >
+            <NotebookPen size={12} /> Editor
+          </Link>
+        </div>
+        <p className="text-[11px] text-gray-500 mt-1">
+          The format you finalize first — the other two are generated from it. The manuscript editor opens this format by default.
+        </p>
       </Field>
 
       <Field label="Premise (the bible — fed into every stage's prompt context)">
@@ -404,6 +444,8 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           <strong>Prepend</strong> (default) puts the override ahead of the universe's <em>stylePrompt</em>; <strong>Append</strong> trails it; <strong>Replace</strong> drops the universe style entirely. Leave the box blank to use the universe style verbatim.
         </p>
       </Field>
+
+      <CatalogCastPanel refKind="series" refId={series.id} refLabel={series.name || 'this series'} />
 
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>

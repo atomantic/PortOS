@@ -584,6 +584,26 @@ describe('Apps Routes', () => {
 
       expect(response.status).toBe(400);
     });
+
+    it('should reject an unknown taskType in the URL', async () => {
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/not-a-real-task-type')
+        .send({ enabled: true });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_TASK_TYPE');
+    });
+  });
+
+  describe('PUT /api/apps/bulk-task-type/:taskType', () => {
+    it('should reject an unknown taskType in the URL', async () => {
+      const response = await request(app)
+        .put('/api/apps/bulk-task-type/not-a-real-task-type')
+        .send({ enabled: true });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_TASK_TYPE');
+    });
   });
 
   describe('GET /api/apps/:id/icon', () => {

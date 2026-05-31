@@ -132,6 +132,30 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(sanitizeCharacter({ name: 'A' }).locked).toBeUndefined();
   });
 
+  it('round-trips ingredientId through applyCanonExtras (set / unset / over-cap / non-string)', () => {
+    // The catalog backfill stamps the catalog row id back onto the embedded
+    // canon entry; the sanitizer must preserve a valid string, trim to cap,
+    // and drop non-string / missing.
+    const set = sanitizeCharacter({ name: 'A', ingredientId: 'cat-chr-bible-abcd1234' });
+    expect(set.ingredientId).toBe('cat-chr-bible-abcd1234');
+
+    const unset = sanitizeCharacter({ name: 'A' });
+    expect(unset.ingredientId).toBeNull();
+
+    const long = 'cat-chr-bible-' + 'a'.repeat(BIBLE_LIMITS.INGREDIENT_ID_MAX + 32);
+    const trimmed = sanitizeCharacter({ name: 'A', ingredientId: long });
+    expect(trimmed.ingredientId.length).toBe(BIBLE_LIMITS.INGREDIENT_ID_MAX);
+
+    // Non-string falls back to null — the sanitizer treats anything outside
+    // the contract as "no value" rather than coercing.
+    expect(sanitizeCharacter({ name: 'A', ingredientId: 12345 }).ingredientId).toBeNull();
+    expect(sanitizeCharacter({ name: 'A', ingredientId: { id: 'x' } }).ingredientId).toBeNull();
+
+    // Symmetry: places + objects carry the same field through the same helper.
+    expect(sanitizePlace({ name: 'P', ingredientId: 'cat-plc-bible-feed' }).ingredientId)
+      .toBe('cat-plc-bible-feed');
+  });
+
   it('caps tags + prompt + sourceSeriesId at their limits', () => {
     const longPrompt = 'p'.repeat(BIBLE_LIMITS.PROMPT_MAX + 50);
     const tooManyTags = Array.from({ length: BIBLE_LIMITS.TAGS_PER_ENTRY_MAX + 5 }, (_, i) => `tag-${i}`);
@@ -243,7 +267,6 @@ describe('storyBible — sanitizeCharacter', () => {
 
     it('caps the list at BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX', () => {
       const tooMany = Array.from({ length: BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX + 5 }, (_, i) => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
         name: `Outfit ${i}`,
       }));
       const out = sanitizeCharacter({ name: 'A', wardrobes: tooMany });

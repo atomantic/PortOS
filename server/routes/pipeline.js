@@ -37,6 +37,8 @@ import * as seriesSvc from '../services/pipeline/series.js';
 import * as issuesSvc from '../services/pipeline/issues.js';
 import * as seasonsSvc from '../services/pipeline/seasons.js';
 import * as arcPlanner from '../services/pipeline/arcPlanner.js';
+import * as manuscriptReview from '../services/pipeline/manuscriptReview.js';
+import * as manuscriptFix from '../services/pipeline/manuscriptFix.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
 import * as editorialAnalysis from '../services/pipeline/editorialAnalysis.js';
@@ -55,7 +57,7 @@ import {
   refineStoryboardScenePrompt,
   buildRenderSlot,
 } from '../services/pipeline/visualStages.js';
-import { extractCanonFromProse } from '../services/universeCanon.js';
+import { extractCanonFromProse, summarizeCanonExtraction } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
 import { mergeSeries } from '../services/recordMerge.js';
@@ -113,6 +115,9 @@ const SERVICE_ERROR_STATUS = {
   [seasonsSvc.ERR_VALIDATION]: 400,
   [seasonsSvc.ERR_REASSIGN_TARGET]: 400,
   [arcPlanner.ERR_VALIDATION]: 400,
+  [manuscriptFix.ERR_VALIDATION]: 400,
+  [manuscriptFix.ERR_NOT_FOUND]: 404,
+  PIPELINE_REVIEW_NOT_FOUND: 404,
   [ERR_NO_STORYBOARDS]: 400,
   [ERR_NO_RENDERED_PAGES]: 409,
   [ERR_NO_VOLUME_COVER]: 409,
@@ -217,6 +222,7 @@ const seriesCreateSchema = z.object({
   stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional().default(''),
   stylePromptOverrideMode: z.enum(seriesSvc.STYLE_PROMPT_OVERRIDE_MODES).optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
+  primaryManuscriptType: z.enum(seriesSvc.MANUSCRIPT_TYPES).nullable().optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
   llm: llmSchema,
   // Local-only "don't sync to peers" marker.
@@ -238,6 +244,7 @@ const seriesPatchSchema = z.object({
   stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional(),
   stylePromptOverrideMode: z.enum(seriesSvc.STYLE_PROMPT_OVERRIDE_MODES).optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
+  primaryManuscriptType: z.enum(seriesSvc.MANUSCRIPT_TYPES).nullable().optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
   llm: llmSchema,
   ephemeral: z.boolean().optional(),
@@ -359,6 +366,10 @@ const generateSchema = z.object({
   seedInput: z.string().max(issuesSvc.STAGE_INPUT_MAX).optional(),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
+  // Explicit source stages to feed the generation (backport support: generate
+  // any stage FROM any other populated stage). Omit for the conventional
+  // forward source. The service drops the target itself and empty stages.
+  sourceStageIds: z.array(z.enum(issuesSvc.TEXT_STAGE_IDS)).optional(),
 });
 
 const visualGenerateSchema = z.object({
@@ -486,7 +497,13 @@ const extractComicPagesSchema = z.object({
 
 const extractCanonFromScriptSchema = z.object({
   providerOverride: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(128).optional(),
 });
+
+// Stages whose `output` can be mined for canon. `prose` is the conventional
+// source (auto-extracted post-generation); `comicScript`/`teleplay` let the
+// writer pull characters introduced only in panel directions / dialogue cues.
+const CANON_EXTRACT_STAGES = Object.freeze(['prose', 'comicScript', 'teleplay']);
 
 // Per-issue truncation budget for canon extraction. Decoupled from the
 // importer's source ceiling (which ingests a *whole book* — millions of
@@ -542,6 +559,60 @@ const verifyFindingSchema = z.object({
 const arcResolveSchema = z.object({
   ...providerOverrideShape,
   findings: z.array(verifyFindingSchema).max(50).optional(),
+});
+
+// Back-derive arc/bible/structure from the existing issue manuscripts. The
+// preview pass just needs the override shape; the commit pass carries the
+// (possibly user-edited) proposal so the LLM is NOT re-run on confirm.
+const arcDeriveSchema = z.object(providerOverrideShape);
+const arcDeriveCommitSchema = z.object({
+  arc: z.object({
+    logline: z.string().max(500).optional(),
+    summary: z.string().max(8000).optional(),
+    protagonistArc: z.string().max(8000).optional(),
+    themes: z.array(z.string().max(200)).max(50).optional(),
+    shape: z.string().max(80).nullable().optional(),
+  }).optional(),
+  bible: z.object({
+    logline: z.string().max(500).optional(),
+    premise: z.string().max(8000).optional(),
+    issueCountTarget: z.number().int().min(0).max(9999).optional(),
+  }).optional(),
+  volume: z.object({
+    title: z.string().max(300).optional(),
+    logline: z.string().max(1000).optional(),
+    synopsis: z.string().max(8000).optional(),
+  }).optional(),
+  issues: z.array(z.object({
+    id: z.string().min(1).max(120),
+    title: z.string().max(300).optional(),
+    synopsis: z.string().max(8000).optional(),
+  })).max(200).optional(),
+});
+
+// Manuscript-completeness ("finish the draft") editor pass — override shape only.
+const manuscriptCompletenessSchema = z.object(providerOverrideShape);
+
+// Manuscript editor — review comment operations.
+const manuscriptFixGenerateSchema = z.object(providerOverrideShape);
+const manuscriptFixAcceptSchema = z.object({
+  find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX),
+  replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+});
+// Comment PATCH: status flip and/or attach/clear a fix. `.strict()` rejects
+// stray keys; `fix` nullable so an explicit clear is distinguishable from absent.
+const manuscriptCommentPatchSchema = z.object({
+  status: z.enum(['open', 'accepted', 'dismissed']).optional(),
+  fix: z.object({
+    find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+    replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+    fuzzy: z.boolean().optional(),
+  }).nullable().optional(),
+}).strict();
+// Versioned free-text section save — writes one issue's manuscript stage.
+const manuscriptSectionSaveSchema = z.object({
+  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES),
+  output: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
 });
 
 const autoRunSchema = z.object({
@@ -1225,6 +1296,112 @@ router.post('/series/:id/arc/resolve-issues', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Back-derive arc + bible + single-volume restructure from the EXISTING issue
+// manuscripts ("I imported a finished graphic novel, reconstruct its spine").
+// Read-only preview the UI shows for review/edit before the commit route.
+router.post('/series/:id/arc/derive-from-manuscript', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(arcDeriveSchema, req.body ?? {});
+  const result = await arcPlanner.deriveFromManuscript(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Apply the (possibly edited) derive preview: bible + single volume + per-issue
+// synopses. The LLM is NOT re-run — the confirmed proposal is in the body.
+router.post('/series/:id/arc/derive-from-manuscript/commit', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(arcDeriveCommitSchema, req.body ?? {});
+  const result = await arcPlanner.commitDerivedManuscript(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Manuscript-completeness editor pass — categorized "finish the draft"
+// suggestions read from the actual drafted script (not synopses). Advisory.
+router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptCompletenessSchema, req.body ?? {});
+  const result = await arcPlanner.analyzeManuscriptCompleteness(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  // Persist findings as a Word-style comment set so the manuscript editor can
+  // work through them across reloads. `issues` stays in the response for the
+  // existing ArcHeader caller — the editor reads the merged `review`.
+  const review = await manuscriptReview.seedReviewFromFindings(req.params.id, result.issues, { runId: result.runId })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json({ ...result, review });
+}));
+
+// =====================
+// Manuscript editor — full series manuscript + persisted editorial comments.
+// The "manuscript" is virtual: one chosen stage per issue (comicScript ▸
+// teleplay ▸ prose) concatenated in story order. Edits target a specific
+// issue+stage; comments persist in data/pipeline-series/{id}/manuscript-review.json.
+// =====================
+
+// Full series manuscript in a chosen format (prose / teleplay / comic script).
+// `?type=` selects the format; absent → the series' pinned primaryManuscriptType,
+// else the auto-detected dominant format. Returns the requested format's
+// sections plus the metadata the editor's format switcher needs.
+router.get('/series/:id/manuscript', asyncHandler(async (req, res) => {
+  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const { sectionsByType, availableTypes, detectedPrimary } = await arcPlanner.collectManuscriptByType(req.params.id);
+  // Resolve the primary (source-of-truth) format: pinned bible value wins, then
+  // detection, then a stable default so the editor always has something to show.
+  const primaryStageId = series.primaryManuscriptType || detectedPrimary || 'prose';
+  const requested = seriesSvc.MANUSCRIPT_TYPES.includes(req.query.type) ? req.query.type : null;
+  const viewType = requested || primaryStageId;
+  res.json({
+    sections: sectionsByType[viewType] || [],
+    viewType,
+    primaryStageId,
+    pinnedPrimary: series.primaryManuscriptType || null,
+    availableTypes,
+  });
+}));
+
+router.get('/series/:id/manuscript/review', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await manuscriptReview.getReview(req.params.id));
+}));
+
+router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptCommentPatchSchema, req.body ?? {});
+  const comment = await manuscriptReview.updateComment(req.params.id, req.params.commentId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json({ comment });
+}));
+
+// Generate an anchored find/replace fix for one comment (does not apply it).
+router.post('/series/:id/manuscript/review/comments/:commentId/fix', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptFixGenerateSchema, req.body ?? {});
+  const result = await manuscriptFix.generateManuscriptFix(req.params.id, { commentId: req.params.commentId, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
+router.post('/series/:id/manuscript/review/comments/:commentId/accept', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptFixAcceptSchema, req.body ?? {});
+  const result = await manuscriptFix.acceptManuscriptFix(req.params.id, { commentId: req.params.commentId, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Versioned free-text save of one manuscript section (snapshots the prior text
+// into history so the edit is revertible). Revert reuses the stage-restore route
+// (POST /issues/:id/stages/:stageId/restore).
+router.put('/series/:id/manuscript/sections/:issueId', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptSectionSaveSchema, req.body ?? {});
+  const result = await manuscriptFix.saveManuscriptSection(req.params.id, { issueId: req.params.issueId, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
 // =====================
 // Volume (season) covers — front + back illustration on the season record.
 // Stored on series.seasons[].cover / .backCover, sanitized by sanitizeSeason,
@@ -1444,6 +1621,13 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   // with empty canon — extractScenes can still produce scenes from the
   // source text alone, just without character/place/object grounding.
   const canon = await getSeriesCanon(series);
+  // A model id is provider-specific, so only inherit the series model when the
+  // effective provider is still the series provider — otherwise an override
+  // provider would be paired with a foreign model id and fail (same guard as
+  // the extract-canon route). When the override switches providers without
+  // naming a model, leave it blank so the new provider's default resolves.
+  const sceneProviderMatchesSeries = !body.providerOverride
+    || body.providerOverride === (series.llm?.provider || '');
   const result = await extractScenes({
     source,
     sourceKind,
@@ -1454,7 +1638,9 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     series: { name: series.name, styleNotes: series.styleNotes },
     issue: { number: issue.number, title: issue.title },
     providerOverride: body.providerOverride || series.llm?.provider || undefined,
-    modelOverride: body.modelOverride || series.llm?.model || undefined,
+    modelOverride: body.modelOverride
+      || (sceneProviderMatchesSeries ? series.llm?.model : undefined)
+      || undefined,
     tag: `pipeline-storyboards-extract-${sourceKind}`,
   });
 
@@ -1559,9 +1745,9 @@ router.post('/issues/:id/stages/comicPages/extract-pages', asyncHandler(async (r
 // derived entries survive later AI refines.
 router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req, res) => {
   const { id, stageId } = req.params;
-  if (stageId !== 'comicScript' && stageId !== 'teleplay') {
+  if (!CANON_EXTRACT_STAGES.includes(stageId)) {
     throw new ServerError(
-      `Stage "${stageId}" does not support canon extraction — supported: comicScript, teleplay`,
+      `Stage "${stageId}" does not support canon extraction — supported: ${CANON_EXTRACT_STAGES.join(', ')}`,
       { status: 400, code: 'PIPELINE_CANON_EXTRACT_BAD_STAGE' },
     );
   }
@@ -1586,20 +1772,52 @@ router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req
       { status: 400, code: 'PIPELINE_CANON_EXTRACT_NO_UNIVERSE' },
     );
   }
-  const result = await extractCanonFromProse(series.universeId, {
-    corpus,
-    // Fall back to the series' configured LLM when the client doesn't pass
-    // an explicit override — matches every other Pipeline LLM action
-    // (e.g. storyboards/extract-scenes) so a manual extract honors the
-    // provider picked in the series header instead of the global default.
-    providerOverride: body.providerOverride || series.llm?.provider || undefined,
-    parallel: true,
-    autoLock: true,
-    sourceSeriesId: series.id,
-  }).catch((err) => { throw mapServiceError(err); });
+  // Fall back to the series' configured LLM when the client doesn't pass an
+  // explicit override — matches every other Pipeline LLM action (e.g.
+  // storyboards/extract-scenes) so a manual extract honors the provider/model
+  // picked in the series header instead of the global default.
+  const provider = body.providerOverride || series.llm?.provider || '';
+  // A model id is provider-specific. Only inherit the series model when the
+  // EFFECTIVE provider is still the series provider — otherwise the retry
+  // picker's whole point (switch provider, keep "Default model") would forward
+  // e.g. `providerOverride: anthropic` paired with a Codex/OpenAI model id and
+  // fail. When the user overrode to a different provider without naming a
+  // model, leave it blank so the extractor resolves that provider's default.
+  const providerMatchesSeries = !body.providerOverride
+    || body.providerOverride === (series.llm?.provider || '');
+  const model = body.model
+    || (providerMatchesSeries ? (series.llm?.model || '') : '');
+
+  // Stamp the outcome on the stage so the Nouns UI can persist a
+  // failure/partial banner and the user can retry with a different
+  // provider/model. A hard failure (every kind threw) still records `failed`
+  // before re-throwing so the banner survives even when the request 5xxes.
+  let result;
+  try {
+    result = await extractCanonFromProse(series.universeId, {
+      corpus,
+      providerOverride: provider || undefined,
+      modelOverride: model || undefined,
+      parallel: true,
+      autoLock: true,
+      sourceSeriesId: series.id,
+    });
+  } catch (err) {
+    const marker = summarizeCanonExtraction({ error: err, provider, model });
+    await issuesSvc.updateStage(id, stageId, { canonExtraction: marker })
+      .catch((e) => console.warn(`⚠️ Failed to record canon-extraction status for issue ${id.slice(0, 8)}: ${e.message}`));
+    throw mapServiceError(err);
+  }
+
+  const marker = summarizeCanonExtraction({ results: result.results, failures: result.failures, provider, model });
+  const { issue: stampedIssue } = await issuesSvc.updateStage(id, stageId, { canonExtraction: marker })
+    .catch((err) => { throw mapServiceError(err); });
 
   res.json({
     universe: result.universe,
+    issue: stampedIssue,
+    canonExtraction: marker,
+    failures: result.failures,
     extracted: countExtractedCanon(result.results),
     sourceStage: stageId,
     truncated,

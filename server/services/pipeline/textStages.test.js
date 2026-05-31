@@ -392,4 +392,62 @@ describe('pipeline text stage generator', () => {
     expect(lt.beatsMin).toBe(16);
     expect(lt.beatsMax).toBe(24);
   });
+
+  // -- source material (backport) --
+
+  // Seed an issue whose stages already carry content, so we can target one
+  // stage and feed it from any other. Mirrors the user's "started from a comic
+  // script" case.
+  async function seedWithStages() {
+    const { series, issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'ready', output: 'BEATS-CONTENT' });
+    await issuesSvc.updateStage(issue.id, 'prose', { status: 'ready', output: 'PROSE-CONTENT' });
+    await issuesSvc.updateStage(issue.id, 'comicScript', { status: 'ready', output: 'SCRIPT-CONTENT' });
+    return { series, issueId: issue.id };
+  }
+
+  it('default source: prose pulls the idea beat sheet when no sourceStageIds given', async () => {
+    const { issueId } = await seedWithStages();
+    await textStages.generateStage(issueId, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.sourceMaterials).toEqual([
+      { stageId: 'idea', label: 'Idea / Beat Sheet', content: 'BEATS-CONTENT' },
+    ]);
+    expect(ctx.hasSourceMaterials).toBe(true);
+  });
+
+  it('backport: generate prose FROM an explicit comic-script source', async () => {
+    const { issueId } = await seedWithStages();
+    await textStages.generateStage(issueId, 'prose', { sourceStageIds: ['comicScript'] });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.sourceMaterials).toEqual([
+      { stageId: 'comicScript', label: 'Comic Script', content: 'SCRIPT-CONTENT' },
+    ]);
+  });
+
+  it('drops the target itself + empty/unknown sources and orders by stage order', async () => {
+    const { issueId } = await seedWithStages();
+    // teleplay is empty; prose === target; bogus is unknown — all dropped.
+    await textStages.generateStage(issueId, 'prose', {
+      sourceStageIds: ['comicScript', 'prose', 'teleplay', 'bogus', 'idea'],
+    });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.sourceMaterials.map((s) => s.stageId)).toEqual(['idea', 'comicScript']);
+  });
+
+  it('backfills the beat sheet (idea) from existing comic-script content', async () => {
+    const { issueId } = await seedWithStages();
+    await textStages.generateStage(issueId, 'idea', { sourceStageIds: ['comicScript'] });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.sourceMaterials.map((s) => s.stageId)).toEqual(['comicScript']);
+    expect(ctx.hasSourceMaterials).toBe(true);
+  });
+
+  it('idea with no explicit source has no default forward source (empty sourceMaterials)', async () => {
+    const { issueId } = await seedWithStages();
+    await textStages.generateStage(issueId, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.sourceMaterials).toEqual([]);
+    expect(ctx.hasSourceMaterials).toBe(false);
+  });
 });

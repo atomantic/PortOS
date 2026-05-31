@@ -14,9 +14,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus,
+  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus, Sparkles,
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import IngredientPicker from '../IngredientPicker';
+import { linkCatalogIngredient } from '../../services/apiCatalog';
 import {
   extractUniverseCanon,
   refineUniverseCharacter,
@@ -44,6 +46,37 @@ const capImageRefs = (refs) => (
     ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
     : refs
 );
+
+// A universe's canon list for a kind is sometimes absent on a freshly-created
+// record; normalize to [] so callers can spread/map without a guard each time.
+const getKindList = (u, kindKey) => (Array.isArray(u?.[kindKey]) ? u[kindKey] : []);
+
+// Build an embedded canon entry from a picked catalog ingredient. The
+// ingredient's `payload` already carries the same field names the universe
+// canon sanitizer whitelists (name / physicalDescription / description / …),
+// so we spread it and overlay the canonical name + the durable `ingredientId`
+// stamp that ties this embedded entry back to its catalog row.
+//
+// `id` is intentionally omitted — the server's `ensureId` mints a fresh
+// kind-prefixed id (`chr-`/`plc-`/`obj-`) on save. We must NOT carry the
+// catalog id into `entry.id`; identity lives in `ingredientId` so the
+// peer-reconciliation backfill (`migrateBibleToCatalog`) recreates the same
+// catalog row id on every peer instead of minting a divergent one.
+export function buildCanonEntryFromIngredient(ingredient) {
+  if (!ingredient || typeof ingredient !== 'object') return null;
+  const payload = (ingredient.payload && typeof ingredient.payload === 'object')
+    ? ingredient.payload
+    : {};
+  const entry = { ...payload };
+  // Strip any id/timestamps the payload may carry from its origin record so
+  // the server mints fresh ones and doesn't collide with an existing entry.
+  delete entry.id;
+  delete entry.createdAt;
+  delete entry.updatedAt;
+  entry.name = String(ingredient.name || payload.name || '').trim() || 'Untitled';
+  entry.ingredientId = ingredient.id;
+  return entry;
+}
 
 // `descField` is the writable field bound to the inline description editor in
 // `CanonCard`. `descFor` (used for the render prompt + the read-only fallback
@@ -100,6 +133,18 @@ export default function UniverseCanonSection({
   const togglingLockRef = useRef(null);
   const [extractText, setExtractText] = useState('');
   const [extractOpen, setExtractOpen] = useState(false);
+  // Which kind's "Pick from Catalog" modal is open (a KINDS entry, or null).
+  const [catalogPickerKind, setCatalogPickerKind] = useState(null);
+  const [catalogLinking, setCatalogLinking] = useState(false);
+  // Ingredient ids already embedded in the open kind's canon list — passed to
+  // the picker so it hides already-linked rows. Only recomputed when the open
+  // kind or the universe changes (not on every render).
+  const catalogExcludeIds = useMemo(
+    () => (catalogPickerKind
+      ? getKindList(universe, catalogPickerKind.key).map((e) => e?.ingredientId).filter(Boolean)
+      : []),
+    [catalogPickerKind, universe],
+  );
   // Per-canon-entry usage map: `{ characters: { [entryId]: [{seriesId, seriesName, issueCount, ...}] }, ... }`.
   // Loaded lazily — usage is a derived view and shouldn't block the initial
   // paint. Refetched after mutations that change the canon shape (extract /
@@ -489,6 +534,60 @@ export default function UniverseCanonSection({
     if (errMsg) toast.error(`Render failed: ${errMsg}`);
   }, []);
 
+  // "Pick from Catalog" → copy a shared catalog ingredient into this universe
+  // as a new embedded canon entry and link the ingredient back to the universe
+  // via catalog_ingredient_refs (role `canon-<kind>`). The embedded entry
+  // carries the catalog id as `ingredientId` so the two records stay tied and
+  // peer-reconciliation preserves the same id on every peer.
+  const handlePickFromCatalog = useCallback(async (kind, ingredient) => {
+    const picked = Array.isArray(ingredient) ? ingredient[0] : ingredient;
+    if (!picked || !universe || catalogLinking) return;
+    const kindKey = kind.key;
+    const list = getKindList(universe, kindKey);
+    // Dedup by ingredientId — re-picking an already-linked ingredient is a
+    // no-op (mirrors the server-side canon name dedup, but keyed on the
+    // durable ingredient identity so renames don't slip a duplicate in).
+    if (list.some((e) => e?.ingredientId && e.ingredientId === picked.id)) {
+      toast.error(`${picked.name || 'Ingredient'} is already in this universe`);
+      setCatalogPickerKind(null);
+      return;
+    }
+    const entry = buildCanonEntryFromIngredient(picked);
+    if (!entry) return;
+    setCatalogLinking(true);
+    setCatalogPickerKind(null);
+    const capturedId = universeId;
+    const nextList = [...list, entry];
+    // Optimistic append so the new row shows immediately; the server response
+    // (with the minted entry id) replaces it.
+    onUniverseChange({ ...universe, [kindKey]: nextList });
+    // `{ silent: true }` because the .catch below owns the error toast — without
+    // it the apiCore request() helper would fire a second, duplicate toast.
+    const updated = await updateUniverse(universeId, { [kindKey]: nextList }, { silent: true })
+      .catch((err) => { toast.error(`Add from Catalog failed: ${err.message}`); return null; });
+    if (!updated) {
+      // Revert the optimistic append — the save didn't land, so the phantom
+      // row must not linger. `list` is the pre-append snapshot from this
+      // closure (canon edits are user-driven one-at-a-time, so it's current).
+      if (mountedRef.current && currentUniverseIdRef.current === capturedId) {
+        onUniverseChange({ ...universe, [kindKey]: list });
+      }
+      if (mountedRef.current) setCatalogLinking(false);
+      return;
+    }
+    if (mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
+    // Link the catalog ingredient back to the universe so the "Appears in"
+    // panel populates. Non-fatal: the embedded entry already carries the
+    // ingredientId, so a failed link still keeps the records tied.
+    await linkCatalogIngredient(
+      picked.id,
+      { refKind: 'universe', refId: universeId, role: `canon-${kind.apiKind}` },
+      { silent: true },
+    ).catch((err) => { toast.error(`Linked entry, but catalog ref failed: ${err.message}`); });
+    if (mountedRef.current) setCatalogLinking(false);
+    toast.success(`Added ${picked.name || 'ingredient'} from Catalog`);
+  }, [universe, universeId, onUniverseChange, mountedRef, catalogLinking]);
+
   // Inline-edit channel for canon fields the user types/picks directly
   // (setting intExt + timeOfDay chips, primaryImageRef pinning, wardrobe
   // edits). Optimistic — UI updates before the server roundtrip so chip
@@ -679,14 +778,28 @@ export default function UniverseCanonSection({
           compact={!!kindFilter}
           onRenderAll={() => handleRenderAll(kind)}
           renderingAll={renderAllKindKey === kind.key}
+          onPickFromCatalog={() => setCatalogPickerKind(kind)}
+          catalogLinking={catalogLinking}
         />
       ))}
 
+      {/* Single shared picker — `catalogPickerKind` carries the KINDS entry
+          whose "Pick from Catalog" button opened it, so the picker scopes its
+          search to that ingredient type. */}
+      <IngredientPicker
+        open={!!catalogPickerKind}
+        onClose={() => setCatalogPickerKind(null)}
+        onSelect={(picked) => { if (catalogPickerKind) handlePickFromCatalog(catalogPickerKind, picked); }}
+        type={catalogPickerKind?.apiKind}
+        excludeIds={catalogExcludeIds}
+        refKind="universe"
+        refId={universeId}
+      />
     </section>
   );
 }
 
-function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false }) {
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
   // Memoized so the BASE object is stable across re-renders that aren't
@@ -722,6 +835,19 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
 
   const controls = (
     <>
+      {onPickFromCatalog ? (
+        <button
+          type="button"
+          onClick={onPickFromCatalog}
+          disabled={catalogLinking}
+          title={`Add an existing ${kind.singular} from the shared Catalog`}
+          aria-label={`Pick ${kind.singular} from Catalog`}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+        >
+          {catalogLinking ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+          Pick from Catalog
+        </button>
+      ) : null}
       {onRenderAll ? (
         <button
           type="button"

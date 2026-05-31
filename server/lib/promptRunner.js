@@ -178,7 +178,7 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
  * @param {string} args.source   — run-record tag (`'universe-builder-expansion'`,
  *   `'media-prompt-refine'`, `'messages-triage'`, `'staged-llm'`, etc.)
  * @param {string} [args.model]  — model id hint; ignored when the
- *   provider doesn't honor it (claude-code, gemini-cli today).
+ *   provider doesn't honor it (claude-code, antigravity-cli today).
  * @param {string} [args.runId]  — caller-supplied run id (skip createRun
  *   round-trip when the caller has already created the run)
  * @param {(chunk: string) => void} [args.onData] — incremental stream

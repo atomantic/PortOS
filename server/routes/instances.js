@@ -54,7 +54,8 @@ const syncCategoriesSchema = z.object({
   // no-op for the missing category. Same regression class as the
   // universe + pipeline omission tracked in .changelog/NEXT.md.
   mediaCollections: z.boolean().optional(),
-  videoHistory: z.boolean().optional()
+  videoHistory: z.boolean().optional(),
+  catalog: z.boolean().optional()
 }).optional();
 
 const updatePeerSchema = z.object({

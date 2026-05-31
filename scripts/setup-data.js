@@ -141,16 +141,18 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // idea-expansion: aee… (pre-003), 41fa… (post-003, pre-004), and
   // 1ee44c… (post-004, pre-025) all auto-updatable to the post-025
   // (role/physicalDescription/personality/background plumbing) hash.
-  'pipeline-idea-expansion.md': ['aee25112b2c596f643b17c559b772c22', '41facefbc0c0549d456bef9111f95ab9', '1ee44cf95851ff8debf18729ebcd40b4'],
+  // post-054 ({{#sourceMaterials}} source-agnostic block) appends the prior
+  // post-025/post-027 hashes to each chain. post-054-fence adds tilde fences +
+  // injection-guard sentence to the sourceMaterials blocks (review fix).
+  'pipeline-idea-expansion.md': ['aee25112b2c596f643b17c559b772c22', '41facefbc0c0549d456bef9111f95ab9', '1ee44cf95851ff8debf18729ebcd40b4', '1f3c5d077a5ef9a4b610335d5e3edd9c', 'b5c47c94ffc74637983c95761ab0c66c'],
   // prose: bfea5a… (pre-003) and 30ac30… (post-003, pre-027) both auto-
-  // updatable to the post-027 ({{worldEntitiesSummary}}) hash.
-  'pipeline-prose.md':          ['bfea5aeeb471aae9749baee765b473a7', '30ac30ec2b9d3e2a9eb869c181732cc6'],
+  // updatable to the post-054-fence (source-agnostic + tilde-fence) hash.
+  'pipeline-prose.md':          ['bfea5aeeb471aae9749baee765b473a7', '30ac30ec2b9d3e2a9eb869c181732cc6', 'd1f8e3f1d214725b5aa67f309a81cd7d', 'bef1bc2767b78f585f2bd89f3d615130'],
   // comic-script: 40e5fd… (pre-003), beab03… (post-003, pre-011), and 1e0af3…
-  // (post-011, pre-027) all auto-updatable to the post-027 ({{worldEntitiesSummary}}) hash.
-  'pipeline-comic-script.md':   ['40e5fdc1a1e68a7419b7dad936366c1a', 'beab031951859ca13579cdb9c4dbe769', '1e0af305c27d0c80c4b482d2ebcb4a0d'],
-  // teleplay: 3f6fec… (pre-027) auto-updatable to the post-027
-  // ({{worldEntitiesSummary}}) hash. Original 376f77… is the post-027 prior.
-  'pipeline-teleplay.md':       ['3f6fecc25573ed054b47db392250034a', '376f779f4687b598f1c92ca4e770fd5a'],
+  // (post-011, pre-027) all auto-updatable to the post-054-fence hash.
+  'pipeline-comic-script.md':   ['40e5fdc1a1e68a7419b7dad936366c1a', 'beab031951859ca13579cdb9c4dbe769', '1e0af305c27d0c80c4b482d2ebcb4a0d', '133d200d069c2e8173b7c129eea58f53', 'e530fc76b89cedaef848ad7ec99c934c'],
+  // teleplay: 3f6fec… (pre-027) auto-updatable to the post-054-fence hash.
+  'pipeline-teleplay.md':       ['3f6fecc25573ed054b47db392250034a', '376f779f4687b598f1c92ca4e770fd5a', '1280ef6b1ad68fa44070ca7478ec2a5f', '2568e14beaa574d43f8018a5def51d04'],
   // season-episodes: 6e349a… (pre-003) and c4928e… (post-003, pre-005) both
   // auto-updatable to the post-005 (shape-aware) hash.
   'pipeline-season-episodes.md': ['6e349ad26bed8a0ccb042571f03f03eb', 'c4928e2a5f833358116b29d2d669888d'],
@@ -177,9 +179,17 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // universe-character-expand: pre-027 shipped, auto-updatable to the post-027
   // (`speechPattern` field added alongside `speechAccent`) hash.
   'universe-character-expand.md': ['ef109eb8e12ddb664c11c790271b5139'],
+  // story-builder-idea-expand: pre-055 (seed-only) and post-055-pre-fence
+  // ({{sourceMaterial}} block, no guard) auto-updatable to the post-055-fence
+  // ({{sourceMaterial}} block + injection-guard sentence) hash.
+  'story-builder-idea-expand.md': ['a23939626a226f7420cebfb45d47950c', '778c86e2caa120856c36e4d5a4da3355'],
   // editorial-analysis: pre-042 (pipe-separated arcDirection enum + ≤160
   // excerpt) auto-updatable to the post-042 (single-value example, ≤200) hash.
   'pipeline-editorial-analysis.md': ['14d9879697c66d51830cc798040d5369'],
+  // manuscript-completeness: pre-056 (location-only findings) auto-updatable to
+  // the post-056 (issueNumber + anchorQuote anchored findings) hash; and
+  // pre-057 (five categories) auto-updatable to the post-057 (comic-structure) hash.
+  'pipeline-manuscript-completeness.md': ['e6858c74ab2cead752d388e3f428406c', '4f2b95778aed85f5fc461d71eb461b79'],
   // CoS agent prompt: drop obsolete "# Chief of Staff Agent Briefing" header
   // and "You are an autonomous agent…" preamble (migration 009). Every
   // historical shipped hash is auto-updatable to the new sample.
@@ -193,10 +203,10 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   ],
 };
 const SHIPPED_PROMPT_NEW_MD5 = {
-  'pipeline-idea-expansion.md': '1f3c5d077a5ef9a4b610335d5e3edd9c',
-  'pipeline-prose.md':          'd1f8e3f1d214725b5aa67f309a81cd7d',
-  'pipeline-comic-script.md':   '133d200d069c2e8173b7c129eea58f53',
-  'pipeline-teleplay.md':       '1280ef6b1ad68fa44070ca7478ec2a5f',
+  'pipeline-idea-expansion.md': '49a208628290543ba2607a5ed48fdc8c',
+  'pipeline-prose.md':          '84523d531eeafa60959c65c553b2563f',
+  'pipeline-comic-script.md':   'dea7d497d1cb38e7574f236f4ff8e644',
+  'pipeline-teleplay.md':       'afa4215330bf856429d70d7e2f856605',
   'pipeline-season-episodes.md':'50c68a29c3ebc275db3095d06bd87100',
   'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
   'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
@@ -206,7 +216,9 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'writers-room-places.md':     'a7f68e51dd6b4421d20f5bd9d855d9b4',
   'cos-agent-briefing.md':      'dccb392a43cbd3dac900fee12c31619a',
   'universe-character-expand.md':'67b6e73ed47f318451a730088b4cff14',
+  'story-builder-idea-expand.md':'c12d76fefaaded2838023065bfc94bb0',
   'pipeline-editorial-analysis.md':'daeb02bd54b0c099b21af659c6298cfe',
+  'pipeline-manuscript-completeness.md':'1ee5ac936fbf1d365e0eaea99bcf1e77',
 };
 const SHIPPED_PROMPT_FILES = Object.keys(SHIPPED_PROMPT_OLD_MD5);
 

@@ -98,6 +98,11 @@ export const BIBLE_LIMITS = Object.freeze({
   TAG_MAX: 60,
   TAGS_PER_ENTRY_MAX: 12,
   SOURCE_SERIES_ID_MAX: 64,
+  // Catalog backlink: when an embedded bible entry is promoted to the
+  // creative-ingredients catalog (server/services/catalogDB.js), this carries
+  // the catalog row id so edits stay synchronized. Cap matches the catalog's
+  // own id format ('cat-<prefix>-<uuid>') — generous so future id schemes fit.
+  INGREDIENT_ID_MAX: 64,
   // Voice id namespace: `engine:voiceName` (e.g. `kokoro:af_heart`,
   // `piper:en_GB-northern_english_male`). Caps generously since 3rd-party
   // providers (ElevenLabs) use uuid-shaped voice ids.
@@ -613,6 +618,11 @@ function applyCanonExtras(raw) {
     tags: cleanStringArray(raw.tags, BIBLE_LIMITS.TAG_MAX, BIBLE_LIMITS.TAGS_PER_ENTRY_MAX),
     source: ensureSource(raw.source),
     sourceSeriesId: trimTo(raw.sourceSeriesId, BIBLE_LIMITS.SOURCE_SERIES_ID_MAX) || null,
+    // Catalog backlink — populated when this entry is promoted to or sourced
+    // from the creative ingredients catalog. `null` keeps the field present on
+    // every entry so the round-trip never strips it on a not-yet-promoted
+    // record. See migrateBibleToCatalog.js for the backfill path.
+    ingredientId: trimTo(raw.ingredientId, BIBLE_LIMITS.INGREDIENT_ID_MAX) || null,
   };
   if (raw.locked === true) out.locked = true;
   else if (raw.locked === false) out.locked = false;

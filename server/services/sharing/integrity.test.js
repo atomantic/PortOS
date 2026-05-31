@@ -20,6 +20,7 @@ vi.mock('../instances.js', async () => ({
 
 // Mock peerSync.js — we test integrity.js logic, not asset hashing.
 vi.mock('./peerSync.js', async () => ({
+  assetIntegrityForRecord: vi.fn().mockResolvedValue({ assetHashes: [], metadataMissing: false }),
   assetShaListForRecord: vi.fn().mockResolvedValue([]),
   PEER_SUBSCRIBABLE_KINDS: ['universe', 'series', 'mediaCollection'],
 }));
@@ -37,7 +38,7 @@ vi.mock('../pipeline/series.js', async () => ({
 
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
-import { assetShaListForRecord } from './peerSync.js';
+import { assetIntegrityForRecord } from './peerSync.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
@@ -73,7 +74,7 @@ describe('buildLocalManifest', () => {
   it('returns one row per collection with the correct shape', async () => {
     const col = makeCollection();
     vi.mocked(listCollections).mockResolvedValue([col]);
-    vi.mocked(assetShaListForRecord).mockResolvedValue(['aabb', 'ccdd']);
+    vi.mocked(assetIntegrityForRecord).mockResolvedValue({ assetHashes: ['aabb', 'ccdd'], metadataMissing: true });
 
     const result = await buildLocalManifest('mediaCollection');
     expect(result).toHaveLength(1);
@@ -83,8 +84,9 @@ describe('buildLocalManifest', () => {
       updatedAt: '2026-05-23T00:00:00.000Z',
       deleted: false,
       assetHashes: ['aabb', 'ccdd'],
+      metadataMissing: true,
     });
-    expect(assetShaListForRecord).toHaveBeenCalledWith('mediaCollection', col);
+    expect(assetIntegrityForRecord).toHaveBeenCalledWith('mediaCollection', col);
   });
 
   it('marks deleted collections as deleted:true and skips asset hashing for them', async () => {
@@ -96,7 +98,7 @@ describe('buildLocalManifest', () => {
     // Tombstones are never hashed — computeRecordIntegrity ignores assets for
     // deleted records, so the file I/O would be wasted.
     expect(result[0].assetHashes).toEqual([]);
-    expect(assetShaListForRecord).not.toHaveBeenCalled();
+    expect(assetIntegrityForRecord).not.toHaveBeenCalled();
   });
 
   it('passes includeDeleted:true so listCollections returns tombstones', async () => {
@@ -119,18 +121,19 @@ describe('buildLocalManifest', () => {
     expect(result).toEqual([]);
   });
 
-  it('handles multiple collections and calls assetShaListForRecord for each', async () => {
+  it('handles multiple collections and calls assetIntegrityForRecord for each', async () => {
     const col1 = makeCollection({ id: 'c1', name: 'C1' });
     const col2 = makeCollection({ id: 'c2', name: 'C2' });
     vi.mocked(listCollections).mockResolvedValue([col1, col2]);
-    vi.mocked(assetShaListForRecord)
-      .mockResolvedValueOnce(['hash-a'])
-      .mockResolvedValueOnce(['hash-b']);
+    vi.mocked(assetIntegrityForRecord)
+      .mockResolvedValueOnce({ assetHashes: ['hash-a'], metadataMissing: false })
+      .mockResolvedValueOnce({ assetHashes: ['hash-b'], metadataMissing: true });
 
     const result = await buildLocalManifest('mediaCollection');
     expect(result).toHaveLength(2);
     expect(result.find((r) => r.id === 'c1').assetHashes).toEqual(['hash-a']);
     expect(result.find((r) => r.id === 'c2').assetHashes).toEqual(['hash-b']);
+    expect(result.find((r) => r.id === 'c2').metadataMissing).toBe(true);
   });
 });
 
@@ -175,7 +178,7 @@ describe('getPeerIntegrity', () => {
     const ts = '2026-05-23T00:00:00.000Z';
     const localCol = makeCollection({ id: 'col-1', updatedAt: ts });
     vi.mocked(listCollections).mockResolvedValue([localCol]);
-    vi.mocked(assetShaListForRecord).mockResolvedValue([]);
+    vi.mocked(assetIntegrityForRecord).mockResolvedValue({ assetHashes: [], metadataMissing: false });
 
     const remoteRecords = [
       { id: 'col-1', name: 'My Collection', updatedAt: ts, deleted: false, assetHashes: [] },
@@ -200,7 +203,7 @@ describe('getPeerIntegrity', () => {
     vi.mocked(getPeers).mockResolvedValue([peer]);
     const ts = '2026-05-23T00:00:00.000Z';
     vi.mocked(listCollections).mockResolvedValue([makeCollection({ id: 'col-1', updatedAt: ts })]);
-    vi.mocked(assetShaListForRecord).mockResolvedValue([]);
+    vi.mocked(assetIntegrityForRecord).mockResolvedValue({ assetHashes: [], metadataMissing: false });
     vi.mocked(peerFetch).mockResolvedValue({
       ok: true,
       status: 200,

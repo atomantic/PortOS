@@ -2,7 +2,7 @@
  * Tests for the light-vs-full context split in buildAgentPrompt.
  *
  * The split is by `provider.type`:
- *   - `tui` / `cli` → light prompt (Claude Code, Codex, Gemini — agentic
+ *   - `tui` / `cli` → light prompt (Claude Code, Codex, Antigravity — agentic
  *     CLIs with native filesystem tools and CLAUDE.md loading)
  *   - `api`         → full prompt (LM Studio, raw OpenAI/Anthropic — no
  *     native filesystem access, so we paste in memory/CLAUDE.md/etc.)
@@ -187,7 +187,7 @@ describe('buildLightContextPrompt', () => {
     });
 
     it('TUI simplify step is provider-aware — non-Claude TUI (codex-tui) gets the inline equivalent, not /simplify', () => {
-      // /simplify is a Claude Code TUI built-in; codex-tui / gemini-tui can't run it.
+      // /simplify is a Claude Code TUI built-in; codex-tui / antigravity-tui can't run it.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
@@ -223,7 +223,7 @@ describe('buildLightContextPrompt', () => {
     });
 
     it('inlines a simplify-equivalent self-review (no /simplify command) for non-Claude CLI agents', () => {
-      // /simplify is a Claude Code built-in; codex/gemini can't run it. With
+      // /simplify is a Claude Code built-in; codex/antigravity can't run it. With
       // simplify enabled they must still get the reuse/quality/efficiency pass,
       // phrased inline so any CLI can perform it.
       const prompt = buildLightContextPrompt(
@@ -351,7 +351,7 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
           reviewLoopPRBranch: 'b',
           reviewLoopPRNumber: 9,
-          reviewLoopReviewers: ['codex', 'gemini', 'copilot'],
+          reviewLoopReviewers: ['codex', 'antigravity', 'copilot'],
           reviewLoopStopMode: 'on-clean',
           reviewLoopReviewerApplies: true,
           sourceTaskId: 'task-src-3',
@@ -359,7 +359,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta);
-      expect(prompt).toMatch(/--review-with codex,gemini,copilot/);
+      expect(prompt).toMatch(/--review-with codex,antigravity,copilot/);
       expect(prompt).toMatch(/--review-stop-on-clean/);
       expect(prompt).toMatch(/--reviewer-applies/);
       // Ordered run instruction.
@@ -389,17 +389,17 @@ describe('buildLightContextPrompt', () => {
 
     it('threads reviewer into the TUI Completion Workflow as `/do:pr --review-with <reviewer>`', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewers: ['gemini'] } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewers: ['antigravity'] } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true });
-      expect(prompt).toMatch(/`\/do:pr --review-with gemini`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with antigravity`/);
     });
 
     it('allows merging on `partial` in the completion merge step when a stop-mode is set', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'gemini'], reviewStopMode: 'on-clean' } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean' } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         isTruthyMeta,
@@ -411,7 +411,7 @@ describe('buildLightContextPrompt', () => {
 
     it('does NOT merge on `partial` under the default stop-mode (all)', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'gemini'] } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'antigravity'] } }),
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         isTruthyMeta,
@@ -473,7 +473,7 @@ describe('buildLightContextPrompt', () => {
       // Push-only Completion wording — NOT the "push and PR" variant.
       expect(prompt).toMatch(/the \*\*Completion\*\* section below drives the push\./);
       expect(prompt).not.toMatch(/drives the push and PR/);
-      // And NOT the post-exit handoff message (that's the codex/gemini path).
+      // And NOT the post-exit handoff message (that's the codex/antigravity path).
       expect(prompt).not.toMatch(/The system will push and open a PR after you exit/);
     });
 

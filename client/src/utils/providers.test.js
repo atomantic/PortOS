@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
   PROVIDER_TYPES,
   filterSelectableModels,
@@ -33,8 +34,8 @@ describe('PROVIDER_TYPES', () => {
 });
 
 describe('filterSelectableModels', () => {
-  it('drops the codex-configured-default sentinel', () => {
-    expect(filterSelectableModels(['gpt-4', CODEX_CONFIGURED_DEFAULT, 'gpt-5'])).toEqual(['gpt-4', 'gpt-5']);
+  it('drops configured-default sentinels', () => {
+    expect(filterSelectableModels(['gpt-4', CODEX_CONFIGURED_DEFAULT, ANTIGRAVITY_CONFIGURED_DEFAULT, 'gpt-5'])).toEqual(['gpt-4', 'gpt-5']);
   });
 
   it('returns an empty array for null/undefined input', () => {

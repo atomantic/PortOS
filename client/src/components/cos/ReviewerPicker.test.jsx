@@ -5,7 +5,7 @@ import ReviewerPicker from './ReviewerPicker';
 
 describe('ReviewerPicker', () => {
   it('renders the selected reviewers in order with numbered badges', () => {
-    render(<ReviewerPicker reviewers={['codex', 'gemini', 'copilot']} onChange={() => {}} />);
+    render(<ReviewerPicker reviewers={['codex', 'antigravity', 'copilot']} onChange={() => {}} />);
     expect(screen.getByText('1.')).toBeInTheDocument();
     expect(screen.getByText('2.')).toBeInTheDocument();
     expect(screen.getByText('3.')).toBeInTheDocument();
@@ -19,7 +19,7 @@ describe('ReviewerPicker', () => {
   });
 
   it('de-dupes a malformed list with duplicates (order-preserving)', () => {
-    render(<ReviewerPicker reviewers={['codex', 'codex', 'gemini']} onChange={() => {}} />);
+    render(<ReviewerPicker reviewers={['codex', 'codex', 'antigravity']} onChange={() => {}} />);
     // Two distinct pills (badges 1 and 2), not three.
     expect(screen.getByText('1.')).toBeInTheDocument();
     expect(screen.getByText('2.')).toBeInTheDocument();
@@ -45,9 +45,9 @@ describe('ReviewerPicker', () => {
   it('reorders with the up arrow', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
-    render(<ReviewerPicker reviewers={['codex', 'gemini', 'copilot']} onChange={onChange} />);
-    await user.click(screen.getByLabelText('Move Gemini earlier'));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['gemini', 'codex', 'copilot'] }));
+    render(<ReviewerPicker reviewers={['codex', 'antigravity', 'copilot']} onChange={onChange} />);
+    await user.click(screen.getByLabelText('Move Antigravity earlier'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['antigravity', 'codex', 'copilot'] }));
   });
 
   it('removes a reviewer', async () => {
@@ -61,8 +61,13 @@ describe('ReviewerPicker', () => {
   it('shows the stop-mode select only for 2+ reviewers', () => {
     const { rerender } = render(<ReviewerPicker reviewers={['codex']} onChange={() => {}} />);
     expect(screen.queryByText('Stop mode:')).not.toBeInTheDocument();
-    rerender(<ReviewerPicker reviewers={['codex', 'gemini']} onChange={() => {}} />);
+    rerender(<ReviewerPicker reviewers={['codex', 'antigravity']} onChange={() => {}} />);
     expect(screen.getByText('Stop mode:')).toBeInTheDocument();
+  });
+
+  it('normalizes legacy Gemini reviewer values to Antigravity', () => {
+    render(<ReviewerPicker reviewers={['gemini']} onChange={() => {}} />);
+    expect(screen.getByText('Antigravity')).toBeInTheDocument();
   });
 
   it('shows the reviewer-applies toggle only when a non-copilot reviewer is present', () => {

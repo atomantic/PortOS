@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, Mic, MicOff, Video, VideoOff, RefreshCw, Settings, Volume2 } from 'lucide-react';
 import api from '../services/api';
+import Banner from '../components/ui/Banner';
 
 const MEDIA_CONSTRAINTS_KEY = 'portos-media-constraints';
 
@@ -269,32 +270,30 @@ export default function Security() {
 
       {/* Error display */}
       {error && (
-        <div className="mb-6 p-4 bg-port-error/10 border border-port-error/30 rounded-lg text-port-error">
-          {error}
-        </div>
+        <Banner tone="error" size="lg" className="mb-6">{error}</Banner>
       )}
 
       {/* Audio interaction prompt for mobile browsers */}
       {audioNeedsInteraction && streaming && audioEnabled && (
-        <div className="mb-6 p-4 bg-port-warning/10 border border-port-warning/30 rounded-lg">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Volume2 size={20} className="text-port-warning" />
-              <div>
-                <p className="text-port-warning font-medium">Audio requires interaction</p>
-                <p className="text-sm text-gray-400 mt-1">
-                  Your browser requires user interaction to enable audio playback
-                </p>
-              </div>
-            </div>
+        <Banner
+          size="lg"
+          align="center"
+          icon={Volume2}
+          title="Audio requires interaction"
+          className="mb-6"
+          actions={
             <button
               onClick={enableAudio}
               className="px-4 py-2 bg-port-warning text-white rounded-lg font-medium hover:bg-port-warning/80 transition-colors whitespace-nowrap"
             >
               Enable Audio
             </button>
-          </div>
-        </div>
+          }
+        >
+          <p className="text-sm text-gray-400 mt-1">
+            Your browser requires user interaction to enable audio playback
+          </p>
+        </Banner>
       )}
 
       {/* Settings panel */}

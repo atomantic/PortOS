@@ -905,8 +905,20 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
   it('every versioned PORTOS_SCHEMA_VERSIONS key is reachable from some snapshot category', () => {
     // A newly-versioned category can't ship without being wired into the
     // per-category snapshot gate — otherwise its snapshot transfer is ungated.
+    //
+    // EXCEPTION: a few keys move via dedicated out-of-band sync endpoints
+    // (Postgres-backed federation), not the file-snapshot transfer. Those
+    // are gated at their own apply path with `compareSchemaVersions` and
+    // need not appear in the snapshot map. List them here so the coverage
+    // assertion stays honest about what the snapshot map IS and ISN'T
+    // responsible for.
+    const OUT_OF_BAND_SYNC_KEYS = new Set([
+      // catalog → `POST /api/catalog/sync/apply` (server/services/catalogSync.js)
+      'catalog',
+    ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {
+      if (OUT_OF_BAND_SYNC_KEYS.has(key)) continue;
       expect(covered.has(key)).toBe(true);
     }
   });

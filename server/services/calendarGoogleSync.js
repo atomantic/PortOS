@@ -259,7 +259,7 @@ async function runConfiguredMcp(prompt, io, accountId) {
   }
 
   // `--allowedTools mcp__…` is Claude-Code-specific argv. Other CLIs grant MCP
-  // access through their own config (codex/gemini have no such flag), so pass
+  // access through their own config (codex/antigravity have no such flag), so pass
   // it only to Claude-family providers — appending it to another CLI would
   // make it reject the invocation on an unknown flag.
   const isClaudeFamily = /claude/i.test(picked.provider.command || '') || /claude/i.test(picked.provider.id || '');

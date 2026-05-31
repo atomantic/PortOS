@@ -508,6 +508,18 @@ html[data-port-theme-mode="day"] :is(.bg-gray-700, .bg-zinc-700, .bg-neutral-700
   background-color: var(--port-control-bg) !important;
 }
 
+/* Toggle off-state track. The global bg-gray-600 → --port-control-bg remap
+   above turns ToggleSwitch's inactive track into the same cream as the page,
+   making the toggle (and its white knob) nearly invisible on light themes
+   like Phosphor Paper. This class keeps the dark-theme gray-600 look while
+   swapping to a contrasting muted tone in day mode. */
+.port-toggle-track-off {
+  background-color: rgb(75 85 99);
+}
+html[data-port-theme-mode="day"] .port-toggle-track-off {
+  background-color: rgb(var(--port-text-muted) / 0.7) !important;
+}
+
 html[data-port-theme-mode="day"] :is(.bg-gray-500, .bg-zinc-500, .bg-neutral-500, .bg-slate-500) {
   background-color: var(--port-control-bg-hover) !important;
 }

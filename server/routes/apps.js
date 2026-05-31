@@ -19,6 +19,7 @@ import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js'
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
+import { SELF_IMPROVEMENT_TASK_TYPES } from '../services/taskSchedule.js';
 import { certPaths } from '../../lib/certPaths.js';
 
 const router = Router();
@@ -404,6 +405,9 @@ router.put('/bulk-task-type/:taskType', asyncHandler(async (req, res) => {
   if (typeof enabled !== 'boolean') {
     throw new ServerError('enabled (boolean) is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  if (!SELF_IMPROVEMENT_TASK_TYPES.includes(req.params.taskType)) {
+    throw new ServerError(`Unknown task type '${req.params.taskType}'`, { status: 400, code: 'INVALID_TASK_TYPE' });
+  }
 
   const result = await appsService.bulkUpdateAppTaskTypeOverride(req.params.taskType, { enabled });
   console.log(`📋 Bulk ${enabled ? 'enabled' : 'disabled'} task type ${req.params.taskType} for ${result.count} apps`);
@@ -477,6 +481,9 @@ router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
 // PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
   const { enabled, interval, taskMetadata } = req.body;
+  if (!SELF_IMPROVEMENT_TASK_TYPES.includes(req.params.taskType)) {
+    throw new ServerError(`Unknown task type '${req.params.taskType}'`, { status: 400, code: 'INVALID_TASK_TYPE' });
+  }
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -884,12 +891,16 @@ router.post('/:id/open-editor', loadApp, asyncHandler(async (req, res) => {
     }
   }
 
-  // Spawn the editor process detached so it doesn't block
+  // Spawn the editor process detached so it doesn't block.
+  // On Windows, editor binaries are typically `.cmd`/`.bat` shims (e.g. `code.cmd`,
+  // `cursor.cmd`) which Node refuses to spawn without a shell since 20.12.2 — so we
+  // opt into the shell on win32. Args are pre-sanitized for shell metacharacters
+  // above, and the command is allowlisted.
   const child = spawn(cmd, args, {
     cwd: app.repoPath,
     detached: true,
     stdio: 'ignore',
-    shell: false,  // Security: Ensure no shell interpretation
+    shell: process.platform === 'win32',
     windowsHide: true
   });
   child.unref();
@@ -905,11 +916,13 @@ router.post('/:id/open-claude', loadApp, asyncHandler(async (req, res) => {
     throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
   }
 
+  // shell:true on Windows so `claude.cmd` resolves (see open-editor above for the
+  // Node 20.12.2 rationale). No user args reach the command line here.
   const child = spawn('claude', [], {
     cwd: app.repoPath,
     detached: true,
     stdio: 'ignore',
-    shell: false,
+    shell: process.platform === 'win32',
     windowsHide: true
   });
   child.unref();

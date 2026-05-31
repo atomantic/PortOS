@@ -80,6 +80,14 @@ export const WRITERS_ROOM_WORK_ID_MAX = 64;
 export const TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
 export const ISSUE_COUNT_TARGET_MAX = 999;
 
+// The manuscript format the series is authored/finalized in first — the source
+// of truth the other two formats are generated from. Stored as the stage id so
+// it maps straight onto the issue stages. `null` = not chosen yet; the
+// manuscript editor falls back to auto-detecting the dominant drafted stage.
+// Mirrors MANUSCRIPT_STAGES in arcPlanner.js (kept local to avoid an import
+// cycle — series.js is imported by arcPlanner.js).
+export const MANUSCRIPT_TYPES = Object.freeze(['comicScript', 'teleplay', 'prose']);
+
 export const LOCKABLE_STAGES = Object.freeze(['arc']);
 
 // Per-field arc lock targets. Each field can be individually frozen so
@@ -151,6 +159,13 @@ const sanitizeSeries = (raw) => {
       ? raw.stylePromptOverrideMode
       : STYLE_PROMPT_OVERRIDE_MODE_DEFAULT,
     targetFormat,
+    // The format this series is finalized in first (source of truth for the
+    // other two). `null` until the author picks one in the bible. Validated
+    // against the stage-id list so a stale/hand-edited value can't smuggle in
+    // a non-manuscript stage.
+    primaryManuscriptType: MANUSCRIPT_TYPES.includes(raw.primaryManuscriptType)
+      ? raw.primaryManuscriptType
+      : null,
     issueCountTarget,
     llm,
     // Share-bucket provenance — present on imported records, absent on locally-authored ones.
@@ -309,6 +324,7 @@ export async function updateSeries(id, patch = {}) {
       ...('stylePromptOverride' in patch ? { stylePromptOverride: patch.stylePromptOverride } : {}),
       ...('stylePromptOverrideMode' in patch ? { stylePromptOverrideMode: patch.stylePromptOverrideMode } : {}),
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
+      ...('primaryManuscriptType' in patch ? { primaryManuscriptType: patch.primaryManuscriptType } : {}),
       ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
       ...('origin' in patch ? { origin: patch.origin } : {}),
       // Local-only "don't sync" marker — sanitizer normalizes anything

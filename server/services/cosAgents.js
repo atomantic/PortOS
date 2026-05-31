@@ -523,9 +523,9 @@ export async function killAgent(agentId) {
 // BTW is only supported for Claude Code TUI agents — the message gets
 // bracket-pasted directly into the live PTY session as if the user typed it
 // themselves. The legacy BTW.md path is gone: it required headless agents to
-// poll a file mid-run, which most CLIs (codex / gemini / LM Studio) don't do
+// poll a file mid-run, which most CLIs (codex / antigravity / LM Studio) don't do
 // reliably anyway, and the indirection had to be reflected in the prompt with
-// a brittle "check this file" instruction. Other TUI kinds (codex, gemini)
+// a brittle "check this file" instruction. Other TUI kinds (codex, antigravity)
 // don't honor bracketed-paste in the same way, so they're not eligible
 // either.
 export async function sendBtwToAgent(agentId, message) {

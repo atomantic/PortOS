@@ -103,8 +103,8 @@ export default function AIProviders() {
     if (isTuiProvider(provider)) {
       return false;
     }
-    // Gemini CLI doesn't require model specification
-    if (provider.type === 'cli' && provider.command === 'gemini') {
+    // Antigravity/Gemini CLIs use their own local model configuration.
+    if (provider.type === 'cli' && (provider.command === 'agy' || provider.command === 'gemini')) {
       return false;
     }
     // All other providers support refresh (API and CLI)

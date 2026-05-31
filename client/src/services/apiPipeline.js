@@ -38,6 +38,16 @@ export const PIPELINE_STAGE_LABELS = Object.freeze({
   audio: 'Audio',
 });
 
+// The stage that conventionally feeds each text-stage target — mirrors the
+// server's DEFAULT_FORWARD_SOURCE (server/services/pipeline/textStages.js).
+// The text-stage source picker pre-checks these so the common forward flow
+// needs no clicks, while still letting any populated stage be a backport source.
+export const PIPELINE_DEFAULT_FORWARD_SOURCE = Object.freeze({
+  prose: ['idea'],
+  comicScript: ['prose'],
+  teleplay: ['prose'],
+});
+
 export const PIPELINE_TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
 
 export const PIPELINE_STAGE_STATUS_LABEL = Object.freeze({
@@ -161,17 +171,21 @@ export const extractPipelineComicPages = (issueId, { force } = {}) =>
     body: JSON.stringify({ force }),
   });
 
-// Run canon extraction (characters/places/objects) against an issue's
-// comicScript or teleplay stage output and merge the result into the series'
-// linked universe. Auto-extract only fires after prose; this lets the writer
-// pull in minor entities introduced only in script-stage panel directions or
-// dialogue cues. Returns { universe, extracted: { characters, places, objects },
-// sourceStage, truncated } — `truncated` is true when the script exceeded
-// the server's 200K-char extract cap and was clamped before being sent to the LLM.
-export const extractPipelineCanonFromScript = (issueId, stageId, { providerOverride } = {}, options = {}) =>
+// Run canon extraction (characters/places/objects) against an issue's prose,
+// comicScript, or teleplay stage output and merge the result into the series'
+// linked universe. Auto-extract fires after prose; this lets the writer re-run
+// it (e.g. after a provider failure) with a chosen provider/model, or pull in
+// minor entities introduced only in script-stage panel directions / dialogue
+// cues. `providerOverride`/`model` override the series' configured LLM for this
+// run so the user can keep trying models until extraction succeeds. Returns
+// { universe, issue, canonExtraction, failures, extracted: { characters, places,
+// objects }, sourceStage, truncated } — `canonExtraction` is the persisted
+// outcome marker; `failures` lists kinds that threw; `truncated` is true when
+// the corpus exceeded the server's 200K-char extract cap and was clamped.
+export const extractPipelineCanonFromScript = (issueId, stageId, { providerOverride, model } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/extract-canon`, {
     method: 'POST',
-    body: JSON.stringify({ providerOverride }),
+    body: JSON.stringify({ providerOverride, model }),
     ...options,
   });
 
@@ -375,6 +389,77 @@ export const resolvePipelineArcIssues = (seriesId, { findings, providerOverride,
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/resolve-issues`, {
     method: 'POST',
     body: JSON.stringify({ findings, providerOverride, modelOverride }),
+  });
+
+// Back-derive arc + bible + a single-volume restructure from the series' EXISTING
+// issue manuscripts. Read-only preview the UI shows for review/edit. Returns
+// { arc, volume, bible, issues, derivedSeasons, runId, providerId, model }.
+export const derivePipelineArcFromManuscript = (seriesId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/derive-from-manuscript`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
+// Apply the (edited) derive preview — writes bible, collapses to one volume,
+// reassigns issues, seeds per-issue synopses. No LLM re-run. Pass the confirmed
+// { arc, bible, volume, issues } proposal. Returns { series, volumeId, issueCount }.
+export const commitPipelineArcFromManuscript = (seriesId, proposal = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/derive-from-manuscript/commit`, {
+    method: 'POST',
+    body: JSON.stringify(proposal),
+  });
+
+// Manuscript-completeness ("finish the draft") editor pass — reads the actual
+// drafted script and returns categorized { severity, category, location,
+// problem, suggestion } findings. Advisory; no auto-resolve. Empty = complete.
+export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
+// ---- Manuscript editor ----
+// Full series manuscript in one format. `type` (comicScript|teleplay|prose)
+// selects the format; omit to get the series' primary/source format. Returns
+// { sections, viewType, primaryStageId, pinnedPrimary, availableTypes }.
+export const getPipelineManuscript = (seriesId, type) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript${type ? `?type=${encodeURIComponent(type)}` : ''}`);
+
+// The persisted "finish the draft" comment set ({ schemaVersion, comments }).
+export const getPipelineManuscriptReview = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review`);
+
+// Patch one comment: { status } flip and/or { fix } attach/clear. Returns { comment }.
+export const patchPipelineManuscriptComment = (seriesId, commentId, patch, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    ...options,
+  });
+
+// Generate an anchored find/replace fix for a comment (does not apply it).
+export const generatePipelineManuscriptFix = (seriesId, commentId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/fix`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
+// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
+// Returns { comment, section }.
+export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace }) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ find, replace }),
+  });
+
+// Versioned free-text save of one manuscript section. Snapshots the prior text
+// into history (revert via restorePipelineStageVersion). Returns { section }
+// where section.versions is the updated [{ runId, createdAt }] list.
+export const savePipelineManuscriptSection = (seriesId, issueId, { stageId, output }, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/sections/${encodeURIComponent(issueId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ stageId, output }),
+    ...options,
   });
 
 // ---- Volume beat-sheet bulk generator ----

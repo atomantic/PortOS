@@ -62,9 +62,16 @@ describe('codeReview helpers', () => {
 
     it('strips unknown reviewer enum values from a hand-edited settings.json', () => {
       const out = pickCodeReviewDefaults({
-        codeReview: { reviewers: ['gemini', 'bogus', 'lmstudio', 'gemini'] },
+        codeReview: { reviewers: ['antigravity', 'bogus', 'lmstudio', 'antigravity'] },
       })
-      expect(out.reviewers).toEqual(['gemini', 'lmstudio'])
+      expect(out.reviewers).toEqual(['antigravity', 'lmstudio'])
+    })
+
+    it('maps legacy gemini defaults to antigravity', () => {
+      const out = pickCodeReviewDefaults({
+        codeReview: { reviewers: ['gemini', 'lmstudio'] },
+      })
+      expect(out.reviewers).toEqual(['antigravity', 'lmstudio'])
     })
 
     it('coerces invalid stop-mode + reviewerApplies + model strings', () => {

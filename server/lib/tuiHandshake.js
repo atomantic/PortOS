@@ -4,7 +4,7 @@
  * Two execution paths need these: `server/lib/tuiPromptRunner.js` (one-shot
  * prompts from the central handler) and `server/services/agentTuiSpawning.js`
  * (long-running CoS agents). Both shell into the same set of TUI binaries
- * (Claude Code, Codex, Gemini) and use identical PTY-paste choreography to
+ * (Claude Code, Codex, Antigravity) and use identical PTY-paste choreography to
  * deliver the prompt — banner repaint wait, bracketed-paste, Enter handshake.
  * Without this shared module they had verbatim copies that would silently
  * drift the first time anyone tweaked one side's paste timing.
@@ -13,6 +13,7 @@
  */
 
 import { resolveCliModel, hasModelFlag } from './providerModels.js';
+import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ export const RAW_SPOOL_MAX_BYTES = 256 * 1024 * 1024;
 export function inferTuiCommand(id) {
   if (!id) return 'claude';
   if (id.includes('codex')) return 'codex';
+  if (id.includes('antigravity')) return 'agy';
   if (id.includes('gemini')) return 'gemini';
   return 'claude';
 }
@@ -73,6 +75,9 @@ export function inferTuiCommand(id) {
 export function applyCommandDefaults(command, args) {
   if (command === 'codex' && !args.includes('--ask-for-approval')) {
     return ['--ask-for-approval', 'never', ...args];
+  }
+  if (isAntigravityCommand(command)) {
+    return ensureAntigravityTuiArgs(args);
   }
   return args;
 }
@@ -88,7 +93,7 @@ export function buildTuiInvocation(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
-  const shouldInject = effectiveModel && !hasModelFlag(baseArgs);
+  const shouldInject = !isAntigravityCommand(command) && effectiveModel && !hasModelFlag(baseArgs);
   const args = shouldInject ? [...baseArgs, '--model', effectiveModel] : baseArgs;
   return { command, args };
 }

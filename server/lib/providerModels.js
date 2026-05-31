@@ -4,6 +4,7 @@
  */
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
+export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 
 export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
 
@@ -22,7 +23,7 @@ export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null
  * @returns {string[]}
  */
 export const filterSelectableModels = (models) =>
-  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT);
+  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
 
 /**
  * Detects whether the provider's stored argv already pins a model with a

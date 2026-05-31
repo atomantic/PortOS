@@ -1,4 +1,5 @@
 import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare } from 'lucide-react';
+import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import { loraDisplayName } from './normalize';
 
@@ -39,7 +40,7 @@ export default function MediaCard({
         className="block w-full aspect-square bg-port-bg relative rounded-t-xl overflow-hidden disabled:cursor-not-allowed disabled:opacity-40"
       >
         {previewUrl ? (
-          <img src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
+          <MediaImage src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-gray-600">
             {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}

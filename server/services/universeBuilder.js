@@ -1011,7 +1011,42 @@ export async function insertUniverseWithId(input = {}) {
   return next;
 }
 
-export async function updateUniverse(id, patchOrMutator = {}) {
+// Canon array keys carrying bible entries that project to catalog rows.
+const CANON_ARRAY_KEYS = ['characters', 'places', 'objects'];
+
+// Compare two canon entries for CONTENT equality, ignoring `updatedAt` (the
+// field we're deciding whether to bump). A cheap stable-stringify is enough —
+// entries are small plain objects and a false "changed" only costs a redundant
+// projection write, never correctness.
+function canonEntryContentEqual(a, b) {
+  const strip = (e) => { const { updatedAt: _x, ...rest } = e || {}; return rest; };
+  return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+}
+
+// Stamp `updatedAt = now` on every canon entry in `next` whose content differs
+// from its same-id entry in `prev` (or that is new). Mutates `next`'s arrays in
+// place. So the embedded entry's LWW clock truthfully reflects a real edit —
+// the bible sanitizer otherwise preserves the prior timestamp and the
+// canon→catalog projection would skip a genuine change. Untouched entries keep
+// their old timestamp so this never manufactures projection churn.
+function stampChangedCanonEntries(prev, next) {
+  const now = new Date().toISOString();
+  for (const key of CANON_ARRAY_KEYS) {
+    const nextList = Array.isArray(next[key]) ? next[key] : null;
+    if (!nextList) continue;
+    const prevById = new Map(
+      (Array.isArray(prev?.[key]) ? prev[key] : []).map((e) => [e?.id, e]),
+    );
+    next[key] = nextList.map((entry) => {
+      if (!entry?.id) return entry;
+      const before = prevById.get(entry.id);
+      if (before && canonEntryContentEqual(before, entry)) return entry;
+      return { ...entry, updatedAt: now };
+    });
+  }
+}
+
+export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // The queued section covers only the universe-builder read/modify/write
   // cycle. The cross-file media-collection rename runs *after* the queue
   // releases so a slow/stuck collection write can't block unrelated universe
@@ -1025,7 +1060,18 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //     `null`/`undefined` short-circuits the write and resolves with the
   //     unchanged record (no `updatedAt` bump, no rename cascade, no
   //     `recordUpdated` emit).
+  //
+  // `options.silent: true` suppresses the post-write `emitRecordUpdated`
+  // peer-sync fan-out — used by the bible→catalog backfill which would
+  // otherwise emit one event per universe at boot on every install. The
+  // universe is still persisted; peers learn about the change on the next
+  // normal sync cycle.
   const isMutator = typeof patchOrMutator === 'function';
+  // `canonProjectionGuard` is set (to an ingredientId) when this write
+  // ORIGINATED from a catalog→canon projection. Threaded into projectToCatalog
+  // below so the originating catalog row isn't written back a second time
+  // (breaks the projectToCanon → updateUniverse → projectToCatalog loop).
+  const { silent = false, canonProjectionGuard = null } = options;
   const s = store();
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
     const cur = await s.loadOne(id);
@@ -1177,6 +1223,16 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       updatedAt: new Date().toISOString(),
     });
     if (!mergedRecord) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    // Stamp `updatedAt = now` on every canon entry whose CONTENT changed vs the
+    // pre-write record. The bible sanitizer preserves a present `updatedAt`, so
+    // an inline edit / AI rewrite that does `{ ...e, ...patch }` keeps the OLD
+    // timestamp — which makes the canon→catalog projection's LWW clock lie (a
+    // catalog row that's merely newer-by-clock would win and the canon edit
+    // would never reach the catalog row, breaking lockstep). Bumping the clock
+    // on genuine content changes makes the embedded entry's timestamp truthful
+    // so projectToCatalog correctly carries the edit across. Unchanged entries
+    // keep their old timestamp (no spurious revisions / no projection churn).
+    stampChangedCanonEntries(cur, mergedRecord);
     // Persist the stale-reference-sheet null at write time so the on-disk
     // record catches up with what the GET-route pruner shows. Otherwise a
     // PATCH that omits `characters` (e.g. rename) merges from `cur` and
@@ -1189,6 +1245,21 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     }
     await ensureDir(s.recordDir(id));
     await atomicWrite(s.recordPath(id), mergedRecord);
+    // Project the freshly-persisted canon arrays back into their catalog rows
+    // SYNCHRONOUSLY (inside the queue) so the authoritative catalog_ingredients
+    // row can never lag the embedded cache on the same request. Best-effort:
+    // projectToCatalog never throws (per-entry failures are logged), but wrap
+    // the import/call anyway — this runs inside the queued write critical
+    // section and an uncaught throw here would reject the whole save. Skipped
+    // when the patch can't have touched canon arrays (rename/scalar PATCH).
+    if (isMutator || 'characters' in patch || 'places' in patch || 'objects' in patch) {
+      try {
+        const { projectToCatalog } = await import('./catalogCanonProjection.js');
+        await projectToCatalog(id, mergedRecord, { guardToken: canonProjectionGuard });
+      } catch (err) {
+        console.error(`🔁 canon→catalog projection failed for ${id}: ${err.message}`);
+      }
+    }
     // Diff inside the queue so we read against the freshest merged state;
     // gate on patches that could have touched characters (mutator or
     // literal-PATCH carrying `characters`) — rename/scalar PATCHes are the
@@ -1260,7 +1331,9 @@ export async function updateUniverse(id, patchOrMutator = {}) {
         console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
       });
   }
-  emitRecordUpdated('universe', merged.id);
+  if (!silent) {
+    emitRecordUpdated('universe', merged.id);
+  }
   return merged;
 }
 

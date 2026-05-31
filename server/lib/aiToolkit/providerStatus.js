@@ -15,7 +15,7 @@ export function createProviderStatusService(config = {}) {
   const {
     dataDir = './data',
     statusFile = 'provider-status.json',
-    defaultFallbackPriority = ['claude-code', 'codex', 'lmstudio', 'local-lm-studio', 'ollama', 'gemini-cli'],
+    defaultFallbackPriority = ['claude-code', 'codex', 'lmstudio', 'local-lm-studio', 'ollama', 'antigravity-cli', 'gemini-cli'],
     defaultUsageLimitWait = 24 * 60 * 60 * 1000,
     defaultRateLimitWait = 5 * 60 * 1000,
     onStatusChange = null

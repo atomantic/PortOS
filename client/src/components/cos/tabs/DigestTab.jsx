@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import Banner from '../../ui/Banner';
 
 export default function DigestTab() {
   const [currentDigest, setCurrentDigest] = useState(null);
@@ -381,20 +382,20 @@ export default function DigestTab() {
               {expandedSections.issues && (
                 <div className="space-y-2">
                   {currentDigest.issues.map((issue, idx) => (
-                    <div
+                    <Banner
                       key={idx}
-                      className="bg-port-error/10 border border-port-error/30 rounded-lg p-3"
+                      tone="error"
+                      size="md"
+                      align="center"
+                      actions={<span className="text-xs text-gray-500">{issue.count}x</span>}
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-port-error font-medium">{issue.error}</span>
-                        <span className="text-xs text-gray-500">{issue.count}x</span>
-                      </div>
+                      <span className="font-medium">{issue.error}</span>
                       {issue.tasks?.length > 0 && (
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-gray-500 mt-2">
                           Affected: {issue.tasks.map(t => t.description || t.id).join(', ')}
                         </div>
                       )}
-                    </div>
+                    </Banner>
                   ))}
                 </div>
               )}

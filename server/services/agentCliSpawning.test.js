@@ -143,8 +143,8 @@ describe('buildCliSpawnConfig', () => {
   it('omits --model for Codex configured-default sentinel but bypasses sandbox/approvals', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'codex-configured-default');
 
-    // The bypass flag is the Codex equivalent of Claude's --dangerously-skip-permissions
-    // / Gemini's --yolo. Without it, codex exec runs sandboxed (no network → `gh`
+    // The bypass flag is the Codex equivalent of Claude/Antigravity's
+    // --dangerously-skip-permissions. Without it, codex exec runs sandboxed (no network → `gh`
     // can't reach api.github.com) and non-interactive approval prompts get cancelled.
     expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox']);
   });
@@ -153,6 +153,13 @@ describe('buildCliSpawnConfig', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4');
 
     expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.4']);
+  });
+
+  it('uses agy print mode for Antigravity without model flags', () => {
+    const config = buildCliSpawnConfig({ id: 'antigravity-cli', command: 'agy', args: [] }, 'antigravity-configured-default');
+
+    expect(config.command).toBe('agy');
+    expect(config.args).toEqual(['--print', '--dangerously-skip-permissions']);
   });
 });
 
@@ -284,7 +291,7 @@ describe('stream error containment', () => {
       task: {
         id: 'task-rv',
         description: 'do stuff',
-        metadata: { reviewers: ['codex', 'gemini'], reviewStopMode: 'on-clean', reviewerApplies: true },
+        metadata: { reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean', reviewerApplies: true },
       },
       cleanupWorktreeFn,
       isTruthyMetaFn: (v) => v === true,
@@ -301,7 +308,7 @@ describe('stream error containment', () => {
 
     expect(cleanupWorktreeFn).toHaveBeenCalledTimes(1);
     const opts = cleanupWorktreeFn.mock.calls[0][2];
-    expect(opts.reviewers).toEqual(['codex', 'gemini']);
+    expect(opts.reviewers).toEqual(['codex', 'antigravity']);
     expect(opts.reviewStopMode).toBe('on-clean');
     expect(opts.reviewerApplies).toBe(true);
     // The removed singular key must NOT be passed.

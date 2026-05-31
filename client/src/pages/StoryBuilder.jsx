@@ -12,6 +12,7 @@ import {
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
@@ -404,6 +405,14 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
   const [busy, setBusy] = useState(false);
   const arc = series?.arc || {};
 
+  // True when at least one issue already carries text content — the prerequisite
+  // for backfilling an upstream step (idea / arc) FROM the downstream work.
+  const issuesHaveContent = useMemo(() => (issues || []).some((iss) => {
+    const st = iss.stages || {};
+    return ['comicScript', 'teleplay', 'prose', 'idea']
+      .some((sid) => (st[sid]?.input?.trim() || st[sid]?.output?.trim()));
+  }), [issues]);
+
   const runGenerate = async () => {
     setBusy(true);
     const res = await generateStoryStep(session.id, stepId, {}, { silent: true })
@@ -411,6 +420,27 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     setBusy(false);
     if (res) { toast.success('Generated'); onChanged(); }
   };
+
+  // Backfill: synthesize this upstream step from the series' existing issue
+  // content instead of from its conventional upstream (start-from-anywhere).
+  const runBackfill = async () => {
+    setBusy(true);
+    const res = await generateStoryStep(session.id, stepId, { fromDownstream: true }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Backfill failed'); return null; });
+    setBusy(false);
+    if (res) { toast.success('Backfilled from existing issues'); onChanged(); }
+  };
+
+  const backfillButton = () => (
+    <button
+      onClick={runBackfill} disabled={busy || locked}
+      title="Reverse-engineer this step from the scripts / prose your issues already have"
+      className="inline-flex items-center gap-2 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-50 px-3 py-1.5 rounded text-sm"
+    >
+      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+      Backfill from existing issues
+    </button>
+  );
   const runRefine = async (feedback, entryId) => {
     setBusy(true);
     const res = await refineStoryStep(session.id, stepId, { feedback, entryId }, { silent: true })
@@ -439,8 +469,14 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
       <div className="space-y-3">
         <FieldBlock label="Working title" value={session.title} />
         <FieldBlock label="Starter idea" value={session.seedIdea} />
-        {!locked && genButton('Expand idea with AI', Boolean((universe?.logline || '').trim()))}
-        <p className="text-xs text-gray-500">Expanding seeds the universe starter prompt and series premise for the next steps.</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          {!locked && genButton('Expand idea with AI', Boolean((universe?.logline || '').trim()))}
+          {!locked && issuesHaveContent && backfillButton()}
+        </div>
+        <p className="text-xs text-gray-500">
+          Expanding seeds the universe starter prompt and series premise for the next steps.
+          {issuesHaveContent && ' Already drafted issues? Backfill reverse-engineers the idea from their content.'}
+        </p>
       </div>
     );
   }
@@ -475,14 +511,18 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <FieldBlock label="Protagonist arc" value={arc.protagonistArc} />
         <FieldBlock label="Themes" value={(arc.themes || []).join(', ')} />
         <FieldBlock label="Emotional shape (Vonnegut)" value={arc.shape} />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {!locked && genButton('Generate plot arc', Boolean((arc.logline || arc.summary || '').trim()))}
+          {!locked && issuesHaveContent && backfillButton()}
           {series?.id && (
             <Link to={`/pipeline/series/${series.id}`} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-port-accent">
               <ExternalLink className="w-4 h-4" /> Deep-edit on the Arc Canvas
             </Link>
           )}
         </div>
+        {issuesHaveContent && (
+          <p className="text-xs text-gray-500">Started from drafted issues? Backfill extracts the arc from their scripts / prose.</p>
+        )}
       </div>
     );
   }
@@ -729,19 +769,18 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const stepState = session?.steps?.[activeStepId] || { status: 'pending', locked: false };
   const isStale = staleSteps.includes(activeStepId);
 
-  // A step is reachable when every earlier step is locked AND not stale.
-  // Returns `true` (reachable) or a discriminator string identifying the
-  // first blocking earlier step's reason, so the caller can render the
-  // matching toast ("Lock the earlier steps first" vs "Re-review the
-  // stale earlier step first" — same boolean truthiness, different copy).
-  const reachable = useCallback((idx) => {
-    if (idx <= 0) return true;
+  // Navigation is advisory, not gated: the user may start from any point and
+  // work the steps out of order (e.g. start from a drafted comic script and
+  // backfill the idea / arc afterward). `firstUnmetUpstream` reports the first
+  // earlier step that is unlocked or stale purely so the rail can show a hint —
+  // it never blocks navigation.
+  const firstUnmetUpstream = useCallback((idx) => {
     for (let i = 0; i < idx; i++) {
       const id = stepIds[i];
       if (session?.steps?.[id]?.locked !== true) return 'unlocked';
       if (staleSteps.includes(id)) return 'stale';
     }
-    return true;
+    return null;
   }, [stepIds, session, staleSteps]);
 
   const lock = useLockToggle({
@@ -765,15 +804,10 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     errorMessage: 'Failed to update lock',
   });
 
-  const goToStep = async (id, idx) => {
-    const why = reachable(idx);
-    if (why !== true) {
-      toast.error(why === 'stale'
-        ? 'Re-review the stale earlier step first'
-        : 'Lock the earlier steps first');
-      return;
-    }
-    // Persist the current-step pointer (server re-gates); navigate optimistically.
+  const goToStep = async (id) => {
+    // Free navigation — any step is reachable. Upstream lock/stale state is
+    // surfaced as a warning on the step (not a block), so a user can jump to a
+    // later step and backfill the earlier ones.
     await setStoryCurrentStep(storyId, id, { silent: true }).catch(() => {});
     navigate(`/story-builder/${storyId}/${id}`);
   };
@@ -820,22 +854,27 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               const st = session.steps?.[s.id] || { status: 'pending', locked: false };
               const stale = staleSteps.includes(s.id);
               const isActive = s.id === activeStepId;
-              // `reachable` returns `true` or a string discriminator ('unlocked' / 'stale');
-              // canGo must be strictly boolean — `disabled={!canGo}` would otherwise
-              // treat the truthy string as "reachable" and re-enable a blocked button.
-              const canGo = reachable(idx) === true;
+              // Navigation is never blocked (start-from-anywhere). The warning
+              // icon flags a step whose upstream is unlocked or stale so the
+              // user knows the order isn't conventional — but they may proceed.
+              const unmet = firstUnmetUpstream(idx);
               return (
                 <button
-                  key={s.id} onClick={() => goToStep(s.id, idx)} disabled={!canGo}
+                  key={s.id} onClick={() => goToStep(s.id)}
                   className={`w-full text-left px-3 py-2 rounded border flex items-center justify-between gap-2 ${
                     isActive ? 'border-port-accent bg-port-card' : 'border-transparent hover:bg-port-card'
-                  } ${!canGo ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  }`}
                 >
                   <span className="flex items-center gap-2 text-sm">
                     {st.locked ? <Lock className="w-3.5 h-3.5 text-port-success" /> : <span className="w-3.5 h-3.5 rounded-full border border-gray-600 inline-block" />}
                     {s.label}
                   </span>
-                  {stale && <AlertTriangle className="w-3.5 h-3.5 text-port-warning" title="Stale — re-review" />}
+                  {(stale || unmet) && (
+                    <AlertTriangle
+                      className="w-3.5 h-3.5 text-port-warning"
+                      title={stale ? 'Stale — re-review' : 'Earlier step not locked yet'}
+                    />
+                  )}
                 </button>
               );
             })}
@@ -852,9 +891,9 @@ function StoryBuilderDetail({ storyId, stepParam }) {
             </div>
 
             {isStale && (
-              <div className="flex items-center gap-2 text-sm text-port-warning bg-port-warning/10 border border-port-warning/30 rounded px-3 py-2">
-                <AlertTriangle className="w-4 h-4" /> An earlier step changed after you locked this — re-review and re-lock to continue.
-              </div>
+              <Banner tone="warning" size="md" icon={AlertTriangle} align="center">
+                An earlier step changed after you locked this — re-review and re-lock to continue.
+              </Banner>
             )}
 
             <StepPanel
@@ -877,13 +916,13 @@ function StoryBuilderDetail({ storyId, stepParam }) {
 
               <div className="flex items-center gap-2">
                 {activeIdx > 0 && (
-                  <button onClick={() => goToStep(stepIds[activeIdx - 1], activeIdx - 1)} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
+                  <button onClick={() => goToStep(stepIds[activeIdx - 1])} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
                     <ChevronLeft className="w-4 h-4" /> Back
                   </button>
                 )}
                 {activeIdx < steps.length - 1 && (
                   <button
-                    onClick={() => goToStep(stepIds[activeIdx + 1], activeIdx + 1)}
+                    onClick={() => goToStep(stepIds[activeIdx + 1])}
                     disabled={!stepState.locked || isStale}
                     className="inline-flex items-center gap-1 text-sm bg-port-accent hover:bg-blue-600 disabled:opacity-40 text-white px-3 py-1.5 rounded"
                   >

@@ -384,7 +384,7 @@ function buildDraftMeta(text, base = {}) {
   };
 }
 
-export async function saveDraftBody(workId, body) {
+export async function saveDraftBody(workId, body, { referencedIngredientIds } = {}) {
   const manifest = await getWork(workId);
   const activeId = manifest.activeDraftVersionId;
   if (!activeId) throw badRequest('Work has no active draft');
@@ -392,7 +392,15 @@ export async function saveDraftBody(workId, body) {
   await atomicWrite(draftPath(workId, activeId), text);
   const draftIdx = manifest.drafts.findIndex((d) => d.id === activeId);
   if (draftIdx < 0) throw notFound('Active draft');
-  manifest.drafts[draftIdx] = buildDraftMeta(text, manifest.drafts[draftIdx]);
+  const meta = buildDraftMeta(text, manifest.drafts[draftIdx]);
+  // Distinguish "caller omitted the field" (preserve the existing snapshot of
+  // referenced ids) from "caller passed an empty array" (the prose no longer
+  // mentions any linked ingredient — clear it). An absent field must NOT wipe
+  // a previously-computed reference list.
+  if (Array.isArray(referencedIngredientIds)) {
+    meta.referencedIngredientIds = referencedIngredientIds;
+  }
+  manifest.drafts[draftIdx] = meta;
   manifest.updatedAt = nowIso();
   await saveManifest(workId, manifest);
   console.log(`📝 wr: saved draft ${activeId.slice(0, 14)}… (${manifest.drafts[draftIdx].wordCount} words)`);
@@ -403,14 +411,21 @@ export async function snapshotDraft(workId, { label } = {}) {
   const { manifest, body } = await getWorkWithBody(workId);
   const newDraftId = `wr-draft-${randomUUID()}`;
   const fromId = manifest.activeDraftVersionId;
+  const fromDraft = manifest.drafts.find((d) => d.id === fromId);
   const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
   await atomicWrite(draftPath(workId, newDraftId), body);
+  // The new draft copies the source's body verbatim, so carry its referenced
+  // ingredient ids forward — otherwise the freshly-snapshotted version would
+  // render no chips (despite identical prose) until the next save re-scans.
   manifest.drafts.push(buildDraftMeta(body, {
     id: newDraftId,
     label: draftLabel,
     contentFile: `drafts/${newDraftId}.md`,
     createdAt: nowIso(),
     createdFromVersionId: fromId,
+    ...(Array.isArray(fromDraft?.referencedIngredientIds)
+      ? { referencedIngredientIds: fromDraft.referencedIngredientIds }
+      : {}),
   }));
   manifest.activeDraftVersionId = newDraftId;
   manifest.updatedAt = nowIso();

@@ -51,6 +51,11 @@ const STATUS_CONFIG = {
     className: 'text-port-warning',
     Icon: AlertTriangle,
   },
+  'metadata-missing': {
+    label: 'Metadata missing',
+    className: 'text-port-warning',
+    Icon: AlertTriangle,
+  },
   'local-only': {
     label: 'Local only',
     className: 'text-port-warning',
@@ -61,6 +66,13 @@ const STATUS_CONFIG = {
     className: 'text-port-warning',
     Icon: AlertTriangle,
   },
+};
+
+const UNAVAILABLE_REASON_LABELS = {
+  'peer-unreachable': 'Peer offline or unreachable',
+  'peer-too-old': 'Peer needs a PortOS update',
+  'fetch-failed': 'Integrity check failed',
+  'peer-not-found': 'Peer not found',
 };
 
 function StatusPill({ status }) {
@@ -157,12 +169,13 @@ const PULL_SKIP_LABELS = {
 function PeerRow({ entry, kind, recordId, onRefresh }) {
   const { peerId, peerName, status } = entry;
   // Direction-aware actions. local-only → we have it, peer doesn't → PUSH.
-  // peer-only → peer has it, we don't → PULL. diverged / assets-missing are
+  // peer-only → peer has it, we don't → PULL. diverged / assets-missing /
+  // metadata-missing are
   // ambiguous (either side could be ahead) → offer BOTH so the fix is always
   // reachable from the machine you're on. (Pre-fix, only push existed, which
   // couldn't resolve a record the LOCAL side was behind on.)
-  const canPush = ['local-only', 'diverged', 'assets-missing'].includes(status);
-  const canPull = ['peer-only', 'diverged', 'assets-missing'].includes(status);
+  const canPush = ['local-only', 'diverged', 'assets-missing', 'metadata-missing'].includes(status);
+  const canPull = ['peer-only', 'diverged', 'assets-missing', 'metadata-missing'].includes(status);
 
   const [syncToPeer, syncing] = useAsyncAction(async () => {
     // The endpoint returns 200 even when nothing was pushed ({ pushed:false,
@@ -228,7 +241,7 @@ function PeerRow({ entry, kind, recordId, onRefresh }) {
 
 // ── Main drawer ──────────────────────────────────────────────────────────────
 export default function SyncDetailDrawer({ kind, recordId, onClose }) {
-  const { byPeer, noSyncingPeers, integrityUnavailable, loading, error, refresh } = useSyncIntegrity(kind);
+  const { byPeer, unavailablePeers, noSyncingPeers, integrityUnavailable, loading, error, refresh } = useSyncIntegrity(kind);
   const peerEntries = byPeer.get(recordId) ?? [];
 
   // Record state is owned here (fetched once) so the preview and the
@@ -445,6 +458,19 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
               <div className="flex items-center gap-2 text-gray-500 text-sm">
                 <WifiOff className="w-4 h-4" />
                 Sync status unavailable — every peer was offline, unreachable, or on an older PortOS.
+              </div>
+            )}
+
+            {!loading && !error && !noSyncingPeers && integrityUnavailable && unavailablePeers?.length > 0 && (
+              <div className="mt-2 rounded border border-port-border/70 divide-y divide-port-border/60">
+                {unavailablePeers.map((peer) => (
+                  <div key={peer.peerId} className="flex items-center justify-between gap-3 px-2 py-1.5">
+                    <span className="min-w-0 truncate text-sm text-white">{peer.peerName}</span>
+                    <span className="shrink-0 text-xs text-gray-400">
+                      {UNAVAILABLE_REASON_LABELS[peer.reason] ?? peer.reason ?? 'Unavailable'}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 

@@ -7,6 +7,7 @@ const execAsync = promisify(exec);
 const AGENT_PATTERNS = [
   { name: 'Claude', pattern: 'claude', command: 'claude' },
   { name: 'Codex', pattern: 'codex', command: 'codex' },
+  { name: 'Antigravity', pattern: 'agy', command: 'agy' },
   { name: 'Gemini', pattern: 'gemini', command: 'gemini' },
   { name: 'Aider', pattern: 'aider', command: 'aider' },
   { name: 'Cursor', pattern: 'cursor', command: 'cursor' },

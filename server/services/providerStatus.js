@@ -12,7 +12,7 @@ import { PATHS } from '../lib/fileUtils.js';
 const providerStatusService = createProviderStatusService({
   dataDir: PATHS.data,
   statusFile: 'provider-status.json',
-  defaultFallbackPriority: ['claude-code', 'codex', 'lmstudio', 'local-lm-studio', 'ollama', 'gemini-cli'],
+  defaultFallbackPriority: ['claude-code', 'codex', 'lmstudio', 'local-lm-studio', 'ollama', 'antigravity-cli', 'gemini-cli'],
   onStatusChange: (eventData) => {
     // Re-emit on the exported events emitter for backwards compatibility
     providerStatusEvents.emit('status:changed', eventData);

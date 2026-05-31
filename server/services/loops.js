@@ -3,7 +3,7 @@
  *
  * Manages recurring AI CLI loops — the web equivalent of Claude Code's `/loop`.
  * Each loop spawns a headless AI run on a configurable interval via the in-tree aiToolkit,
- * so any configured provider (Claude, Gemini, Codex, etc.) can power loops.
+ * so any configured provider (Claude, Antigravity, Codex, etc.) can power loops.
  * Output streams in real-time via EventEmitter → Socket.IO.
  */
 

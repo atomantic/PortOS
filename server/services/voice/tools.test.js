@@ -139,9 +139,37 @@ vi.mock('../askService.js', () => ({
 vi.mock('./config.js', () => ({
   getVoiceConfig: vi.fn(async () => ({ llm: { codeAgent: { enabled: true, provider: '', model: '' } } })),
 }));
+// code_agent_status reads agent state and indexes all tasks by id. loadState
+// comes from cosState.js; getAllTasks comes from cos.js; isTruthyMeta from
+// agentState.js. Default to empty so tests that don't care can ignore it.
+const cosStateRef = { value: { agents: {} } };
+const tasksRef = { value: [] };
+vi.mock('../cosState.js', () => ({
+  loadState: vi.fn(async () => cosStateRef.value),
+}));
+vi.mock('../agentState.js', () => ({
+  isTruthyMeta: (v) => v === true || v === 'true',
+}));
 vi.mock('../cos.js', () => ({
   addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
   isRunning: vi.fn(() => true),
+  getAllTasks: vi.fn(async () => ({ user: { tasks: tasksRef.value }, cos: { tasks: [] } })),
+}));
+// dispatch_code_agent fuzzy-resolves the optional `app` parameter against the
+// user's configured managed apps; default to two apps so the resolve / not-
+// found branches can be exercised.
+const activeAppsRef = { value: [
+  { id: 'bookloom-abc', name: 'BookLoom' },
+  { id: 'portos-default', name: 'PortOS' },
+] };
+vi.mock('../apps.js', () => ({
+  getActiveApps: vi.fn(async () => activeAppsRef.value),
+}));
+const catalogItemsRef = { value: [] };
+const catalogRefsRef = { value: [] };
+vi.mock('../catalogDB.js', () => ({
+  listIngredients: vi.fn(async () => ({ items: catalogItemsRef.value, nextOffset: catalogItemsRef.value.length })),
+  listRefsForIngredient: vi.fn(async () => catalogRefsRef.value),
 }));
 // dispatch_code_agent resolves a code-capable provider when none is pinned.
 // Default the active provider to a code-capable (tui) one so the inherit path
@@ -169,6 +197,37 @@ describe('getToolSpecs', () => {
       expect(s.type).toBe('function');
       expect(typeof s.function.name).toBe('string');
       expect(s.function.parameters?.type).toBe('object');
+    }
+  });
+
+  it('catalog_lookup advertises user-defined catalog types in its type enum', async () => {
+    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    try {
+      setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
+      const lookup = getToolSpecs().find((s) => s.function.name === 'catalog_lookup');
+      const enumVals = lookup.function.parameters.properties.type.enum;
+      // Built-ins still present, plus the user type.
+      expect(enumVals).toEqual(expect.arrayContaining(['character', 'place', 'object', 'idea', 'scene', 'concept', 'faction']));
+    } finally {
+      setUserCatalogTypes([]);  // restore the registry for other suites
+    }
+  });
+
+  it('intent gating surfaces catalog_lookup for an utterance naming a user-defined type', async () => {
+    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    try {
+      // Before the type exists, "search my wardrobes" must NOT trip the catalog
+      // group (proves the static regex doesn't already cover the word).
+      const before = getToolSpecsForIntent('search my wardrobes');
+      expect(before.specs.some((s) => s.function.name === 'catalog_lookup')).toBe(false);
+
+      setUserCatalogTypes([{ id: 'wardrobe', label: 'Wardrobe', primaryContentKey: 'desc', fields: [] }]);
+      const after = getToolSpecsForIntent('search my wardrobes');
+      // Now the custom-noun match activates the catalog group and offers the tool.
+      expect(after.activeGroups.has('catalog')).toBe(true);
+      expect(after.specs.some((s) => s.function.name === 'catalog_lookup')).toBe(true);
+    } finally {
+      setUserCatalogTypes([]);
     }
   });
 });
@@ -280,6 +339,113 @@ describe('dispatch_code_agent', () => {
     expect(r.ok).toBe(true);
     expect(r.summary).toMatch(/stopped/i);
   });
+
+  it('resolves a spoken `app` to a managed-app id and threads it through addTask', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'book loom' });
+    expect(r.ok).toBe(true);
+    expect(r.app).toBe('bookloom-abc');
+    expect(r.summary).toMatch(/in BookLoom/);
+    expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ app: 'bookloom-abc' });
+  });
+
+  it('omits the `app` field on addTask when no target is spoken (PortOS-self)', async () => {
+    await dispatchTool('dispatch_code_agent', { task: 'fix the test' });
+    expect(mockedAddTask.mock.calls[0][0]).not.toHaveProperty('app');
+  });
+
+  it('errors when the spoken app is unknown — does NOT silently fall through to PortOS', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'GhostApp' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/GhostApp/);
+    expect(r.summary).toMatch(/BookLoom/); // suggestion list pulled from active apps
+    expect(mockedAddTask).not.toHaveBeenCalled();
+  });
+
+  it('ignores an empty/whitespace `app` string (treats as omitted)', async () => {
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: '   ' });
+    expect(r.ok).toBe(true);
+    expect(mockedAddTask.mock.calls[0][0]).not.toHaveProperty('app');
+  });
+});
+
+describe('code_agent_status', () => {
+  afterEach(() => {
+    cosStateRef.value = { agents: {} };
+    tasksRef.value = [];
+  });
+
+  it('reports zero tasks when no agents are running', async () => {
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.ok).toBe(true);
+    expect(r.count).toBe(0);
+    expect(r.summary).toMatch(/no coding tasks/i);
+  });
+
+  it('ignores running agents whose task is NOT voice-dispatched', async () => {
+    cosStateRef.value = { agents: { 'a1': { id: 'a1', taskId: 't1', status: 'running', startedAt: new Date().toISOString(), metadata: { phase: 'working' } } } };
+    tasksRef.value = [{ id: 't1', description: 'manual task', metadata: {} }];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.count).toBe(0);
+  });
+
+  it('ignores agents that are not in running status', async () => {
+    cosStateRef.value = { agents: { 'a1': { id: 'a1', taskId: 't1', status: 'completed', startedAt: new Date().toISOString() } } };
+    tasksRef.value = [{ id: 't1', description: 'done', metadata: { voiceDispatch: true } }];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.count).toBe(0);
+  });
+
+  it('reports a single voice-dispatched running task with phase, app, and elapsed', async () => {
+    const startedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    cosStateRef.value = { agents: { 'a1': { id: 'a1', taskId: 't1', status: 'running', startedAt, metadata: { phase: 'working', taskAppName: 'BookLoom' } } } };
+    tasksRef.value = [{ id: 't1', description: 'fix the failing backup test\nmore detail', metadata: { voiceDispatch: true } }];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.ok).toBe(true);
+    expect(r.count).toBe(1);
+    expect(r.agents[0]).toMatchObject({ taskId: 't1', phase: 'working', app: 'BookLoom' });
+    expect(r.agents[0].description).toBe('fix the failing backup test');
+    expect(r.summary).toMatch(/working in BookLoom/);
+    expect(r.summary).toMatch(/5 minutes/);
+    expect(r.summary).toMatch(/fix the failing backup test/);
+  });
+
+  it('accepts the string "true" voiceDispatch flag (TASKS.md round-trip)', async () => {
+    cosStateRef.value = { agents: { 'a1': { id: 'a1', taskId: 't1', status: 'running', startedAt: new Date().toISOString() } } };
+    tasksRef.value = [{ id: 't1', description: 'x', metadata: { voiceDispatch: 'true' } }];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.count).toBe(1);
+  });
+
+  it('reports "spinning up" while phase=initializing', async () => {
+    cosStateRef.value = { agents: { 'a1': { id: 'a1', taskId: 't1', status: 'running', startedAt: new Date().toISOString(), metadata: { phase: 'initializing' } } } };
+    tasksRef.value = [{ id: 't1', description: 'add a flag', metadata: { voiceDispatch: true } }];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.summary).toMatch(/spinning up/);
+  });
+
+  it('summarizes multiple running voice-dispatched tasks', async () => {
+    const t = (sec) => new Date(Date.now() - sec * 1000).toISOString();
+    cosStateRef.value = { agents: {
+      a1: { id: 'a1', taskId: 't1', status: 'running', startedAt: t(120), metadata: { phase: 'working' } },
+      a2: { id: 'a2', taskId: 't2', status: 'running', startedAt: t(30), metadata: { phase: 'initializing', taskAppName: 'BookLoom' } },
+    } };
+    tasksRef.value = [
+      { id: 't1', description: 'fix the build', metadata: { voiceDispatch: true } },
+      { id: 't2', description: 'add a flag', metadata: { voiceDispatch: true } },
+    ];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.count).toBe(2);
+    expect(r.summary).toMatch(/^2 coding tasks/);
+    expect(r.summary).toMatch(/fix the build/);
+    expect(r.summary).toMatch(/add a flag/);
+  });
+
+  it('reports "less than a minute" for fresh starts', async () => {
+    cosStateRef.value = { agents: { a1: { id: 'a1', taskId: 't1', status: 'running', startedAt: new Date(Date.now() - 5_000).toISOString(), metadata: { phase: 'working' } } } };
+    tasksRef.value = [{ id: 't1', description: 'x', metadata: { voiceDispatch: true } }];
+    const r = await dispatchTool('code_agent_status', {});
+    expect(r.summary).toMatch(/less than a minute/);
+  });
 });
 
 describe('code intent classification', () => {
@@ -287,6 +453,13 @@ describe('code intent classification', () => {
     expect([...classifyIntent('have the agent fix the failing test')]).toContain('code');
     expect([...classifyIntent('refactor the widget registry')]).toContain('code');
     expect([...classifyIntent('write a unit test for the echo filter')]).toContain('code');
+  });
+
+  it('routes status-check phrasings to the code group (so code_agent_status reaches the LLM)', () => {
+    expect([...classifyIntent("how's that coding task going?")]).toContain('code');
+    expect([...classifyIntent('status of the agent')]).toContain('code');
+    expect([...classifyIntent('is the agent still running')]).toContain('code');
+    expect([...classifyIntent("what's happening with the PR")]).toContain('code');
   });
 
   it('does not route plain reminders/notes/ambiguous-verb phrases to the code group', () => {
@@ -1344,5 +1517,46 @@ describe('new tool intent routing', () => {
   it('routes visual-description utterances to the vision group', () => {
     expect(classifyIntent("what's on this chart?").has('vision')).toBe(true);
     expect(classifyIntent('describe the cybercity').has('vision')).toBe(true);
+  });
+  it('routes catalog lookups to the catalog group', () => {
+    expect(classifyIntent('find my character Mira').has('catalog')).toBe(true);
+    expect(classifyIntent('search my catalog for ideas').has('catalog')).toBe(true);
+    expect(classifyIntent('look up the scene in the woods').has('catalog')).toBe(true);
+    expect(classifyIntent('what time is it').has('catalog')).toBe(false);
+  });
+});
+
+describe('catalog_lookup', () => {
+  afterEach(() => {
+    catalogItemsRef.value = [];
+    catalogRefsRef.value = [];
+  });
+  it('requires a non-empty query', async () => {
+    await expect(dispatchTool('catalog_lookup', { query: '' })).rejects.toThrow(/query is required/);
+    await expect(dispatchTool('catalog_lookup', {})).rejects.toThrow(/query is required/);
+  });
+  it('returns shaped results with snippet + refsCount and ignores invalid type', async () => {
+    catalogItemsRef.value = [
+      { id: 'place-1', type: 'place', name: 'The Reach', payload: { description: 'A windswept plateau under perpetual storm clouds.' }, tags: [] },
+    ];
+    catalogRefsRef.value = [
+      { ingredientId: 'place-1', refKind: 'universe', refId: 'u-1', role: 'setting' },
+      { ingredientId: 'place-1', refKind: 'series', refId: 's-1', role: 'setting' },
+    ];
+    const res = await dispatchTool('catalog_lookup', { query: 'reach', type: 'bogus', limit: 5 });
+    expect(res.ok).toBe(true);
+    expect(res.count).toBe(1);
+    const hit = res.results[0];
+    expect(hit).toMatchObject({ id: 'place-1', type: 'place', name: 'The Reach', refsCount: 2 });
+    expect(hit.snippet).toMatch(/windswept plateau/);
+    expect(res.summary).toMatch(/Found 1 catalog match for "reach"/);
+  });
+  it('reports zero matches gracefully', async () => {
+    catalogItemsRef.value = [];
+    const res = await dispatchTool('catalog_lookup', { query: 'nope' });
+    expect(res.ok).toBe(true);
+    expect(res.count).toBe(0);
+    expect(res.results).toEqual([]);
+    expect(res.summary).toMatch(/No catalog ingredients matched "nope"/);
   });
 });

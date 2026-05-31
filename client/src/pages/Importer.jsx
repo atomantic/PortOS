@@ -43,6 +43,35 @@ const pickArcFields = (arc) => {
   return out;
 };
 
+// importerIssueEntry caps synopsis at 4000 chars (server schema) — clamp the
+// zipped season text so the structural remap can't 400 on commit.
+const IMPORT_ISSUE_SYNOPSIS_MAX = 4000;
+
+// Collapse the LLM's multi-season proposal into a SINGLE graphic-novel volume.
+// Every issue is pinned to volume 1; each season's logline/synopsis is folded
+// into the matching issue's synopsis (zipped by order) so the user's "the
+// volume descriptions read better as issue descriptions" intuition is the
+// default for a single book. Issues that already carry a synopsis keep it.
+export function collapseToSingleVolume({ seasonsPreview, issues, seriesName, arc }) {
+  const list = Array.isArray(issues) ? issues : [];
+  const seasons = [{
+    number: 1,
+    title: seriesName || seasonsPreview?.[0]?.title || 'Volume 1',
+    logline: arc?.logline || seasonsPreview?.[0]?.logline || '',
+    synopsis: arc?.summary || '',
+    episodeCountTarget: list.length,
+  }];
+  const mappedIssues = list.map((iss, i) => {
+    if (iss.synopsis && iss.synopsis.trim()) return { ...iss, seasonNumber: 1 };
+    const season = (seasonsPreview || [])[i];
+    const synopsis = season
+      ? [season.logline, season.synopsis].filter(Boolean).join('\n\n').slice(0, IMPORT_ISSUE_SYNOPSIS_MAX)
+      : (iss.synopsis || '');
+    return { ...iss, seasonNumber: 1, synopsis };
+  });
+  return { seasons, issues: mappedIssues };
+}
+
 const emptyIntake = () => ({
   universeName: '',
   seriesName: '',
@@ -140,6 +169,10 @@ export default function Importer() {
   const [arcDraft, setArcDraft] = useState(null);
   const [seasonsDraft, setSeasonsDraft] = useState([]);
   const [issuesDraft, setIssuesDraft] = useState([]);
+  // 'single' = one graphic-novel volume holding every issue as a chapter/act;
+  // 'multi' = keep the LLM's multi-season breakdown. Defaults to 'single' for
+  // comic scripts (a graphic novel is one book), 'multi' otherwise.
+  const [structureMode, setStructureMode] = useState('multi');
   // Server already persisted universe+series+arc but the issue-loop rolled
   // back. The next commit drops arc/seasons/canon so a retry can't overwrite
   // server-side edits made between attempts.
@@ -208,9 +241,26 @@ export default function Importer() {
     });
     // Strip non-arc keys (e.g. the LLM's top-level `seasons`) at seed time
     // — guards against the wire schema tightening to `.strict()`.
-    setArcDraft(pickArcFields(result.arcPreview));
-    setSeasonsDraft((result.seasonsPreview || []).map((s) => ({ ...s })));
-    setIssuesDraft((result.issueProposals || []).map((i) => ({ ...i })));
+    const seededArc = pickArcFields(result.arcPreview);
+    setArcDraft(seededArc);
+    const initialIssues = (result.issueProposals || []).map((i) => ({ ...i }));
+    // Comic scripts default to a single graphic-novel volume; everything else
+    // keeps the LLM's multi-season proposal. The user can flip this in Review.
+    if (intake.contentType === 'comic-script') {
+      setStructureMode('single');
+      const collapsed = collapseToSingleVolume({
+        seasonsPreview: result.seasonsPreview || [],
+        issues: initialIssues,
+        seriesName: result.series?.name || intake.seriesName,
+        arc: seededArc,
+      });
+      setSeasonsDraft(collapsed.seasons);
+      setIssuesDraft(collapsed.issues);
+    } else {
+      setStructureMode('multi');
+      setSeasonsDraft((result.seasonsPreview || []).map((s) => ({ ...s })));
+      setIssuesDraft(initialIssues);
+    }
     setIssueSplitFailed(Boolean(result.issueSplitFailed));
     setIssueSplitError(result.issueSplitError || null);
     setArcAlreadyPersisted(false);
@@ -224,6 +274,27 @@ export default function Importer() {
     setPhase('review');
     return result;
   }, { errorMessage: 'Failed to analyze import' });
+
+  // Flip between single-volume (graphic novel) and multi-volume structure. A
+  // structural reset re-derives seasons + issues from the original proposal, so
+  // it intentionally discards per-issue title/synopsis edits.
+  const handleStructureMode = (mode) => {
+    setStructureMode(mode);
+    const baseIssues = (preview?.issueProposals || []).map((i) => ({ ...i }));
+    if (mode === 'single') {
+      const collapsed = collapseToSingleVolume({
+        seasonsPreview: preview?.seasonsPreview || [],
+        issues: baseIssues,
+        seriesName: preview?.series?.name || intake.seriesName,
+        arc: arcDraft,
+      });
+      setSeasonsDraft(collapsed.seasons);
+      setIssuesDraft(collapsed.issues);
+    } else {
+      setSeasonsDraft((preview?.seasonsPreview || []).map((s) => ({ ...s })));
+      setIssuesDraft(baseIssues);
+    }
+  };
 
   const [runCommit, committing] = useAsyncAction(async () => {
     if (!preview) return null;
@@ -361,6 +432,8 @@ export default function Importer() {
           setIssuesDraft={setIssuesDraft}
           arcRoles={config.arcRoles}
           arcShapeIds={config.arcShapeIds}
+          structureMode={structureMode}
+          onStructureModeChange={handleStructureMode}
           replaceMode={replaceMode}
           setReplaceMode={setReplaceMode}
           committing={committing}
@@ -606,12 +679,54 @@ function ImporterProgress({ stages }) {
   );
 }
 
+// Lets the user pick how the import is structured: one graphic-novel volume
+// holding every issue as a chapter/act, vs the LLM's multi-volume breakdown.
+// Switching is a structural reset (re-derives seasons + issues), so the copy
+// warns that per-issue edits are discarded.
+function StructureChooser({ mode, onChange, issueCount, seasonCount }) {
+  const opt = (value, title, desc) => {
+    const active = mode === value;
+    return (
+      <label
+        className={`flex-1 cursor-pointer rounded-lg border p-3 transition-colors ${
+          active ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg hover:border-port-accent/40'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="import-structure"
+            checked={active}
+            onChange={() => onChange(value)}
+            className="accent-port-accent"
+          />
+          <span className="text-sm font-medium">{title}</span>
+        </div>
+        <p className="text-xs text-port-text-muted mt-1 ml-6">{desc}</p>
+      </label>
+    );
+  };
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-2">
+      <div className="text-xs uppercase tracking-wider text-port-text-muted">Structure</div>
+      <div className="flex flex-col md:flex-row gap-2">
+        {opt('single', 'Single volume (graphic novel)',
+          `One volume holding all ${issueCount} issue${issueCount === 1 ? '' : 's'} as chapters/acts. The extracted volume descriptions become the issue synopses.`)}
+        {opt('multi', 'Multi-volume series',
+          `Keep the ${seasonCount || 'extracted'} volume${seasonCount === 1 ? '' : 's'} the LLM proposed as separate books.`)}
+      </div>
+      <p className="text-[11px] text-port-text-muted italic">Switching re-derives the structure below and discards per-issue title/synopsis edits.</p>
+    </div>
+  );
+}
+
 function ReviewPanel({
   preview, contentType, canonSelections,
   selectedCanon, setSelectedCanon,
   arcDraft, setArcDraft, seasonsDraft, setSeasonsDraft,
   issuesDraft, setIssuesDraft,
   arcRoles, arcShapeIds,
+  structureMode, onStructureModeChange,
   replaceMode, setReplaceMode,
   committing, onCommit, onBack,
   issueSplitFailed, issueSplitError, onRetryIssues, retryingIssues,
@@ -688,6 +803,13 @@ function ReviewPanel({
         entries={canonSelections.objects}
         selectedIdxs={selectedCanon.objects}
         onToggle={(idx) => toggleSelected('objects', idx)}
+      />
+
+      <StructureChooser
+        mode={structureMode}
+        onChange={onStructureModeChange}
+        issueCount={issuesDraft.length}
+        seasonCount={(preview.seasonsPreview || []).length}
       />
 
       <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} arcShapeIds={arcShapeIds} />

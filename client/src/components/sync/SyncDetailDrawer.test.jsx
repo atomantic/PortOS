@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // ── Mock useSyncIntegrity ────────────────────────────────────────────────────
 const mockRefresh = vi.fn();
@@ -168,11 +168,13 @@ describe('SyncDetailDrawer', () => {
   it('shows an "integrity unavailable" message (not "No peer data") when every peer is unreachable', async () => {
     mockUseSyncIntegrity.mockReturnValue(defaultHookState({
       byPeer: new Map(), // no peer contributed records
+      unavailablePeers: [{ peerId: 'peer-a', peerName: 'void', reason: 'peer-unreachable' }],
       noSyncingPeers: false, // sync IS configured
       integrityUnavailable: true, // …but no peer answered
     }));
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
     expect(screen.getByText(/sync status unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/peer offline or unreachable/i)).toBeInTheDocument();
     expect(screen.queryByText(/no peer data for this record/i)).not.toBeInTheDocument();
   });
 
@@ -243,7 +245,9 @@ describe('SyncDetailDrawer', () => {
     try {
       mockGetMediaCollection.mockImplementation(() => new Promise(() => {})); // never settles
       render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
-      await vi.advanceTimersByTimeAsync(12001);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12001);
+      });
       expect(screen.getByText(/couldn.t load this collection/i)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -263,8 +267,10 @@ describe('SyncDetailDrawer', () => {
       // Now the stale col-A fetch settles — its cleanup must clear ONLY its own
       // timer, NOT col-B's. If it cleared the ref blindly, col-B's hard timeout
       // would be disabled and the drawer would hang on "Loading…" forever.
-      resolveA();
-      await vi.advanceTimersByTimeAsync(12001);
+      await act(async () => {
+        resolveA();
+        await vi.advanceTimersByTimeAsync(12001);
+      });
       expect(screen.getByText(/couldn.t load this collection/i)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -387,6 +393,7 @@ describe('SyncDetailDrawer — kind="universe"', () => {
         ]);
         return m;
       })(),
+      unavailablePeers: [],
       noSyncingPeers: false,
       loading: false,
       error: null,
@@ -406,6 +413,7 @@ describe('SyncDetailDrawer — kind="universe"', () => {
 
   it('shows per-peer breakdown', async () => {
     render(<SyncDetailDrawer kind="universe" recordId={UNIVERSE_ID} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Iron Veil')).toBeInTheDocument());
     expect(screen.getByText('void')).toBeInTheDocument();
     expect(screen.getByText('null')).toBeInTheDocument();
     expect(screen.getByText('Diverged')).toBeInTheDocument();
@@ -450,6 +458,7 @@ describe('SyncDetailDrawer — kind="series"', () => {
         ]);
         return m;
       })(),
+      unavailablePeers: [],
       noSyncingPeers: false,
       loading: false,
       error: null,

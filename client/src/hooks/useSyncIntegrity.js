@@ -26,6 +26,7 @@ const STATUS_RANK = [
   'diverged',
   'peer-only',
   'local-only',
+  'metadata-missing',
   'in-parity',
 ];
 
@@ -57,12 +58,15 @@ function worstStatus(a, b) {
  *   integrityUnavailable: boolean,
  *   statusById: Map<string, string>,
  *   byPeer: Map<string, Array<{peerId:string, peerName:string, status:string}>>,
+ *   unavailablePeers: Array<{peerId:string, peerName:string, reason:string}>,
  *   refresh: () => void,
  * }}
  *
  * `statusById`  — Map<recordId, worst status across all queried peers>
  * `byPeer`      — Map<recordId, [{peerId, peerName, status}, …]> for drawer breakdowns
  * `noSyncingPeers` — true when no online peer has the matching category enabled
+ * `unavailablePeers` — per-peer reasons for peers that could not report
+ *   integrity, e.g. peer-unreachable vs peer-too-old.
  * `integrityUnavailable` — true when eligible peers DO exist but none returned
  *   usable integrity data (all too-old / unreachable / fetch-failed). Distinct
  *   from `noSyncingPeers`; lets callers render a neutral "unknown" badge instead
@@ -83,9 +87,18 @@ function worstStatus(a, b) {
  * @param {string} recordId
  * @returns {string|undefined}
  */
+function unavailableBadgeStatus(unavailablePeers = []) {
+  const reasons = new Set(unavailablePeers.map((p) => p.reason).filter(Boolean));
+  if (reasons.size === 1 && reasons.has('peer-unreachable')) return 'peer-unreachable';
+  if (reasons.size === 1 && reasons.has('peer-too-old')) return 'peer-too-old';
+  if (reasons.size === 1 && reasons.has('fetch-failed')) return 'fetch-failed';
+  return 'unknown';
+}
+
 export function syncBadgeStatus(sync, recordId) {
   if (sync.noSyncingPeers) return 'not-syncing';
-  return sync.statusById.get(recordId) ?? (sync.integrityUnavailable ? 'unknown' : undefined);
+  return sync.statusById.get(recordId)
+    ?? (sync.integrityUnavailable ? unavailableBadgeStatus(sync.unavailablePeers) : undefined);
 }
 
 export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
@@ -95,6 +108,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
   const [integrityUnavailable, setIntegrityUnavailable] = useState(false);
   const [statusById, setStatusById] = useState(() => new Map());
   const [byPeer, setByPeer] = useState(() => new Map());
+  const [unavailablePeers, setUnavailablePeers] = useState([]);
 
   // Generation counter to discard stale async responses (e.g. if `kind`
   // changes while a fetch is in flight).
@@ -133,6 +147,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
         setIntegrityUnavailable(false);
         setStatusById(new Map());
         setByPeer(new Map());
+        setUnavailablePeers([]);
         setLoading(false);
         return;
       }
@@ -148,7 +163,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
             const data = await fetchSyncIntegrity(peer.instanceId, kind);
             return { peer, data };
           } catch {
-            return { peer, data: { available: false, records: [] } };
+            return { peer, data: { available: false, reason: 'fetch-failed', records: [] } };
           }
         }),
       );
@@ -158,10 +173,18 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
       // Reduce to per-record worst-case status + per-peer breakdown.
       const newStatusById = new Map();
       const newByPeer = new Map();
+      const newUnavailablePeers = [];
 
       let anyAvailable = false;
       for (const { peer, data } of results) {
-        if (!data?.available) continue;
+        if (!data?.available) {
+          newUnavailablePeers.push({
+            peerId: peer.instanceId,
+            peerName: peer.name ?? peer.instanceId,
+            reason: data?.reason ?? 'fetch-failed',
+          });
+          continue;
+        }
         anyAvailable = true;
         for (const rec of data.records ?? []) {
           const existing = newStatusById.get(rec.id);
@@ -180,6 +203,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
       setIntegrityUnavailable(!anyAvailable);
       setStatusById(newStatusById);
       setByPeer(newByPeer);
+      setUnavailablePeers(newUnavailablePeers);
     } catch (err) {
       if (gen !== genRef.current) return;
       setError(err);
@@ -192,5 +216,5 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
     run();
   }, [run]);
 
-  return { loading, error, noSyncingPeers, integrityUnavailable, statusById, byPeer, refresh: run };
+  return { loading, error, noSyncingPeers, integrityUnavailable, statusById, byPeer, unavailablePeers, refresh: run };
 }

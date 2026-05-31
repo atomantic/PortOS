@@ -99,7 +99,7 @@ USER FEEDBACK:
 ${feedback}`;
 }
 
-// CLI providers (codex/claude-code/gemini-cli) need provider-specific arg
+// CLI providers (codex/claude-code/antigravity-cli) need provider-specific arg
 // shapes that the toolkit runner already knows about — going through the
 // runner avoids the "stdin is not a terminal" failure mode that hits when
 // you spawn `codex` directly without the `exec -` invocation.

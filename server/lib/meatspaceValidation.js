@@ -150,6 +150,18 @@ export const bloodPressureSchema = z.object({
 });
 
 // =============================================================================
+// WORKOUTS
+// =============================================================================
+
+export const workoutSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  type: z.string().min(1).max(100),
+  durationMinutes: z.number().min(0).max(1440).nullable().optional(),
+  intensity: z.string().max(50).nullable().optional(),
+  notes: z.string().max(1000).nullable().optional()
+});
+
+// =============================================================================
 // EPIGENETIC TESTS
 // =============================================================================
 

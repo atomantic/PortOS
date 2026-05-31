@@ -2367,11 +2367,17 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     tasks = parseTasksMarkdown(content);
   }
 
-  // Reject duplicate: same first-line description already pending or in_progress.
+  // Reject duplicate: same first-line description AND same target app already
+  // pending or in_progress. The `metadata.app` scope matters — the same
+  // description against two different apps is two different pieces of work
+  // (e.g. "fix the failing test" in PortOS vs in BookLoom), and collapsing
+  // them silently drops the second dispatch.
   const normalizedDesc = firstLine(taskData.description).toLowerCase();
+  const targetApp = taskData.app || null;
   const duplicate = tasks.find(t =>
     (t.status === 'pending' || t.status === 'in_progress') &&
-    firstLine(t.description).toLowerCase() === normalizedDesc
+    firstLine(t.description).toLowerCase() === normalizedDesc &&
+    (t.metadata?.app || null) === targetApp
   );
   if (duplicate) {
     console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}`);

@@ -11,11 +11,13 @@
  *
  * Each CLI reads its prompt from stdin under a different convention:
  *   - Codex:       `codex exec -`        (+ `--model` when not the sentinel)
- *   - Gemini CLI:  prompt piped to stdin (+ `-m <model>`)
+ *   - Antigravity: `agy --print` with prompt piped to stdin
+ *   - Gemini CLI:  legacy prompt piped to stdin (+ `-m <model>`)
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
 import { resolveCliModel, hasModelFlag } from './providerModels.js';
+import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
 
 /**
  * Build CLI args based on provider type. Each CLI provider has different
@@ -51,6 +53,13 @@ export function buildCliArgs(provider) {
     }
     args.push('-'); // stdin marker
     return args;
+  }
+
+  // Antigravity CLI (`agy`) replaces the old Gemini CLI for Google's coding
+  // agent. Print mode is the headless one-shot interface; prompt text still
+  // travels over stdin so large PortOS prompts do not hit OS argv limits.
+  if (isAntigravityCliProvider(provider)) {
+    return ensureAntigravityPrintArgs(baseArgs);
   }
 
   // Gemini CLI: prompt is piped via stdin directly. `-m <model>` is gemini-

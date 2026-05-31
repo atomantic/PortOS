@@ -201,7 +201,7 @@ describe('buildCliArgs — claude-code defaultModel honoring', () => {
 });
 
 describe('buildCliArgs — gemini-cli defaultModel honoring', () => {
-  it('appends -m <id> for gemini-cli', () => {
+  it('appends -m <id> for legacy gemini-cli', () => {
     const provider = { id: 'gemini-cli', command: 'gemini', args: [], defaultModel: 'gemini-2.5-pro' };
     const args = buildCliArgs(provider);
     expect(args).toEqual(['-m', 'gemini-2.5-pro']);
@@ -234,6 +234,20 @@ describe('buildCliArgs — gemini-cli defaultModel honoring', () => {
     };
     const args = buildCliArgs(provider);
     expect(args).toEqual(['--model', 'gemini-2.0-flash']);
+  });
+});
+
+describe('buildCliArgs — antigravity-cli headless mode', () => {
+  it('uses agy print mode and does not pass model flags', () => {
+    const provider = { id: 'antigravity-cli', command: 'agy', args: [], defaultModel: 'antigravity-configured-default' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['--print', '--dangerously-skip-permissions']);
+  });
+
+  it('strips legacy Gemini flags during invocation', () => {
+    const provider = { id: 'antigravity-cli', command: 'agy', args: ['--yolo', '-m', 'gemini-2.5-pro', '--output-format', 'text'], defaultModel: 'antigravity-configured-default' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['--print', '--dangerously-skip-permissions']);
   });
 });
 

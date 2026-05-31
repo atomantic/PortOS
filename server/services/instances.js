@@ -167,7 +167,8 @@ const DEFAULT_SYNC_CATEGORIES = {
   universe: false,
   pipeline: false,
   mediaCollections: false,
-  videoHistory: false
+  videoHistory: false,
+  catalog: false
 };
 
 export { DEFAULT_SYNC_CATEGORIES };

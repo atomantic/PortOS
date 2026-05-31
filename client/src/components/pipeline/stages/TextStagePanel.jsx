@@ -5,17 +5,21 @@
  * generate button that calls the server's text-stage runner.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Sparkles, Save, History } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineStage, updatePipelineIssue,
   PIPELINE_STAGE_LABELS,
+  PIPELINE_TEXT_STAGES,
+  PIPELINE_DEFAULT_FORWARD_SOURCE as DEFAULT_FORWARD_SOURCE,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
 } from '../../../services/api';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import StageHistoryModal from './StageHistoryModal';
+
+const stageHasContent = (stage) => Boolean(stage?.input?.trim() || stage?.output?.trim());
 
 export default function TextStagePanel({
   issue,
@@ -38,6 +42,29 @@ export default function TextStagePanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const runHistory = stage.runHistory || [];
 
+  // Other text stages that currently have content — the candidate source
+  // material for this generation. Excludes the target stage itself. Lets you
+  // generate any stage FROM any other populated stage (backport), e.g. prose
+  // from a comic script. Ordered by the canonical stage order.
+  const availableSources = useMemo(
+    () => PIPELINE_TEXT_STAGES.filter(
+      (id) => id !== stageId && stageHasContent(issue.stages?.[id]),
+    ),
+    [issue.stages, stageId],
+  );
+
+  // Selected source stage ids. Defaults to the conventional forward source(s)
+  // that exist; recomputed whenever the candidate set changes (issue/stage swap).
+  const [selectedSources, setSelectedSources] = useState([]);
+  useEffect(() => {
+    const preferred = (DEFAULT_FORWARD_SOURCE[stageId] || []).filter((id) => availableSources.includes(id));
+    setSelectedSources(preferred);
+  }, [issue.id, stageId, availableSources]);
+
+  const toggleSource = (id) => setSelectedSources(
+    (prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]),
+  );
+
   // Reset local edits when the stage record changes from the parent (e.g.
   // auto-run pushed a new output).
   useEffect(() => {
@@ -51,6 +78,9 @@ export default function TextStagePanel({
       seedInput: draftInput,
       providerId: series?.llm?.provider || undefined,
       model: series?.llm?.model || undefined,
+      // Only send when there's a real choice to make — omitting it lets the
+      // server fall back to the conventional forward source (unchanged behavior).
+      ...(availableSources.length ? { sourceStageIds: selectedSources } : {}),
     }),
     { errorMessage: `Failed to generate ${stageId}` },
   );
@@ -130,6 +160,30 @@ export default function TextStagePanel({
           </button>
         </div>
       </div>
+
+      {availableSources.length > 0 ? (
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          <span className="uppercase tracking-wider text-gray-500">Generate from:</span>
+          {availableSources.map((id) => {
+            const active = selectedSources.includes(id);
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => toggleSource(id)}
+                aria-pressed={active}
+                className={`px-2 py-1 rounded-full border transition-colors ${
+                  active
+                    ? 'bg-port-accent/20 border-port-accent text-white'
+                    : 'bg-port-card border-port-border text-gray-400 hover:border-port-accent/50'
+                }`}
+              >
+                {PIPELINE_STAGE_LABELS[id]}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {stageId === 'idea' ? (
         <label className="block">

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle2, XCircle, Wand2, RefreshCw, Terminal, AlertTriangle, Box, Cpu } from 'lucide-react';
 import toast from '../ui/Toast';
+import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
+import { usePrevious } from '../../hooks/usePrevious.js';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
@@ -69,12 +71,12 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   // packages" to "all installed" — covers manual refresh, terminal installs,
   // and the SSE-complete path. Without this, parent state (e.g. VideoGen's
   // status pill) stays stale until the user manually clicks its own refresh.
-  const prevHadMissingRef = useRef(false);
+  const hadMissing = !!check && Array.isArray(check.missing) && check.missing.length > 0;
+  const allInstalled = !!check && Array.isArray(check.missing) && check.missing.length === 0;
+  const prevHadMissing = usePrevious(hadMissing, false);
   useEffect(() => {
-    const allInstalled = !!check && Array.isArray(check.missing) && check.missing.length === 0;
-    if (allInstalled && prevHadMissingRef.current) onPackagesChanged?.();
-    prevHadMissingRef.current = !!check && Array.isArray(check.missing) && check.missing.length > 0;
-  }, [check, onPackagesChanged]);
+    if (allInstalled && prevHadMissing) onPackagesChanged?.();
+  }, [allInstalled, prevHadMissing, onPackagesChanged]);
 
   const handleDetect = async () => {
     setDetecting(true);
@@ -199,24 +201,21 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
           ) : (
             <>
               {check.archMismatch && (
-                <div className="flex items-start gap-2 text-xs text-port-warning bg-port-warning/10 border border-port-warning/30 rounded p-2 mb-3">
-                  <Cpu size={14} className="shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <div>
-                      This Python reports <code>{check.interpreterArch}</code> but your Mac is <code>{check.hostArch}</code>.
-                      <code>mlx</code> ships arm64-only wheels — installing it here will fail.
-                    </div>
-                    {check.suggestedArm64Python && (
-                      <button
-                        type="button"
-                        onClick={() => onPythonPathChange(check.suggestedArm64Python)}
-                        className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs bg-port-accent hover:bg-port-accent/80 text-white rounded"
-                      >
-                        <Wand2 size={12} /> Switch to {check.suggestedArm64Python}
-                      </button>
-                    )}
+                <Banner icon={Cpu} className="mb-3">
+                  <div>
+                    This Python reports <code>{check.interpreterArch}</code> but your Mac is <code>{check.hostArch}</code>.
+                    <code>mlx</code> ships arm64-only wheels — installing it here will fail.
                   </div>
-                </div>
+                  {check.suggestedArm64Python && (
+                    <button
+                      type="button"
+                      onClick={() => onPythonPathChange(check.suggestedArm64Python)}
+                      className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs bg-port-accent hover:bg-port-accent/80 text-white rounded"
+                    >
+                      <Wand2 size={12} /> Switch to {check.suggestedArm64Python}
+                    </button>
+                  )}
+                </Banner>
               )}
               <ul className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
                 {check.required.map(pkg => {
@@ -233,13 +232,12 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
               </ul>
               {check.externallyManaged && check.missing.length > 0 ? (
                 <div className="space-y-2">
-                  <div className="flex items-start gap-2 text-xs text-port-warning bg-port-warning/10 border border-port-warning/30 rounded p-2">
-                    <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  <Banner icon={AlertTriangle}>
                     <div>
                       This Python is <strong>externally managed</strong> (PEP 668) — pip can't install into it.
                       Create a PortOS-owned venv to install packages safely without touching your system Python.
                     </div>
-                  </div>
+                  </Banner>
                   <button
                     type="button"
                     onClick={handleCreateVenv}

@@ -40,7 +40,7 @@ export function createAIToolkit(config = {}) {
     hooks = {},
     maxConcurrentRuns = 5,
     enableProviderStatus = true,
-    defaultFallbackPriority = ['claude-code', 'codex', 'nvidia-kimi', 'lmstudio', 'ollama', 'gemini-cli']
+    defaultFallbackPriority = ['claude-code', 'codex', 'nvidia-kimi', 'lmstudio', 'ollama', 'antigravity-cli', 'gemini-cli']
   } = config;
 
   const providerService = createProviderService({

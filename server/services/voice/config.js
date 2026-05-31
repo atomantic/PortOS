@@ -58,6 +58,7 @@ export const VOICE_DEFAULTS = Object.freeze({
   llm: {
     provider: 'lmstudio',
     model: 'auto',
+    visionModel: 'auto',
     // Legacy free-form system prompt. Overridden by `personality` + tool
     // descriptions when `usePersonality` is true (default).
     systemPrompt: 'You are the PortOS assistant. Your replies are spoken aloud — keep them short and use plain prose (no markdown or lists).',
@@ -77,7 +78,7 @@ export const VOICE_DEFAULTS = Object.freeze({
       maxIterations: 3,
     },
     // Code-agent delegation — lets the voice CoS hand a coding task to a
-    // CLI/TUI agent (Claude Code, Codex, Gemini) via the CoS task system.
+    // CLI/TUI agent (Claude Code, Codex, Antigravity) via the CoS task system.
     // The conversational brain (llm.provider above) stays the fast local
     // router; this is the heavyweight agent that does the actual edits in an
     // isolated worktree and opens a PR. OFF by default. Empty provider/model

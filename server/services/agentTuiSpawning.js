@@ -20,6 +20,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
+import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
@@ -138,7 +139,8 @@ export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onDat
   return { sessionId, ptyProcess, pid: ptyProcess?.pid || null };
 }
 
-function appendModelArgs(args, model) {
+function appendModelArgs(args, model, command) {
+  if (isAntigravityCommand(command)) return args;
   const effectiveModel = resolveCliModel(model);
   return effectiveModel ? [...args, '--model', effectiveModel] : args;
 }
@@ -146,7 +148,7 @@ function appendModelArgs(args, model) {
 export function buildTuiSpawnConfig(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
-  const args = appendModelArgs(baseArgs, model);
+  const args = appendModelArgs(baseArgs, model, command);
 
   return {
     command,

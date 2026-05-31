@@ -28,7 +28,7 @@ import { Link } from 'react-router-dom';
 import {
   Plus, Trash2, Loader2, Sparkles, ShieldCheck, ChevronRight, ChevronDown,
   ChevronsUpDown, AlertCircle, Wand2, Info, ListChecks, X, Lock, Unlock,
-  ImageIcon, Layers, FileDown, BookOpen, ChartSpline,
+  ImageIcon, Layers, FileDown, BookOpen, ChartSpline, FileSearch, BookText, FileText,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { timeAgo } from '../../utils/formatters';
@@ -41,6 +41,8 @@ import {
   generatePipelineArcOverview, generatePipelineSeasonEpisodes, verifyPipelineArc,
   verifyPipelineVolume,
   resolvePipelineArcIssues,
+  derivePipelineArcFromManuscript, commitPipelineArcFromManuscript,
+  analyzePipelineManuscriptCompleteness,
   listPipelineIssues, updatePipelineSeries, setPipelineArcFieldLock,
   startPipelineVolumeBeats, cancelPipelineVolumeBeats,
   generatePipelineVolumeCover, generatePipelineVolumeBackCover,
@@ -518,12 +520,29 @@ export function ArcRoadmapChart({ points }) {
 function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const arc = series.arc;
   const arcLocked = !!series.locked?.arc;
-  const [running, setRunning] = useState(null); // 'generate' | 'verify' | 'resolve' | null
+  const [running, setRunning] = useState(null); // 'generate' | 'verify' | 'resolve' | 'derive' | 'derive-commit' | 'completeness' | null
   const [verifyIssues, setVerifyIssues] = useState(null);
+  // Derive-from-manuscript preview (null until the LLM proposal lands) and the
+  // categorized "finish the draft" findings.
+  const [derivePreview, setDerivePreview] = useState(null);
+  const [completeness, setCompleteness] = useState(null);
   // Which finding indexes have an in-flight per-finding resolve. Lets the row
   // show its own spinner without blocking the rest of the page.
   const [resolvingIdx, setResolvingIdx] = useState(new Set());
   const [confirmingRegen, setConfirmingRegen] = useState(false);
+
+  // Switching series must not leak the prior series' advisory results. These
+  // are all ephemeral (never persisted) — reset on id change. `running` is
+  // intentionally excluded: it's bound to an in-flight call whose
+  // setRunning(null) must still fire on completion.
+  useEffect(() => {
+    setVerifyIssues(null);
+    setDerivePreview(null);
+    setCompleteness(null);
+    setConfirmingRegen(false);
+    setResolvingIdx(new Set());
+  }, [series.id]);
+
   const { busy: lockBusy, toggle: toggleArcLock } = useLockToggle({
     patchFn: (next) => updatePipelineSeries(series.id, {
       locked: { ...(series.locked || {}), arc: next },
@@ -631,6 +650,62 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     }
   };
 
+  // Back-derive arc + bible + a single-volume restructure from the issue
+  // manuscripts. Read-only — opens the preview the user reviews/edits before
+  // committing.
+  const runDerive = async () => {
+    setRunning('derive');
+    const result = await withFlush(() =>
+      derivePipelineArcFromManuscript(series.id, llmOverride).catch((err) => {
+        toast.error(err.message || 'Failed to derive from manuscript');
+        return null;
+      }),
+    );
+    setRunning(null);
+    if (!result) return;
+    setDerivePreview(result);
+  };
+
+  // Apply the (edited) derive preview. No LLM re-run — the confirmed proposal
+  // is sent verbatim. Refreshes series + issues so the volume collapse + issue
+  // reassignment + bible fill show immediately.
+  const runDeriveCommit = async (proposal) => {
+    setRunning('derive-commit');
+    const result = await commitPipelineArcFromManuscript(series.id, proposal).catch((err) => {
+      toast.error(err.message || 'Failed to apply');
+      return null;
+    });
+    setRunning(null);
+    if (!result) return;
+    if (result.series) onSeriesUpdate(result.series);
+    if (onIssuesUpdate) {
+      const refreshed = await listPipelineIssues(series.id).catch(() => null);
+      if (refreshed) onIssuesUpdate(refreshed);
+    }
+    setDerivePreview(null);
+    toast.success(`Arc, bible, and a single volume of ${result.issueCount} issue${result.issueCount === 1 ? '' : 's'} derived from the manuscript`);
+  };
+
+  // "Finish the draft" — manuscript-completeness editor pass. Advisory; no
+  // auto-resolve (the suggestions guide manual authoring).
+  const runCompleteness = async () => {
+    setRunning('completeness');
+    const result = await withFlush(() =>
+      analyzePipelineManuscriptCompleteness(series.id, llmOverride).catch((err) => {
+        toast.error(err.message || 'Failed to analyze manuscript');
+        return null;
+      }),
+    );
+    setRunning(null);
+    if (!result) return;
+    setCompleteness(result.issues || []);
+    if ((result.issues || []).length === 0) {
+      toast.success('Manuscript looks complete — no gaps found');
+    } else {
+      toast(`Found ${result.issues.length} suggestion${result.issues.length === 1 ? '' : 's'} to finish the draft`);
+    }
+  };
+
   // A picked `shape` alone counts as an "arc" record (it's an explicit
   // narrative-design decision the sanitizer preserves), but it isn't a
   // generated arc — the LLM hasn't written anything yet. Use the
@@ -702,6 +777,28 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
               <VerifyScopeTooltip scope={VERIFY_ARC_SCOPE} id="verify-arc-scope-tooltip" />
             </div>
           ) : null}
+          <button
+            type="button"
+            onClick={runDerive}
+            disabled={!!running || arcLocked}
+            title={arcLocked
+              ? 'Arc is locked — unlock to derive from the manuscript'
+              : 'Reconstruct the arc, bible, and a single-volume structure from the issue scripts you already wrote'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
+          >
+            {running === 'derive' ? <Loader2 size={14} className="animate-spin" /> : <BookText size={14} />}
+            Derive from manuscript
+          </button>
+          <button
+            type="button"
+            onClick={runCompleteness}
+            disabled={!!running}
+            title="Read the actual drafted script and suggest what's missing to finish the draft — gaps in content, arc, and character development"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
+          >
+            {running === 'completeness' ? <Loader2 size={14} className="animate-spin" /> : <FileSearch size={14} />}
+            Finish the draft
+          </button>
         </div>
       </div>
 
@@ -753,7 +850,230 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
           lockedNote={arcLocked ? 'Arc is locked — unlock above to enable auto-resolve.' : null}
         />
       ) : null}
+
+      {derivePreview ? (
+        <DeriveFromManuscriptPreview
+          preview={derivePreview}
+          committing={running === 'derive-commit'}
+          onCancel={() => setDerivePreview(null)}
+          onConfirm={runDeriveCommit}
+        />
+      ) : null}
+
+      {completeness ? (
+        <CompletenessResults
+          issues={completeness}
+          seriesId={series.id}
+          onDismiss={() => setCompleteness(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+// Field-count guard for derived synopsis textareas — mirrors the server caps so
+// the user isn't surprised by a 400 on commit.
+const DERIVE_SYNOPSIS_MAX = 8000;
+const DERIVE_TITLE_MAX = 300;
+
+// Review/edit panel for the derive-from-manuscript proposal. The arc + bible
+// fields and the single-volume title/synopsis are editable; each existing issue
+// gets an editable title + synopsis (pre-filled from the derived seasons). On
+// confirm the edited proposal is sent — the LLM is NOT re-run.
+function DeriveFromManuscriptPreview({ preview, committing, onCancel, onConfirm }) {
+  const [arc, setArc] = useState(() => ({
+    logline: preview.arc?.logline || '',
+    summary: preview.arc?.summary || '',
+    protagonistArc: preview.arc?.protagonistArc || '',
+    themes: Array.isArray(preview.arc?.themes) ? preview.arc.themes : [],
+    shape: preview.arc?.shape ?? null,
+  }));
+  const [bible, setBible] = useState(() => ({
+    logline: preview.bible?.logline || '',
+    premise: preview.bible?.premise || '',
+    issueCountTarget: preview.bible?.issueCountTarget ?? (preview.issues?.length || 0),
+  }));
+  const [volume, setVolume] = useState(() => ({
+    title: preview.volume?.title || '',
+    logline: preview.volume?.logline || '',
+    synopsis: preview.volume?.synopsis || '',
+  }));
+  // Per-issue editable rows. Default synopsis = the derived suggestion, falling
+  // back to whatever synopsis the issue already carried.
+  const [issues, setIssues] = useState(() =>
+    (preview.issues || []).map((iss) => ({
+      id: iss.id,
+      number: iss.number,
+      title: iss.title || '',
+      synopsis: iss.synopsisSuggestion || iss.currentSynopsis || '',
+      ideaLocked: !!iss.ideaLocked,
+    })),
+  );
+
+  const setIssueField = (id, field, value) =>
+    setIssues((prev) => prev.map((it) => (it.id === id ? { ...it, [field]: value } : it)));
+
+  const confirm = () => {
+    onConfirm({
+      arc,
+      bible,
+      volume,
+      issues: issues.map((it) => ({
+        id: it.id,
+        title: it.title.slice(0, DERIVE_TITLE_MAX),
+        synopsis: it.ideaLocked ? '' : it.synopsis.slice(0, DERIVE_SYNOPSIS_MAX),
+      })),
+    });
+  };
+
+  const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white focus:border-port-accent/50 outline-none';
+
+  return (
+    <div className="bg-port-bg border border-port-accent/30 rounded-lg p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium text-white flex items-center gap-1.5">
+          <BookText size={14} className="text-port-accent" />
+          Derived from manuscript — review before applying
+        </h3>
+        <button type="button" onClick={onCancel} disabled={committing} className="text-gray-500 hover:text-white disabled:opacity-40">
+          <X size={16} />
+        </button>
+      </div>
+      <p className="text-xs text-gray-400">
+        Applying collapses the series into <strong>one volume</strong> holding all {issues.length} issue{issues.length === 1 ? '' : 's'} as chapters/acts,
+        fills the bible, and seeds each issue&apos;s synopsis. Your verbatim issue scripts are <strong>not</strong> changed.
+      </p>
+
+      <div className="grid gap-3 @md:grid-cols-2">
+        <label className="block space-y-1">
+          <span className="text-[11px] uppercase tracking-wider text-gray-500">Series logline</span>
+          <input className={inputCls} value={bible.logline} maxLength={500}
+            onChange={(e) => { setBible((b) => ({ ...b, logline: e.target.value })); setArc((a) => ({ ...a, logline: e.target.value })); }} />
+        </label>
+        <label className="block space-y-1">
+          <span className="text-[11px] uppercase tracking-wider text-gray-500">Issue count target</span>
+          <input type="number" min={0} className={inputCls} value={bible.issueCountTarget}
+            onChange={(e) => setBible((b) => ({ ...b, issueCountTarget: parseInt(e.target.value, 10) || 0 }))} />
+        </label>
+      </div>
+      <label className="block space-y-1">
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">Premise</span>
+        <textarea className={`${inputCls} resize-y`} rows={3} value={bible.premise} maxLength={8000}
+          onChange={(e) => { setBible((b) => ({ ...b, premise: e.target.value })); setArc((a) => ({ ...a, summary: e.target.value })); }} />
+      </label>
+      <label className="block space-y-1">
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">Protagonist arc</span>
+        <textarea className={`${inputCls} resize-y`} rows={2} value={arc.protagonistArc} maxLength={8000}
+          onChange={(e) => setArc((a) => ({ ...a, protagonistArc: e.target.value }))} />
+      </label>
+
+      <div className="border-t border-port-border pt-2 space-y-2">
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">Volume</span>
+        <input className={inputCls} value={volume.title} maxLength={DERIVE_TITLE_MAX} placeholder="Volume title"
+          onChange={(e) => setVolume((v) => ({ ...v, title: e.target.value }))} />
+      </div>
+
+      <div className="border-t border-port-border pt-2 space-y-2">
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">Issues (acts / chapters)</span>
+        {issues.map((it) => (
+          <div key={it.id} className="bg-port-card border border-port-border rounded p-2 space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-gray-500 shrink-0">#{it.number}</span>
+              <input className={inputCls} value={it.title} maxLength={DERIVE_TITLE_MAX} placeholder="Issue title"
+                aria-label={`Title for issue ${it.number}`}
+                onChange={(e) => setIssueField(it.id, 'title', e.target.value)} />
+            </div>
+            <textarea
+              className={`${inputCls} resize-y`}
+              rows={2}
+              value={it.synopsis}
+              maxLength={DERIVE_SYNOPSIS_MAX}
+              aria-label={`Synopsis for issue ${it.number}`}
+              placeholder={it.ideaLocked ? 'Synopsis locked on this issue — left unchanged' : 'Issue synopsis (seeds idea.input so Verify Arc can read it)'}
+              disabled={it.ideaLocked}
+              onChange={(e) => setIssueField(it.id, 'synopsis', e.target.value)}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button type="button" onClick={confirm} disabled={committing}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-port-accent/20 text-port-accent border border-port-accent/40 hover:bg-port-accent/30 disabled:opacity-40">
+          {committing ? <Loader2 size={14} className="animate-spin" /> : <BookText size={14} />}
+          Apply — collapse to one volume
+        </button>
+        <button type="button" onClick={onCancel} disabled={committing} className="px-3 py-1.5 rounded text-sm text-gray-400 hover:text-white">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Human-readable labels for the manuscript-completeness categories.
+const COMPLETENESS_CATEGORY_LABELS = {
+  'missing-content': 'Missing content',
+  'arc-gap': 'Arc gaps',
+  'character-gap': 'Character development',
+  pacing: 'Pacing',
+  continuity: 'Continuity',
+  other: 'Other',
+};
+const COMPLETENESS_CATEGORY_ORDER = ['missing-content', 'arc-gap', 'character-gap', 'pacing', 'continuity', 'other'];
+
+// Advisory findings panel for "finish the draft" — grouped by category, no
+// resolve buttons (the suggestions guide manual authoring, not an LLM rewrite).
+function CompletenessResults({ issues, onDismiss, seriesId }) {
+  const grouped = useMemo(() => {
+    const byCat = new Map();
+    for (const iss of issues) {
+      const cat = COMPLETENESS_CATEGORY_LABELS[iss.category] ? iss.category : 'other';
+      if (!byCat.has(cat)) byCat.set(cat, []);
+      byCat.get(cat).push(iss);
+    }
+    return COMPLETENESS_CATEGORY_ORDER.filter((c) => byCat.has(c)).map((c) => [c, byCat.get(c)]);
+  }, [issues]);
+
+  return (
+    <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-medium text-white flex items-center gap-1.5">
+          <FileSearch size={14} className="text-port-accent" />
+          Finish the draft — {issues.length} suggestion{issues.length === 1 ? '' : 's'}
+        </h3>
+        <div className="flex items-center gap-3">
+          {issues.length > 0 && seriesId ? (
+            <Link
+              to={`/pipeline/series/${seriesId}/manuscript`}
+              className="text-xs text-port-accent hover:underline inline-flex items-center gap-1"
+              title="Open the manuscript editor to act on these comments inline"
+            >
+              <FileText size={12} /> Open editor
+            </Link>
+          ) : null}
+          <button type="button" onClick={onDismiss} className="text-gray-500 hover:text-white"><X size={16} /></button>
+        </div>
+      </div>
+      {issues.length === 0 ? (
+        <p className="text-xs text-gray-400">The manuscript reads as complete — no gaps found.</p>
+      ) : (
+        grouped.map(([cat, list]) => (
+          <div key={cat} className="space-y-1">
+            <span className="text-[11px] uppercase tracking-wider text-gray-500">{COMPLETENESS_CATEGORY_LABELS[cat]} ({list.length})</span>
+            <ul className="space-y-1">
+              {list.map((iss, i) => (
+                <li key={i} className={`text-xs p-2 rounded border ${SEVERITY_COLORS[iss.severity] || SEVERITY_COLORS.medium}`}>
+                  {iss.location ? <span className="font-medium">{iss.location}: </span> : null}
+                  <span>{iss.problem}</span>
+                  {iss.suggestion ? <p className="mt-1 text-gray-300"><span className="opacity-70">Suggestion: </span>{iss.suggestion}</p> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
+      )}
+    </div>
   );
 }
 

@@ -47,7 +47,8 @@ Thumbs.db
 # Playwright
 .playwright-mcp
 
-# Claude worktrees
+# Claude worktrees + session workflow scripts
+.claude/workflows/
 .claude/worktrees/
 .worktrees/
 .claude/settings.local.json

@@ -13,6 +13,7 @@ export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
 export * from './bibleLimits.js';
+export * from './catalogTypes.js';
 export * from './editorialRoadmap.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';
@@ -29,6 +30,7 @@ export * from './wrImageDefaults.js';
 export * from './graphSimulation.js';
 
 // === Generic UI / collection utilities ===
+export * from './audioRecorder.js';
 export * from './clientErrorReporter.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';

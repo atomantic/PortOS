@@ -11,7 +11,7 @@ import {
   listWritersRoomAnalyses,
   getWritersRoomAnalysis,
 } from '../../services/apiWritersRoom';
-import { getSettings, updateSettings, listImageStylePresets } from '../../services/apiSystem';
+import { getSettings, patchSettingsSlice, listImageStylePresets } from '../../services/apiSystem';
 import { listImageModels } from '../../services/apiImageVideo';
 import BackendChipStrip from '../media/BackendChipStrip';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
@@ -244,11 +244,8 @@ export default function StoryboardPanel({
 
   const persistCfg = useCallback(async (next) => {
     setImageCfg(next);
-    const current = await getSettings().catch(() => ({}));
-    await updateSettings({
-      ...current,
-      writersRoom: { ...(current.writersRoom || {}), imageGen: next },
-    }).catch((err) => toast.error(`Settings save failed: ${err.message}`));
+    await patchSettingsSlice('writersRoom', { imageGen: next }, { silent: true })
+      .catch((err) => toast.error(`Settings save failed: ${err.message}`));
   }, []);
 
   const charByKey = useMemo(() => buildCharByKey(characters), [characters]);

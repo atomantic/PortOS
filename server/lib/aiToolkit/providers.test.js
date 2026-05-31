@@ -414,5 +414,45 @@ describe('Provider Service', () => {
       expect(codex.models).toEqual([CODEX_SENTINEL]);
       expect(codex.defaultModel).toBe(CODEX_SENTINEL);
     });
+
+    it('migrates legacy Gemini providers to Antigravity agy providers', async () => {
+      await writeProvidersFile({
+        activeProvider: 'gemini-cli',
+        providers: {
+          'gemini-cli': {
+            id: 'gemini-cli',
+            name: 'Gemini CLI',
+            type: 'cli',
+            command: 'gemini',
+            args: ['--yolo', '-m', 'gemini-2.5-pro', '--output-format', 'text'],
+            envVars: { GEMINI_SANDBOX: 'false', KEEP_ME: '1' },
+            models: ['gemini-2.5-pro'],
+            defaultModel: 'gemini-2.5-pro'
+          },
+          'gemini-tui': {
+            id: 'gemini-tui',
+            name: 'Gemini TUI',
+            type: 'tui',
+            command: 'gemini',
+            args: ['--yolo'],
+            envVars: { GEMINI_SANDBOX: 'false' },
+          }
+        }
+      });
+
+      const antigravity = await providerService.getProviderById('antigravity-cli');
+      const antigravityTui = await providerService.getProviderById('antigravity-tui');
+      const legacy = await providerService.getProviderById('gemini-cli');
+      const active = await providerService.getActiveProvider();
+
+      expect(active.id).toBe('antigravity-cli');
+      expect(legacy).toBeNull();
+      expect(antigravity.command).toBe('agy');
+      expect(antigravity.args).toEqual(['--print', '--dangerously-skip-permissions']);
+      expect(antigravity.defaultModel).toBe('antigravity-configured-default');
+      expect(antigravity.envVars).toEqual({ KEEP_ME: '1' });
+      expect(antigravityTui.command).toBe('agy');
+      expect(antigravityTui.args).toEqual(['--dangerously-skip-permissions']);
+    });
   });
 });

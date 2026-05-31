@@ -148,7 +148,7 @@ ${hints.map(h => `- ${h}`).join('\n')}
 
 /**
  * Provider types that get the **light** prompt: agentic CLIs with native
- * filesystem tools and CLAUDE.md loading (Claude Code, Codex, Gemini —
+ * filesystem tools and CLAUDE.md loading (Claude Code, Codex, Antigravity —
  * whether running interactively as `tui` or one-shot as `cli`). Everything
  * else (`api`: LM Studio, raw OpenAI/Anthropic) needs the full pasted-in
  * context because it has no native filesystem access.
@@ -156,7 +156,7 @@ ${hints.map(h => `- ${h}`).join('\n')}
 const LIGHT_CONTEXT_PROVIDER_TYPES = new Set([PROVIDER_TYPES.TUI, PROVIDER_TYPES.CLI]);
 
 // Inline reuse/quality/efficiency self-review wording for agents that can't run
-// the Claude Code `/simplify` built-in (API providers + codex/gemini CLIs).
+// the Claude Code `/simplify` built-in (API providers + codex/antigravity CLIs).
 // Shared by both prompt paths so the two phrasings can't drift apart.
 const SIMPLIFY_INLINE_REVIEW = 'review your changed code for reuse, quality, and efficiency (DRY, dead code, naming, simpler equivalents, missed edge cases)';
 
@@ -250,7 +250,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / gemini / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).` : null,
+    hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
   ].filter(Boolean).join(' ');
   const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.`;
@@ -681,7 +681,7 @@ Begin working on the task now.`;
 
 /**
  * Build the **light-context** prompt for agents that have native filesystem
- * tools and CLAUDE.md loading (Claude Code, Codex, Gemini — `tui` or `cli`).
+ * tools and CLAUDE.md loading (Claude Code, Codex, Antigravity — `tui` or `cli`).
  *
  * The agent already has direct access to the project, so we don't paste in:
  *   memory dumps, CLAUDE.md contents, digital twin, tools summary,
@@ -708,7 +708,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   const lightReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
   // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
   // (the slashdo submodule mounts those as project-level slash commands).
-  // Other CLI providers (codex, gemini) can't — they get the legacy
+  // Other CLI providers (codex, antigravity) can't — they get the legacy
   // commit-only block where PortOS handles push+PR on exit.
   const hasSlashdo = !isTui && (providerId === 'claude-code' || providerId === 'claude-code-bedrock');
 
@@ -859,7 +859,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
         : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
     : '';
   // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
-  // (codex-tui, gemini-tui) can't run it, so give them the inline equivalent.
+  // (codex-tui, antigravity-tui) can't run it, so give them the inline equivalent.
   // Default (no providerId) stays Claude-shaped for backward compatibility.
   const canRunSimplifyCommand = !providerId || /claude/i.test(providerId);
   const simplifyStep = simplifyEnabled
@@ -898,7 +898,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
  * Claude Code CLI agents have slashdo commands available (the submodule
  * mounts them as project-level slash commands), so when `hasSlashdo` is
  * true and a PR is expected, the agent owns the full `/simplify` → `/do:pr`
- * sequence and PortOS skips its post-exit push+PR. Codex/Gemini and other
+ * sequence and PortOS skips its post-exit push+PR. Codex/Antigravity and other
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
@@ -937,7 +937,7 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = fals
   } else {
     body = 'Commit and push your changes (`git pull --rebase && git push`, conventional commit prefix, no `git add -A`).';
   }
-  // Non-slashdo CLIs (codex/gemini) have no `/simplify` command; when the task
+  // Non-slashdo CLIs (codex/antigravity) have no `/simplify` command; when the task
   // enabled simplify, inline the equivalent self-review so the quality pass still
   // runs before they commit.
   const simplifyLine = simplifyEnabled

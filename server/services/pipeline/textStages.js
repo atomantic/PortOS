@@ -16,7 +16,7 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries } from './series.js';
-import { extractCanonFromProse } from '../universeCanon.js';
+import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -30,6 +30,30 @@ const STAGE_TO_TEMPLATE = Object.freeze({
   comicScript: 'pipeline-comic-script',
   teleplay: 'pipeline-teleplay',
 });
+
+// Human labels for the {{#sourceMaterials}} block so the LLM sees "Comic Script"
+// rather than "comicScript". Mirrors the client's PIPELINE_STAGE_LABELS.
+const STAGE_LABELS = Object.freeze({
+  idea: 'Idea / Beat Sheet',
+  prose: 'Prose Draft',
+  comicScript: 'Comic Script',
+  teleplay: 'Teleplay',
+});
+
+// The stage that conventionally feeds each target when no explicit source is
+// chosen — mirrors the strict forward chain. Idea has no upstream text stage
+// (it derives from the seed); comic/teleplay both adapt prose. Used to compute
+// the default source set so autoRunner and the legacy UI path are unchanged.
+const DEFAULT_FORWARD_SOURCE = Object.freeze({
+  prose: ['idea'],
+  comicScript: ['prose'],
+  teleplay: ['prose'],
+});
+
+// User-edited input takes precedence over raw LLM output — matches how editors
+// actually work the artifact. Exported so backfill paths (storyBuilder) read a
+// stage's content through the same precedence rule.
+export const stageContentOf = (stage) => (stage?.input?.trim() || stage?.output?.trim() || '');
 
 // Set exactly one of `beats` / `synopsis` per neighbor so the prompt's
 // beat-level guidance doesn't leak into synopsis-only entries (the template
@@ -132,11 +156,36 @@ async function buildIdeaContextAugment(series, issue) {
 }
 
 /**
+ * Resolve the ordered list of stage ids whose content should feed this
+ * generation as source material.
+ *
+ * - When `sourceStageIds` is provided (non-empty), use exactly those — this is
+ *   the backport path (e.g. generate prose FROM comicScript). Each id must be a
+ *   valid text stage, must not be the target stage itself, and must have
+ *   content; anything failing those checks is dropped.
+ * - When omitted/empty, fall back to the conventional forward source(s) that
+ *   have content — so the auto-runner and the legacy UI behave exactly as before.
+ *
+ * Returned in TEXT_STAGE_IDS order for stable prompt rendering.
+ */
+function resolveSourceStageIds({ issue, stageId, sourceStageIds }) {
+  const requested = new Set(Array.isArray(sourceStageIds)
+    ? sourceStageIds
+    : DEFAULT_FORWARD_SOURCE[stageId] || []);
+  return TEXT_STAGE_IDS.filter((id) =>
+    requested.has(id)
+    && id !== stageId
+    && stageContentOf(issue.stages?.[id]));
+}
+
+/**
  * Build the variable bag fed into the stage template. Includes the series
- * bible (`series.*`) and every *prior* text stage's content (`stages.*`).
+ * bible (`series.*`) and every *prior* text stage's content (`stages.*`), plus
+ * a source-agnostic `sourceMaterials` array (the stages explicitly chosen as
+ * source, defaulting to the conventional forward source).
  * Visual stages aren't included — text templates don't need rendered images.
  */
-function buildStageContext({ series, canon, world, issue, stageId, seedInput }) {
+function buildStageContext({ series, canon, world, issue, stageId, seedInput, sourceStageIds }) {
   const stages = {};
   for (const id of TEXT_STAGE_IDS) {
     if (id === stageId) break; // only include stages BEFORE the current one
@@ -145,9 +194,15 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput }) 
       status: cur.status || 'empty',
       // Prefer the user-edited input over the raw LLM output when present —
       // matches how editors actually work the artifact.
-      content: (cur.input?.trim() || cur.output?.trim() || ''),
+      content: stageContentOf(cur),
     };
   }
+  // Source-agnostic block: whichever stages were chosen (or the conventional
+  // default) rendered as labeled blocks. This is what lets a target stage adapt
+  // from ANY other populated stage — generate prose from a comic script, or
+  // backfill the beat sheet from finished prose.
+  const sourceMaterials = resolveSourceStageIds({ issue, stageId, sourceStageIds })
+    .map((id) => ({ stageId: id, label: STAGE_LABELS[id] || id, content: stageContentOf(issue.stages?.[id]) }));
   // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
   // per-issue text prompts reference named entities without paying the full
   // canon-block token cost — `series.characters` already covers the bible-
@@ -174,6 +229,10 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput }) 
     // (defaults to 'standard') so templates can use the fields unconditionally.
     lengthTargets: computeIssueTargets(issue),
     stages,
+    sourceMaterials,
+    // Scalar guard for templates that want a one-time header before the
+    // {{#sourceMaterials}} loop — the engine can't nest same-name sections.
+    hasSourceMaterials: sourceMaterials.length > 0,
     seed: (seedInput || issue.stages?.[stageId]?.input || '').trim(),
   };
 }
@@ -213,7 +272,11 @@ export async function generateStage(issueId, stageId, options = {}) {
 
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 
-  const ctx = buildStageContext({ series, canon, world, issue, stageId, seedInput: options.seedInput });
+  const ctx = buildStageContext({
+    series, canon, world, issue, stageId,
+    seedInput: options.seedInput,
+    sourceStageIds: options.sourceStageIds,
+  });
   if (stageId === 'idea') {
     Object.assign(ctx, await buildIdeaContextAugment(series, issue));
   }
@@ -237,7 +300,7 @@ export async function generateStage(issueId, stageId, options = {}) {
   }
 
   const output = (result.content || '').trim();
-  const { issue: updatedIssue, stage } = await updateStage(issueId, stageId, {
+  let { issue: updatedIssue, stage } = await updateStage(issueId, stageId, {
     status: output ? 'ready' : 'error',
     output,
     lastRunId: result.runId,
@@ -259,19 +322,47 @@ export async function generateStage(issueId, stageId, options = {}) {
     // sourceSeriesId attributes them to the triggering series. Matches the
     // pre-B.4 `extractAndMergeIntoSeries` semantics so existing-data behavior
     // is preserved.
-    await extractCanonFromProse(series.universeId, {
+    // Persist the extraction outcome on the prose stage (success, partial, or
+    // failed) so the Nouns UI can surface a banner and let the user retry with
+    // a different provider/model. Still non-fatal — a noisy extract shouldn't
+    // roll back the user's accepted prose draft. The stamp is best-effort: if
+    // even the stamp write fails we only warn (no throw out of the prose path).
+    //
+    // Record only the override actually forwarded to the extractor (not a
+    // series.llm fallback) — the extract call below passes bare
+    // `options.providerId`/`options.model`, so when those are undefined the
+    // extractor resolves to the global active provider. Claiming
+    // `series.llm.provider` here would make the banner misreport which provider
+    // failed. Empty string = "used the default/active provider".
+    const provider = options.providerId || '';
+    const model = options.model || '';
+    const marker = await extractCanonFromProse(series.universeId, {
       corpus: output,
       providerOverride: options.providerId,
+      modelOverride: options.model,
       parallel: true,
       autoLock: true,
       sourceSeriesId: series.id,
-    }).catch((err) => {
-      console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
+    }).then(
+      ({ results, failures }) => summarizeCanonExtraction({ results, failures, provider, model }),
+      (err) => {
+        console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
+        return summarizeCanonExtraction({ error: err, provider, model });
+      },
+    );
+    // Use the stamped issue/stage as the return value so callers (and the
+    // socket update) carry the fresh canonExtraction marker, not the pre-stamp
+    // snapshot. Best-effort: on a stamp-write failure we keep the pre-stamp
+    // values.
+    const stamped = await updateStage(issueId, 'prose', { canonExtraction: marker }).catch((err) => {
+      console.warn(`⚠️ Failed to record canon-extraction status for issue ${issueId.slice(0, 8)}: ${err.message}`);
+      return null;
     });
+    if (stamped) ({ issue: updatedIssue, stage } = stamped);
   }
 
   return { issue: updatedIssue, stage, runId: result.runId };
 }
 
 // Export internals for tests.
-export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, STAGE_TO_TEMPLATE };
+export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };

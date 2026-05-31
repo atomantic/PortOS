@@ -104,13 +104,16 @@ run git submodule update --init --recursive
 step "submodules" "done" "Submodules updated"
 log ""
 
-# Kill PM2 daemon entirely — pm2 stop/restart only signal app processes but
-# leave the daemon alive. If the daemon was originally launched from a different
-# project (e.g. a Yarn PnP zip cache), it caches a stale ProcessContainerFork.js
-# path and all subsequent fork() calls crash with MODULE_NOT_FOUND. Killing the
-# daemon forces a fresh launch from our local node_modules on restart.
+# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
+# tears down the daemon and stops EVERY other project's apps on this machine.
+# `pm2 update` then reloads the daemon in place from our local node_modules,
+# refreshing its cached ProcessContainerFork.js path (a stale path from a daemon
+# originally launched by another project — e.g. a Yarn PnP zip cache — makes all
+# subsequent fork() calls crash with MODULE_NOT_FOUND) while resurrecting other
+# projects' apps instead of killing them.
 step "pm2-stop" "running" "Stopping PortOS apps..."
-run node ./node_modules/pm2/bin/pm2 kill || true
+run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
+run node ./node_modules/pm2/bin/pm2 update || true
 step "pm2-stop" "done" "Apps stopped"
 log ""
 
@@ -189,8 +192,8 @@ TAG="$TAG" ROOT_DIR="$ROOT_DIR" node -e '
   fs.writeFileSync(path.join(process.env.ROOT_DIR, "data", "update-complete.json.tmp"), marker);
 ' && mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
 
-# Start PM2 apps — `pm2 kill` above tore down the daemon, so use `start` not
-# `restart` (restart against a config doesn't reliably start processes that
+# Start PM2 apps — use `start` not `restart` (restart against a config doesn't
+# reliably start processes that
 # aren't currently managed, leaving the app stopped after an update that ran
 # while PortOS wasn't running). `delete --silent` first so a partial prior
 # state doesn't make `start` a no-op, then `save` so the apps come back on

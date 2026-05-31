@@ -23,6 +23,7 @@ import {Palette,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import Banner from '../../ui/Banner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import { isApiProvider } from '../../../utils/providers';
 
@@ -89,7 +90,7 @@ export default function TasteTab({ onRefresh }) {
   const loadProviders = useCallback(async () => {
     const data = await api.getProviders().catch(() => ({ providers: [] }));
     // Taste summaries / personalized questions need a chat-completions endpoint —
-    // CLI providers (Claude Code, Codex, Gemini CLI) can't run them. Filter the
+    // CLI providers (Claude Code, Codex, Antigravity CLI) can't run them. Filter the
     // picker so the user can't accidentally select an incompatible default.
     const apiProviders = (data.providers || []).filter(p => p.enabled && isApiProvider(p));
     setProviders(apiProviders);
@@ -410,13 +411,13 @@ export default function TasteTab({ onRefresh }) {
             </div>
           )}
           {!selectedProvider && (
-            <div className="p-4 bg-port-warning/10 border border-port-warning/30 rounded-lg mb-4 text-sm text-port-warning">
+            <Banner tone="warning" size="lg" className="mb-4">
               No API-based provider configured — Go Deeper and Generate Summary need one.{' '}
               <a href="/ai" className="underline hover:text-yellow-300">
                 Open AI Providers
               </a>{' '}
               and add LM Studio, OpenAI, or Anthropic to enable these.
-            </div>
+            </Banner>
           )}
           <div className="flex flex-col sm:flex-row gap-3">
             <button

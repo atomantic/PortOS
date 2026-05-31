@@ -12,6 +12,7 @@ export const INTEGRITY_STATUS = Object.freeze({
   PEER_ONLY: 'peer-only',
   DIVERGED: 'diverged',
   ASSETS_MISSING: 'assets-missing',
+  METADATA_MISSING: 'metadata-missing',
 });
 
 const sortedHashes = (a) => [...(Array.isArray(a) ? a : [])].sort();
@@ -25,7 +26,8 @@ const hashesEqual = (a, b) => {
 /**
  * Pure diff of two manifest lists.
  *
- * Each entry shape: `{ id, name?, updatedAt, deleted?, assetHashes }`.
+ * Each entry shape:
+ * `{ id, name?, updatedAt, deleted?, assetHashes, metadataMissing? }`.
  *
  * Tombstone handling: when BOTH sides are tombstoned (deleted === true) the
  * pair is omitted from the output entirely — both agree the record is gone, so
@@ -69,6 +71,8 @@ export function computeRecordIntegrity(localList, remoteList) {
       status = INTEGRITY_STATUS.DIVERGED;
     } else if (!hashesEqual(local.assetHashes, remote.assetHashes)) {
       status = INTEGRITY_STATUS.ASSETS_MISSING;
+    } else if (local.metadataMissing === true || remote.metadataMissing === true) {
+      status = INTEGRITY_STATUS.METADATA_MISSING;
     } else {
       status = INTEGRITY_STATUS.IN_PARITY;
     }

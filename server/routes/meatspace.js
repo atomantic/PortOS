@@ -18,6 +18,7 @@ import {
   bloodTestSchema,
   bodyEntrySchema,
   bloodPressureSchema,
+  workoutSchema,
   epigeneticTestSchema,
   eyeExamSchema,
   eyeExamUpdateSchema,
@@ -450,6 +451,25 @@ router.post('/blood-pressure', asyncHandler(async (req, res) => {
   const data = validateRequest(bloodPressureSchema, req.body);
   const reading = await healthService.addBloodPressureReading(data);
   res.status(201).json(reading);
+}));
+
+/**
+ * GET /api/meatspace/workouts
+ * Workout entries logged via voice, palette, or API
+ */
+router.get('/workouts', asyncHandler(async (req, res) => {
+  const workouts = await healthService.getWorkouts();
+  res.json({ workouts });
+}));
+
+/**
+ * POST /api/meatspace/workouts
+ * Log a workout
+ */
+router.post('/workouts', asyncHandler(async (req, res) => {
+  const data = validateRequest(workoutSchema, req.body);
+  const workout = await healthService.addWorkout(data);
+  res.status(201).json(workout);
 }));
 
 /**

@@ -60,7 +60,7 @@ export const AGENT_OPTIONS = [
 ];
 
 // Reviewer choices for the Review Loop. `copilot` requests a GitHub Copilot
-// review via the native reviewer API; CLI reviewers (claude/gemini/codex)
+// review via the native reviewer API; CLI reviewers (claude/antigravity/codex)
 // instruct the follow-up agent to invoke the named CLI; local-LLM reviewers
 // (lmstudio/ollama) route the diff through PortOS's `POST /api/code-review/local`
 // endpoint, which runs the model configured on the AI Providers → Code Review
@@ -69,7 +69,7 @@ export const AGENT_OPTIONS = [
 export const REVIEWER_OPTIONS = [
   { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
   { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff' },
-  { value: 'gemini', label: 'Gemini', description: 'Gemini CLI reviews the PR diff' },
+  { value: 'antigravity', label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
   { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff' },
   { value: 'lmstudio', label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
   { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
@@ -91,6 +91,7 @@ export const DEFAULT_REVIEW_STOP_MODE = 'all';
 // server's normalizeReviewers): prefers `reviewers`, falls back to legacy
 // single `reviewer`, defaults to `['copilot']`.
 const REVIEWER_VALUES = REVIEWER_OPTIONS.map(o => o.value);
+const REVIEWER_ALIASES = { gemini: 'antigravity' };
 export function normalizeReviewers(meta) {
   const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
   const source = Array.isArray(raw.reviewers)
@@ -99,7 +100,8 @@ export function normalizeReviewers(meta) {
   const seen = new Set();
   const out = [];
   for (const r of source) {
-    if (REVIEWER_VALUES.includes(r) && !seen.has(r)) { seen.add(r); out.push(r); }
+    const normalized = REVIEWER_ALIASES[r] || r;
+    if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
   }
   return out.length ? out : [...DEFAULT_REVIEWERS];
 }
@@ -272,7 +274,8 @@ const DYNAMIC_AVATAR_RULES = {
   provider: {
     codex: 'esoteric',        // OpenAI Codex → mystical/ancient aesthetic
     'lm-studio': 'sigil',    // Local LM Studio → arcane/occult aesthetic
-    'gemini-cli': 'sigil',   // Gemini → arcane aesthetic
+    'antigravity-cli': 'sigil', // Antigravity → arcane aesthetic
+    'gemini-cli': 'sigil',      // Legacy Gemini configs → arcane aesthetic
   },
   // Improvement task analysis types → cyberpunk (system working on itself)
   analysisType: {

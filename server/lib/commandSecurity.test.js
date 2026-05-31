@@ -4,7 +4,8 @@ import {
   ALLOWED_COMMANDS_SORTED,
   DANGEROUS_SHELL_CHARS,
   validateCommand,
-  redactOutput
+  redactOutput,
+  parseCommandArgs
 } from './commandSecurity.js'
 
 describe('commandSecurity', () => {
@@ -196,6 +197,26 @@ describe('commandSecurity', () => {
       expect(result).toContain('"API_KEY": "[REDACTED]"')
       expect(result).toContain('"SECRET_TOKEN": "[REDACTED]"')
       expect(result).toContain('"name": "app"')
+    })
+  })
+
+  describe('parseCommandArgs', () => {
+    it('splits on whitespace when there are no quotes', () => {
+      expect(parseCommandArgs('npm run dev')).toEqual(['npm', 'run', 'dev'])
+    })
+
+    it('keeps double-quoted segments intact', () => {
+      expect(parseCommandArgs('node --opt "arg with spaces"'))
+        .toEqual(['node', '--opt', 'arg with spaces'])
+    })
+
+    it('keeps single-quoted segments intact', () => {
+      expect(parseCommandArgs("git commit -m 'msg with spaces'"))
+        .toEqual(['git', 'commit', '-m', 'msg with spaces'])
+    })
+
+    it('preserves an empty quoted argument', () => {
+      expect(parseCommandArgs('echo ""')).toEqual(['echo', ''])
     })
   })
 })

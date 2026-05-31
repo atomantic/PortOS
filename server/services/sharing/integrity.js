@@ -16,7 +16,7 @@ import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
 import { getPeers } from '../instances.js';
-import { assetShaListForRecord } from './peerSync.js';
+import { assetIntegrityForRecord } from './peerSync.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 
@@ -44,6 +44,9 @@ export async function buildLocalManifest(kind) {
   const out = [];
   for (const r of records) {
     const deleted = r.deleted === true;
+    const assetIntegrity = deleted
+      ? { assetHashes: [], metadataMissing: false }
+      : await assetIntegrityForRecord(kind, r);
     out.push({
       id: r.id,
       name: r.name,
@@ -53,7 +56,8 @@ export async function buildLocalManifest(kind) {
       // compares assetHashes when BOTH sides are live (and drops
       // deleted-vs-deleted pairs entirely). Hashing a deleted record's
       // still-on-disk assets is pure wasted file I/O.
-      assetHashes: deleted ? [] : await assetShaListForRecord(kind, r),
+      assetHashes: assetIntegrity.assetHashes,
+      metadataMissing: assetIntegrity.metadataMissing,
     });
   }
   return out;

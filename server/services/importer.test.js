@@ -857,6 +857,11 @@ describe('commitImport', () => {
     expect(result.series.arc.shape).toBe('man-in-hole');
     expect(result.series.seasons).toHaveLength(1);
     expect(result.series.seasons[0].title).toBe('Foundry');
+    // Bible top-level fields populated from the extracted arc + issue count
+    // (the sidebar used to stay blank after import).
+    expect(result.series.logline).toBe('A reluctant heir.');
+    expect(result.series.premise).toBe('Big story.');
+    expect(result.series.issueCountTarget).toBe(1);
     // One issue created with prose + idea seeded.
     expect(result.createdIssueIds).toHaveLength(1);
     const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
@@ -901,6 +906,35 @@ describe('commitImport', () => {
     const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
     expect(issue.stages.prose.output).toBe('Plain prose.');
     expect(issue.stages.comicScript?.output).toBeFalsy();
+  });
+
+  it('replace mode overwrites the bible, clearing stale fields when the new arc lacks them', async () => {
+    const { uni, ser } = await setupForCommit();
+    // First (additive) import seeds a bible logline + premise.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'Old logline', summary: 'Old premise' },
+      seasons: [],
+      issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }],
+    });
+    expect((await seriesSvc.getSeries(ser.id)).logline).toBe('Old logline');
+
+    // Replace with an arc that has NO logline/summary — the bible must be
+    // cleared, not left showing the prior work's text beside a replaced arc.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      replaceMode: true,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: '', summary: '', protagonistArc: '' },
+      seasons: [],
+      issues: [{ title: 'I2', arcPosition: 1, proseExcerpt: 'p2' }],
+    });
+    expect(result.series.logline).toBe('');
+    expect(result.series.premise).toBe('');
+    expect(result.series.issueCountTarget).toBe(1);
   });
 
   it('refuses to commit when the series arc is locked', async () => {

@@ -31,6 +31,7 @@ vi.mock('../lib/stageRunner.js', () => ({
 const sb = await import('./storyBuilder.js');
 const seriesSvc = await import('./pipeline/series.js');
 const universeSvc = await import('./universeBuilder.js');
+const issuesSvc = await import('./pipeline/issues.js');
 
 beforeEach(() => {
   fileStore.clear();
@@ -91,15 +92,15 @@ describe('storyBuilder — lock state machine + gating', () => {
     expect(locked.steps.idea.lockedAt).toBeTruthy();
   });
 
-  it('cannot advance to a step until every earlier step is locked', async () => {
+  it('allows jumping to any step out of order (start-from-anywhere)', async () => {
     const s = await sb.createStorySession({ title: 'X' });
-    // idea not locked → cannot jump to universeAesthetic
-    await expect(sb.setCurrentStep(s.id, 'universeAesthetic')).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
-    await sb.lockStep(s.id, 'idea');
-    const moved = await sb.setCurrentStep(s.id, 'universeAesthetic');
-    expect(moved.currentStep).toBe('universeAesthetic');
-    // plotArc still blocked — universeAesthetic not locked
-    await expect(sb.setCurrentStep(s.id, 'plotArc')).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+    // Navigation is advisory, not gated: the user may jump straight to a later
+    // step and backfill the earlier ones. (Lock/stale state is surfaced as a
+    // warning in the session view, enforced only at the generators.)
+    const moved = await sb.setCurrentStep(s.id, 'plotArc');
+    expect(moved.currentStep).toBe('plotArc');
+    // Unknown ids still reject.
+    await expect(sb.setCurrentStep(s.id, 'bogus')).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
   });
 
   it('moving backward is always allowed', async () => {
@@ -238,5 +239,93 @@ describe('storyBuilder — generate delegation', () => {
     expect(universe.logline).toBe('frozen logline');
     // starterPrompt is NOT locked by the aesthetic step's keys, so this DID land.
     expect(universe.starterPrompt).toBe('new starter prose');
+  });
+});
+
+describe('generateStep backfill (fromDownstream)', () => {
+  // Record the stage + vars of the most recent staged-LLM call so a test can
+  // assert which prompt a backfill routed through.
+  let seenStage;
+  let seenVars;
+  function installSpy() {
+    seenStage = null; seenVars = null;
+    stageRunnerSpy = async (stage, vars) => {
+      seenStage = stage; seenVars = vars;
+      let content = {};
+      if (stage === 'story-builder-idea-expand') content = { title: 'T', logline: 'L', expandedIdea: 'E' };
+      else if (stage === 'importer-arc-extract') {
+        content = {
+          logline: 'Backfilled arc logline', summary: 'Backfilled summary',
+          protagonistArc: 'grows', themes: ['legacy'], shape: 'man-in-hole',
+          seasons: [{ number: 1, title: 'Vol 1', logline: 'v1', synopsis: 's1', endingHook: 'hook' }],
+        };
+      } else if (stage === 'pipeline-arc-overview') {
+        content = {
+          logline: 'Forward arc logline', summary: 'Forward summary',
+          protagonistArc: 'grows', themes: ['legacy'], shape: 'man-in-hole',
+          seasonOutlines: [{ number: 1, title: 'Vol 1', episodeCountTarget: 6 }],
+        };
+      }
+      return { content, runId: 'run-x', providerId: 'p', model: 'm' };
+    };
+  }
+
+  // A seed session mints its own universe + series; attach a drafted comic
+  // script to one issue, mirroring the "started from a drafted comic" case.
+  async function makeSessionWithDraftedIssue() {
+    const s = await sb.createStorySession({ title: 'Backfill' });
+    const issue = await issuesSvc.createIssue({ seriesId: s.seriesId, title: 'Issue One' });
+    await issuesSvc.updateStage(issue.id, 'comicScript', { status: 'ready', output: 'PAGE 1 ... a drafted comic script ...' });
+    return { session: s, issue };
+  }
+
+  it('plotArc backfill extracts the arc from issue content via importer-arc-extract', async () => {
+    installSpy();
+    const { session } = await makeSessionWithDraftedIssue();
+    const res = await sb.generateStep(session.id, 'plotArc', { fromDownstream: true });
+    expect(seenStage).toBe('importer-arc-extract');
+    expect(seenVars.source).toContain('drafted comic script');
+    const updated = await seriesSvc.getSeries(session.seriesId);
+    expect(updated.arc?.logline).toBe('Backfilled arc logline');
+    expect(updated.seasons?.length).toBe(1);
+    expect(updated.seasons[0].synopsis).toBe('s1');
+    expect(res.runId).toBe('run-x');
+  });
+
+  it('plotArc forward path still uses pipeline-arc-overview (no fromDownstream)', async () => {
+    installSpy();
+    const { session } = await makeSessionWithDraftedIssue();
+    await sb.generateStep(session.id, 'plotArc', {});
+    expect(seenStage).toBe('pipeline-arc-overview');
+  });
+
+  it('plotArc backfill refuses when no issue has content', async () => {
+    installSpy();
+    const s = await sb.createStorySession({ title: 'Empty' });
+    await expect(sb.generateStep(s.id, 'plotArc', { fromDownstream: true }))
+      .rejects.toThrow(/No issue content/);
+  });
+
+  it('idea backfill feeds issue content into the idea-expand prompt', async () => {
+    installSpy();
+    const { session } = await makeSessionWithDraftedIssue();
+    await sb.generateStep(session.id, 'idea', { fromDownstream: true });
+    expect(seenStage).toBe('story-builder-idea-expand');
+    expect(seenVars.sourceMaterial).toContain('drafted comic script');
+  });
+
+  it('idea forward path sends an empty sourceMaterial', async () => {
+    installSpy();
+    const { session } = await makeSessionWithDraftedIssue();
+    await sb.generateStep(session.id, 'idea', {});
+    expect(seenStage).toBe('story-builder-idea-expand');
+    expect(seenVars.sourceMaterial).toBe('');
+  });
+
+  it('idea backfill refuses when no issue has content', async () => {
+    installSpy();
+    const s = await sb.createStorySession({ title: 'Empty' });
+    await expect(sb.generateStep(s.id, 'idea', { fromDownstream: true }))
+      .rejects.toThrow(/No issue content/);
   });
 });

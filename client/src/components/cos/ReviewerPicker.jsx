@@ -7,6 +7,7 @@ import {
 } from './constants';
 
 const labelFor = (value) => REVIEWER_OPTIONS.find(o => o.value === value)?.label || value;
+const normalizeReviewerValue = (value) => value === 'gemini' ? 'antigravity' : value;
 
 /**
  * Ordered multi-reviewer picker. Click a reviewer to append it (run order =
@@ -29,7 +30,7 @@ export default function ReviewerPicker({
   // dupes would otherwise collide on the `key={value}` below and corrupt
   // reorder/remove. An empty list shows the "defaults to Copilot" hint and lets
   // the user clear copilot; the server/submit layer resolves [] → ['copilot'].
-  const selected = Array.isArray(reviewers) ? [...new Set(reviewers)] : [];
+  const selected = Array.isArray(reviewers) ? [...new Set(reviewers.map(normalizeReviewerValue))] : [];
   const available = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
   const hasNonCopilot = selected.some(r => r !== 'copilot');
 

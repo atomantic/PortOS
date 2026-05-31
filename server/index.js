@@ -42,6 +42,7 @@ import cosRoutes from './routes/cos.js';
 import featureAgentsRoutes from './routes/featureAgents.js';
 import feedsRoutes from './routes/feeds.js';
 import gsdRoutes from './routes/gsd.js';
+import catalogRoutes from './routes/catalog.js';
 import memoryRoutes from './routes/memory.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
@@ -72,7 +73,7 @@ import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
 import codeReviewRoutes from './routes/codeReview.js';
 import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './services/localLlm.js';
-import { ensureRunning as ensureOllamaRunning } from './services/ollamaManager.js';
+import { ensureProviderReady as ensureOllamaProviderReady, ensureRunning as ensureOllamaRunning } from './services/ollamaManager.js';
 import searchRoutes from './routes/search.js';
 import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
@@ -136,7 +137,8 @@ import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
-import { getSettings as getInitSettings } from './services/settings.js';
+import { getSettings as getInitSettings, settingsEvents } from './services/settings.js';
+import { setUserCatalogTypes } from './lib/catalogTypes.js';
 import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
@@ -214,6 +216,7 @@ await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), co
 
 // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
 const aiToolkitHooks = {
+  ensureProviderReady: (provider) => ensureOllamaProviderReady(provider),
   onRunCreated: (metadata) => {
     recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
       console.error(`❌ Failed to record usage session: ${err.message}`);
@@ -290,7 +293,7 @@ if (activeLocalLlmBackend === 'ollama') {
 }
 
 // Swap the toolkit's generic executeCliRun for PortOS's variant that adds
-// CLI-provider-specific args building (Codex `exec -`, Gemini stdin piping,
+// CLI-provider-specific args building (Codex `exec -`, Antigravity `agy --print`,
 // Claude Code `-p -`). The toolkit's in-tree implementation is also safe
 // (no shell, prompt via stdin) — the PortOS variant exists for the per-CLI
 // invocation conventions, not for security.
@@ -409,6 +412,7 @@ app.use('/api/cos/gsd', gsdRoutes);
 app.use('/api/cos', cosRoutes);
 app.use('/api/feature-agents', featureAgentsRoutes);
 app.use('/api/feeds', feedsRoutes);
+app.use('/api/catalog', catalogRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
@@ -496,6 +500,18 @@ initBrainMemoryBridge();
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Warm the catalog user-type registry from settings before any catalog request
+// can land, so user-defined types validate + mint ids immediately on boot.
+// Refresh on every settings write (the Settings → Catalog tab persists through
+// updateSettings, which emits this event) so the in-process registry tracks
+// edits without a restart.
+getInitSettings()
+  .then(s => setUserCatalogTypes(s.catalogUserTypes || []))
+  .catch(err => console.error(`❌ Catalog user-type warm failed: ${err.message}`));
+settingsEvents.on('settings:updated', (s) => {
+  try { setUserCatalogTypes(s?.catalogUserTypes || []); }
+  catch (err) { console.error(`❌ Catalog user-type refresh failed: ${err.message}`); }
+});
 // Initialize Telegram (manual bot or MCP bridge based on settings)
 getInitSettings().then(s => {
   if (s.telegram?.method === 'mcp-bridge') {
@@ -677,6 +693,42 @@ ensureSelf()
       const { markRecoveryDone } = await import('./services/creativeDirector/recovery.js');
       markRecoveryDone();
     });
+  })
+  .then(async () => {
+    // Catalog backfill: promote universe canon (characters/places/objects)
+    // into the Postgres ingredients catalog. Idempotent — marker in
+    // data/catalog-backfill.applied.json gates the walk after the first run.
+    // Fire-and-forget so a DB hiccup doesn't block server boot — the route
+    // surface tolerates an empty catalog and the user can re-trigger via
+    // the admin endpoint.
+    try {
+      const { ensureSchema } = await import('./lib/db.js');
+      await ensureSchema();
+      const { migrateBibleToCatalog } = await import('./scripts/migrateBibleToCatalog.js');
+      await migrateBibleToCatalog();
+      // One-time data repair: rewrite legacy machine universe tags
+      // (`from-universe`, `universe:<id>`) on backfilled rows into the friendly
+      // universe NAME tag. Runs after the backfill so promoted rows exist;
+      // marker-gated in data/catalog-universe-tags.applied.json.
+      const { repairUniverseTags } = await import('./scripts/repairUniverseTags.js');
+      await repairUniverseTags();
+      // Per-record catalog payload-shape migration — walks rows whose stored
+      // payload.schemaVersion lags the registry-current and applies registered
+      // upgraders. No-ops via marker once an install is at the high-water
+      // version, so this is free on steady-state boots.
+      const { migrateCatalogPayload } = await import('./scripts/migrateCatalogPayload.js');
+      await migrateCatalogPayload();
+      // One-time canon↔catalog reconciliation: collapse any pre-existing
+      // divergence between an embedded universe-canon entry and its catalog
+      // row (they were copy-on-write mirrors before the bidirectional
+      // projection landed). LWW on updatedAt; writes the winner to both sides.
+      // Runs LAST so promoted rows exist and are at current payload-shape
+      // version; marker-gated in data/catalog-canon-reconcile.applied.json.
+      const { reconcileCanonCatalog } = await import('./scripts/reconcileCanonCatalog.js');
+      await reconcileCanonCatalog();
+    } catch (err) {
+      console.error(`🪄 catalog migrations failed at boot: ${err.message}`);
+    }
   })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.

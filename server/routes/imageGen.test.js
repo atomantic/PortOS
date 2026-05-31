@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import imageGenRoutes from './imageGen.js';
@@ -45,6 +45,39 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
   listJobs: vi.fn(() => []),
 }));
+
+// HOST_ARCH is read at request time inside `buildSetupCheck`, so backing it
+// with a hoisted mutable holder + getter lets tests flip between arm64 and
+// x86_64 hosts without re-mocking. Default arm64 keeps every existing test
+// behaving as before.
+const hostArchHolder = vi.hoisted(() => ({ value: 'arm64' }));
+
+vi.mock('../lib/pythonSetup.js', () => ({
+  REQUIRED_PACKAGES: ['mflux', 'mlx'],
+  get HOST_ARCH() { return hostArchHolder.value; },
+  isAllowedPython: vi.fn(() => true),
+  probePythonHealth: vi.fn(async () => ({
+    installed: ['mflux', 'mlx'], missing: [], missingPip: [],
+    externallyManaged: false, interpreterArch: 'arm64',
+  })),
+  detectPython: vi.fn(async () => '/usr/bin/python3'),
+  detectArm64Python: vi.fn(async () => null),
+  installPackages: vi.fn(() => ({ promise: Promise.resolve(), kill: vi.fn() })),
+  createVenv: vi.fn(async () => '/fake/venv/python'),
+  pipNameFor: (n) => n,
+  resolveFlux2Python: vi.fn(() => null),
+  FLUX2_VENV_DEFAULT: '/fake/flux2-venv',
+  installFlux2Venv: vi.fn(),
+  isFlux2VenvHealthy: vi.fn(async () => true),
+}));
+
+// Stat the python binary to key the cache. Override per-test for mtime
+// changes; default to a stable mtime so the cache HIT path works.
+const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000 }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, stat: (path) => mockStat(path) };
+});
 
 import * as imageGen from '../services/imageGen/index.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
@@ -547,6 +580,193 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
       expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('middle');
+    });
+  });
+
+  describe('GET /setup/check (cache behavior)', () => {
+    // Each test uses a unique pythonPath so the module-scope cache from one
+    // test doesn't bleed into the next (vi.clearAllMocks() resets call counts
+    // but not the cache Map).
+    let probePythonHealth, createVenv;
+    beforeEach(async () => {
+      const mod = await import('../lib/pythonSetup.js');
+      probePythonHealth = mod.probePythonHealth;
+      createVenv = mod.createVenv;
+      mockStat.mockReset();
+      mockStat.mockResolvedValue({ mtimeMs: 1_700_000_000_000 });
+    });
+
+    it('returns the same payload on a cache hit and only spawns python once', async () => {
+      const p = '/usr/bin/python3-cache-hit-test';
+      const r1 = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      const r2 = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(r1.body).toEqual(r2.body);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+    });
+
+    it('busts the cache when the python interpreter mtime changes', async () => {
+      const p = '/usr/bin/python3-mtime-test';
+      mockStat.mockResolvedValueOnce({ mtimeMs: 1_700_000_000_000 });
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      mockStat.mockResolvedValueOnce({ mtimeMs: 1_700_000_000_001 });
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not cache when stat fails (broken / missing path)', async () => {
+      const p = '/usr/bin/python3-stat-fail-test';
+      mockStat.mockRejectedValue(new Error('ENOENT'));
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('cache for distinct pythonPaths are independent', async () => {
+      const p1 = '/usr/bin/python3-distinct-a';
+      const p2 = '/opt/homebrew/bin/python3-distinct-b';
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p1)}`);
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p2)}`);
+      // Two distinct paths → two probe spawns; both then cached for repeats.
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p1)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('POST /setup/create-venv invalidates the base AND new venv cache entries', async () => {
+      const base = '/usr/bin/python3-venv-test';
+      // Warm cache for the base python.
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(base)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+
+      // Create venv (mocked to return /fake/venv/python).
+      const created = await request(app).post('/api/image-gen/setup/create-venv').send({ basePython: base });
+      expect(created.status).toBe(200);
+      expect(createVenv).toHaveBeenCalled();
+
+      // Next probe of the base python re-spawns (cache busted).
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(base)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('GET /setup/install completion invalidates the cache for that pythonPath', async () => {
+      const p = '/usr/bin/python3-install-bust-test';
+      // Warm cache.
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+
+      // Run install (mocked installPackages resolves immediately).
+      const installRes = await request(app).get(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=mflux`);
+      expect(installRes.status).toBe(200);
+
+      // The next /setup/check must re-probe — the install just changed the
+      // missing-packages list, and the SSE consumer re-runs /setup/check on
+      // `complete` expecting fresh data.
+      await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('write path sweeps expired entries so long-running processes do not accumulate', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const stale = '/usr/bin/python3-sweep-stale';
+        const fresh = '/usr/bin/python3-sweep-fresh';
+        // Warm the cache with one entry, then advance past the TTL.
+        await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(stale)}`);
+        vi.advanceTimersByTime(31_000);
+        // A write for a different path triggers the sweep — stale entry drops.
+        await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(fresh)}`);
+        // A subsequent probe of the stale path re-spawns, confirming the entry
+        // was actually removed (not merely TTL-bypassed).
+        await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(stale)}`);
+        // 3 spawns total: initial stale, fresh, post-sweep stale.
+        expect(probePythonHealth).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('GET /setup/check (arch fields)', () => {
+    // The route's archMismatch logic gates on `process.platform === 'darwin'` —
+    // override it so the assertions run identically on Linux CI and a dev Mac.
+    const originalPlatform = process.platform;
+    let probePythonHealth, detectArm64Python;
+
+    beforeEach(async () => {
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      const mod = await import('../lib/pythonSetup.js');
+      probePythonHealth = mod.probePythonHealth;
+      detectArm64Python = mod.detectArm64Python;
+      mockStat.mockReset();
+      mockStat.mockResolvedValue({ mtimeMs: 1_700_000_000_000 });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      hostArchHolder.value = 'arm64';
+    });
+
+    it('exposes hostArch + archMismatch + suggestedArm64Python on matched arch', async () => {
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-match')}`);
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({
+        hostArch: 'arm64',
+        archMismatch: false,
+        suggestedArm64Python: null,
+        interpreterArch: 'arm64',
+      });
+    });
+
+    it('flips archMismatch true and includes the suggested arm64 python on an x86_64 interpreter', async () => {
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      detectArm64Python.mockResolvedValueOnce('/opt/homebrew/bin/python3');
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-x86')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.archMismatch).toBe(true);
+      expect(r.body.suggestedArm64Python).toBe('/opt/homebrew/bin/python3');
+    });
+
+    it('returns suggestedArm64Python null when no arm64 interpreter is available to suggest', async () => {
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      detectArm64Python.mockResolvedValueOnce(null);
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-no-arm64')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.archMismatch).toBe(true);
+      expect(r.body.suggestedArm64Python).toBeNull();
+    });
+
+    it('does not flag archMismatch on non-darwin even when interpreter arch differs', async () => {
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-linux')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.archMismatch).toBe(false);
+      expect(r.body.suggestedArm64Python).toBeNull();
+    });
+
+    it('does not flag archMismatch on darwin/x86_64 hosts (Intel macs) — only arm64 hosts care about mlx wheels', async () => {
+      hostArchHolder.value = 'x86_64';
+      probePythonHealth.mockResolvedValueOnce({
+        installed: [], missing: [], missingPip: [],
+        externallyManaged: false, interpreterArch: 'x86_64',
+      });
+      const r = await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent('/arch-fields-intel-mac')}`);
+      expect(r.status).toBe(200);
+      expect(r.body.hostArch).toBe('x86_64');
+      expect(r.body.archMismatch).toBe(false);
+      expect(r.body.suggestedArm64Python).toBeNull();
+      expect(detectArm64Python).not.toHaveBeenCalled();
     });
   });
 });

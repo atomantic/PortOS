@@ -117,7 +117,7 @@ export function VoiceTab() {
       .finally(() => setLoading(false));
     // Load the provider registry once. The conversational brain can only
     // stream through `api`-type providers (filtered here); the code-agent
-    // picker draws from `cli`/`tui` providers (Claude Code, Codex, Gemini) —
+    // picker draws from `cli`/`tui` providers (Claude Code, Codex, Antigravity) —
     // those are the ones that can actually edit code. Silent: the empty-list
     // fallback is the error UI, so don't also pop a toast.
     getProviders({ silent: true })
@@ -242,10 +242,12 @@ export function VoiceTab() {
   // the cached list) so the select never silently drops the user's choice.
   const llmProvider = cfg.llm.provider || 'lmstudio';
   const llmModel = cfg.llm.model || 'auto';
+  const llmVisionModel = cfg.llm.visionModel || 'auto';
   const selectedProvider = apiProviders.find((p) => p.id === llmProvider);
   const providerMissing = apiProviders.length > 0 && !selectedProvider;
   const providerModels = selectedProvider?.models || [];
   const modelMissing = llmModel !== 'auto' && !providerModels.includes(llmModel);
+  const visionModelMissing = llmVisionModel !== 'auto' && !providerModels.includes(llmVisionModel);
 
   // Code-agent delegation picker. Empty provider/model = "system default" (the
   // CoS spawner's activeProvider + selectModelForTask). The saved choice is
@@ -454,6 +456,7 @@ export function VoiceTab() {
               // so we don't send a model the new provider doesn't have.
               patch('llm.provider', e.target.value);
               patch('llm.model', 'auto');
+              patch('llm.visionModel', 'auto');
             }}
             className={inputCls}
           >
@@ -484,6 +487,35 @@ export function VoiceTab() {
             >
               <option value="auto">auto</option>
               {modelMissing && <option value={llmModel}>{llmModel} (current)</option>}
+              {providerModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => handleRefreshModels(llmProvider)}
+              disabled={refreshingModels || providerMissing || apiProviders.length === 0}
+              aria-label="Refresh model list from the provider"
+              title="Refresh model list from the provider"
+              className="shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
+            >
+              {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label htmlFor="voice-vision-model" className="block text-sm text-gray-400">Vision model</label>
+          <p className="text-xs text-gray-500">'auto' uses the provider's vision-capable default for screen descriptions.</p>
+          <div className="flex items-center gap-2">
+            <select
+              id="voice-vision-model"
+              value={llmVisionModel}
+              onChange={(e) => patch('llm.visionModel', e.target.value)}
+              className={`${inputCls} flex-1`}
+            >
+              <option value="auto">auto</option>
+              {visionModelMissing && <option value={llmVisionModel}>{llmVisionModel} (current)</option>}
               {providerModels.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}

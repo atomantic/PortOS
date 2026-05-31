@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
+import Banner from '../components/ui/Banner';
 
 export function HistoryPage() {
   const [history, setHistory] = useState([]);
@@ -271,11 +272,11 @@ export function HistoryPage() {
                       {entry.error && (
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Error</div>
-                          <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3">
-                            <pre className="text-sm text-port-error font-mono whitespace-pre-wrap">
+                          <Banner tone="error" size="md">
+                            <pre className="text-sm font-mono whitespace-pre-wrap">
                               {entry.error}
                             </pre>
-                          </div>
+                          </Banner>
                         </div>
                       )}
 

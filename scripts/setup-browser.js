@@ -9,20 +9,24 @@
  * collisions and TCC ambiguity, and the Canary update cadence keeps the
  * automation surface fresh.
  *
- * Idempotent: if `data/browser-config.json` already has `chromePath` set, this
- * exits without re-prompting. Non-interactive (CI / pm2-managed update.sh)
- * runs skip silently. `PORTOS_USE_CANARY=1` opts in without prompting; `=0`
- * opts out without prompting.
+ * Idempotent: if `data/browser-config.json` already has a custom browser path
+ * or the user declined Canary, this exits without re-prompting.
+ * Non-interactive (CI / pm2-managed update.sh) runs skip silently unless
+ * `PORTOS_USE_CANARY=1` opts in to using an already-installed Canary; package
+ * manager installs stay interactive to avoid hanging on password prompts.
+ * `PORTOS_USE_CANARY=0` opts out without prompting.
  *
  * Called by: npm run setup, setup.sh/ps1, update.sh/ps1.
  */
 
 import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
+import { randomUUID } from 'crypto';
+import { hasConfiguredBrowser, normalizeBrowserConfig } from '../server/lib/browserConfig.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -51,7 +55,14 @@ function loadConfig() {
 
 function saveConfig(config) {
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-  writeFileSync(configFile, JSON.stringify(config, null, 2));
+  const tmp = `${configFile}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(normalizeBrowserConfig(config), null, 2)}\n`);
+  try {
+    renameSync(tmp, configFile);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch {}
+    throw err;
+  }
 }
 
 function hasCommand(cmd, args) {
@@ -63,9 +74,14 @@ function hasCommand(cmd, args) {
 function detectCanary() {
   const os = platform();
   if (os === 'darwin') {
-    const app = '/Applications/Google Chrome Canary.app';
-    const bin = `${app}/Contents/MacOS/Google Chrome Canary`;
-    return existsSync(bin) ? { app, bin } : null;
+    for (const app of [
+      '/Applications/Google Chrome Canary.app',
+      join(homedir(), 'Applications', 'Google Chrome Canary.app')
+    ]) {
+      const bin = `${app}/Contents/MacOS/Google Chrome Canary`;
+      if (existsSync(bin)) return { app, bin };
+    }
+    return null;
   }
   if (os === 'win32') {
     const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
@@ -94,8 +110,29 @@ function applyCanaryToConfig(found) {
   }
   config.chromePath = found.bin;
   if (found.app) config.macAppBundle = found.app;
+  delete config.canaryPromptDeclined;
   saveConfig(config);
   console.log(`✅ PortOS browser set to Chrome Canary → ${found.bin}`);
+}
+
+function markCanaryDeclined() {
+  const config = loadConfig();
+  if (config === null) {
+    console.warn('   Skipping Canary preference write — fix the corrupt browser-config.json first.');
+    return;
+  }
+  config.canaryPromptDeclined = true;
+  saveConfig(config);
+}
+
+function parseCanaryEnv(value) {
+  if (value === undefined) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return null;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  console.warn(`⚠️  Ignoring PORTOS_USE_CANARY=${value}; expected one of 1/0, true/false, yes/no, on/off.`);
+  return null;
 }
 
 function promptYesNo(question, defaultYes = true) {
@@ -119,17 +156,23 @@ async function runCanarySetup() {
     return;
   }
 
+  const canaryEnv = parseCanaryEnv(process.env.PORTOS_USE_CANARY);
+  if (canaryEnv === false) return;
+
   const config = loadConfig();
-  if (typeof config?.chromePath === 'string' && config.chromePath.trim()) {
+  if (config === null) return;
+
+  const envOptIn = canaryEnv === true;
+  if (hasConfiguredBrowser(config)) {
     // Already configured — don't re-prompt on subsequent setup/update runs.
     return;
   }
+  if (!envOptIn && config.canaryPromptDeclined === true) {
+    return;
+  }
 
-  const envOptOut = process.env.PORTOS_USE_CANARY === '0' || process.env.PORTOS_USE_CANARY === 'false';
-  const envOptIn = process.env.PORTOS_USE_CANARY === '1' || process.env.PORTOS_USE_CANARY === 'true';
   const interactive = process.stdin.isTTY && process.stdout.isTTY;
 
-  if (envOptOut) return;
   if (!interactive && !envOptIn) {
     // Non-TTY (CI, update.sh under pm2) and no explicit opt-in: print a
     // one-liner hint and bail. The user can re-run setup interactively or
@@ -143,7 +186,10 @@ async function runCanarySetup() {
   if (found) {
     const ok = envOptIn ? true : await promptYesNo('Chrome Canary detected. Use it as the PortOS-managed browser?', true);
     if (ok) applyCanaryToConfig(found);
-    else console.log('   Keeping the platform-default Chrome. You can switch later in Settings → Browser.');
+    else {
+      markCanaryDeclined();
+      console.log('   Keeping the platform-default Chrome. You can switch later in Settings → Browser.');
+    }
     return;
   }
 
@@ -154,8 +200,14 @@ async function runCanarySetup() {
     return;
   }
 
+  if (!interactive) {
+    console.log(`💡 Chrome Canary not detected. Install it interactively via ${install.label} or from https://www.google.com/chrome/canary/, then re-run setup.`);
+    return;
+  }
+
   const ok = envOptIn ? true : await promptYesNo(`Install Chrome Canary via ${install.label} and use it as the PortOS-managed browser?`, true);
   if (!ok) {
+    markCanaryDeclined();
     console.log('   Keeping the platform-default Chrome. You can switch later in Settings → Browser.');
     return;
   }
@@ -163,7 +215,9 @@ async function runCanarySetup() {
   console.log(`🍺 Installing Chrome Canary via ${install.label}...`);
   const result = spawnSync(install.cmd, install.args, { stdio: 'inherit' });
   if (result.status !== 0) {
-    console.log(`⚠️  ${install.label} install of Chrome Canary failed (exit ${result.status}). You can install it manually and re-run setup.`);
+    const detail = result.error?.message
+      || (result.signal ? `signal ${result.signal}` : `exit ${result.status}`);
+    console.log(`⚠️  ${install.label} install of Chrome Canary failed (${detail}). You can install it manually and re-run setup.`);
     return;
   }
 

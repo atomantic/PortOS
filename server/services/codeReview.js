@@ -1,6 +1,6 @@
 /**
  * Local-LLM code review backend for the Review Loop's `lmstudio` / `ollama`
- * reviewer kinds. The follow-up agent (a CLI like Claude / Gemini / Codex)
+ * reviewer kinds. The follow-up agent (a CLI like Claude / Antigravity / Codex)
  * POSTs the PR diff to `/api/code-review/local`; we feed it through the
  * configured backend's OpenAI-compatible `/v1/chat/completions` endpoint with
  * a code-review system prompt and return the findings text the agent then
@@ -17,6 +17,7 @@ import {
   LOCAL_LLM_REVIEWERS,
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
+  REVIEWER_ALIASES,
   REVIEWER_VALUES,
   REVIEW_STOP_MODES,
 } from '../lib/validation.js'
@@ -49,7 +50,7 @@ export function pickCodeReviewDefaults(settings) {
   const raw = settings && typeof settings === 'object' ? settings.codeReview : null
   const reviewersIn = Array.isArray(raw?.reviewers) ? raw.reviewers : null
   const reviewers = reviewersIn
-    ? Array.from(new Set(reviewersIn.filter((r) => REVIEWER_VALUES.includes(r))))
+    ? Array.from(new Set(reviewersIn.map((r) => REVIEWER_ALIASES[r] || r).filter((r) => REVIEWER_VALUES.includes(r))))
     : []
   return {
     reviewers: reviewers.length ? reviewers : [...DEFAULT_REVIEWERS],

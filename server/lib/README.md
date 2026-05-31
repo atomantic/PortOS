@@ -26,6 +26,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `validation.js` | Catch-all Zod schemas + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`). Most route inputs validate through here. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
+| `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
@@ -49,6 +50,10 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `sceneExtractor.js` | Split prose or teleplay into scene list via LLM. |
 | `seasonStructure.js` | Season/episode structure recommendation. |
 | `bibleExtractor.js` | LLM bible-extraction stage + sanitization. |
+| `catalogBulkParsers.js` | Dependency-free markdown/CSV/JSON parsers for `POST /api/catalog/bulk-import` and YAML/markdown serializers for `GET /api/catalog/export`. |
+| `catalogChunking.js` | Pure lossless scrap-text chunker (`chunkRawText`, `CATALOG_CHUNK_MAX_CHARS`) — splits a long paste into ≤maxChars chunks on paragraph/newline/sentence/whitespace boundaries so the catalog extractor processes each child and unions results. |
+| `catalogTypes.js` | Shared catalog ingredient TYPE REGISTRY — one entry per type drives validation enum, ID prefix, FTS field set, extraction shape, per-record `payloadSchemaVersion` + upgraders, per-type `defaultTags`. Also exports the relation-kind registry and the tag-taxonomy helpers (`canonicalTagKey`, `tagIdForKey`, `defaultTagsForType`). Mirrored on the client at `client/src/lib/catalogTypes.js`. |
+| `catalogUniverseTags.js` | Pure transform that rewrites legacy machine universe tags (`from-universe`, `universe:<id>`) on backfilled catalog ingredients into friendly universe-NAME tags, preserving user tags + the structured `catalog_ingredient_refs` link. Used by the boot-time repair and the bible→catalog backfill. |
 | `comicScriptParser.js` | Marvel/DC-format comic script parser. |
 | `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. |
 | `creativeDirectorPresets.js` | Locked-at-creation aspect ratio + quality presets for the Creative Director. |
@@ -63,6 +68,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `aiToolkit/` | Vendored toolkit (providers + runner + prompts + status). See `aiToolkit/index.js`. |
 | `aiToolkitState.js` | Module-level singleton for the toolkit instance shared by the `providers`/`runner`/`promptService` shims — `setAIToolkitInstance` / `requireToolkit` (throws `AI_TOOLKIT_NOT_INITIALIZED`) / `getAIToolkitInstance` (no-throw for cleanup paths). |
+| `antigravity.js` | Antigravity (`agy`) CLI provider helpers — id/sentinel constants (`ANTIGRAVITY_CLI_ID`, `ANTIGRAVITY_CONFIGURED_DEFAULT`, `LEGACY_GEMINI_*`), `isAntigravityCommand`/`isAntigravityCliProvider` predicates, and `ensureAntigravityPrintArgs`/`ensureAntigravityTuiArgs`/`stripAntigravityUnsupportedArgs` argv normalizers (strip legacy Gemini `--yolo`/`-m`/`--output-format`). |
 | `aiProvider.js` | Shared AI provider utilities for LLM calls. |
 | `promptRunner.js` | Shared LLM runner wrapper. |
 | `tuiPromptRunner.js` | One-shot TUI prompt runner (PTY-driven). |
@@ -106,6 +112,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
 | `ffmpeg.js` | Shared ffmpeg helpers (videoGen + videoTimeline). |
 | `gitRemote.js` | `getOriginInfo`, `parseGitRemoteUrl`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — classifies the local `origin` remote vs the upstream atomantic/PortOS repo. Used by the update flow to detect forks. |
+| `processEnv.js` | `stripDebugMallocEnv(env)` — drop macOS `Malloc*` debug env vars before spawning a child. Pinokio-launched PortOS exports `MallocStackLogging`/`MallocScribble`/etc. that flood Python subprocess stderr with `can't turn off malloc stack logging` lines; route every Node→Python spawn through this. No-op on Linux/Windows. |
 | `pythonSetup.js` | Python venv / runner setup helpers. |
 
 ## Networking
@@ -149,6 +156,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `appResolver.js` | Fuzzy-match a spoken/typed phrase to a managed app (`{ id, name }`). Tiered exact → prefix → substring, used by voice tools that target a specific app. |
 | `capabilityMap.js` | Pure row builders for the Capability Map (per-integration status tiers + rollup); fed by `routes/capabilities.js`. |
 | `civitai.js` | Civitai URL parsing + API client. |
 | `localLlmCatalog.js` | Curated cross-backend (Ollama↔LM Studio) local-LLM catalog + install-id mapping for the migrate flow. Pure. |
@@ -165,6 +173,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `browserConfig.js` | Shared custom browser path helpers for deriving macOS app bundles, detecting configured browser choices, normalizing browser config, and validating Chrome-compatible binary paths. |
 | `db.js` | PostgreSQL connection pool. |
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
 | `platform.js` | Platform/OS detection helpers. |

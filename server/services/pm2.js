@@ -5,6 +5,7 @@ import { writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { createRequire } from 'module';
 import { extractJSONArray, safeJSONParse } from '../lib/fileUtils.js';
+import { parseCommandArgs } from '../lib/commandSecurity.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -387,14 +388,17 @@ export async function getLogs(name, lines = 100, pm2Home = null) {
  * @param {string} command Command to run (e.g., "npm run dev")
  */
 export async function startWithCommand(name, cwd, command) {
-  const [script, ...args] = command.split(' ');
+  // Parse with quote-awareness so `node --opt "arg with spaces"` survives;
+  // a bare split(' ') would shred quoted segments. PM2 accepts `args` as an
+  // array, which avoids re-joining and re-splitting on the way through.
+  const [script, ...args] = parseCommandArgs(command);
 
   return connectAndRun((pm2) => {
     return new Promise((resolve, reject) => {
       const opts = {
         name,
         script,
-        args: args.join(' '),
+        args,
         cwd,
         watch: false,
         autorestart: true,

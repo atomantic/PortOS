@@ -26,7 +26,7 @@ import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
 import {
-  STEP_IDS, STEP_STATUSES, isValidStepId, stepIndex,
+  STEP_IDS, STEP_STATUSES, isValidStepId,
 } from '../lib/storyBuilderSteps.js';
 import { hashUpstream, computeStaleSteps } from '../lib/storyBuilderIntegrity.js';
 import { createUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
@@ -37,7 +37,8 @@ import {
   createSeries, getSeries, updateSeries, setArcFieldLock,
 } from './pipeline/series.js';
 import {
-  generateArcOverview, generateReaderMap, refineReaderMap, commitSeasonsWithRemap,
+  generateArcOverview, generateArcFromSource, generateReaderMap, refineReaderMap, commitSeasonsWithRemap,
+  collectIssueSourceText,
 } from './pipeline/arcPlanner.js';
 
 const TYPE_SCHEMA_VERSION = 1;
@@ -387,27 +388,17 @@ export async function unlockStep(id, stepId) {
 }
 
 /**
- * Set the wizard's current step. Gated: cannot advance to a step unless every
- * earlier step is locked AND no earlier locked step is stale.
+ * Set the wizard's current step.
+ *
+ * Advisory, not gated: a user may start from any point and work the steps out
+ * of order (e.g. begin from a drafted comic script and backfill the idea / arc
+ * afterward). The client surfaces "upstream not locked" / "stale" as warnings
+ * (from the `staleSteps` array in the session view) rather than hard blocks.
+ * The only enforcement that remains is at the generators themselves — a *locked*
+ * underlying record (arc, readerMap, …) still refuses regeneration.
  */
 export async function setCurrentStep(id, stepId) {
   if (!isValidStepId(stepId)) throw makeErr(`Unknown step: ${stepId}`, ERR_VALIDATION);
-  const session = await getStorySession(id);
-  const target = stepIndex(stepId);
-  const cur = stepIndex(session.currentStep);
-  if (target > cur) {
-    const { hashes } = await computeCurrentHashes(session);
-    const stale = computeStaleSteps(session, hashes);
-    for (let i = 0; i < target; i++) {
-      const earlier = STEP_IDS[i];
-      if (session.steps[earlier]?.locked !== true) {
-        throw makeErr(`Cannot advance: step "${earlier}" must be locked first`, ERR_VALIDATION);
-      }
-      if (stale.includes(earlier)) {
-        throw makeErr(`Cannot advance: step "${earlier}" is stale — re-review and re-lock it`, ERR_VALIDATION);
-      }
-    }
-  }
   return updateStorySession(id, { currentStep: stepId });
 }
 
@@ -429,11 +420,17 @@ export async function setIssueLock(id, issueId, locked) {
   });
 }
 
+// ── Backfill (generate upstream from downstream) ───────────────────────────
+
 // ── Generate / refine delegation ──────────────────────────────────────────
 
 // Each step's generate delegates to the existing service that owns its content,
 // then persists into the universe/series record. Returns the LLM result so the
 // route can surface runId / changes / rationale.
+//
+// `options.fromDownstream` flips a step from forward-generation to backfill:
+// idea / plotArc synthesize themselves from the series' existing issue content
+// instead of from their (possibly empty) conventional upstream.
 export async function generateStep(id, stepId, options = {}) {
   const session = await getStorySession(id);
   // Provider/model resolution: an explicit per-call override wins, else fall
@@ -442,9 +439,19 @@ export async function generateStep(id, stepId, options = {}) {
   const reqProviderId = options.providerId || session.llm?.provider || undefined;
   const reqModel = options.model || session.llm?.model || undefined;
   if (stepId === 'idea') {
+    // Backfill: reverse-engineer the idea from existing issue content when the
+    // user started downstream. Rendered only when present, so the forward path
+    // (seed-only) is byte-for-byte unchanged.
+    const sourceMaterial = options.fromDownstream ? await collectIssueSourceText(session.seriesId) : '';
+    if (options.fromDownstream && !sourceMaterial) {
+      throw makeErr(
+        'No issue content to backfill the idea from — write a comic script, teleplay, or prose on at least one issue first',
+        ERR_VALIDATION,
+      );
+    }
     const { content, runId, providerId, model } = await runStagedLLM(
       'story-builder-idea-expand',
-      { universeName: session.title, seedIdea: session.seedIdea || '' },
+      { universeName: session.title, seedIdea: session.seedIdea || '', sourceMaterial },
       { providerOverride: reqProviderId, modelOverride: reqModel, returnsJson: true, source: 'story-builder-idea-expand' },
     );
     const expandedIdea = isStr(content?.expandedIdea) ? content.expandedIdea.trim() : '';
@@ -489,9 +496,27 @@ export async function generateStep(id, stepId, options = {}) {
   }
   if (stepId === 'plotArc') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
-    const { arc, seasons, runId, providerId, model } = await generateArcOverview(session.seriesId, {
-      providerOverride: reqProviderId, modelOverride: reqModel,
-    });
+    let arcGenResult;
+    if (options.fromDownstream) {
+      // Backfill: extract the arc + seasons from the issues that already exist
+      // (the user drafted scripts/prose first). Reuses the importer's
+      // arc-extraction prompt via arcPlanner.generateArcFromSource.
+      const sourceText = await collectIssueSourceText(session.seriesId);
+      if (!sourceText) {
+        throw makeErr(
+          'No issue content to backfill the arc from — write a comic script, teleplay, or prose on at least one issue first',
+          ERR_VALIDATION,
+        );
+      }
+      arcGenResult = await generateArcFromSource(session.seriesId, {
+        sourceText, providerOverride: reqProviderId, modelOverride: reqModel,
+      });
+    } else {
+      arcGenResult = await generateArcOverview(session.seriesId, {
+        providerOverride: reqProviderId, modelOverride: reqModel,
+      });
+    }
+    const { arc, seasons, runId, providerId, model } = arcGenResult;
     // A null arc means the LLM returned nothing identifying — refuse rather
     // than wiping a previously-generated arc with `updateSeries({ arc: null })`.
     if (!arc) throw makeErr('LLM returned an empty arc — try regenerating', ERR_VALIDATION);

@@ -4,12 +4,13 @@
  * Stores config in data/browser-config.json
  */
 
-import { writeFile, readdir, stat, unlink } from 'fs/promises';
+import { readdir, stat, unlink } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { join, basename, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
-import { ensureDir, safeJSONParse, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
+import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const execFileAsync = promisify(execFile);
@@ -43,21 +44,30 @@ const DEFAULT_CONFIG = {
 };
 
 let cachedConfig = null;
+let cachedConfigMtimeMs = null;
 
 // ---------- Config persistence ----------
 
+async function getConfigMtimeMs() {
+  const info = await stat(CONFIG_FILE).catch(() => null);
+  return info?.isFile() ? info.mtimeMs : null;
+}
+
 export async function loadConfig() {
-  if (cachedConfig) return cachedConfig;
+  const mtimeMs = await getConfigMtimeMs();
+  if (cachedConfig && cachedConfigMtimeMs === mtimeMs) return cachedConfig;
   const raw = await tryReadFile(CONFIG_FILE);
   const parsed = safeJSONParse(raw, null);
-  cachedConfig = parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG };
+  cachedConfig = normalizeBrowserConfig(parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG });
+  cachedConfigMtimeMs = mtimeMs;
   return cachedConfig;
 }
 
 export async function saveConfig(config) {
   await ensureDir(PATHS.data);
-  cachedConfig = { ...DEFAULT_CONFIG, ...config };
-  await writeFile(CONFIG_FILE, JSON.stringify(cachedConfig, null, 2));
+  cachedConfig = normalizeBrowserConfig({ ...DEFAULT_CONFIG, ...config });
+  await atomicWrite(CONFIG_FILE, cachedConfig);
+  cachedConfigMtimeMs = await getConfigMtimeMs();
   browserEvents.emit('config:changed', cachedConfig);
   return cachedConfig;
 }

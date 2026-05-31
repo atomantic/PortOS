@@ -590,21 +590,51 @@ async function buildCollectionAssetManifest(collection) {
   return out;
 }
 
+function summarizeAssetManifest(manifest) {
+  const entries = Array.isArray(manifest) ? manifest : [];
+  return {
+    assetHashes: entries.map((e) => e.sha256).filter(Boolean).sort(),
+    metadataMissing: entries.some((e) => e?.kind === 'image' && !isNonEmptyStr(e.sidecarSha256)),
+  };
+}
+
+async function buildIntegrityAssetManifest(kind, record) {
+  if (kind === 'mediaCollection') return buildCollectionAssetManifest(record);
+  if (kind === 'series') {
+    const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
+    const manifestIssues = childIssues.filter(
+      (i) => i?.deleted !== true && i?.ephemeral !== true,
+    );
+    const linkedCollection = await findCollectionBySeriesId(record?.id).catch(() => null);
+    return buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
+  }
+  return buildAssetManifest(record);
+}
+
 /**
- * Returns sorted sha256 hashes for a record's own assets (used by the
- * integrity manifest builder). For `series` this captures the series' OWN
- * asset refs only — child-issue assets are not yet included (v1 limitation;
- * full issue-level integrity is deferred to a future pass).
+ * Returns the integrity-facing asset summary for a record: sorted file hashes
+ * plus whether any hashed image lacks a gen-params sidecar. `series` mirrors
+ * the push manifest path so child issue assets participate in integrity.
+ *
+ * @param {'universe'|'series'|'mediaCollection'} kind
+ * @param {object} record
+ * @returns {Promise<{assetHashes:string[], metadataMissing:boolean}>}
+ */
+export async function assetIntegrityForRecord(kind, record) {
+  const manifest = await buildIntegrityAssetManifest(kind, record);
+  return summarizeAssetManifest(manifest);
+}
+
+/**
+ * Back-compat helper for callers/tests that only need hashes.
  *
  * @param {'universe'|'series'|'mediaCollection'} kind
  * @param {object} record
  * @returns {Promise<string[]>} sorted sha256 strings (falsy hashes omitted)
  */
 export async function assetShaListForRecord(kind, record) {
-  const manifest = kind === 'mediaCollection'
-    ? await buildCollectionAssetManifest(record)
-    : await buildAssetManifest(record);
-  return manifest.map((e) => e.sha256).filter(Boolean).sort();
+  const { assetHashes } = await assetIntegrityForRecord(kind, record);
+  return assetHashes;
 }
 
 async function hashImageForManifest(filename) {
@@ -758,6 +788,22 @@ function directoryForAssetKind(kind) {
 // upgrade?" probe point.
 const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
 
+async function isSubscriptionRecordTombstone(sub) {
+  if (sub.recordKind === 'universe') {
+    const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'series') {
+    const record = await getSeries(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'mediaCollection') {
+    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  return false;
+}
+
 export async function pushRecordToPeer(sub, options = {}) {
   if (
     !isPlainObject(sub)
@@ -772,11 +818,14 @@ export async function pushRecordToPeer(sub, options = {}) {
   // on the next `peer:online` (where `retryPendingPushesForPeer` passes
   // `bypassSchemaCooldown: true`) or after the cooldown elapses.
   if (sub.blockedBySchema && !options.bypassSchemaCooldown) {
-    const detectedAtMs = Date.parse(sub.blockedBySchema.detectedAt || '');
-    const stillCooling = Number.isFinite(detectedAtMs)
-      && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
-    if (stillCooling) {
-      return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
+    const tombstonePush = await isSubscriptionRecordTombstone(sub);
+    if (!tombstonePush) {
+      const detectedAtMs = Date.parse(sub.blockedBySchema.detectedAt || '');
+      const stillCooling = Number.isFinite(detectedAtMs)
+        && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
+      if (stillCooling) {
+        return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
+      }
     }
   }
   const peer = await findPeerById(sub.peerId);
@@ -847,15 +896,27 @@ export async function pushRecordToPeer(sub, options = {}) {
   // see schemaVersions, but until the user upgrades it that's the
   // best-effort behavior we want (vs. permanently stranded pushes). Once
   // they upgrade, the next push round naturally re-includes `portosMeta`.
-  if (res && res.status === 400 && payload.portosMeta) {
+  // `catalogBundle` (catalog-federation push enrichment) is a second new
+  // top-level key an even-newer-than-version-gate-but-pre-catalog peer's strict
+  // schema also rejects. Strip whichever key(s) the receiver actually named —
+  // surgically, so a peer that supports `portosMeta` but not `catalogBundle`
+  // keeps its version-gate handshake. Zod `.strict()` lists all unrecognized
+  // keys in one issue, so a single retry covers both.
+  if (res && res.status === 400 && (payload.portosMeta || payload.catalogBundle)) {
     const errBody = await res.clone().json().catch(() => null);
     const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
-    const mentionsMeta = details.some((d) => /portosMeta/.test(`${d?.path || ''} ${d?.message || ''}`));
-    if (errBody?.code === 'VALIDATION_ERROR' && mentionsMeta) {
+    const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
+    if (errBody?.code === 'VALIDATION_ERROR' && (mentions('portosMeta') || mentions('catalogBundle'))) {
+      const legacyPayload = { ...payload };
+      const stripped = [];
+      if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
+      if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
+      // The universe record still lands; on a pre-catalog peer the catalog
+      // enrichments simply re-derive from the embedded canon on its backfill,
+      // and a re-push after it upgrades re-includes the stripped key(s).
       console.log(
-        `ℹ️ peerSync: ${peer.name || peer.instanceId} is on a pre-version-gate PortOS — retrying push without portosMeta envelope`,
+        `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
-      const { portosMeta: _strip, ...legacyPayload } = payload;
       res = await postPayload(legacyPayload);
     }
   }
@@ -1055,6 +1116,16 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const assetManifest = record.deleted === true
       ? []
       : await buildAssetManifestWithCollection(record, linkedCollection);
+    // Bundle the catalog rows referenced by this universe (ingredients + the
+    // universe→ingredient ref links). The embedded canon already replicates
+    // via the universe record, but the catalog row's enrichments (tags,
+    // embedding, payload.summary) live ONLY in Postgres — without this bundle
+    // the receiver re-derives a strictly-lossy view on its first backfill.
+    // Skip for tombstone pushes (the universe is being deleted; its ref rows
+    // tombstone locally and ride a later catalog-sync cycle if needed).
+    const catalogBundle = record.deleted === true
+      ? null
+      : await buildCatalogBundleForRef('universe', sub.recordId);
     return {
       kind: 'universe',
       record: sanitized,
@@ -1062,6 +1133,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       sourceInstanceId,
       portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
+      ...(catalogBundle ? { catalogBundle } : {}),
     };
   }
   if (sub.recordKind === 'series') {
@@ -1126,6 +1198,54 @@ async function buildPushPayload(sub, sourceInstanceId) {
     return { kind: 'mediaCollection', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
   return null;
+}
+
+/**
+ * Build the catalog bundle (`{ ingredients, refs }`) that piggy-backs on a
+ * universe record push. Catalog data lives in Postgres only — on a non-Postgres
+ * install (or when the catalog tables don't exist yet) there's nothing to
+ * bundle, so we gate on the backend and swallow any read failure: a missing
+ * bundle is non-fatal (the universe record still replicates; the receiver's
+ * backfill re-derives a lossy view, exactly as before this bundle existed).
+ *
+ * Returns `null` (omit the key) when there's nothing to ship — both the
+ * non-Postgres case and the genuinely-empty case (a universe with no catalog
+ * refs yet). Dynamic import keeps catalogDB's pg module graph off peerSync's
+ * load path on installs that never touch Postgres.
+ */
+async function buildCatalogBundleForRef(refKind, refId) {
+  const { getBackendName } = await import('../memoryBackend.js');
+  if (getBackendName() !== 'postgres') return null;
+  const { getCatalogBundleForRef } = await import('../catalogDB.js');
+  const bundle = await getCatalogBundleForRef(refKind, refId).catch((err) => {
+    console.log(`⚠️ peerSync: catalog bundle for ${refKind}/${refId} failed: ${err.message}`);
+    return null;
+  });
+  if (!bundle) return null;
+  const ingredients = Array.isArray(bundle.ingredients) ? bundle.ingredients : [];
+  const refs = Array.isArray(bundle.refs) ? bundle.refs : [];
+  if (ingredients.length === 0 && refs.length === 0) return null;
+  return { ingredients, refs };
+}
+
+/**
+ * Apply a received catalog bundle on the receiver. Reuses
+ * `catalogSync.applyRemoteChanges` so the bundle goes through the exact same
+ * per-row LWW upsert + schema gate + try/catch isolation as direct catalog
+ * sync — we forward `portosMeta` so applyRemoteChanges runs the gate itself
+ * (defense in depth; the push-level gate already ran). Postgres-only; the
+ * applyIncomingPush caller already null-checks `catalogBundle`, but we re-gate
+ * the backend here so a stray call on a non-Postgres install is a clean no-op.
+ */
+async function applyCatalogBundle(catalogBundle, portosMeta) {
+  const { getBackendName } = await import('../memoryBackend.js');
+  if (getBackendName() !== 'postgres') return;
+  const { applyRemoteChanges } = await import('../catalogSync.js');
+  await applyRemoteChanges({
+    ingredients: Array.isArray(catalogBundle.ingredients) ? catalogBundle.ingredients : [],
+    refs: Array.isArray(catalogBundle.refs) ? catalogBundle.refs : [],
+    portosMeta,
+  });
 }
 
 async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
@@ -1244,7 +1364,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, assetManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, catalogBundle, assetManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -1309,6 +1429,17 @@ export async function applyIncomingPush(payload) {
   // is schema-version-safe at any version anyway, so it needn't gate.
   if (record.deleted !== true && isPlainObject(linkedCollection) && linkedCollection.deleted !== true) {
     for (const c of RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection) relevantCategories.add(c);
+  }
+  // A catalog bundle ships catalog-schema-shaped ingredient rows. Gate the
+  // `catalog` category whenever the bundle carries at least one LIVE ingredient
+  // — a sender ahead on `catalog` would push forward-shaped payload an older
+  // receiver can't interpret. Tombstone-only bundles (all ingredients deleted)
+  // are id+deleted+deletedAt+updatedAt — safe at every version, so they needn't
+  // gate (same reasoning as the tombstone-record exemption above).
+  if (record.deleted !== true && isPlainObject(catalogBundle) &&
+      Array.isArray(catalogBundle.ingredients) &&
+      catalogBundle.ingredients.some((i) => i?.deleted !== true)) {
+    for (const c of (RECORD_KIND_SCHEMA_CATEGORIES['cat-ingredient'] || ['catalog'])) relevantCategories.add(c);
   }
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
@@ -1392,6 +1523,20 @@ export async function applyIncomingPush(payload) {
   if (!localEphemeral && record.deleted !== true && isPlainObject(linkedCollection)) {
     await mergeMediaCollectionsFromSync([linkedCollection]).catch((err) => {
       console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
+    });
+  }
+
+  // Apply the bundled catalog rows (ingredients + universe→ingredient refs)
+  // through the same LWW upsert path as direct catalog sync. Same guards as the
+  // linkedCollection merge: skip for local-ephemeral records and tombstone
+  // pushes (a deleted universe's catalog refs tombstone locally on the next
+  // catalog-sync cycle; resurrecting them here would be wrong). Postgres-only
+  // and best-effort — a failure doesn't fail the push (the universe record is
+  // already merged; the receiver's backfill still derives a lossy view, and
+  // the next catalog-sync cycle reconciles the enriched rows).
+  if (!localEphemeral && record.deleted !== true && isPlainObject(catalogBundle)) {
+    await applyCatalogBundle(catalogBundle, portosMeta).catch((err) => {
+      console.log(`⚠️ peerSync: catalog bundle apply failed: ${err.message}`);
     });
   }
 

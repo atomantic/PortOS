@@ -3,6 +3,7 @@ import { Upload, Download, FileJson, HeartPulse, CheckCircle, AlertCircle } from
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
+import Banner from '../../ui/Banner';
 
 export default function SettingsTab({ onRefresh }) {
   // JSON import state
@@ -180,12 +181,8 @@ export default function SettingsTab({ onRefresh }) {
 
         {/* Success */}
         {jsonResult && (
-          <div className="mt-4 p-4 bg-port-success/10 border border-port-success/30 rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle size={16} className="text-port-success" />
-              <span className="text-port-success font-medium">Import successful</span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <Banner tone="success" size="lg" icon={CheckCircle} title="Import successful" className="mt-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mt-2">
               <div>
                 <span className="text-gray-500">Metrics processed</span>
                 <p className="text-white font-semibold">{jsonResult.metricsProcessed?.toLocaleString()}</p>
@@ -203,17 +200,12 @@ export default function SettingsTab({ onRefresh }) {
                 <p className="text-white font-semibold">{jsonResult.daysAffected?.toLocaleString()}</p>
               </div>
             </div>
-          </div>
+          </Banner>
         )}
 
         {/* Error */}
         {jsonError && (
-          <div className="mt-4 p-4 bg-port-error/10 border border-port-error/30 rounded-lg">
-            <div className="flex items-center gap-2">
-              <AlertCircle size={16} className="text-port-error" />
-              <span className="text-port-error">{jsonError}</span>
-            </div>
-          </div>
+          <Banner tone="error" size="lg" icon={AlertCircle} align="center" className="mt-4">{jsonError}</Banner>
         )}
       </div>
 
@@ -281,12 +273,8 @@ export default function SettingsTab({ onRefresh }) {
 
         {/* Success */}
         {xmlResult && (
-          <div className="mt-4 p-4 bg-port-success/10 border border-port-success/30 rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle size={16} className="text-port-success" />
-              <span className="text-port-success font-medium">Import successful</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-sm">
+          <Banner tone="success" size="lg" icon={CheckCircle} title="Import successful" className="mt-4">
+            <div className="grid grid-cols-2 gap-3 text-sm mt-2">
               <div>
                 <span className="text-gray-500">Records imported</span>
                 <p className="text-white font-semibold">{xmlResult.records?.toLocaleString()}</p>
@@ -296,17 +284,12 @@ export default function SettingsTab({ onRefresh }) {
                 <p className="text-white font-semibold">{xmlResult.days?.toLocaleString()}</p>
               </div>
             </div>
-          </div>
+          </Banner>
         )}
 
         {/* Error */}
         {xmlError && (
-          <div className="mt-4 p-4 bg-port-error/10 border border-port-error/30 rounded-lg">
-            <div className="flex items-center gap-2">
-              <AlertCircle size={16} className="text-port-error" />
-              <span className="text-port-error">{xmlError}</span>
-            </div>
-          </div>
+          <Banner tone="error" size="lg" icon={AlertCircle} align="center" className="mt-4">{xmlError}</Banner>
         )}
       </div>
     </div>

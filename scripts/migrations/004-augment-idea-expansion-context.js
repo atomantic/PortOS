@@ -15,11 +15,13 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-idea-expansion.md': [
     '1ee44cf95851ff8debf18729ebcd40b4', // post-004 / pre-025 — the hash this migration originally produced
     '41facefbc0c0549d456bef9111f95ab9', // post-003 / pre-004
+    '1f3c5d077a5ef9a4b610335d5e3edd9c', // post-025 / pre-054
+    'b5c47c94ffc74637983c95761ab0c66c', // post-054 / pre-054-fence
   ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': '1f3c5d077a5ef9a4b610335d5e3edd9c', // post-025
+  'pipeline-idea-expansion.md': '49a208628290543ba2607a5ed48fdc8c', // post-054-fence
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

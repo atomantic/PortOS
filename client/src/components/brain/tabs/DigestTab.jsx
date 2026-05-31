@@ -9,6 +9,7 @@ import {Play,
   Clock} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import Banner from '../../ui/Banner';
 
 import { timeAgo } from '../../../utils/formatters';
 
@@ -238,14 +239,14 @@ export default function DigestTab({ onRefresh }) {
 
             {/* Open Loops */}
             {latestReview.biggestOpenLoops?.length > 0 && (
-              <div className="p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg mb-4">
-                <h4 className="text-xs font-medium text-port-warning mb-2">Biggest Open Loops</h4>
+              <Banner tone="warning" size="md" className="mb-4">
+                <h4 className="text-xs font-medium mb-2">Biggest Open Loops</h4>
                 <ul className="space-y-1">
                   {latestReview.biggestOpenLoops.map((loop, i) => (
                     <li key={i} className="text-sm text-gray-300">• {loop}</li>
                   ))}
                 </ul>
-              </div>
+              </Banner>
             )}
 
             {/* Recurring Theme */}

@@ -54,7 +54,14 @@ vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({
   promoteWorkToPipeline: vi.fn(),
 }));
 
+// Mock the catalog scan so the draft-save route stays pure (no Postgres pool).
+// Default: the work has no linked cast, so the scan finds nothing.
+vi.mock('../services/catalogExtraction.js', () => ({
+  scanProseForIngredientRefs: vi.fn(async () => []),
+}));
+
 import * as svc from '../services/writersRoom/local.js';
+import * as catalogExtraction from '../services/catalogExtraction.js';
 import * as charSvc from '../services/writersRoom/characters.js';
 import * as placesSvc from '../services/writersRoom/places.js';
 import writersRoomRoutes from './writersRoom.js';
@@ -144,11 +151,32 @@ describe('writersRoom routes', () => {
       expect(r.status).toBe(400);
     });
 
-    it('PUT /works/:id/draft persists and echoes the body', async () => {
+    it('PUT /works/:id/draft persists, echoes the body, and stamps scanned ingredient refs', async () => {
+      catalogExtraction.scanProseForIngredientRefs.mockResolvedValueOnce(['cat-chr-mira']);
       const r = await request(app).put('/api/writers-room/works/wr-work-1/draft').send({ body: 'new prose' });
       expect(r.status).toBe(200);
-      expect(svc.saveDraftBody).toHaveBeenCalledWith('wr-work-1', 'new prose');
+      // The route scans the prose scoped to this work, then passes the derived
+      // ids through to the save path.
+      expect(catalogExtraction.scanProseForIngredientRefs).toHaveBeenCalledWith('new prose', { workId: 'wr-work-1' });
+      expect(svc.saveDraftBody).toHaveBeenCalledWith('wr-work-1', 'new prose', { referencedIngredientIds: ['cat-chr-mira'] });
       expect(r.body.activeDraftBody).toBe('new prose');
+    });
+
+    it('PUT /works/:id/draft trusts a client-supplied referencedIngredientIds and skips the scan', async () => {
+      const r = await request(app)
+        .put('/api/writers-room/works/wr-work-1/draft')
+        .send({ body: 'new prose', referencedIngredientIds: ['cat-plc-harbor'] });
+      expect(r.status).toBe(200);
+      expect(catalogExtraction.scanProseForIngredientRefs).not.toHaveBeenCalled();
+      expect(svc.saveDraftBody).toHaveBeenCalledWith('wr-work-1', 'new prose', { referencedIngredientIds: ['cat-plc-harbor'] });
+    });
+
+    it('PUT /works/:id/draft survives a scan failure (best-effort, omits refs)', async () => {
+      catalogExtraction.scanProseForIngredientRefs.mockRejectedValueOnce(new Error('db down'));
+      const r = await request(app).put('/api/writers-room/works/wr-work-1/draft').send({ body: 'new prose' });
+      expect(r.status).toBe(200);
+      // Scan failure → undefined refs → save path preserves the prior snapshot.
+      expect(svc.saveDraftBody).toHaveBeenCalledWith('wr-work-1', 'new prose', { referencedIngredientIds: undefined });
     });
 
     it('POST /works/:id/versions accepts an optional label', async () => {
