@@ -250,6 +250,31 @@ describe('mediaJobQueue', () => {
     expect(persisted.statusMsg).toBe('Completed');
   });
 
+  it('debounce-persists live progress before a terminal transition', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId,
+      progress: 0.37,
+      step: 37,
+      totalSteps: 100,
+      message: 'Rendering step 37/100',
+    });
+
+    await waitFor(() => {
+      const data = JSON.parse(readFileSync(file, 'utf-8'));
+      const persisted = data.jobs.find((j) => j.id === job.jobId);
+      return persisted?.status === 'running'
+        && persisted.progress === 0.37
+        && persisted.statusMsg === 'Rendering step 37/100';
+    }, { timeoutMs: 2000 });
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
   it('boot recovery: persisted "running" jobs are reclassified as failed', async () => {
     const interruptedId = '00000000-0000-4000-8000-000000000001';
     const persisted = {

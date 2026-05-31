@@ -64,6 +64,7 @@ const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 
 // default trips false positives. 20 minutes covers a slow generation +
 // queueing delay, and is env-overridable when batch limits change.
 const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20 * 60 * 1000);
+const PROGRESS_PERSIST_DEBOUNCE_MS = 250;
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
 // safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
@@ -544,20 +545,54 @@ function makeGenDispatcher(emitter, job, handlers) {
 
 async function runJob(job) {
   const sseEntry = ensureSseEntry(job.id);
+  let progressPersistDirty = false;
+  let progressPersistTimer = null;
+  let progressPersisting = null;
+  let terminalStarted = false;
+
+  const flushProgressPersist = async () => {
+    if (progressPersistTimer) {
+      clearTimeout(progressPersistTimer);
+      progressPersistTimer = null;
+    }
+    if (!progressPersistDirty) return;
+    progressPersistDirty = false;
+    await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on progress failed: ${e.message}`));
+  };
+
+  const drainProgressPersist = async () => {
+    if (progressPersisting) await progressPersisting.catch(() => {});
+    await flushProgressPersist();
+  };
+
+  const scheduleProgressPersist = () => {
+    progressPersistDirty = true;
+    if (progressPersistTimer || progressPersisting) return;
+    progressPersistTimer = setTimeout(() => {
+      progressPersistTimer = null;
+      progressPersisting = flushProgressPersist().finally(() => {
+        progressPersisting = null;
+        if (progressPersistDirty) scheduleProgressPersist();
+      });
+    }, PROGRESS_PERSIST_DEBOUNCE_MS);
+    progressPersistTimer.unref?.();
+  };
 
   // Single idempotent terminal sink. All terminal paths (completed, failed,
   // canceled, watchdog) funnel through here. The status check at the top
   // ensures only the first caller wins; any subsequent call (e.g. watchdog
   // fired and then the gen emits 'completed') is a no-op.
   let watchdogTimer;
-  function terminate(state, apply) {
-    if (job.status !== 'running') return;
+  async function terminate(state, apply) {
+    if (terminalStarted || job.status !== 'running') return;
+    terminalStarted = true;
     // setInterval now (was setTimeout) — using clearInterval to match the new
     // API. (Node accepts either clearTimeout or clearInterval on the same
     // Timeout handle, so this is purely stylistic.)
     clearInterval(watchdogTimer);
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
+    await drainProgressPersist();
     apply(job);
     job.status = state;
     if (state === 'completed') {
@@ -582,16 +617,22 @@ async function runJob(job) {
 
   const handlers = {
     progress: (payload) => {
+      if (terminalStarted || job.status !== 'running') return;
+      let didUpdatePersistedProgress = false;
       if (payload.type === 'progress' && typeof payload.progress === 'number' && Number.isFinite(payload.progress)) {
         job.progress = Math.max(0, Math.min(1, payload.progress));
+        didUpdatePersistedProgress = true;
       }
       if (typeof payload.message === 'string' && payload.message.length > 0) {
         job.statusMsg = payload.message;
+        didUpdatePersistedProgress = true;
       }
+      if (didUpdatePersistedProgress) scheduleProgressPersist();
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
-      terminate('completed', (j) => { j.result = payload; });
+      terminate('completed', (j) => { j.result = payload; })
+        .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`));
     },
     failed: (payload) => {
       // If cancelJob() flagged this job before the underlying gen reported
@@ -603,10 +644,11 @@ async function runJob(job) {
           // is cleaned up still gets a meaningful terminal frame from the
           // archived state, rather than the generic "Canceled" fallback.
           j.error = 'Canceled while running';
-        });
+        }).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`));
         return;
       }
-      terminate('failed', (j) => { j.error = payload.error || 'unknown error'; });
+      terminate('failed', (j) => { j.error = payload.error || 'unknown error'; })
+        .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`));
     },
   };
 
