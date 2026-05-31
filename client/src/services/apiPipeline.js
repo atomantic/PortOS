@@ -437,19 +437,19 @@ export const patchPipelineManuscriptComment = (seriesId, commentId, patch, optio
     ...options,
   });
 
-// Generate an anchored find/replace fix for a comment (does not apply it).
+// Generate one or more anchored fix edits for a comment (does not apply them).
 export const generatePipelineManuscriptFix = (seriesId, commentId, { providerOverride, modelOverride } = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/fix`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride }),
   });
 
-// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
-// Returns { comment, section }.
-export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace }) =>
+// Apply one or more optionally edited fixes into stage output + mark accepted.
+// Returns { comment, section, sections }.
+export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace, edits }) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/accept`, {
     method: 'POST',
-    body: JSON.stringify({ find, replace }),
+    body: JSON.stringify({ find, replace, edits }),
   });
 
 // Versioned free-text save of one manuscript section. Snapshots the prior text

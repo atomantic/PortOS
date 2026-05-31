@@ -9,8 +9,8 @@
  *             a free-text editor that saves back to that issue's stage on blur.
  *   - Right : Word-style editorial comments from the completeness pass. Click a
  *             comment to jump to (and select) its anchor in the manuscript,
- *             generate an AI find/replace fix, edit it, and accept it into the
- *             manuscript — or dismiss it.
+ *             generate AI edit suggestions, review diffs, edit/skip individual
+ *             suggestions, and accept them into the manuscript — or dismiss it.
  *
  * Data: GET /pipeline/series/:id/manuscript (sections) + .../manuscript/review
  * (comments). Section saves reuse PATCH /pipeline/issues/:id; fixes go through
@@ -22,6 +22,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Loader2, Sparkles, Check, X, CornerDownRight, FileText, ChevronDown, ChevronRight, Star, History, RotateCcw, ClipboardCheck,
 } from 'lucide-react';
+import InlineDiff from '../components/ui/InlineDiff';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { timeAgo } from '../utils/formatters';
@@ -255,12 +256,15 @@ export default function PipelineManuscriptEditor() {
   // the current view, or we'd paint (and later blur-save) the wrong format's
   // text into this section. The edit still persisted server-side — it shows on
   // switching to that format.
-  const applyAccepted = ({ comment, section }) => {
-    if (section?.issueId && section.stageId === viewType) {
-      patchSection(section.issueId, { content: section.content, versions: section.versions });
-      baselineRef.current.set(`${section.issueId}:${section.stageId}`, section.content);
-      setSaveState((prev) => ({ ...prev, [section.issueId]: 'saved' }));
-    }
+  const applyAccepted = ({ comment, section, sections: changedSections }) => {
+    const list = Array.isArray(changedSections) && changedSections.length ? changedSections : [section].filter(Boolean);
+    list.forEach((changed) => {
+      if (changed?.issueId && changed.stageId === viewType) {
+        patchSection(changed.issueId, { content: changed.content, versions: changed.versions });
+        baselineRef.current.set(`${changed.issueId}:${changed.stageId}`, changed.content);
+        setSaveState((prev) => ({ ...prev, [changed.issueId]: 'saved' }));
+      }
+    });
     if (comment) updateCommentLocal(comment);
   };
 
@@ -516,32 +520,73 @@ function Badge({ comment }) {
 }
 
 function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJump, onCommentChange, onAccepted }) {
-  const [replaceText, setReplaceText] = useState(comment.fix?.replace || '');
   const hasFix = !!comment.fix;
+  const fixEdits = useMemo(() => {
+    if (Array.isArray(comment.fix?.edits) && comment.fix.edits.length) return comment.fix.edits;
+    if (comment.fix?.find || comment.fix?.replace) {
+      return [{
+        issueNumber: comment.issueNumber,
+        issueId: comment.issueId,
+        stageId: comment.stageId,
+        find: comment.fix.find || '',
+        replace: comment.fix.replace || '',
+        fuzzy: comment.fix.fuzzy,
+      }];
+    }
+    return [];
+  }, [comment.fix, comment.issueId, comment.issueNumber, comment.stageId]);
+  const fixKey = useMemo(
+    () => fixEdits.map((e, i) => `${i}:${e.issueId || ''}:${e.stageId || ''}:${e.find}:${e.replace}`).join('\n---\n'),
+    [fixEdits],
+  );
+  const [editDrafts, setEditDrafts] = useState({});
+  const [selectedEdits, setSelectedEdits] = useState({});
+
+  useEffect(() => {
+    const nextDrafts = {};
+    const nextSelected = {};
+    fixEdits.forEach((edit, i) => {
+      nextDrafts[i] = edit.replace || '';
+      nextSelected[i] = true;
+    });
+    setEditDrafts(nextDrafts);
+    setSelectedEdits(nextSelected);
+  }, [fixKey, fixEdits]);
 
   const [runGenerate, generating] = useAsyncAction(
     () => generatePipelineManuscriptFix(seriesId, comment.id, { providerOverride, modelOverride }),
     { errorMessage: 'Failed to generate fix' },
   );
   const [runAccept, accepting] = useAsyncAction(
-    () => acceptPipelineManuscriptFix(seriesId, comment.id, { find: comment.fix.find, replace: replaceText }),
+    (selected) => acceptPipelineManuscriptFix(seriesId, comment.id, { edits: selected }),
     { errorMessage: 'Failed to apply fix' },
   );
 
   const generate = async () => {
     const result = await runGenerate();
     if (!result) return;
-    setReplaceText(result.fix?.replace || '');
+    const nextEdits = Array.isArray(result.fix?.edits) && result.fix.edits.length
+      ? result.fix.edits
+      : (result.fix ? [{ ...result.fix, issueNumber: comment.issueNumber, issueId: comment.issueId, stageId: comment.stageId }] : []);
+    setEditDrafts(Object.fromEntries(nextEdits.map((edit, i) => [i, edit.replace || ''])));
+    setSelectedEdits(Object.fromEntries(nextEdits.map((_, i) => [i, true])));
     if (result.comment) onCommentChange(result.comment);
     if (result.fix?.fuzzy) toast('The suggested anchor was not found verbatim — edit the manuscript directly, or adjust the replacement.');
   };
 
   const accept = async () => {
     if (!comment.fix) return;
-    const result = await runAccept();
+    const selected = fixEdits
+      .map((edit, i) => ({ ...edit, replace: editDrafts[i] ?? edit.replace ?? '' }))
+      .filter((_, i) => selectedEdits[i]);
+    if (selected.length === 0) {
+      toast('Select at least one suggested edit to apply');
+      return;
+    }
+    const result = await runAccept(selected);
     if (!result) return;
     onAccepted(result);
-    toast.success('Fix applied to the manuscript');
+    toast.success(selected.length === 1 ? 'Fix applied to the manuscript' : `${selected.length} fixes applied to the manuscript`);
   };
 
   const dismiss = async () => {
@@ -550,7 +595,7 @@ function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJum
     if (result?.comment) onCommentChange(result.comment);
   };
 
-  const fuzzy = comment.fix?.fuzzy;
+  const fuzzy = comment.fix?.fuzzy || fixEdits.some((e) => e.fuzzy);
 
   return (
     <div className="border border-port-border rounded-lg bg-port-bg/40 p-2.5 space-y-2">
@@ -573,20 +618,38 @@ function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJum
 
       {hasFix ? (
         <div className="space-y-1.5">
-          {comment.fix.find ? (
-            <details className="text-[11px]">
-              <summary className="text-gray-500 cursor-pointer">Replacing…</summary>
-              <pre className="mt-1 whitespace-pre-wrap text-gray-500 bg-port-card border border-port-border rounded p-1.5 max-h-24 overflow-y-auto">{comment.fix.find}</pre>
-            </details>
-          ) : null}
-          <label htmlFor={`fix-replace-${comment.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Suggested replacement (editable)</label>
-          <textarea
-            id={`fix-replace-${comment.id}`}
-            value={replaceText}
-            onChange={(e) => setReplaceText(e.target.value)}
-            rows={Math.min(16, Math.max(3, replaceText.split('\n').length + 1))}
-            className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-[12px] text-gray-100 font-mono resize-y focus:border-port-accent/50 focus:outline-none"
-          />
+          <p className="text-[10px] uppercase tracking-wider text-gray-500">
+            Suggested {fixEdits.length === 1 ? 'edit' : `${fixEdits.length} edits`}
+          </p>
+          {fixEdits.map((edit, i) => {
+            const draft = editDrafts[i] ?? edit.replace ?? '';
+            const checked = selectedEdits[i] !== false;
+            const label = edit.issueNumber != null ? `Issue ${edit.issueNumber}` : 'Manuscript';
+            return (
+              <div key={`${i}-${edit.issueId || ''}-${edit.find}`} className="border border-port-border rounded bg-port-card/60 overflow-hidden">
+                <label className="flex items-center gap-2 px-2 py-1.5 border-b border-port-border text-[11px] text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => setSelectedEdits((prev) => ({ ...prev, [i]: e.target.checked }))}
+                    className="accent-port-accent"
+                  />
+                  <span className="font-medium">{label}{edit.title ? ` — ${edit.title}` : ''}</span>
+                  {edit.fuzzy ? <span className="ml-auto text-port-warning">fuzzy</span> : null}
+                </label>
+                {edit.note ? <p className="px-2 pt-1.5 text-[11px] text-gray-500">{edit.note}</p> : null}
+                <InlineDiff oldText={edit.find || ''} newText={draft} emptyLabel="No replacement changes." />
+                <label htmlFor={`fix-replace-${comment.id}-${i}`} className="block px-2 pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Replacement (editable)</label>
+                <textarea
+                  id={`fix-replace-${comment.id}-${i}`}
+                  value={draft}
+                  onChange={(e) => setEditDrafts((prev) => ({ ...prev, [i]: e.target.value }))}
+                  rows={Math.min(14, Math.max(3, draft.split('\n').length + 1))}
+                  className="m-2 mt-1 w-[calc(100%-1rem)] px-2 py-1.5 bg-port-bg border border-port-border rounded text-[12px] text-gray-100 font-mono resize-y focus:border-port-accent/50 focus:outline-none"
+                />
+              </div>
+            );
+          })}
           {fuzzy ? (
             <p className="text-[10px] text-port-warning">Anchor not found verbatim — accepting may fail; edit the manuscript directly if so.</p>
           ) : null}
@@ -609,7 +672,7 @@ function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJum
             <button
               type="button"
               onClick={accept}
-              disabled={accepting || !replaceText.trim()}
+              disabled={accepting || !fixEdits.some((_, i) => selectedEdits[i] && (editDrafts[i] || '').trim())}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40"
             >
               {accepting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}

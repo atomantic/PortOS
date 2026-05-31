@@ -1,12 +1,12 @@
 /**
  * Pipeline — Manuscript Fix generation + accept
  *
- * Turns a "Finish the draft" comment into a surgical, anchored edit. The LLM
- * returns `{ find, replace }` where `find` is a verbatim excerpt of the issue's
- * drafted stage text and `replace` is that excerpt rewritten to close the gap.
- * The user can edit `replace` before accepting; accept applies the find/replace
- * to the issue's stage output through the serialized stage-write path (which
- * snapshots the prior text into runHistory).
+ * Turns a "Finish the draft" comment into one or more anchored edits. The LLM
+ * returns `{ edits: [{ issueNumber, find, replace }] }` where each `find` is a
+ * verbatim excerpt of an issue's drafted stage text and `replace` is that
+ * excerpt rewritten to close the gap. The user can edit or skip each suggested
+ * replacement before accepting; accept applies the selected edits through the
+ * serialized stage-write path (which snapshots the prior text into runHistory).
  *
  * Read this alongside manuscriptReview.js (where the comment + fix persist) and
  * arcPlanner.js (which owns the completeness pass that creates the comments).
@@ -27,31 +27,135 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 // Mirrors arcPlanner's stageTextOf (inlined there to avoid an import cycle).
 const stageTextOf = (stage) => (stage?.output?.trim() || stage?.input?.trim() || '');
 
-// Resolve which issue+stage a comment edits. Prefer the ids stored on the
-// comment at seed time; fall back to matching issueNumber against the current
-// manuscript sections (the manuscript may have grown since the comment was
-// created). Returns { issueId, stageId } or throws ERR_VALIDATION.
-async function resolveTarget(seriesId, comment) {
-  if (comment.issueId && comment.stageId) {
-    return { issueId: comment.issueId, stageId: comment.stageId };
-  }
-  const sections = await collectManuscriptSections(seriesId);
-  const section = comment.issueNumber != null
-    ? sections.find((s) => s.number === comment.issueNumber)
-    : null;
-  if (!section) {
-    throw makeErr(
-      'This comment is not anchored to a specific issue — edit the manuscript directly to address it',
-      ERR_VALIDATION,
-    );
-  }
-  return { issueId: section.issueId, stageId: section.stageId };
-}
-
 async function loadStageText(issueId, stageId) {
   const issue = await getIssue(issueId).catch(() => null);
   if (!issue) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
   return stageTextOf(issue.stages?.[stageId]);
+}
+
+const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
+
+function manuscriptTextOf(sections) {
+  return sections
+    .map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content || ''}`)
+    .join('\n\n---\n\n');
+}
+
+function sectionLabel(s) {
+  return `Issue ${s.number}${s.title ? ` — ${s.title}` : ''}`;
+}
+
+// Resolve the manuscript sections a comment may edit. Narrow comments still
+// get their one issue, while unanchored or story-level comments get the whole
+// drafted manuscript so the model can produce multiple concrete insertions.
+async function resolveTargets(seriesId, comment) {
+  const sections = await collectManuscriptSections(seriesId);
+  if (comment.issueId && comment.stageId) {
+    const current = sections.find((s) => s.issueId === comment.issueId && s.stageId === comment.stageId);
+    if (current) return [current];
+    return [{
+      issueId: comment.issueId,
+      stageId: comment.stageId,
+      number: comment.issueNumber,
+      title: '',
+      content: await loadStageText(comment.issueId, comment.stageId),
+    }];
+  }
+  if (comment.issueNumber != null) {
+    const section = sections.find((s) => s.number === comment.issueNumber);
+    if (section) return [section];
+  }
+  if (sections.length) return sections;
+  throw makeErr('No drafted manuscript text is available to edit', ERR_VALIDATION);
+}
+
+// Legacy `{ find, replace }` accepts still need exactly one target.
+async function resolveTarget(seriesId, comment) {
+  const targets = await resolveTargets(seriesId, comment);
+  if (targets.length !== 1) {
+    throw makeErr(
+      'This comment spans multiple manuscript sections — accept one or more generated edits instead',
+      ERR_VALIDATION,
+    );
+  }
+  const [target] = targets;
+  return { issueId: target.issueId, stageId: target.stageId };
+}
+
+function normalizeModelEdits(content) {
+  if (Array.isArray(content?.edits)) return content.edits;
+  if (typeof content?.find === 'string' || typeof content?.replace === 'string') {
+    return [{ find: content.find || '', replace: content.replace || '' }];
+  }
+  return [];
+}
+
+function resolveEditSection(raw, targets) {
+  const issueNumber = Number.isInteger(raw?.issueNumber) ? raw.issueNumber : null;
+  if (issueNumber != null) {
+    const byNumber = targets.find((s) => s.number === issueNumber);
+    if (byNumber) return byNumber;
+  }
+  if (targets.length === 1) return targets[0];
+  const find = typeof raw?.find === 'string' ? raw.find : '';
+  if (find) {
+    const matches = targets.filter((s) => (s.content || '').includes(find));
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
+}
+
+function normalizeFix(content, targets) {
+  const edits = normalizeModelEdits(content)
+    .map((raw) => {
+      const find = typeof raw?.find === 'string' ? raw.find : '';
+      const replace = typeof raw?.replace === 'string' ? raw.replace : '';
+      if (!find || !replace) return null;
+      const section = resolveEditSection(raw, targets);
+      if (!section) return null;
+      const edit = {
+        issueNumber: section.number,
+        issueId: section.issueId,
+        stageId: section.stageId,
+        title: section.title || '',
+        find,
+        replace,
+      };
+      if (typeof raw.note === 'string' && raw.note.trim()) edit.note = raw.note.trim().slice(0, 1000);
+      if (!(section.content || '').includes(find)) edit.fuzzy = true;
+      return edit;
+    })
+    .filter(Boolean);
+  if (edits.length === 0) return null;
+  const fix = { edits };
+  if (edits.length === 1) {
+    fix.find = edits[0].find;
+    fix.replace = edits[0].replace;
+    if (edits[0].fuzzy) fix.fuzzy = true;
+  }
+  return fix;
+}
+
+function editsFromAcceptRequest({ comment, find, replace, edits }) {
+  if (Array.isArray(edits) && edits.length) {
+    return edits.map((e) => ({
+      issueId: typeof e.issueId === 'string' ? e.issueId : null,
+      stageId: typeof e.stageId === 'string' ? e.stageId : null,
+      issueNumber: Number.isInteger(e.issueNumber) ? e.issueNumber : null,
+      find: typeof e.find === 'string' ? e.find : '',
+      replace: typeof e.replace === 'string' ? e.replace : '',
+    })).filter((e) => e.find);
+  }
+  if (find) {
+    return [{
+      issueId: comment.issueId,
+      stageId: comment.stageId,
+      issueNumber: comment.issueNumber,
+      find,
+      replace: typeof replace === 'string' ? replace : '',
+    }];
+  }
+  return [];
 }
 
 // Locate the `find` span to replace. `indexOf` alone edits the FIRST match,
@@ -84,6 +188,43 @@ const sectionFrom = (issue, stageId, stage) => ({
   versions: stageVersionsOf(stage),
 });
 
+async function resolveMissingEditTargets(seriesId, comment, edits) {
+  const targets = await resolveTargets(seriesId, comment);
+  return edits.map((edit) => {
+    if (edit.issueId && edit.stageId) return edit;
+    const section = resolveEditSection(edit, targets);
+    return section
+      ? { ...edit, issueId: section.issueId, stageId: section.stageId, issueNumber: section.number }
+      : edit;
+  });
+}
+
+async function applyEditsToSections(edits, comment) {
+  const groups = new Map();
+  for (const edit of edits) {
+    const key = `${edit.issueId}:${edit.stageId}`;
+    if (!groups.has(key)) groups.set(key, { issueId: edit.issueId, stageId: edit.stageId, edits: [] });
+    groups.get(key).edits.push(edit);
+  }
+
+  const sections = [];
+  for (const group of groups.values()) {
+    const { issue, stage } = await updateStageWithLatest(group.issueId, group.stageId, (cur) => {
+      let text = stageTextOf(cur);
+      for (const edit of group.edits) {
+        const idx = locateFind(text, edit.find, comment.anchorQuote);
+        if (idx === -1) {
+          throw makeErr('Anchor text is no longer present in the manuscript — regenerate the fix', ERR_VALIDATION);
+        }
+        text = text.slice(0, idx) + edit.replace + text.slice(idx + edit.find.length);
+      }
+      return { output: text, status: 'edited', lastRunId: `fix-${randomUUID()}` };
+    }, { snapshotPrior: true });
+    sections.push(sectionFrom(issue, group.stageId, stage));
+  }
+  return sections;
+}
+
 /**
  * Free-text manuscript edit, versioned. Writes `output` to the issue's stage and
  * snapshots the PRIOR text into runHistory (via `snapshotPrior`) so every saved
@@ -104,30 +245,36 @@ export async function saveManuscriptSection(seriesId, { issueId, stageId, output
 }
 
 /**
- * Generate an anchored find/replace fix for a comment and persist it on the
- * comment (status stays `open` — the user still has to accept). When the LLM's
- * `find` can't be located verbatim in the current stage text, the fix is
- * flagged `fuzzy: true` so the client falls back to manual editing rather than
- * a write that would silently miss.
+ * Generate anchored fix edits for a comment and persist them on the comment
+ * (status stays `open` — the user still has to accept). When an edit's `find`
+ * can't be located verbatim in the current stage text, that edit is flagged
+ * `fuzzy: true` so the client can warn before apply.
  */
 export async function generateManuscriptFix(seriesId, { commentId, providerOverride, modelOverride } = {}) {
   const series = await getSeries(seriesId);
   const comment = await getComment(seriesId, commentId);
   if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
 
-  const { issueId, stageId } = await resolveTarget(seriesId, comment);
-  const manuscript = await loadStageText(issueId, stageId);
-  if (!manuscript) {
-    throw makeErr('That issue has no drafted text to edit', ERR_VALIDATION);
+  const targets = await resolveTargets(seriesId, comment);
+  if (targets.every((s) => !s.content)) {
+    throw makeErr('There is no drafted text to edit', ERR_VALIDATION);
   }
 
   const arc = series.arc || {};
+  const manuscript = manuscriptTextOf(targets);
   const ctx = {
     series: { name: series.name, logline: series.logline, premise: series.premise },
     arc: {
       logline: arc.logline || '',
       themesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
     },
+    scope: targets.length === 1 ? sectionLabel(targets[0]) : 'Full manuscript',
+    sections: targets.map((s) => ({
+      issueNumber: s.number,
+      title: s.title || '',
+      stageId: s.stageId,
+      manuscript: s.content || '',
+    })),
     manuscript,
     finding: {
       category: comment.category,
@@ -145,44 +292,35 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
     source: 'pipeline-manuscript-fix',
   });
 
-  const find = typeof content?.find === 'string' ? content.find : '';
-  const replace = typeof content?.replace === 'string' ? content.replace : '';
-  // The accept path locates the edit by `find` (schema requires it non-empty),
-  // and the UI only lets the user edit `replace` — so a fix missing `find`
-  // would be shown but could never be applied. Reject it as unusable.
-  if (!find || !replace) throw makeErr('The model did not return a usable fix — try again', ERR_VALIDATION);
-  const fix = { find, replace };
-  // A `find` that isn't present verbatim can't be applied surgically; mark it
-  // so the UI offers manual editing instead of a no-op accept.
-  if (find && !manuscript.includes(find)) fix.fuzzy = true;
+  const fix = normalizeFix(content, targets);
+  if (!fix) throw makeErr('The model did not return a usable fix — try again', ERR_VALIDATION);
 
   const updated = await updateComment(seriesId, commentId, { fix });
   return { comment: updated, fix, runId };
 }
 
 /**
- * Apply an (optionally user-edited) find/replace to the issue's stage output and
- * mark the comment accepted. Serialized through `updateStageWithLatest`, which
- * snapshots the prior output into runHistory when a fresh run id is stamped.
- * Returns the refreshed manuscript section + the accepted comment.
+ * Apply selected, optionally user-edited fix edits to manuscript stage output
+ * and mark the comment accepted. Serialized through `updateStageWithLatest`,
+ * which snapshots the prior output into runHistory when a fresh run id is
+ * stamped. Returns refreshed manuscript sections + the accepted comment.
  */
-export async function acceptManuscriptFix(seriesId, { commentId, find, replace } = {}) {
+export async function acceptManuscriptFix(seriesId, { commentId, find, replace, edits } = {}) {
   const comment = await getComment(seriesId, commentId);
   if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
-  const { issueId, stageId } = await resolveTarget(seriesId, comment);
+  const acceptedEdits = await resolveMissingEditTargets(
+    seriesId,
+    comment,
+    editsFromAcceptRequest({ comment, find, replace, edits }),
+  );
+  if (acceptedEdits.length === 0) {
+    throw makeErr('No applicable edits were selected', ERR_VALIDATION);
+  }
+  if (acceptedEdits.some((e) => !e.issueId || !e.stageId || !e.find)) {
+    throw makeErr('One selected edit is not anchored to a manuscript section — regenerate the fix', ERR_VALIDATION);
+  }
 
-  const { issue, stage } = await updateStageWithLatest(issueId, stageId, (cur) => {
-    const text = stageTextOf(cur);
-    const idx = locateFind(text, find, comment.anchorQuote);
-    if (idx === -1) {
-      throw makeErr('Anchor text is no longer present in the manuscript — regenerate the fix', ERR_VALIDATION);
-    }
-    const next = text.slice(0, idx) + replace + text.slice(idx + find.length);
-    // Fresh run id + snapshotPrior so the pre-fix text is preserved in history
-    // and this accepted version is itself revertible later.
-    return { output: next, status: 'edited', lastRunId: `fix-${randomUUID()}` };
-  }, { snapshotPrior: true });
-
+  const sections = await applyEditsToSections(acceptedEdits, comment);
   const updated = await updateComment(seriesId, commentId, { status: 'accepted' });
-  return { comment: updated, section: sectionFrom(issue, stageId, stage) };
+  return { comment: updated, section: sections[0] || null, sections };
 }

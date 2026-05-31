@@ -163,6 +163,58 @@ describe('manuscriptFix', () => {
     expect(after.stages.prose.output).toBe('She opened the door. Later, she slammed the oak door shut.');
   });
 
+  it('generates and accepts multiple edits for broad unanchored manuscript feedback', async () => {
+    const { s, issue } = await setupSeriesWithDraft('Page 17: Sara laughs. Jack runs away.');
+    const issue2 = await issuesSvc.createIssue({
+      seriesId: s.id, number: 2, title: 'Two', arcPosition: 2,
+      stages: { prose: { output: 'Page 40: Jack shows Sara the coins.', status: 'ready' } },
+    });
+    const seeded = await review.seedReviewFromFindings(s.id, [finding({
+      issueNumber: null,
+      anchorQuote: '',
+      problem: 'Sara needs private concern beats on pages 17 and 40',
+      suggestion: 'Add small private beats at both moments.',
+    })]);
+
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      expect(template).toBe('pipeline-manuscript-fix');
+      expect(ctx.scope).toBe('Full manuscript');
+      expect(ctx.sections).toHaveLength(2);
+      return {
+        runId: 'rf-multi',
+        content: {
+          edits: [
+            {
+              issueNumber: 1,
+              find: 'Page 17: Sara laughs. Jack runs away.',
+              replace: 'Page 17: Sara laughs. Jack runs away.\n\nSara watches him go, her smile gone.',
+            },
+            {
+              issueNumber: 2,
+              find: 'Page 40: Jack shows Sara the coins.',
+              replace: 'Page 40: Sara looks afraid for Jack. Jack shows Sara the coins.',
+            },
+          ],
+        },
+      };
+    });
+
+    const generated = await fixer.generateManuscriptFix(s.id, { commentId: seeded.comments[0].id });
+    expect(generated.fix.edits).toHaveLength(2);
+    expect(generated.comment.fix.edits[1]).toMatchObject({ issueId: issue2.id, stageId: 'prose' });
+
+    const accepted = await fixer.acceptManuscriptFix(s.id, {
+      commentId: seeded.comments[0].id,
+      edits: generated.fix.edits,
+    });
+    expect(accepted.comment.status).toBe('accepted');
+    expect(accepted.sections).toHaveLength(2);
+    const after1 = await issuesSvc.getIssue(issue.id);
+    const after2 = await issuesSvc.getIssue(issue2.id);
+    expect(after1.stages.prose.output).toContain('smile gone');
+    expect(after2.stages.prose.output).toContain('looks afraid');
+  });
+
   it('acceptManuscriptFix throws when the anchor text is gone', async () => {
     const { s } = await setupSeriesWithDraft();
     const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
