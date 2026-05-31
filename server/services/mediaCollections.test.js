@@ -147,6 +147,25 @@ describe('mediaCollections service', () => {
     expect(all[0].id).toBe(c.id);
   });
 
+  it('write mutators map a malformed id to ERR_NOT_FOUND (not a raw store error → 500)', async () => {
+    // A path-param id that fails the store allowlist (e.g. "has space",
+    // "../escape") must surface as a clean NOT_FOUND — the same result the
+    // pre-split scan gave — instead of throwing an uncoded error from
+    // queueRecordWrite that the route mapper would turn into a 500.
+    for (const bad of ['has space', '../escape', 'a/b']) {
+      await expect(svc.addItem(bad, { kind: 'image', ref: 'x.png' }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.updateCollection(bad, { description: 'x' }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.deleteCollection(bad))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.removeItem(bad, 'image:x.png'))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.bulkUpdateCollectionItems(bad, { add: [{ kind: 'image', ref: 'x.png' }] }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    }
+  });
+
   it('deleteCollection clears coverKey on the persisted tombstone (no dangling cover in the wire record)', async () => {
     const c = await svc.createCollection({ name: 'WithCover' });
     await svc.addItem(c.id, { kind: 'image', ref: 'cover.png' });

@@ -47,6 +47,19 @@ export const ITEMS_MAX = 5000;
 // sync batch). Single source of truth: also passed to `createCollectionStore`.
 const COLLECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
+// A malformed/overlong id can't name any stored collection (ids are the fixed
+// path-segment allowlist above), so map it to NOT_FOUND — the same result the
+// pre-split `listCollections` scan gave for an unknown id. Without this, the
+// id-accepting write mutators would hand a bad id to `queueRecordWrite`, which
+// throws a raw (uncoded) store error that the route mapper surfaces as a 500
+// instead of a clean 404. Read paths (`loadOne`) already return null for a bad
+// id, so they don't need this; the write paths throw before `loadOne` runs.
+const assertCollectionId = (id) => {
+  if (typeof id !== 'string' || !COLLECTION_ID_PATTERN.test(id)) {
+    throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+  }
+};
+
 export { REF_MAX_LENGTH, itemKey };
 
 const sanitizeItem = (raw) => {
@@ -596,6 +609,7 @@ export const renameCollectionForUniverse = (universeId, newUniverseName) =>
   renameOwnerLinked('universeId', universeId, UNIVERSE_ID_MAX, universeCollectionNameFor, newUniverseName);
 
 export async function updateCollection(id, patch) {
+  assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -647,6 +661,7 @@ export async function updateCollection(id, patch) {
 }
 
 export async function deleteCollection(id) {
+  assertCollectionId(id);
   const { universeId: deletedUniverseId, seriesId: deletedSeriesId, alreadyDeleted } = await store().queueRecordWrite(id, async () => {
     const target = await store().loadOne(id);
     if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -704,6 +719,7 @@ const validateItemInput = (item) => {
 
 export async function addItem(id, item) {
   const { kind, ref } = validateItemInput(item);
+  assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -766,6 +782,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     }
   }
 
+  assertCollectionId(id);
   const result = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
@@ -818,6 +835,7 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
 }
 
 export async function removeItem(id, key) {
+  assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
