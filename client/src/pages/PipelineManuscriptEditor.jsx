@@ -490,8 +490,9 @@ function CommentCard({ comment, seriesId, onJump, onCommentChange, onAccepted })
               <pre className="mt-1 whitespace-pre-wrap text-gray-500 bg-port-card border border-port-border rounded p-1.5 max-h-24 overflow-y-auto">{comment.fix.find}</pre>
             </details>
           ) : null}
-          <label className="block text-[10px] uppercase tracking-wider text-gray-500">Suggested replacement (editable)</label>
+          <label htmlFor={`fix-replace-${comment.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Suggested replacement (editable)</label>
           <textarea
+            id={`fix-replace-${comment.id}`}
             value={replaceText}
             onChange={(e) => setReplaceText(e.target.value)}
             rows={Math.min(16, Math.max(3, replaceText.split('\n').length + 1))}
