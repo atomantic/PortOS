@@ -197,11 +197,14 @@ afterEach(async () => {
   // delay between them — pushes scheduled by an earlier drain (e.g.
   // ackDeletesUpTo from a settled push) only enqueue on the next tick, so
   // we need more than one pass to fully quiesce the writeTail chains.
+  // __drainForTests double-awaits writeTail (one tick apart) so the
+  // persistPushSuccess that enqueues after peerFetch resolves is captured.
   for (let i = 0; i < 3; i++) {
-    await __resetForTests();
+    await __drainForTests();
     await __drainCursors();
     await new Promise((r) => setTimeout(r, 5));
   }
+  await __resetForTests();
   await rm(tmp, { recursive: true, force: true });
   PATHS.data = originalDataPath;
   PATHS.images = originalImagesPath;
