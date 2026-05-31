@@ -153,6 +153,7 @@ export * from './timezone.js';
 // === General utilities ===
 export * from './asyncMutex.js';
 export * from './errorHandler.js';
+export * from './mapWithConcurrency.js';
 export * from './objects.js';
 export * from './sseUtils.js';
 export * from './uuid.js';

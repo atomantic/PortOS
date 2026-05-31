@@ -186,6 +186,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
+| `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
 | `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
