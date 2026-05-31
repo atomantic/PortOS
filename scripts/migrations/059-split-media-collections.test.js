@@ -139,6 +139,22 @@ describe('migration 059 — split media-collections.json to per-record files', (
     expect(existsSync(join(typeDir, '11111111-1111-1111-1111-111111111111', 'index.json'))).toBe(true);
   });
 
+  it('duplicate ids: first record wins (matches the old monolithic dedup)', async () => {
+    // The legacy reader (listCollections) kept the FIRST occurrence of a
+    // duplicate id; the split must preserve that so an upgrade can't flip which
+    // record survives (e.g. a live record shadowing a later tombstone).
+    const id = '11111111-1111-1111-1111-111111111111';
+    writeJson(legacyPath, {
+      collections: [
+        collection(id, { name: 'First (wins)' }),
+        collection(id, { name: 'Second (dropped)', deleted: true, deletedAt: '2026-05-31T00:00:00.000Z' }),
+      ],
+    });
+    const result = await migration.up({ rootDir });
+    expect(result).toEqual({ ok: true, reason: 'split', written: 1, skipped: 1, invalid: 0 });
+    expect(readJson(join(typeDir, id, 'index.json')).name).toBe('First (wins)');
+  });
+
   it('reports unreadable when the legacy file is corrupted', async () => {
     writeFileSync(legacyPath, 'not json');
     const result = await migration.up({ rootDir });

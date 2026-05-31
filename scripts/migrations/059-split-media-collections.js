@@ -160,15 +160,19 @@ export default {
         continue;
       }
       if (existingIds.has(id)) {
-        // Already split in a prior partial run — leave it alone. The
-        // monolithic record may have stale state (in-flight writes after the
-        // crash), so trusting the already-split per-record file is safer.
+        // Already split — either in a prior partial run (trust the on-disk
+        // per-record file, which may hold fresher post-crash state) OR earlier
+        // in THIS loop (a duplicate id within the legacy array). For the
+        // duplicate case this preserves the old monolithic `listCollections`
+        // first-wins dedup (`seen.has(id)` → skip), so the upgrade can't flip
+        // which record survives (live vs tombstone, or item membership).
         skipped += 1;
         continue;
       }
       const recordDir = join(typeDir, id);
       await mkdir(recordDir, { recursive: true });
       await writeJson(join(recordDir, 'index.json'), record);
+      existingIds.add(id); // first-wins: later duplicates of this id are skipped above
       written += 1;
     }
 
