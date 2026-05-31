@@ -1619,4 +1619,29 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     const f1 = await issuesSvc.getIssue(i1.id);
     expect(f1.stages.idea.input).toBe('frozen synopsis');
   });
+
+  it('commitDerivedManuscript does not strip issues out of a locked non-kept volume', async () => {
+    const s = await setupSeries();
+    const v1 = await seasonsSvc.createSeason(s.id, { title: 'V1', number: 1 });
+    const v2 = await seasonsSvc.createSeason(s.id, { title: 'V2 (locked)', number: 2 });
+    await seasonsSvc.updateSeason(s.id, v2.id, { locked: true });
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v1.id, title: 'Issue 1', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\nx', status: 'ready' } } });
+    const iLocked = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v2.id, title: 'Locked vol issue', arcPosition: 2, stages: { comicScript: { output: 'PAGE 1\ny', status: 'ready' } } });
+
+    const out = await planner.commitDerivedManuscript(s.id, {
+      arc: { logline: 'L', summary: 'S' },
+      bible: { logline: 'L', premise: 'S', issueCountTarget: 2 },
+      volume: { title: 'The Giant' },
+      issues: [{ id: i1.id, synopsis: 'a' }, { id: iLocked.id, synopsis: 'b' }],
+    });
+
+    // The locked volume survives (commitSeasonsWithRemap re-inserts it) — so we
+    // did NOT collapse to a single volume, and its issue must stay put.
+    const seasonIds = out.series.seasons.map((x) => x.id);
+    expect(seasonIds).toContain(v2.id);
+    const fLocked = await issuesSvc.getIssue(iLocked.id);
+    expect(fLocked.seasonId).toBe(v2.id); // not stripped onto the target volume
+    const f1 = await issuesSvc.getIssue(i1.id);
+    expect(f1.seasonId).toBe(v1.id); // the kept (lowest, unlocked) volume reused its id
+  });
 });

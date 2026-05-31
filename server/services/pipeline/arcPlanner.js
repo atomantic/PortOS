@@ -525,13 +525,26 @@ export async function commitDerivedManuscript(seriesId, { arc, bible, volume, is
   //    migrates orphans). Re-read first so we merge against the bible write.
   const sanitizedArc = sanitizeArc({ ...(arc || {}), status: 'draft' });
   const latest = await getSeries(seriesId);
-  await commitSeasonsWithRemap(latest, { arc: sanitizedArc, seasons: [targetSeason] });
+  const { series: afterSeasons } = await commitSeasonsWithRemap(latest, { arc: sanitizedArc, seasons: [targetSeason] });
+
+  // A locked NON-target season survives commitSeasonsWithRemap (mergeSeasonsWithLocks
+  // re-inserts it). Pinning its issues onto the target volume would empty a locked
+  // volume — the exact destructive move deleteSeason / bulkReassignSeason refuse.
+  // So leave a locked survivor's issues where they are (deleteSeason's contract).
+  const lockedSurvivorIds = new Set(
+    (afterSeasons?.seasons || [])
+      .filter((s) => s.locked === true && s.id !== targetSeason.id)
+      .map((s) => s.id),
+  );
 
   // 4) Pin every issue onto the single volume and apply per-issue edits.
   const editsById = new Map((Array.isArray(issues) ? issues : []).map((e) => [e.id, e]));
   await withReexportSuppressed('series', seriesId, async () => {
     for (const iss of existingIssues) {
-      if (iss.seasonId !== targetSeason.id) {
+      // `iss.seasonId` is the pre-collapse season; a locked survivor keeps its id
+      // (and its issues weren't remapped), so this skip is correct against either
+      // the stale or fresh view.
+      if (!lockedSurvivorIds.has(iss.seasonId) && iss.seasonId !== targetSeason.id) {
         await updateIssue(iss.id, { seasonId: targetSeason.id }, { skipRenumber: true });
       }
       const edit = editsById.get(iss.id);
