@@ -12,7 +12,7 @@ import { usePreviousSync } from './usePrevious.js';
  * Returns:
  *   {
  *     status: 'unknown' | 'queued' | 'running' | 'completed' | 'failed' | 'canceled',
- *     progress, step, totalSteps, currentImage,
+ *     progress, statusMsg, step, totalSteps, currentImage,
  *     filename, path, error,
  *   }
  *
@@ -23,6 +23,7 @@ import { usePreviousSync } from './usePrevious.js';
 const INITIAL_STATE = Object.freeze({
   status: 'unknown',
   progress: 0,
+  statusMsg: null,
   step: 0,
   totalSteps: null,
   currentImage: null,
@@ -69,6 +70,8 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
       setState((prev) => ({
         ...prev,
         status: job.status || 'unknown',
+        progress: typeof job.progress === 'number' ? job.progress : prev.progress,
+        statusMsg: job.statusMsg || prev.statusMsg,
         filename: job.result?.filename || prev.filename,
         path: job.result?.path || prev.path,
         error: job.error || prev.error,
@@ -99,6 +102,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
           ...prev,
           status: 'running',
           progress: data.progress ?? prev.progress,
+          statusMsg: data.message ?? prev.statusMsg,
           step: data.step ?? prev.step,
           totalSteps: data.totalSteps ?? prev.totalSteps,
           currentImage: data.currentImage ?? prev.currentImage,
@@ -106,6 +110,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
         if (
           next.status === prev.status
           && next.progress === prev.progress
+          && next.statusMsg === prev.statusMsg
           && next.step === prev.step
           && next.totalSteps === prev.totalSteps
           && next.currentImage === prev.currentImage
@@ -118,6 +123,8 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
       setState((prev) => ({
         ...prev,
         status: 'completed',
+        progress: 1,
+        statusMsg: 'Completed',
         filename: data.filename ?? prev.filename,
         path: data.path ?? prev.path,
       }));

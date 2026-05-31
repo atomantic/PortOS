@@ -218,6 +218,38 @@ describe('mediaJobQueue', () => {
     expect(finished.result?.path).toBe(`/data/videos/${job.jobId}.mp4`);
   });
 
+  it('progress/status events update the live job record for non-SSE readers', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'progress please' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    videoGenEvents.emit('status', { generationId: job.jobId, message: 'Loading pipeline' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.statusMsg === 'Loading pipeline');
+    expect(mediaJobQueue.getJob(job.jobId).progress).toBe(0);
+
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId,
+      progress: 0.42,
+      step: 21,
+      totalSteps: 50,
+      message: 'Rendering step 21/50',
+    });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.progress === 0.42);
+    const running = mediaJobQueue.getJob(job.jobId);
+    expect(running.status).toBe('running');
+    expect(running.statusMsg).toBe('Rendering step 21/50');
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => {
+      const data = JSON.parse(readFileSync(file, 'utf-8'));
+      const persisted = data.jobs.find((j) => j.id === job.jobId);
+      return persisted?.status === 'completed';
+    });
+    const persisted = JSON.parse(readFileSync(file, 'utf-8')).jobs.find((j) => j.id === job.jobId);
+    expect(persisted.progress).toBe(1);
+    expect(persisted.statusMsg).toBe('Completed');
+  });
+
   it('boot recovery: persisted "running" jobs are reclassified as failed', async () => {
     const interruptedId = '00000000-0000-4000-8000-000000000001';
     const persisted = {

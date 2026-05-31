@@ -228,8 +228,8 @@ async function persistImpl() {
     ...archive,
   ];
   // Strip non-serializable bits.
-  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position }) =>
-    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position }),
+  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg }) =>
+    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg }),
   );
   await atomicWrite(JOBS_FILE, { jobs: serializable });
 }
@@ -344,6 +344,8 @@ function startLaneJob(job, { isCodex }) {
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.position = 1;
+  job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
+  job.statusMsg = job.statusMsg || 'Starting';
   if (isCodex) {
     codexRunning.push(job);
   } else {
@@ -558,6 +560,13 @@ async function runJob(job) {
     emitter.off?.('progress', onActivity);
     apply(job);
     job.status = state;
+    if (state === 'completed') {
+      job.progress = 1;
+      job.statusMsg = 'Completed';
+    }
+    // failed/canceled intentionally retain the last mid-render progress/statusMsg
+    // (how far it got) — consumers gate the progress UI on status === 'running',
+    // so the residual values are not displayed for terminal jobs.
     job.completedAt = new Date().toISOString();
     const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
     const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
@@ -573,6 +582,12 @@ async function runJob(job) {
 
   const handlers = {
     progress: (payload) => {
+      if (payload.type === 'progress' && typeof payload.progress === 'number' && Number.isFinite(payload.progress)) {
+        job.progress = Math.max(0, Math.min(1, payload.progress));
+      }
+      if (typeof payload.message === 'string' && payload.message.length > 0) {
+        job.statusMsg = payload.message;
+      }
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
