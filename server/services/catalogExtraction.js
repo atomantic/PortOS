@@ -22,6 +22,7 @@ import { extractBible } from '../lib/bibleExtractor.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { BIBLE_KINDS, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { CATALOG_TYPES } from '../lib/catalogTypes.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { catalogEvents } from './catalogEvents.js';
 import { getScrap, listChildScraps, listIngredientsForRef } from './catalogDB.js';
 
@@ -315,23 +316,6 @@ export function dedupDrafts(drafts = []) {
     }
   }
   return merged;
-}
-
-// Map over an array with a bounded number of in-flight promises. Preserves
-// input order in the result. Used so a heavily-chunked scrap doesn't fan out
-// dozens of concurrent LLM extraction passes at once.
-async function mapWithConcurrency(items, concurrency, fn) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < items.length) {
-      const i = cursor++;
-      results[i] = await fn(items[i], i);
-    }
-  };
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
-  await Promise.all(workers);
-  return results;
 }
 
 // How many child-chunk extractions run concurrently. Bounded so a long paste

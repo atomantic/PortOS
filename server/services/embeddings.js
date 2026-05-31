@@ -14,6 +14,7 @@
 import { getSettings } from './settings.js';
 import * as ollama from './ollamaManager.js';
 import * as lmstudio from './lmStudioManager.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 
 export const EMBEDDING_DIM = 768;
 
@@ -157,24 +158,14 @@ export async function embedIngredient(ingredient) {
  */
 export async function embedBatch(texts, options = {}) {
   const concurrency = Math.max(1, options.concurrency || 4);
-  const results = new Array(texts.length).fill(null);
-
-  let next = 0;
-  const worker = async () => {
-    while (next < texts.length) {
-      const i = next++;
-      const out = await embedText(texts[i], options);
-      if (out.success) {
-        results[i] = { embedding: out.embedding, model: out.model, provider: out.provider };
-      } else if (out.skipped) {
-        results[i] = null;
-      } else {
-        console.error(`🧬 embedBatch[${i}] failed: ${out.error}`);
-        results[i] = null;
-      }
+  return mapWithConcurrency(texts, concurrency, async (text, i) => {
+    const out = await embedText(text, options);
+    if (out.success) {
+      return { embedding: out.embedding, model: out.model, provider: out.provider };
     }
-  };
-
-  await Promise.all(Array.from({ length: concurrency }, worker));
-  return results;
+    if (!out.skipped) {
+      console.error(`🧬 embedBatch[${i}] failed: ${out.error}`);
+    }
+    return null;
+  });
 }
