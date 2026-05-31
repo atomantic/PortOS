@@ -22,7 +22,7 @@
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
-import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS } from './series.js';
+import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS, MANUSCRIPT_TYPES } from './series.js';
 import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStage, updateStageWithLatest, assertStageUnlocked } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
@@ -170,12 +170,16 @@ const BACKFILL_SOURCE_MAX = 200_000;
 // question — "does this stage have ANY content to use as a generation source".)
 const stageTextOf = (stage) => (stage?.output?.trim() || stage?.input?.trim() || '');
 
+// The drafted-manuscript stages, in precedence order. Single source of truth is
+// `MANUSCRIPT_TYPES` in series.js (which series.js needs for the bible field and
+// arcPlanner already imports — so no new cycle). Re-exported under the
+// historical name for the existing importers.
+export const MANUSCRIPT_STAGES = MANUSCRIPT_TYPES;
 // Default stage precedence: the richest authored artifact per issue. `idea`
 // (the outline/synopsis seed) is the lowest-priority fallback — it lets an
 // arc be back-derived from outlines alone. Callers that specifically mean
 // "the DRAFTED MANUSCRIPT" must pass MANUSCRIPT_STAGES to exclude it.
-const SOURCE_STAGE_ORDER = ['comicScript', 'teleplay', 'prose', 'idea'];
-export const MANUSCRIPT_STAGES = ['comicScript', 'teleplay', 'prose'];
+const SOURCE_STAGE_ORDER = [...MANUSCRIPT_STAGES, 'idea'];
 
 /**
  * Concatenate the richest authored artifact per issue into one corpus an
@@ -192,19 +196,99 @@ export const MANUSCRIPT_STAGES = ['comicScript', 'teleplay', 'prose'];
  * Shared by `deriveFromManuscript` here and the Story Builder's plotArc/idea
  * backfill (storyBuilder.js) so both see the identical corpus shape.
  */
-export async function collectIssueSourceText(seriesId, { stageOrder = SOURCE_STAGE_ORDER } = {}) {
-  if (!seriesId) return '';
+export async function collectManuscriptSections(seriesId, { stageOrder = MANUSCRIPT_STAGES } = {}) {
+  if (!seriesId) return [];
   const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesByPosition);
-  const parts = [];
+  const sections = [];
   for (const iss of issues) {
     const st = iss.stages || {};
     const pick = stageOrder
       .map((sid) => ({ sid, content: stageTextOf(st[sid]) }))
       .find((x) => x.content);
     if (!pick) continue;
-    parts.push(`# Issue ${iss.number}${iss.title ? ` — ${iss.title}` : ''} (${pick.sid})\n\n${pick.content}`);
+    sections.push({
+      issueId: iss.id,
+      number: iss.number,
+      title: iss.title || '',
+      stageId: pick.sid,
+      content: pick.content,
+    });
   }
-  return parts.join('\n\n---\n\n').slice(0, BACKFILL_SOURCE_MAX);
+  return sections;
+}
+
+// Header for one manuscript section. The corpus join below derives from
+// `collectManuscriptSections` so the text the LLM sees stays byte-identical to
+// the per-section text the editor renders — anchorQuote/find matching depends
+// on that invariant.
+const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
+
+export async function collectIssueSourceText(seriesId, { stageOrder = SOURCE_STAGE_ORDER } = {}) {
+  if (!seriesId) return '';
+  const sections = await collectManuscriptSections(seriesId, { stageOrder });
+  return sections
+    .map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content}`)
+    .join('\n\n---\n\n')
+    .slice(0, BACKFILL_SOURCE_MAX);
+}
+
+// Lightweight version list for a stage — `{ runId, createdAt }` per retained
+// prior version (full text stays in the issue record, fetched on revert via the
+// restore route). Lets the editor show "History (N)" + revert without shipping
+// every snapshot's text in the manuscript payload.
+export const stageVersionsOf = (stage) =>
+  (Array.isArray(stage?.runHistory) ? stage.runHistory : [])
+    .map((h) => ({ runId: h.runId, createdAt: h.createdAt }));
+
+// The dominant manuscript type across the series' sections — the editor's
+// display "mode". Per-section stageId stays authoritative for writes.
+export function primaryStageIdOf(sections) {
+  const counts = new Map();
+  for (const s of sections) counts.set(s.stageId, (counts.get(s.stageId) || 0) + 1);
+  let best = null;
+  let bestN = 0;
+  for (const [sid, n] of counts) if (n > bestN) { best = sid; bestN = n; }
+  return best;
+}
+
+/**
+ * Collect the FULL series manuscript in every format at once, for the
+ * format-switching manuscript editor. Unlike `collectManuscriptSections`
+ * (which picks one richest stage per issue), this returns a complete
+ * issue-by-issue section list for EACH of comicScript / teleplay / prose —
+ * every issue appears in every format's list (content `''` where that issue
+ * hasn't been drafted in that format yet) so the editor spans the whole story
+ * and the author can fill gaps. One issue scan feeds all three.
+ *
+ * Returns `{ sectionsByType, availableTypes, detectedPrimary }`:
+ *   - sectionsByType[stageId] = [{ issueId, number, title, stageId, content }]
+ *   - availableTypes          = the formats that have content in ≥1 issue
+ *   - detectedPrimary         = the format with the most drafted issues (the
+ *                               fallback when the series hasn't pinned one)
+ */
+export async function collectManuscriptByType(seriesId) {
+  // Derive the accumulators from MANUSCRIPT_STAGES so a new format added there
+  // can't desync into a missing key (a `.push` on undefined).
+  const sectionsByType = Object.fromEntries(MANUSCRIPT_STAGES.map((t) => [t, []]));
+  const counts = Object.fromEntries(MANUSCRIPT_STAGES.map((t) => [t, 0]));
+  if (!seriesId) return { sectionsByType, availableTypes: [], detectedPrimary: null };
+  const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesByPosition);
+  for (const iss of issues) {
+    const st = iss.stages || {};
+    for (const sid of MANUSCRIPT_STAGES) {
+      const content = stageTextOf(st[sid]);
+      sectionsByType[sid].push({
+        issueId: iss.id, number: iss.number, title: iss.title || '', stageId: sid, content,
+        versions: stageVersionsOf(st[sid]),
+      });
+      if (content) counts[sid] += 1;
+    }
+  }
+  const availableTypes = MANUSCRIPT_STAGES.filter((t) => counts[t] > 0);
+  let detectedPrimary = null;
+  let best = 0;
+  for (const t of MANUSCRIPT_STAGES) if (counts[t] > best) { detectedPrimary = t; best = counts[t]; }
+  return { sectionsByType, availableTypes, detectedPrimary };
 }
 
 // Series + world + arc fields shared by every arc-level prompt context.
@@ -603,6 +687,11 @@ function shapeCompletenessFindings(rawIssues) {
       location: typeof raw?.location === 'string' ? raw.location.trim().slice(0, 200) : '',
       problem: problem.slice(0, 2000),
       suggestion: typeof raw?.suggestion === 'string' ? raw.suggestion.trim().slice(0, 2000) : '',
+      // Structured anchor: lets the editor map a finding to its issue section
+      // and jump to the verbatim excerpt. Both optional — older runs and
+      // un-anchorable findings still render (just without click-to-jump).
+      issueNumber: Number.isInteger(raw?.issueNumber) ? raw.issueNumber : null,
+      anchorQuote: typeof raw?.anchorQuote === 'string' ? raw.anchorQuote.trim().slice(0, 400) : '',
     });
   }
   return out;

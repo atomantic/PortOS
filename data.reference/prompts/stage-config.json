@@ -286,7 +286,14 @@
     },
     "pipeline-manuscript-completeness": {
       "name": "Pipeline — Manuscript Completeness",
-      "description": "Developmental editor pass over the ACTUAL drafted manuscript (comic script / prose / teleplay across all issues), not synopses. Surfaces what's missing to FINISH a near-complete draft: missing-content (beats/pages/scenes), arc-gap (themes/protagonist turns the draft doesn't yet deliver), character-gap (under-developed cast), pacing, and continuity. Returns categorized { severity, category, location, problem, suggestion } findings — empty list means complete.",
+      "description": "Developmental editor pass over the ACTUAL drafted manuscript (comic script / prose / teleplay across all issues), not synopses. Surfaces what's missing to FINISH a near-complete draft: missing-content (beats/pages/scenes), arc-gap (themes/protagonist turns the draft doesn't yet deliver), character-gap (under-developed cast), pacing, and continuity. Returns categorized { severity, category, issueNumber, anchorQuote, location, problem, suggestion } findings — issueNumber + anchorQuote anchor each finding to a manuscript spot so the editor can jump to it; empty list means complete.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-manuscript-fix": {
+      "name": "Pipeline — Manuscript Fix",
+      "description": "Generate a surgical, anchored edit that closes one 'Finish the draft' editorial gap in a single issue's drafted text. Given the issue's manuscript + the finding (category/severity/problem/suggestion/anchorQuote), returns a { find, replace } JSON pair where `find` is a verbatim excerpt of the manuscript to locate and `replace` is that excerpt rewritten to close the gap — preserving the author's voice. The user can edit `replace` before accepting it into the manuscript.",
       "model": "heavy",
       "returnsJson": true,
       "variables": []

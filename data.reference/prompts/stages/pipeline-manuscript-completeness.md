@@ -80,6 +80,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
     {
       "severity": "high",
       "category": "missing-content",
+      "issueNumber": 2,
+      "anchorQuote": "a short verbatim excerpt copied EXACTLY from the manuscript above, at the spot the gap occurs",
       "location": "Issue 2, around the castle-escape page",
       "problem": "string (what is missing or under-developed, with specific evidence from the script)",
       "suggestion": "string (the smallest concrete addition — a beat, a page, a scene, a line of motivation — that closes the gap)"
@@ -88,6 +90,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
 }
 ```
 
+- `issueNumber` must be the integer `N` from the `# Issue N` header of the issue the gap belongs to (omit or use `null` if the gap spans the whole series and no single issue applies).
+- `anchorQuote` must be a short excerpt (one sentence or a few words, ≤ 400 chars) **copied verbatim** from the manuscript text above, marking where the gap is — the exact spot a transition is missing, where a payoff should land, etc. Copy it character-for-character so an editor can locate it; do not paraphrase. Use the empty string only when the gap is an absence with no nearby text to point at (e.g. a missing ending after the final line — then quote that final line).
 - `category` must be one of `missing-content` / `arc-gap` / `character-gap` / `pacing` / `continuity`.
 - `severity` must be one of `high` / `medium` / `low`:
   - **`high`** — the draft cannot be considered finished without this (a missing climax, an unresolved central arc).

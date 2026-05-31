@@ -418,6 +418,50 @@ export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverri
     body: JSON.stringify({ providerOverride, modelOverride }),
   });
 
+// ---- Manuscript editor ----
+// Full series manuscript in one format. `type` (comicScript|teleplay|prose)
+// selects the format; omit to get the series' primary/source format. Returns
+// { sections, viewType, primaryStageId, pinnedPrimary, availableTypes }.
+export const getPipelineManuscript = (seriesId, type) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript${type ? `?type=${encodeURIComponent(type)}` : ''}`);
+
+// The persisted "finish the draft" comment set ({ schemaVersion, comments }).
+export const getPipelineManuscriptReview = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review`);
+
+// Patch one comment: { status } flip and/or { fix } attach/clear. Returns { comment }.
+export const patchPipelineManuscriptComment = (seriesId, commentId, patch, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    ...options,
+  });
+
+// Generate an anchored find/replace fix for a comment (does not apply it).
+export const generatePipelineManuscriptFix = (seriesId, commentId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/fix`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
+// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
+// Returns { comment, section }.
+export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace }) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ find, replace }),
+  });
+
+// Versioned free-text save of one manuscript section. Snapshots the prior text
+// into history (revert via restorePipelineStageVersion). Returns { section }
+// where section.versions is the updated [{ runId, createdAt }] list.
+export const savePipelineManuscriptSection = (seriesId, issueId, { stageId, output }, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/sections/${encodeURIComponent(issueId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ stageId, output }),
+    ...options,
+  });
+
 // ---- Volume beat-sheet bulk generator ----
 // Sequential idea-stage run across every issue in a volume. `mode` is
 // 'skip-existing' (default) or 'regenerate-all'. Returns

@@ -2021,6 +2021,94 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.issues[0].category).toBe('missing-content');
     expect(completenessSpy).toHaveBeenCalledWith(ser.body.id, expect.any(Object));
+    // The completeness pass also seeds a persisted review the editor reads.
+    expect(Array.isArray(r.body.review?.comments)).toBe(true);
+  });
+
+  describe('manuscript editor routes', () => {
+    it('GET /series/:id/manuscript returns sections + primaryStageId; review starts empty', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { prose: { output: 'A drafted scene.', status: 'ready' } },
+      });
+      const ms = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript`);
+      expect(ms.status).toBe(200);
+      expect(ms.body.sections).toHaveLength(1);
+      expect(ms.body.sections[0]).toMatchObject({ stageId: 'prose', content: 'A drafted scene.' });
+      expect(ms.body.primaryStageId).toBe('prose');
+
+      const review = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript/review`);
+      expect(review.status).toBe(200);
+      expect(review.body.comments).toEqual([]);
+    });
+
+    it('switches manuscript format via ?type and reports the pinned primary', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: {
+          prose: { output: 'Prose draft.', status: 'ready' },
+          teleplay: { output: 'INT. ROOM - DAY', status: 'ready' },
+        },
+      });
+      // Default view resolves to the detected dominant format; availableTypes lists both.
+      const def = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript`);
+      expect(def.body.availableTypes.sort()).toEqual(['prose', 'teleplay']);
+      // Explicit format switch.
+      const tele = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript?type=teleplay`);
+      expect(tele.body.viewType).toBe('teleplay');
+      expect(tele.body.sections[0].content).toBe('INT. ROOM - DAY');
+      // Pin a primary in the bible; it round-trips on the next load.
+      await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({ primaryManuscriptType: 'teleplay' });
+      const pinned = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript`);
+      expect(pinned.body.pinnedPrimary).toBe('teleplay');
+      expect(pinned.body.viewType).toBe('teleplay');
+    });
+
+    it('PUT section save versions the edit; restore reverts it', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { prose: { output: 'First draft.', status: 'ready' } },
+      });
+      // Versioned save snapshots the prior text.
+      const saved = await request(app)
+        .put(`/api/pipeline/series/${ser.body.id}/manuscript/sections/${iss.body.id}`)
+        .send({ stageId: 'prose', output: 'Second draft.' });
+      expect(saved.status).toBe(200);
+      expect(saved.body.section.content).toBe('Second draft.');
+      expect(saved.body.section.versions).toHaveLength(1);
+      // Revert through the stage-restore route.
+      const runId = saved.body.section.versions[0].runId;
+      const restored = await request(app)
+        .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/restore`)
+        .send({ runId });
+      expect(restored.status).toBe(200);
+      expect(restored.body.stage.output).toBe('First draft.');
+      // Non-manuscript stage is rejected.
+      const bad = await request(app)
+        .put(`/api/pipeline/series/${ser.body.id}/manuscript/sections/${iss.body.id}`)
+        .send({ stageId: 'idea', output: 'x' });
+      expect(bad.status).toBe(400);
+    });
+
+    it('PATCH unknown comment is a 404; accept rejects a missing find with a 400', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const patch = await request(app)
+        .patch(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope`)
+        .send({ status: 'dismissed' });
+      expect(patch.status).toBe(404);
+
+      const accept = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
+        .send({ replace: 'x' }); // missing required `find`
+      expect(accept.status).toBe(400);
+    });
   });
 
   describe('audio stage routes', () => {

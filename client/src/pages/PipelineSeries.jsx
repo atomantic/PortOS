@@ -302,6 +302,38 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </div>
       </Field>
 
+      <Field label="Primary manuscript format (source of truth)">
+        <div className="flex items-center gap-2">
+          <select
+            id="series-primary-manuscript"
+            value={series.primaryManuscriptType || ''}
+            onChange={async (e) => {
+              const value = e.target.value || null;
+              patchSeries({ primaryManuscriptType: value });
+              const updated = await updatePipelineSeries(series.id, { primaryManuscriptType: value }, { silent: true })
+                .catch((err) => { toast.error(err.message || 'Failed to set primary format'); return null; });
+              if (updated) onSeriesUpdate?.(updated);
+            }}
+            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          >
+            <option value="">— Auto-detect —</option>
+            <option value="comicScript">Comic</option>
+            <option value="teleplay">Teleplay</option>
+            <option value="prose">Prose</option>
+          </select>
+          <Link
+            to={`/pipeline/series/${series.id}/manuscript`}
+            className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
+            title="Open the full manuscript editor"
+          >
+            <NotebookPen size={12} /> Editor
+          </Link>
+        </div>
+        <p className="text-[11px] text-gray-500 mt-1">
+          The format you finalize first — the other two are generated from it. The manuscript editor opens this format by default.
+        </p>
+      </Field>
+
       <Field label="Premise (the bible — fed into every stage's prompt context)">
         <textarea
           value={series.premise || ''}

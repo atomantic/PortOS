@@ -1540,6 +1540,44 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     await expect(planner.analyzeManuscriptCompleteness(s.id)).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
   });
 
+  it('analyzeManuscriptCompleteness carries issueNumber + anchorQuote and tolerates their absence', async () => {
+    const s = await setupSeries();
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { prose: { output: 'A short draft.', status: 'ready' } } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { issues: [
+        { severity: 'high', category: 'arc-gap', issueNumber: 1, anchorQuote: '  a quote  ', problem: 'anchored', suggestion: 'fix it' },
+        { severity: 'low', category: 'pacing', problem: 'unanchored', suggestion: '' },
+      ] },
+      runId: 'rc', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.analyzeManuscriptCompleteness(s.id);
+    expect(out.issues[0]).toMatchObject({ issueNumber: 1, anchorQuote: 'a quote' });
+    expect(out.issues[1]).toMatchObject({ issueNumber: null, anchorQuote: '' });
+  });
+
+  it('collectManuscriptSections orders by arcPosition, drops empties, and collectIssueSourceText stays byte-identical', async () => {
+    const s = await setupSeries();
+    // Insert out of arcPosition order to prove sorting (don't assert on the
+    // auto-assigned `number`, which follows creation order, not arcPosition).
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Two', arcPosition: 2, stages: { teleplay: { output: 'TELE two', status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\none', status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Empty', arcPosition: 3 });
+
+    const sections = await planner.collectManuscriptSections(s.id);
+    // Empty issue dropped; remaining two ordered by arcPosition (One before Two).
+    expect(sections.map((x) => x.content)).toEqual(['PAGE 1\none', 'TELE two']);
+    expect(sections.map((x) => x.stageId)).toEqual(['comicScript', 'teleplay']);
+    expect(sections.map((x) => x.title)).toEqual(['One', 'Two']);
+    expect(planner.primaryStageIdOf(sections)).toBeDefined();
+
+    // The corpus join derives from the sections — verify the invariant.
+    const corpus = await planner.collectIssueSourceText(s.id, { stageOrder: planner.MANUSCRIPT_STAGES });
+    const expected = sections
+      .map((x) => `# Issue ${x.number} — ${x.title} (${x.stageId})\n\n${x.content}`)
+      .join('\n\n---\n\n');
+    expect(corpus).toBe(expected);
+  });
+
   it('deriveFromManuscript proposes a single volume + bible + zipped issue synopses', async () => {
     const s = await setupSeries();
     const sea = await seasonsSvc.createSeason(s.id, { title: 'V1', episodeCountTarget: 3 });

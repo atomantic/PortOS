@@ -259,18 +259,23 @@ const sanitizeTextStage = (raw) => ({
  *     editing the existing version, not replacing it. The previous run remains
  *     the active version; the next generate will snapshot it.
  */
-export function snapshotRunHistory(prevStage, patch, stageId) {
+export function snapshotRunHistory(prevStage, patch, stageId, { force = false } = {}) {
   const prevHistory = Array.isArray(prevStage?.runHistory) ? prevStage.runHistory : [];
   if (!patch || typeof patch !== 'object') return prevHistory;
   if (!TEXT_STAGE_IDS.includes(stageId)) return prevHistory;
   const nextRunId = isStr(patch.lastRunId) ? patch.lastRunId : '';
   if (!nextRunId) return prevHistory;
   if (nextRunId === prevStage?.lastRunId) return prevHistory;
-  if (!prevStage?.lastRunId) return prevHistory;
-  const prevOutput = prevStage.output || '';
+  // Default: only snapshot a prior that was itself a recorded run (keeps the
+  // first generate from snapshotting an empty/seed-only stage). With `force`
+  // (manuscript-editor edits), snapshot ANY non-empty prior, synthesizing an id
+  // when the prior was never a run — so imported/hand-typed text stays
+  // revertible from its very first edit.
+  if (!prevStage?.lastRunId && !force) return prevHistory;
+  const prevOutput = prevStage?.output || '';
   if (!prevOutput.trim()) return prevHistory;
   const snapshot = {
-    runId: prevStage.lastRunId,
+    runId: prevStage.lastRunId || `pre-${nextRunId}`,
     createdAt: prevStage.updatedAt || new Date().toISOString(),
     input: prevStage.input || '',
     output: prevOutput,
@@ -971,7 +976,7 @@ export function deleteIssue(id) {
  * inside the queue; its return value is shallow-merged over the stage exactly
  * as `updateStage` merges a static patch.
  */
-export function updateStageWithLatest(issueId, stageId, computeFn) {
+export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPrior = false } = {}) {
   if (!STAGE_IDS.includes(stageId)) {
     // Validate before queueing so the caller gets an immediate rejection
     // rather than waiting in line for an error it already knows about.
@@ -1003,7 +1008,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
     // Snapshot the prior `{ runId, input, output }` into runHistory when this
     // patch carries a fresh lastRunId (i.e. a generate just replaced prior
     // content). Computed BEFORE the spread so it reads pre-merge state.
-    const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId);
+    const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId, { force: snapshotPrior });
     const merged = {
       ...currentStage,
       ...patch,

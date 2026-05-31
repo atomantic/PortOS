@@ -28,7 +28,7 @@ import { Link } from 'react-router-dom';
 import {
   Plus, Trash2, Loader2, Sparkles, ShieldCheck, ChevronRight, ChevronDown,
   ChevronsUpDown, AlertCircle, Wand2, Info, ListChecks, X, Lock, Unlock,
-  ImageIcon, Layers, FileDown, BookOpen, ChartSpline, FileSearch, BookText,
+  ImageIcon, Layers, FileDown, BookOpen, ChartSpline, FileSearch, BookText, FileText,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { timeAgo } from '../../utils/formatters';
@@ -530,6 +530,19 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   // show its own spinner without blocking the rest of the page.
   const [resolvingIdx, setResolvingIdx] = useState(new Set());
   const [confirmingRegen, setConfirmingRegen] = useState(false);
+
+  // Switching series must not leak the prior series' advisory results. These
+  // are all ephemeral (never persisted) — reset on id change. `running` is
+  // intentionally excluded: it's bound to an in-flight call whose
+  // setRunning(null) must still fire on completion.
+  useEffect(() => {
+    setVerifyIssues(null);
+    setDerivePreview(null);
+    setCompleteness(null);
+    setConfirmingRegen(false);
+    setResolvingIdx(new Set());
+  }, [series.id]);
+
   const { busy: lockBusy, toggle: toggleArcLock } = useLockToggle({
     patchFn: (next) => updatePipelineSeries(series.id, {
       locked: { ...(series.locked || {}), arc: next },
@@ -850,6 +863,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
       {completeness ? (
         <CompletenessResults
           issues={completeness}
+          seriesId={series.id}
           onDismiss={() => setCompleteness(null)}
         />
       ) : null}
@@ -1010,7 +1024,7 @@ const COMPLETENESS_CATEGORY_ORDER = ['missing-content', 'arc-gap', 'character-ga
 
 // Advisory findings panel for "finish the draft" — grouped by category, no
 // resolve buttons (the suggestions guide manual authoring, not an LLM rewrite).
-function CompletenessResults({ issues, onDismiss }) {
+function CompletenessResults({ issues, onDismiss, seriesId }) {
   const grouped = useMemo(() => {
     const byCat = new Map();
     for (const iss of issues) {
@@ -1028,7 +1042,18 @@ function CompletenessResults({ issues, onDismiss }) {
           <FileSearch size={14} className="text-port-accent" />
           Finish the draft — {issues.length} suggestion{issues.length === 1 ? '' : 's'}
         </h3>
-        <button type="button" onClick={onDismiss} className="text-gray-500 hover:text-white"><X size={16} /></button>
+        <div className="flex items-center gap-3">
+          {issues.length > 0 && seriesId ? (
+            <Link
+              to={`/pipeline/series/${seriesId}/manuscript`}
+              className="text-xs text-port-accent hover:underline inline-flex items-center gap-1"
+              title="Open the manuscript editor to act on these comments inline"
+            >
+              <FileText size={12} /> Open editor
+            </Link>
+          ) : null}
+          <button type="button" onClick={onDismiss} className="text-gray-500 hover:text-white"><X size={16} /></button>
+        </div>
       </div>
       {issues.length === 0 ? (
         <p className="text-xs text-gray-400">The manuscript reads as complete — no gaps found.</p>
