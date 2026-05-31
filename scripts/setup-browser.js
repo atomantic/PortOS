@@ -20,13 +20,13 @@
  */
 
 import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
-import { randomUUID } from 'crypto';
 import { hasConfiguredBrowser, normalizeBrowserConfig } from '../server/lib/browserConfig.js';
+import { atomicWrite } from '../server/lib/fileUtils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -53,16 +53,8 @@ function loadConfig() {
   }
 }
 
-function saveConfig(config) {
-  if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-  const tmp = `${configFile}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(normalizeBrowserConfig(config), null, 2)}\n`);
-  try {
-    renameSync(tmp, configFile);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch {}
-    throw err;
-  }
+async function saveConfig(config) {
+  await atomicWrite(configFile, `${JSON.stringify(normalizeBrowserConfig(config), null, 2)}\n`);
 }
 
 function hasCommand(cmd, args) {
@@ -102,7 +94,7 @@ function canaryInstallCommand() {
   return null;
 }
 
-function applyCanaryToConfig(found) {
+async function applyCanaryToConfig(found) {
   const config = loadConfig();
   if (config === null) {
     console.warn('   Skipping Canary config write — fix the corrupt browser-config.json first.');
@@ -111,18 +103,18 @@ function applyCanaryToConfig(found) {
   config.chromePath = found.bin;
   if (found.app) config.macAppBundle = found.app;
   delete config.canaryPromptDeclined;
-  saveConfig(config);
+  await saveConfig(config);
   console.log(`✅ PortOS browser set to Chrome Canary → ${found.bin}`);
 }
 
-function markCanaryDeclined() {
+async function markCanaryDeclined() {
   const config = loadConfig();
   if (config === null) {
     console.warn('   Skipping Canary preference write — fix the corrupt browser-config.json first.');
     return;
   }
   config.canaryPromptDeclined = true;
-  saveConfig(config);
+  await saveConfig(config);
 }
 
 function parseCanaryEnv(value) {
@@ -185,9 +177,9 @@ async function runCanarySetup() {
 
   if (found) {
     const ok = envOptIn ? true : await promptYesNo('Chrome Canary detected. Use it as the PortOS-managed browser?', true);
-    if (ok) applyCanaryToConfig(found);
+    if (ok) await applyCanaryToConfig(found);
     else {
-      markCanaryDeclined();
+      await markCanaryDeclined();
       console.log('   Keeping the platform-default Chrome. You can switch later in Settings → Browser.');
     }
     return;
@@ -207,7 +199,7 @@ async function runCanarySetup() {
 
   const ok = envOptIn ? true : await promptYesNo(`Install Chrome Canary via ${install.label} and use it as the PortOS-managed browser?`, true);
   if (!ok) {
-    markCanaryDeclined();
+    await markCanaryDeclined();
     console.log('   Keeping the platform-default Chrome. You can switch later in Settings → Browser.');
     return;
   }
@@ -222,7 +214,7 @@ async function runCanarySetup() {
   }
 
   const reFound = detectCanary();
-  if (reFound) applyCanaryToConfig(reFound);
+  if (reFound) await applyCanaryToConfig(reFound);
   else console.log('⚠️  Canary installed but the binary was not found at the expected path. You can set chromePath manually in Settings → Browser.');
 }
 
