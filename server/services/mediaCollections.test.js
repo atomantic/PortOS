@@ -1122,6 +1122,20 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(all[0].id).toBe('good');
   });
 
+  it('skips a record whose id is not a valid store path-segment WITHOUT aborting the batch', async () => {
+    // A malformed/peer-supplied id like '../../escape' can't be persisted (the
+    // store's id allowlist would throw inside queueRecordWrite). sanitizeCollection
+    // must drop it at the boundary so the valid records in the same batch still merge.
+    const result = await svc.mergeMediaCollectionsFromSync([
+      { id: '../../escape', name: 'Evil', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+      { id: 'has space', name: 'Spacey', items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+      { id: 'valid-after-bad', name: 'Survivor', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+    ]);
+    expect(result).toEqual({ applied: true, count: 1 });
+    const all = await svc.listCollections({ includeDeleted: true });
+    expect(all.map((c) => c.id)).toEqual(['valid-after-bad']);
+  });
+
   it('rejects items whose ref contains path-traversal tokens', async () => {
     // Defense in depth — a peer can push a collection containing a ref
     // like '../etc/passwd' via the linkedCollection field. sanitizeItem

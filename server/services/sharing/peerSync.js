@@ -1506,8 +1506,9 @@ export async function applyIncomingPush(payload) {
   // semantics as the snapshot-sync mediaCollections category. Failures here
   // don't fail the push: the record itself is already merged and the next
   // snapshot-sync cycle will reconcile the collection if it diverged. The
-  // sanitizer in mediaCollections strips a peer-supplied `id` that isn't a
-  // string, so a bogus payload can't plant a malformed row.
+  // sanitizer in mediaCollections drops a peer-supplied `id` that isn't a
+  // valid path-segment (the store's id allowlist), so a bogus payload can't
+  // plant a malformed row or abort the batch.
   //
   // Defense in depth on the peer-supplied envelope:
   //   - plain-object check (arrays would get wrapped and the sanitizer

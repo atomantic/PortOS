@@ -702,11 +702,11 @@ const CHECKSUM_PATHS = {
   // content (and checksum) can change even when no record file moved.
   universe: [UNIVERSE_BUILDER_DIR, PEER_SUBSCRIPTIONS_FILE],
   pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR, PEER_SUBSCRIPTIONS_FILE],
-  // mediaCollections invalidates on its own file AND on the parent record
-  // files — `getMediaCollectionsSnapshot` filters collections whose linked
-  // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
-  // must re-checksum the collections snapshot even though
-  // media-collections.json itself didn't move. Same goes for un-ephemeral.
+  // mediaCollections invalidates on its own record dir AND on the parent
+  // record files — `getMediaCollectionsSnapshot` filters collections whose
+  // linked universe/series is ephemeral, so a "mark ephemeral" PATCH on a
+  // universe must re-checksum the collections snapshot even though no
+  // media-collections record file moved. Same goes for un-ephemeral.
   mediaCollections: [MEDIA_COLLECTIONS_DIR, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
   // videoHistory is a flat history file with no parent-record dependency —
   // its checksum invalidates only when video-history.json itself moves.

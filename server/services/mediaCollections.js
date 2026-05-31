@@ -39,6 +39,14 @@ export const NAME_MAX_LENGTH = 80;
 export const DESCRIPTION_MAX_LENGTH = 500;
 export const ITEMS_MAX = 5000;
 
+// A collection id is a filesystem path segment (data/media-collections/<id>/).
+// The store's idPattern allowlist rejects anything else, so a record whose id
+// can't round-trip to its own dir is unrepresentable — `sanitizeCollection`
+// drops it here so a malformed/peer-supplied id is skipped at the boundary
+// rather than thrown deep inside `queueRecordWrite` (which would abort a whole
+// sync batch). Single source of truth: also passed to `createCollectionStore`.
+const COLLECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
 export { REF_MAX_LENGTH, itemKey };
 
 const sanitizeItem = (raw) => {
@@ -81,7 +89,10 @@ const SERIES_ID_MAX = 80;
 
 const sanitizeCollection = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
-  if (typeof raw.id !== 'string' || !raw.id) return null;
+  // Reject ids the store can't persist (path-segment allowlist) so a peer-
+  // supplied / hand-edited bogus id is dropped here instead of throwing inside
+  // queueRecordWrite and aborting the rest of a merge batch.
+  if (typeof raw.id !== 'string' || !COLLECTION_ID_PATTERN.test(raw.id)) return null;
   if (typeof raw.name !== 'string') return null;
   const name = raw.name.trim().slice(0, NAME_MAX_LENGTH);
   if (!name) return null;
@@ -148,6 +159,9 @@ const store = () => {
     dir,
     type: 'mediaCollections',
     schemaVersion: TYPE_SCHEMA_VERSION,
+    // Same allowlist `sanitizeCollection` enforces, so the store and the
+    // sanitizer agree on which ids are representable (no drift).
+    idPattern: COLLECTION_ID_PATTERN,
     // Runs on every loadOne/loadAll. Tombstones (deleted:true) survive
     // sanitization so the mutators and merge path can see them.
     sanitizeRecord: sanitizeCollection,
@@ -247,6 +261,11 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   // Deterministic id when universe-linked (cross-machine convergence); a fresh
   // random id otherwise. Queue on whichever id this call would create/adopt so
   // two concurrent calls for the same universe serialize on the same record.
+  // NOTE: the no-universe branch queues on a random id, so two concurrent calls
+  // for the same NAME do NOT serialize and could both create a same-named
+  // bucket. Acceptable: this name-first helper has no production callers (it's
+  // the ad-hoc/CLI path); universe/series filing uses the deterministic-id
+  // helpers, which converge. A hot caller should derive a stable queue key.
   const canonId = linkedCollectionId({ universeId: normalizedUniverseId });
   const queueId = canonId || randomUUID();
   let createdId = null;
@@ -348,10 +367,10 @@ export async function findCollectionByUniverseId(universeId) {
 /**
  * Atomic universeId-first upsert for a universe's auto-managed collection.
  *
- * Resolution order (serialized via the shared file write tail):
+ * Resolution order (serialized on the deterministic id's per-record queue):
  *   1. universeId stamp wins. Returned as-is — the caller's `universeName`
  *      can be stale (it was a snapshot taken before this call entered the
- *      write tail), so reconciling the name here could ping-pong a fresh
+ *      queue), so reconciling the name here could ping-pong a fresh
  *      cascade rename back to an old name. `renameCollectionForUniverse`
  *      is the canonical path for name changes; if its best-effort cascade
  *      fails, the surviving stale name is acceptable until the user
