@@ -391,6 +391,33 @@ export const resolvePipelineArcIssues = (seriesId, { findings, providerOverride,
     body: JSON.stringify({ findings, providerOverride, modelOverride }),
   });
 
+// Back-derive arc + bible + a single-volume restructure from the series' EXISTING
+// issue manuscripts. Read-only preview the UI shows for review/edit. Returns
+// { arc, volume, bible, issues, derivedSeasons, runId, providerId, model }.
+export const derivePipelineArcFromManuscript = (seriesId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/derive-from-manuscript`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
+// Apply the (edited) derive preview — writes bible, collapses to one volume,
+// reassigns issues, seeds per-issue synopses. No LLM re-run. Pass the confirmed
+// { arc, bible, volume, issues } proposal. Returns { series, volumeId, issueCount }.
+export const commitPipelineArcFromManuscript = (seriesId, proposal = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/derive-from-manuscript/commit`, {
+    method: 'POST',
+    body: JSON.stringify(proposal),
+  });
+
+// Manuscript-completeness ("finish the draft") editor pass — reads the actual
+// drafted script and returns categorized { severity, category, location,
+// problem, suggestion } findings. Advisory; no auto-resolve. Empty = complete.
+export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
 // ---- Volume beat-sheet bulk generator ----
 // Sequential idea-stage run across every issue in a volume. `mode` is
 // 'skip-existing' (default) or 'regenerate-all'. Returns

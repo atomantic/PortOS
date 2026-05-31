@@ -23,7 +23,7 @@ import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
 import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS } from './series.js';
-import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest, assertStageUnlocked } from './issues.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStage, updateStageWithLatest, assertStageUnlocked } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
@@ -153,6 +153,41 @@ async function resolveWorldContext(series, preloaded) {
 // tiebreaker for issues that were created ad-hoc and never got a position.
 export const compareIssuesByPosition = (a, b) =>
   (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0);
+
+// Cap on the concatenated manuscript fed to back-derivation passes. Mirrors the
+// importer's source ceiling intent — large enough for a full graphic novel,
+// bounded so a runaway corpus can't blow the prompt budget.
+const BACKFILL_SOURCE_MAX = 200_000;
+
+// Local copy of textStages' stageContentOf. Inlined (not imported) because
+// textStages.js imports from THIS module (compareIssuesByPosition,
+// NO_LINKED_UNIVERSE_PLACEHOLDER) — importing back would create a cycle whose
+// binding is undefined at module-eval time. The one-liner is stable.
+const stageTextOf = (stage) => (stage?.input?.trim() || stage?.output?.trim() || '');
+
+/**
+ * Concatenate the richest authored artifact per issue (comicScript → teleplay →
+ * prose → idea) into one corpus an upstream pass can back-derive FROM — the
+ * "started from a finished manuscript" case. Issues are ordered by arcPosition
+ * so the corpus reads in story order. Returns '' when no issue has any text.
+ *
+ * Shared by `deriveFromManuscript` here and the Story Builder's plotArc/idea
+ * backfill (storyBuilder.js) so both see the identical corpus shape.
+ */
+export async function collectIssueSourceText(seriesId) {
+  if (!seriesId) return '';
+  const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesByPosition);
+  const parts = [];
+  for (const iss of issues) {
+    const st = iss.stages || {};
+    const pick = ['comicScript', 'teleplay', 'prose', 'idea']
+      .map((sid) => ({ sid, content: stageTextOf(st[sid]) }))
+      .find((x) => x.content);
+    if (!pick) continue;
+    parts.push(`# Issue ${iss.number}${iss.title ? ` — ${iss.title}` : ''} (${pick.sid})\n\n${pick.content}`);
+  }
+  return parts.join('\n\n---\n\n').slice(0, BACKFILL_SOURCE_MAX);
+}
 
 // Series + world + arc fields shared by every arc-level prompt context.
 // Pulled out so verify-arc and verify-volume don't drift on what counts as
@@ -350,6 +385,241 @@ export async function generateArcFromSource(seriesId, {
   // endingHook); shapeSeasonOutlines forwards all fields buildSeason accepts.
   const seasons = shapeSeasonOutlines(content?.seasons);
   return { arc, seasons, raw: content, runId, providerId, model };
+}
+
+// Render one derived season's logline + synopsis into a per-issue synopsis seed
+// the preview pre-fills `idea.input` with. Empty string when the season carries
+// no usable text (the caller leaves the issue's existing synopsis untouched).
+function issueSynopsisFromSeason(season) {
+  if (!season) return '';
+  return [season.logline, season.synopsis].map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean).join('\n\n');
+}
+
+/**
+ * Back-derive an arc + bible + a single-volume restructure proposal from the
+ * series' EXISTING issue manuscripts — the "I imported a finished graphic novel,
+ * now reconstruct its spine" path. Read-only: writes nothing. Returns a preview
+ * the UI shows for review/edit before `commitDerivedManuscript` applies it.
+ *
+ * The proposal is deliberately single-volume (a graphic novel is one book): the
+ * derived multi-season `seasons` from `generateArcFromSource` are flattened into
+ * per-issue synopsis suggestions (zipped by story order), so the user's "the
+ * volume descriptions read better as issue descriptions" intuition is the
+ * default. `volume` is the single book; `issues[]` maps each existing issue to a
+ * proposed title + synopsis the user can edit.
+ */
+export async function deriveFromManuscript(seriesId, { providerOverride, modelOverride } = {}) {
+  const series = await getSeries(seriesId);
+  if (series.locked?.arc === true) {
+    throw makeErr('Arc is locked — unlock it on the Arc Canvas before deriving from the manuscript', ERR_VALIDATION);
+  }
+  const sourceText = await collectIssueSourceText(seriesId);
+  if (!sourceText) {
+    throw makeErr(
+      'No issue manuscript to derive from — write a comic script, prose, or teleplay on at least one issue first',
+      ERR_VALIDATION,
+    );
+  }
+  const { arc, seasons, raw, runId, providerId, model } = await generateArcFromSource(seriesId, {
+    sourceText, providerOverride, modelOverride,
+  });
+  const issues = (await listIssues({ seriesId })).sort(compareIssuesByPosition);
+  const issueMapping = issues.map((iss, i) => ({
+    id: iss.id,
+    number: iss.number,
+    title: iss.title || `Issue ${i + 1}`,
+    currentSynopsis: (iss.stages?.idea?.input || '').trim(),
+    // Zip the derived seasons onto issues in story order; extra seasons (more
+    // seasons than issues) fall off the end — the user can fold them into the
+    // last issue's synopsis in the preview if they matter.
+    synopsisSuggestion: issueSynopsisFromSeason(seasons[i]),
+    ideaLocked: iss.stages?.idea?.locked === true,
+  }));
+  return {
+    arc,
+    // The single book the issues comprise. Title defaults to the series name;
+    // logline/synopsis seed from the derived arc.
+    volume: {
+      title: series.name || seasons[0]?.title || 'Volume 1',
+      logline: arc?.logline || '',
+      synopsis: arc?.summary || '',
+    },
+    bible: {
+      logline: arc?.logline || series.logline || '',
+      premise: arc?.summary || series.premise || '',
+      issueCountTarget: issues.length,
+    },
+    issues: issueMapping,
+    // Surface the raw derived seasons too so a future "keep as multi-volume"
+    // affordance can opt out of the flatten without re-running the LLM.
+    derivedSeasons: seasons,
+    runId,
+    providerId,
+    model,
+  };
+}
+
+// Seed one issue's `idea.input` synopsis (respecting the per-stage lock). Used
+// by the derive-commit to make Verify Arc — which reads `idea.input` — useful on
+// issues that only carried a verbatim comicScript before. Never touches
+// `idea.output` (beats) or the comicScript manuscript.
+async function seedIssueSynopsis(issueId, synopsis) {
+  const text = typeof synopsis === 'string' ? synopsis.trim() : '';
+  if (!text) return;
+  const iss = await getIssue(issueId).catch(() => null);
+  if (!iss || iss.stages?.idea?.locked === true) return;
+  const hasBeats = !!(iss.stages?.idea?.output || '').trim();
+  await updateStage(issueId, 'idea', {
+    input: text,
+    // Don't downgrade an issue that already has generated beats.
+    status: hasBeats ? (iss.stages?.idea?.status || 'edited') : 'empty',
+  });
+}
+
+/**
+ * Apply a (possibly user-edited) `deriveFromManuscript` preview: write the
+ * bible, collapse the series to ONE volume, reassign every issue onto it, and
+ * seed per-issue synopses. The verbatim issue scripts (comicScript/prose) are
+ * never touched — same contract as `resolveVerifyIssues`.
+ *
+ * The single volume reuses the lowest-numbered existing season's id when one
+ * exists (so issues already under it don't churn), and `commitSeasonsWithRemap`
+ * drops the rest while honoring arc/season locks. A follow-up sweep then pins
+ * EVERY issue onto the kept volume — covering both issues the remap routed to
+ * the ungrouped bucket and any that were already attached elsewhere.
+ */
+export async function commitDerivedManuscript(seriesId, { arc, bible, volume, issues = [] } = {}) {
+  const series = await getSeries(seriesId);
+  if (series.locked?.arc === true) {
+    throw makeErr('Arc is locked — unlock it on the Arc Canvas before applying', ERR_VALIDATION);
+  }
+
+  // 1) Bible — top-level series fields the Arc Canvas sidebar reads. These are
+  //    not lock-gated individually (only `locked.arc` exists, checked above).
+  const biblePatch = {};
+  if (typeof bible?.logline === 'string') biblePatch.logline = bible.logline;
+  if (typeof bible?.premise === 'string') biblePatch.premise = bible.premise;
+  if (Number.isFinite(bible?.issueCountTarget)) biblePatch.issueCountTarget = bible.issueCountTarget;
+  if (Object.keys(biblePatch).length) await updateSeries(seriesId, biblePatch);
+
+  // 2) Build the single target volume, reusing the lowest-numbered existing
+  //    season's id so its child issues don't need re-homing. sanitizeSeason
+  //    mints a fresh sea-uuid when `id` is undefined (no seasons yet).
+  const existingSeasons = (Array.isArray(series.seasons) ? series.seasons : [])
+    .slice()
+    .sort((a, b) => (a.number || 0) - (b.number || 0));
+  const keep = existingSeasons[0] || null;
+  const existingIssues = await listIssues({ seriesId });
+  const targetSeason = sanitizeSeason({
+    id: keep?.id,
+    number: 1,
+    title: volume?.title || series.name || 'Volume 1',
+    logline: volume?.logline || '',
+    synopsis: volume?.synopsis || '',
+    episodeCountTarget: existingIssues.length,
+    status: keep?.status || 'draft',
+    locked: keep?.locked === true,
+  });
+
+  // 3) Persist arc + the single season (drops the others; honors locks +
+  //    migrates orphans). Re-read first so we merge against the bible write.
+  const sanitizedArc = sanitizeArc({ ...(arc || {}), status: 'draft' });
+  const latest = await getSeries(seriesId);
+  await commitSeasonsWithRemap(latest, { arc: sanitizedArc, seasons: [targetSeason] });
+
+  // 4) Pin every issue onto the single volume and apply per-issue edits.
+  const editsById = new Map((Array.isArray(issues) ? issues : []).map((e) => [e.id, e]));
+  await withReexportSuppressed('series', seriesId, async () => {
+    for (const iss of existingIssues) {
+      if (iss.seasonId !== targetSeason.id) {
+        await updateIssue(iss.id, { seasonId: targetSeason.id }, { skipRenumber: true });
+      }
+      const edit = editsById.get(iss.id);
+      if (edit?.title && typeof edit.title === 'string' && edit.title.trim() && edit.title.trim() !== iss.title) {
+        await updateIssue(iss.id, { title: edit.title.trim() }, { skipRenumber: true });
+      }
+      if (edit?.synopsis) await seedIssueSynopsis(iss.id, edit.synopsis);
+    }
+    await recomputeIssueNumbersForSeries(seriesId);
+  });
+  emitRecordUpdated('series', seriesId);
+
+  const updated = await getSeries(seriesId);
+  return { series: updated, volumeId: targetSeason.id, issueCount: existingIssues.length };
+}
+
+// ── Manuscript completeness ("finish the draft") ──────────────────────────
+// Unlike verifyArc/verifyVolume (which read synopsis/beats from idea.input /
+// idea.output), this pass reads the ACTUAL drafted manuscript (comicScript /
+// prose / teleplay) so it can flag what's missing to FINISH a near-complete
+// draft: gaps in content, holes in the arc, and under-developed characters.
+
+// Findings carry a `category` on top of the verify shape so the UI can group
+// them. Unknown categories collapse to 'other' rather than being dropped.
+const COMPLETENESS_CATEGORIES = new Set([
+  'missing-content', 'arc-gap', 'character-gap', 'pacing', 'continuity', 'other',
+]);
+
+function shapeCompletenessFindings(rawIssues) {
+  if (!Array.isArray(rawIssues)) return [];
+  const out = [];
+  for (const raw of rawIssues) {
+    const problem = typeof raw?.problem === 'string' ? raw.problem.trim() : '';
+    if (!problem) continue;
+    out.push({
+      severity: VERIFY_SEVERITIES.has(raw?.severity) ? raw.severity : 'medium',
+      category: COMPLETENESS_CATEGORIES.has(raw?.category) ? raw.category : 'other',
+      location: typeof raw?.location === 'string' ? raw.location.trim().slice(0, 200) : '',
+      problem: problem.slice(0, 2000),
+      suggestion: typeof raw?.suggestion === 'string' ? raw.suggestion.trim().slice(0, 2000) : '',
+    });
+  }
+  return out;
+}
+
+async function buildCompletenessContext(series, manuscript, preloadedWorld) {
+  const [base, canon] = await Promise.all([
+    buildArcBaseContext(series, preloadedWorld),
+    getSeriesCanon(series),
+  ]);
+  return {
+    ...base,
+    manuscript,
+    existingCharactersJson: JSON.stringify(canon.characters, null, 2),
+    existingPlacesJson: JSON.stringify(canon.places, null, 2),
+    existingObjectsJson: JSON.stringify(canon.objects, null, 2),
+  };
+}
+
+/**
+ * Editor pass over the drafted manuscript itself: returns categorized
+ * suggestions for rounding out and finishing a near-complete draft — missing
+ * pages/beats, arc holes, and character-development gaps. Read-only; advisory
+ * (no auto-resolve). Complements verifyArc/verifyVolume, which stay at synopsis
+ * depth and never see the script.
+ */
+export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
+  const series = await getSeries(seriesId);
+  const manuscript = await collectIssueSourceText(seriesId);
+  if (!manuscript) {
+    throw makeErr(
+      'No manuscript to analyze — write a comic script, prose, or teleplay on at least one issue first',
+      ERR_VALIDATION,
+    );
+  }
+  const ctx = await buildCompletenessContext(series, manuscript, options.preloadedWorld);
+  const { content, runId, providerId, model } = await runStagedLLM(
+    'pipeline-manuscript-completeness',
+    ctx,
+    {
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      returnsJson: true,
+      source: 'pipeline-manuscript-completeness',
+    },
+  );
+  const issues = shapeCompletenessFindings(content?.issues);
+  return { issues, raw: content, runId, providerId, model };
 }
 
 // Reader-map context: the protagonist arc + the Vonnegut shape backbone + the
@@ -1391,6 +1661,9 @@ export const __testing = {
   shapeEpisodes,
   shapeVerifyIssues,
   shapeFindings,
+  shapeCompletenessFindings,
+  buildCompletenessContext,
+  issueSynopsisFromSeason,
   renderVolumeIssue,
   buildNeighborVolumes,
   mergeArcWithLocks,

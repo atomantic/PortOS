@@ -45,6 +45,9 @@ let arcGenerateSpy;
 let seasonEpisodesSpy;
 let arcVerifySpy;
 let volumeVerifySpy;
+let deriveSpy;
+let deriveCommitSpy;
+let completenessSpy;
 vi.mock('../services/pipeline/arcPlanner.js', async () => {
   const actual = await vi.importActual('../services/pipeline/arcPlanner.js');
   return {
@@ -53,6 +56,9 @@ vi.mock('../services/pipeline/arcPlanner.js', async () => {
     generateSeasonEpisodes: vi.fn((...args) => seasonEpisodesSpy(...args)),
     verifyArc: vi.fn((...args) => arcVerifySpy(...args)),
     verifyVolume: vi.fn((...args) => volumeVerifySpy(...args)),
+    deriveFromManuscript: vi.fn((...args) => deriveSpy(...args)),
+    commitDerivedManuscript: vi.fn((...args) => deriveCommitSpy(...args)),
+    analyzeManuscriptCompleteness: vi.fn((...args) => completenessSpy(...args)),
   };
 });
 
@@ -1971,6 +1977,50 @@ describe('pipeline routes', () => {
     expect(r.body.issues).toHaveLength(1);
     expect(r.body.issues[0].location).toBe('episode:3');
     expect(volumeVerifySpy).toHaveBeenCalledWith(ser.body.id, 'sea-fake', expect.objectContaining({ providerOverride: 'anthropic' }));
+  });
+
+  it('POST /series/:id/arc/derive-from-manuscript returns the preview', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    deriveSpy = vi.fn(async () => ({
+      arc: { logline: 'L' }, volume: { title: 'V' }, bible: { logline: 'L', premise: 'P', issueCountTarget: 3 },
+      issues: [{ id: 'i1', number: 1, title: 'One', synopsisSuggestion: 'syn' }],
+      runId: 'rd', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/arc/derive-from-manuscript`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.volume.title).toBe('V');
+    expect(r.body.issues).toHaveLength(1);
+    expect(deriveSpy).toHaveBeenCalledWith(ser.body.id, expect.any(Object));
+  });
+
+  it('POST /series/:id/arc/derive-from-manuscript/commit forwards the edited proposal', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    deriveCommitSpy = vi.fn(async () => ({ series: { id: ser.body.id, seasons: [{ id: 'sea-1' }] }, volumeId: 'sea-1', issueCount: 3 }));
+    const proposal = {
+      arc: { logline: 'L', summary: 'S' },
+      bible: { logline: 'L', premise: 'S', issueCountTarget: 3 },
+      volume: { title: 'The Giant' },
+      issues: [{ id: 'i1', title: 'Act One', synopsis: 'syn one' }],
+    };
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/arc/derive-from-manuscript/commit`).send(proposal);
+    expect(r.status).toBe(200);
+    expect(r.body.issueCount).toBe(3);
+    expect(deriveCommitSpy).toHaveBeenCalledWith(ser.body.id, expect.objectContaining({ volume: { title: 'The Giant' } }));
+  });
+
+  it('POST /series/:id/manuscript/completeness returns categorized findings', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    completenessSpy = vi.fn(async () => ({
+      issues: [{ severity: 'high', category: 'missing-content', location: 'Issue 2', problem: 'no climax', suggestion: 'add one' }],
+      runId: 'rc', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/manuscript/completeness`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.issues[0].category).toBe('missing-content');
+    expect(completenessSpy).toHaveBeenCalledWith(ser.body.id, expect.any(Object));
   });
 
   describe('audio stage routes', () => {

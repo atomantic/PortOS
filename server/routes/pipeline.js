@@ -554,6 +554,38 @@ const arcResolveSchema = z.object({
   findings: z.array(verifyFindingSchema).max(50).optional(),
 });
 
+// Back-derive arc/bible/structure from the existing issue manuscripts. The
+// preview pass just needs the override shape; the commit pass carries the
+// (possibly user-edited) proposal so the LLM is NOT re-run on confirm.
+const arcDeriveSchema = z.object(providerOverrideShape);
+const arcDeriveCommitSchema = z.object({
+  arc: z.object({
+    logline: z.string().max(500).optional(),
+    summary: z.string().max(8000).optional(),
+    protagonistArc: z.string().max(8000).optional(),
+    themes: z.array(z.string().max(200)).max(50).optional(),
+    shape: z.string().max(80).nullable().optional(),
+  }).optional(),
+  bible: z.object({
+    logline: z.string().max(500).optional(),
+    premise: z.string().max(8000).optional(),
+    issueCountTarget: z.number().int().min(0).max(9999).optional(),
+  }).optional(),
+  volume: z.object({
+    title: z.string().max(300).optional(),
+    logline: z.string().max(1000).optional(),
+    synopsis: z.string().max(8000).optional(),
+  }).optional(),
+  issues: z.array(z.object({
+    id: z.string().min(1).max(120),
+    title: z.string().max(300).optional(),
+    synopsis: z.string().max(8000).optional(),
+  })).max(200).optional(),
+});
+
+// Manuscript-completeness ("finish the draft") editor pass — override shape only.
+const manuscriptCompletenessSchema = z.object(providerOverrideShape);
+
 const autoRunSchema = z.object({
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
@@ -1231,6 +1263,37 @@ router.post('/series/:id/arc/resolve-issues', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(arcResolveSchema, req.body ?? {});
   const result = await arcPlanner.resolveVerifyIssues(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Back-derive arc + bible + single-volume restructure from the EXISTING issue
+// manuscripts ("I imported a finished graphic novel, reconstruct its spine").
+// Read-only preview the UI shows for review/edit before the commit route.
+router.post('/series/:id/arc/derive-from-manuscript', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(arcDeriveSchema, req.body ?? {});
+  const result = await arcPlanner.deriveFromManuscript(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Apply the (possibly edited) derive preview: bible + single volume + per-issue
+// synopses. The LLM is NOT re-run — the confirmed proposal is in the body.
+router.post('/series/:id/arc/derive-from-manuscript/commit', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(arcDeriveCommitSchema, req.body ?? {});
+  const result = await arcPlanner.commitDerivedManuscript(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Manuscript-completeness editor pass — categorized "finish the draft"
+// suggestions read from the actual drafted script (not synopses). Advisory.
+router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptCompletenessSchema, req.body ?? {});
+  const result = await arcPlanner.analyzeManuscriptCompleteness(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

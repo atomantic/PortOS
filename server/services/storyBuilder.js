@@ -38,9 +38,8 @@ import {
 } from './pipeline/series.js';
 import {
   generateArcOverview, generateArcFromSource, generateReaderMap, refineReaderMap, commitSeasonsWithRemap,
+  collectIssueSourceText,
 } from './pipeline/arcPlanner.js';
-import { listIssues } from './pipeline/issues.js';
-import { stageContentOf } from './pipeline/textStages.js';
 
 const TYPE_SCHEMA_VERSION = 1;
 
@@ -422,31 +421,6 @@ export async function setIssueLock(id, issueId, locked) {
 }
 
 // ── Backfill (generate upstream from downstream) ───────────────────────────
-
-// Cap the concatenated issue corpus fed into a backfill extraction so a long
-// series can't blow past the provider's context budget. The importer enforces
-// its own (much larger) source ceiling; this is the Story-Builder-side bound.
-const BACKFILL_SOURCE_MAX = 200_000;
-
-// Collect existing issue content for the session's series, newest-authored
-// artifact per issue, so an upstream step (idea / plotArc) can be synthesized
-// FROM the downstream work that already exists — the user's "started from a
-// comic script" case. Prefers the richest stage (comicScript → teleplay →
-// prose → idea). Returns '' when no issue has any text content.
-async function collectIssueSourceText(seriesId) {
-  if (!seriesId) return '';
-  const issues = await listIssues({ seriesId }).catch(() => []);
-  const parts = [];
-  for (const iss of issues) {
-    const st = iss.stages || {};
-    const pick = ['comicScript', 'teleplay', 'prose', 'idea']
-      .map((sid) => ({ sid, content: stageContentOf(st[sid]) }))
-      .find((x) => x.content);
-    if (!pick) continue;
-    parts.push(`# Issue ${iss.number}${iss.title ? ` — ${iss.title}` : ''} (${pick.sid})\n\n${pick.content}`);
-  }
-  return parts.join('\n\n---\n\n').slice(0, BACKFILL_SOURCE_MAX);
-}
 
 // ── Generate / refine delegation ──────────────────────────────────────────
 
