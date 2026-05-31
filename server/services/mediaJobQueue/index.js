@@ -714,7 +714,10 @@ async function runJob(job) {
   let watchdogInFlight = false;
   watchdogTimer = setInterval(async () => {
     if (watchdogInFlight) return;
-    if (job.status !== 'running') return;
+    // terminalStarted closes the window terminate() opens: it now awaits a
+    // disk drain before flipping job.status, so a tick that only checked
+    // status could fire mod.cancel on a job that is already terminating.
+    if (terminalStarted || job.status !== 'running') return;
     const idleFor = Date.now() - lastActivityAt;
     if (idleFor < idleTimeoutMs) return;
     watchdogInFlight = true;
@@ -727,7 +730,9 @@ async function runJob(job) {
     // queue still settles, and reset inFlight in finally.
     try {
       const mod = await getGenModuleForJob(job);
-      if (job.status !== 'running') return;
+      // Re-check after the await — terminate() may have started (and is
+      // draining to disk with job.status still 'running') during the import.
+      if (terminalStarted || job.status !== 'running') return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
       if (mod?.cancel) mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });

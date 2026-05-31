@@ -255,12 +255,15 @@ describe('mediaJobQueue', () => {
     const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
+    // Use a message synthesizeMessage() could NOT produce (it would emit
+    // "Rendering step 37/100" from step/totalSteps) so this pins the
+    // explicit-message passthrough, not the synthesized fallback.
     videoGenEvents.emit('progress', {
       generationId: job.jobId,
       progress: 0.37,
       step: 37,
       totalSteps: 100,
-      message: 'Rendering step 37/100',
+      message: 'Rendering step 37/100 (upscaling)',
     });
 
     await waitFor(() => {
@@ -268,7 +271,7 @@ describe('mediaJobQueue', () => {
       const persisted = data.jobs.find((j) => j.id === job.jobId);
       return persisted?.status === 'running'
         && persisted.progress === 0.37
-        && persisted.statusMsg === 'Rendering step 37/100';
+        && persisted.statusMsg === 'Rendering step 37/100 (upscaling)';
     }, { timeoutMs: 2000 });
 
     videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
