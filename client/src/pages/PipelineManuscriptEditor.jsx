@@ -24,13 +24,13 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import useProviderModels from '../hooks/useProviderModels';
 import { timeAgo } from '../utils/formatters';
+import { filterSelectableModels } from '../utils/providers';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
   patchPipelineManuscriptComment, savePipelineManuscriptSection, restorePipelineStageVersion,
   generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
-  analyzePipelineManuscriptCompleteness,
+  analyzePipelineManuscriptCompleteness, getProviders,
 } from '../services/api';
 
 const STAGE_LABEL = { comicScript: 'comic script', teleplay: 'teleplay', prose: 'prose', idea: 'outline' };
@@ -74,15 +74,12 @@ export default function PipelineManuscriptEditor() {
   const [switching, setSwitching] = useState(false);
   const [pinning, setPinning] = useState(false);
   // AI provider override for Generate-fix + Editorial-review actions.
-  // selectedProviderId === '' means "System default" (no override sent to server).
-  const {
-    providers,
-    selectedProviderId: overrideProviderId,
-    selectedModel: overrideModel,
-    availableModels: overrideModels,
-    setSelectedProviderId: setOverrideProviderId,
-    setSelectedModel: setOverrideModel,
-  } = useProviderModels(); // enabled providers only; we prepend "System default" in the select
+  // '' means "System default" (no override sent to server). Intentionally NOT
+  // auto-selected — useProviderModels always picks the first provider, but here
+  // "no selection" is the correct default so we manage this state directly.
+  const [providers, setProviders] = useState([]);
+  const [overrideProviderId, setOverrideProviderId] = useState('');
+  const [overrideModel, setOverrideModel] = useState('');
   // Per-issue free-text save state: 'saving' | 'saved' | undefined.
   const [saveState, setSaveState] = useState({});
   // textarea elements keyed by issue number, for jump-to-anchor.
@@ -125,9 +122,26 @@ export default function PipelineManuscriptEditor() {
     return () => { canceled = true; };
   }, [seriesId, navigate]);
 
+  // Load the enabled provider list once for the override selector.
+  useEffect(() => {
+    let canceled = false;
+    getProviders()
+      .then((data) => { if (!canceled) setProviders((data?.providers || []).filter((p) => p.enabled)); })
+      .catch(() => {});
+    return () => { canceled = true; };
+  }, []);
+
+  const overrideProvider = providers.find((p) => p.id === overrideProviderId) || null;
+  const overrideModels = filterSelectableModels(overrideProvider?.models || [overrideProvider?.defaultModel]);
   // undefined (not '') so the server treats it as "no override" → system default.
   const providerOverride = overrideProviderId || undefined;
   const modelOverride = overrideModel || undefined;
+
+  const changeOverrideProvider = (id) => {
+    setOverrideProviderId(id);
+    const p = providers.find((pr) => pr.id === id);
+    setOverrideModel(p?.defaultModel || '');
+  };
 
   // Re-run the editorial completeness pass over the manuscript with the chosen
   // provider. The route persists findings as the review comment set, so we just
@@ -349,7 +363,7 @@ export default function PipelineManuscriptEditor() {
               <select
                 id="ms-provider-override"
                 value={overrideProviderId}
-                onChange={(e) => setOverrideProviderId(e.target.value)}
+                onChange={(e) => changeOverrideProvider(e.target.value)}
                 className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white"
               >
                 <option value="">System default</option>
