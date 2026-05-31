@@ -250,6 +250,57 @@ describe('mediaJobQueue', () => {
     expect(persisted.statusMsg).toBe('Completed');
   });
 
+  it('debounce-persists live progress before a terminal transition', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Use a message synthesizeMessage() could NOT produce (it would emit
+    // "Rendering step 37/100" from step/totalSteps) so this pins the
+    // explicit-message passthrough, not the synthesized fallback.
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId,
+      progress: 0.37,
+      step: 37,
+      totalSteps: 100,
+      message: 'Rendering step 37/100 (upscaling)',
+    });
+
+    await waitFor(() => {
+      const data = JSON.parse(readFileSync(file, 'utf-8'));
+      const persisted = data.jobs.find((j) => j.id === job.jobId);
+      return persisted?.status === 'running'
+        && persisted.progress === 0.37
+        && persisted.statusMsg === 'Rendering step 37/100 (upscaling)';
+    }, { timeoutMs: 2000 });
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('cancel during the terminal drain window is refused, not "canceling"', async () => {
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'finishing race' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Dirty the debounce so terminate() must actually drain (the widened
+    // async window this guards). emit() is synchronous: the 'completed'
+    // handler runs terminate(), which sets job.terminating synchronously and
+    // then parks on the async drain with job.status still 'running'.
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.9, message: 'Almost done' });
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+
+    // A cancel landing in that window must be refused (the outcome is already
+    // decided) rather than reported as 'canceling', and must not fire a
+    // redundant provider cancel. cancelJob's guard returns synchronously
+    // before any await, so no microtask flips the status first.
+    const result = await mediaJobQueue.cancelJob(job.jobId);
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('ALREADY_TERMINAL');
+    expect(stubs.cancelVideo).not.toHaveBeenCalled();
+
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
   it('boot recovery: persisted "running" jobs are reclassified as failed', async () => {
     const interruptedId = '00000000-0000-4000-8000-000000000001';
     const persisted = {
