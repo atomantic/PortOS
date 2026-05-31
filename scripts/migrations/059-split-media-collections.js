@@ -121,8 +121,14 @@ export default {
     const sourcePath = legacyExists ? legacyPath : backupPath;
     const doc = await readJsonTolerant(sourcePath);
     if (!doc || typeof doc !== 'object' || doc.__unreadable) {
-      console.warn(`⚠️ migration 059: ${sourcePath} unreadable — skipping. Resolve manually before next boot.`);
-      return { ok: false, reason: 'unreadable' };
+      // THROW (don't return) so the runner does NOT mark this migration applied
+      // — it records any migration whose up() *resolves* (run-migrations.js:70-71),
+      // so returning here would freeze the split as "done" with nothing migrated,
+      // and the collections would stay orphaned in the unreadable file even after
+      // the user repairs it. Throwing keeps it pending so a repaired file is
+      // re-split on the next boot; server boot itself survives via the
+      // runMigrations().catch() in server/index.js.
+      throw new Error(`migration 059: ${sourcePath} is unreadable — repair or remove it, then reboot to retry the split`);
     }
 
     const collections = Array.isArray(doc.collections) ? doc.collections : [];

@@ -155,10 +155,14 @@ describe('migration 059 — split media-collections.json to per-record files', (
     expect(readJson(join(typeDir, id, 'index.json')).name).toBe('First (wins)');
   });
 
-  it('reports unreadable when the legacy file is corrupted', async () => {
+  it('throws (does NOT mark applied) when the legacy file is corrupted, so a repaired file re-splits', async () => {
+    // Throwing keeps the migration pending in run-migrations.js (which marks any
+    // migration whose up() resolves as applied) — so the collections aren't
+    // frozen as "migrated" while still trapped in the unreadable file.
     writeFileSync(legacyPath, 'not json');
-    const result = await migration.up({ rootDir });
-    expect(result.ok).toBe(false);
+    await expect(migration.up({ rootDir })).rejects.toThrow(/unreadable/);
+    // Nothing was stamped — a repaired file on the next run still splits.
+    expect(existsSync(typeIndexPath)).toBe(false);
   });
 
   it('recovers from the .bak-059 file if the legacy was already renamed', async () => {
