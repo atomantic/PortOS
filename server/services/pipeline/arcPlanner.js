@@ -672,7 +672,7 @@ export async function commitDerivedManuscript(seriesId, { arc, bible, volume, is
 // Findings carry a `category` on top of the verify shape so the UI can group
 // them. Unknown categories collapse to 'other' rather than being dropped.
 const COMPLETENESS_CATEGORIES = new Set([
-  'missing-content', 'arc-gap', 'character-gap', 'pacing', 'continuity', 'other',
+  'missing-content', 'arc-gap', 'character-gap', 'pacing', 'continuity', 'comic-structure', 'other',
 ]);
 
 function shapeCompletenessFindings(rawIssues) {
@@ -686,7 +686,8 @@ function shapeCompletenessFindings(rawIssues) {
       category: COMPLETENESS_CATEGORIES.has(raw?.category) ? raw.category : 'other',
       location: typeof raw?.location === 'string' ? raw.location.trim().slice(0, 200) : '',
       problem: problem.slice(0, 2000),
-      suggestion: typeof raw?.suggestion === 'string' ? raw.suggestion.trim().slice(0, 2000) : '',
+      // comic-structure suggestions are full page rewrites (~4-6 panels); give them more room.
+      suggestion: typeof raw?.suggestion === 'string' ? raw.suggestion.trim().slice(0, 8000) : '',
       // Structured anchor: lets the editor map a finding to its issue section
       // and jump to the verbatim excerpt. Both optional — older runs and
       // un-anchorable findings still render (just without click-to-jump).

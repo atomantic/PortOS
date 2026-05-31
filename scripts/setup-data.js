@@ -187,8 +187,9 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // excerpt) auto-updatable to the post-042 (single-value example, ≤200) hash.
   'pipeline-editorial-analysis.md': ['14d9879697c66d51830cc798040d5369'],
   // manuscript-completeness: pre-056 (location-only findings) auto-updatable to
-  // the post-056 (issueNumber + anchorQuote anchored findings) hash.
-  'pipeline-manuscript-completeness.md': ['e6858c74ab2cead752d388e3f428406c'],
+  // the post-056 (issueNumber + anchorQuote anchored findings) hash; and
+  // pre-057 (five categories) auto-updatable to the post-057 (comic-structure) hash.
+  'pipeline-manuscript-completeness.md': ['e6858c74ab2cead752d388e3f428406c', '4f2b95778aed85f5fc461d71eb461b79'],
   // CoS agent prompt: drop obsolete "# Chief of Staff Agent Briefing" header
   // and "You are an autonomous agent…" preamble (migration 009). Every
   // historical shipped hash is auto-updatable to the new sample.
@@ -217,7 +218,7 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'universe-character-expand.md':'67b6e73ed47f318451a730088b4cff14',
   'story-builder-idea-expand.md':'c12d76fefaaded2838023065bfc94bb0',
   'pipeline-editorial-analysis.md':'daeb02bd54b0c099b21af659c6298cfe',
-  'pipeline-manuscript-completeness.md':'4f2b95778aed85f5fc461d71eb461b79',
+  'pipeline-manuscript-completeness.md':'1ee5ac936fbf1d365e0eaea99bcf1e77',
 };
 const SHIPPED_PROMPT_FILES = Object.keys(SHIPPED_PROMPT_OLD_MD5);
 

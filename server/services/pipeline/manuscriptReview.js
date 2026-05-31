@@ -71,7 +71,7 @@ function sanitizeComment(raw) {
     category: clampStr(raw.category, 40) || 'other',
     location: clampStr(raw.location, 200),
     problem,
-    suggestion: clampStr(raw.suggestion, 2000),
+    suggestion: clampStr(raw.suggestion, 8000),
     anchorQuote: clampStr(raw.anchorQuote, 400),
     status: STATUS_SET.has(raw.status) ? raw.status : 'open',
     fix: sanitizeFix(raw.fix),
