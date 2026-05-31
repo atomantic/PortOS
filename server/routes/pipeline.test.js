@@ -2108,6 +2108,11 @@ describe('pipeline routes', () => {
         .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
         .send({ replace: 'x' }); // missing required `find`
       expect(accept.status).toBe(400);
+
+      const acceptMissingReplace = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
+        .send({ find: 'x' }); // legacy accept must still include `replace`
+      expect(acceptMissingReplace.status).toBe(400);
     });
   });
 

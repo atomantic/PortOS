@@ -595,18 +595,38 @@ const manuscriptCompletenessSchema = z.object(providerOverrideShape);
 
 // Manuscript editor — review comment operations.
 const manuscriptFixGenerateSchema = z.object(providerOverrideShape);
-const manuscriptFixAcceptSchema = z.object({
+const manuscriptFixEditSchema = z.object({
+  issueNumber: z.number().int().nullable().optional(),
+  issueId: z.string().min(1).max(120).nullable().optional(),
+  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES).nullable().optional(),
   find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX),
   replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+});
+const manuscriptFixAcceptSchema = z.object({
+  find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+  replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+  edits: z.array(manuscriptFixEditSchema).max(20).optional(),
+}).refine((v) => (Array.isArray(v.edits) && v.edits.length > 0) || !!v.find, {
+  message: 'Provide find/replace or at least one edit',
+}).refine((v) => !v.find || typeof v.replace === 'string', {
+  path: ['replace'],
+  message: 'replace is required when find is provided',
 });
 // Comment PATCH: status flip and/or attach/clear a fix. `.strict()` rejects
 // stray keys; `fix` nullable so an explicit clear is distinguishable from absent.
 const manuscriptCommentPatchSchema = z.object({
   status: z.enum(['open', 'accepted', 'dismissed']).optional(),
   fix: z.object({
-    find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
-    replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+    find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+    replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
     fuzzy: z.boolean().optional(),
+    edits: z.array(manuscriptFixEditSchema.extend({
+      title: z.string().max(200).optional(),
+      note: z.string().max(1000).optional(),
+      fuzzy: z.boolean().optional(),
+    })).max(20).optional(),
+  }).refine((v) => !!v.find || !!v.replace || (Array.isArray(v.edits) && v.edits.length > 0), {
+    message: 'Fix must include find/replace or edits',
   }).nullable().optional(),
 }).strict();
 // Versioned free-text section save — writes one issue's manuscript stage.
@@ -1373,7 +1393,7 @@ router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(a
   res.json({ comment });
 }));
 
-// Generate an anchored find/replace fix for one comment (does not apply it).
+// Generate one or more anchored fix edits for one comment (does not apply them).
 router.post('/series/:id/manuscript/review/comments/:commentId/fix', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptFixGenerateSchema, req.body ?? {});
@@ -1382,7 +1402,7 @@ router.post('/series/:id/manuscript/review/comments/:commentId/fix', asyncHandle
   res.json(result);
 }));
 
-// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
+// Apply selected, optionally edited fix edits into stage output + mark accepted.
 router.post('/series/:id/manuscript/review/comments/:commentId/accept', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptFixAcceptSchema, req.body ?? {});

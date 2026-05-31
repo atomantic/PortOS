@@ -1167,6 +1167,41 @@ describe('pipeline issues service', () => {
   });
 
   describe('concurrent write serialization', () => {
+    it('updateStagesWithLatest validates the whole batch before writing any issue', async () => {
+      const first = await svc.createIssue({
+        seriesId: 'ser-1',
+        title: 'First',
+        stages: { prose: { output: 'First draft.', status: 'ready' } },
+      });
+      const second = await svc.createIssue({
+        seriesId: 'ser-1',
+        title: 'Second',
+        stages: { prose: { output: 'Second draft.', status: 'ready' } },
+      });
+
+      await expect(
+        svc.updateStagesWithLatest('ser-1', [
+          {
+            issueId: first.id,
+            stageId: 'prose',
+            computeFn: () => ({ output: 'First changed.', status: 'edited', lastRunId: 'bulk-1' }),
+          },
+          {
+            issueId: second.id,
+            stageId: 'prose',
+            computeFn: () => {
+              throw Object.assign(new Error('stale second section'), { code: 'TEST_STALE' });
+            },
+          },
+        ], { snapshotPrior: true }),
+      ).rejects.toMatchObject({ code: 'TEST_STALE' });
+
+      const afterFirst = await svc.getIssue(first.id);
+      const afterSecond = await svc.getIssue(second.id);
+      expect(afterFirst.stages.prose.output).toBe('First draft.');
+      expect(afterSecond.stages.prose.output).toBe('Second draft.');
+    });
+
     it('two concurrent writes do not clobber each other — both fields survive in final state', async () => {
       // This is the key regression test for the queueIssueWrite tail.
       // If the write queue is bypassed or broken, both calls read the same

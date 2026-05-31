@@ -50,8 +50,30 @@ function sanitizeFix(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const find = typeof raw.find === 'string' ? raw.find : '';
   const replace = typeof raw.replace === 'string' ? raw.replace : '';
-  if (!find && !replace) return null;
+  const edits = Array.isArray(raw.edits)
+    ? raw.edits
+      .map((e) => {
+        if (!e || typeof e !== 'object') return null;
+        const editFind = typeof e.find === 'string' ? e.find : '';
+        const editReplace = typeof e.replace === 'string' ? e.replace : '';
+        if (!editFind && !editReplace) return null;
+        const out = {
+          issueNumber: Number.isInteger(e.issueNumber) ? e.issueNumber : null,
+          issueId: typeof e.issueId === 'string' ? e.issueId : null,
+          stageId: typeof e.stageId === 'string' ? e.stageId : null,
+          title: clampStr(e.title, 200),
+          find: editFind,
+          replace: editReplace,
+          note: clampStr(e.note, 1000),
+        };
+        if (e.fuzzy === true) out.fuzzy = true;
+        return out;
+      })
+      .filter(Boolean)
+    : [];
+  if (!find && !replace && edits.length === 0) return null;
   const out = { find, replace };
+  if (edits.length) out.edits = edits;
   if (raw.fuzzy === true) out.fuzzy = true;
   return out;
 }

@@ -909,6 +909,68 @@ export function updateStage(issueId, stageId, patch = {}) {
   return updateStageWithLatest(issueId, stageId, () => patch);
 }
 
+function mergeStagePatch(currentStage, stageId, patch, { snapshotPrior = false } = {}) {
+  const isVisual = VISUAL_STAGE_IDS.includes(stageId);
+  const isAudio = AUDIO_STAGE_IDS.includes(stageId);
+  const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId, { force: snapshotPrior });
+  const merged = {
+    ...currentStage,
+    ...patch,
+    runHistory: nextRunHistory,
+    updatedAt: new Date().toISOString(),
+  };
+  if (isVisual) return sanitizeVisualStage(merged, stageId);
+  if (isAudio) return sanitizeAudioStage(merged);
+  return sanitizeTextStage(merged);
+}
+
+export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior = false } = {}) {
+  if (!isStr(seriesId) || !seriesId) {
+    return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
+  }
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return Promise.resolve([]);
+  }
+  for (const { stageId } of updates) {
+    if (!STAGE_IDS.includes(stageId)) {
+      return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
+    }
+  }
+
+  return queueSeriesIssuesWrite(seriesId, async () => {
+    const state = await readState();
+    const results = [];
+    let changed = false;
+    for (const update of updates) {
+      const idx = state.issues.findIndex((i) => i.id === update.issueId);
+      if (idx < 0) throw makeErr(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      const cur = state.issues[idx];
+      if (cur.deleted || cur.seriesId !== seriesId) throw makeErr(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      const currentStage = cur.stages[update.stageId];
+      const patch = update.computeFn(currentStage);
+      if (isPlainObject(patch) && Object.keys(patch).length === 0) {
+        results.push({ issue: cur, stage: currentStage });
+        continue;
+      }
+      const nextStage = mergeStagePatch(currentStage, update.stageId, patch, { snapshotPrior });
+      const mergedIssue = sanitizeIssue({
+        ...cur,
+        stages: { ...cur.stages, [update.stageId]: nextStage },
+        updatedAt: new Date().toISOString(),
+      });
+      if (!mergedIssue) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+      state.issues[idx] = mergedIssue;
+      results.push({ issue: mergedIssue, stage: mergedIssue.stages[update.stageId] });
+      changed = true;
+    }
+    if (changed) {
+      await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+      emitRecordUpdated('series', seriesId);
+    }
+    return results;
+  });
+}
+
 /**
  * Restore a prior `runHistory` snapshot as the active stage state. Looks up the
  * snapshot by `runId` against the freshest persisted record (so a concurrent
@@ -994,8 +1056,6 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     const cur = await store().loadOne(issueId);
     if (!cur) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-    const isVisual = VISUAL_STAGE_IDS.includes(stageId);
-    const isAudio = AUDIO_STAGE_IDS.includes(stageId);
     const currentStage = cur.stages[stageId];
     const patch = computeFn(currentStage);
     // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
@@ -1008,17 +1068,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     // Snapshot the prior `{ runId, input, output }` into runHistory when this
     // patch carries a fresh lastRunId (i.e. a generate just replaced prior
     // content). Computed BEFORE the spread so it reads pre-merge state.
-    const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId, { force: snapshotPrior });
-    const merged = {
-      ...currentStage,
-      ...patch,
-      runHistory: nextRunHistory,
-      updatedAt: new Date().toISOString(),
-    };
-    let next;
-    if (isVisual) next = sanitizeVisualStage(merged, stageId);
-    else if (isAudio) next = sanitizeAudioStage(merged);
-    else next = sanitizeTextStage(merged);
+    const next = mergeStagePatch(currentStage, stageId, patch, { snapshotPrior });
     const mergedIssue = sanitizeIssue({
       ...cur,
       stages: { ...cur.stages, [stageId]: next },

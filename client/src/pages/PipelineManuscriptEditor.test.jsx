@@ -85,7 +85,9 @@ describe('PipelineManuscriptEditor', () => {
     // Section text updates and the open count drops to 0.
     expect(await screen.findByDisplayValue('The hero walked in. She left, but paused.')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/0 open/)).toBeInTheDocument());
-    expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', { find: 'She left.', replace: 'She left, but paused.' });
+    expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', {
+      edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'She left, but paused.', fuzzy: undefined }],
+    });
   });
 
   it('switches manuscript format on demand', async () => {
