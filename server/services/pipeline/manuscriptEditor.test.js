@@ -130,6 +130,15 @@ describe('manuscriptFix', () => {
     expect(fuzzy.fix.fuzzy).toBe(true);
   });
 
+  it('generateManuscriptFix rejects a fix with no find (unappliable by the accept path)', async () => {
+    const { s } = await setupSeriesWithDraft();
+    const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
+    stageRunnerSpy = vi.fn(async () => ({ content: { replace: 'only a replacement, no find' }, runId: 'rf3' }));
+    await expect(
+      fixer.generateManuscriptFix(s.id, { commentId: seeded.comments[0].id }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+  });
+
   it('acceptManuscriptFix applies the find/replace to the stage output and marks the comment accepted', async () => {
     const { s, issue } = await setupSeriesWithDraft();
     const seeded = await review.seedReviewFromFindings(s.id, [finding()]);

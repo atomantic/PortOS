@@ -206,9 +206,14 @@ export default function PipelineManuscriptEditor() {
     setComments((prev) => prev.map((c) => (c.id === next.id ? next : c)));
 
   // After an accepted fix the server returns the rewritten section — reflect it
-  // in the manuscript pane so the edit shows without a reload.
+  // in the manuscript pane so the edit shows without a reload. A comment can
+  // target a format other than the one on screen (the sidebar shows all
+  // comments); only patch the visible textarea when the edited stage matches
+  // the current view, or we'd paint (and later blur-save) the wrong format's
+  // text into this section. The edit still persisted server-side — it shows on
+  // switching to that format.
   const applyAccepted = ({ comment, section }) => {
-    if (section?.issueId) {
+    if (section?.issueId && section.stageId === viewType) {
       patchSection(section.issueId, { content: section.content, versions: section.versions });
       baselineRef.current.set(`${section.issueId}:${section.stageId}`, section.content);
       setSaveState((prev) => ({ ...prev, [section.issueId]: 'saved' }));

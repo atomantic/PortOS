@@ -147,7 +147,10 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
 
   const find = typeof content?.find === 'string' ? content.find : '';
   const replace = typeof content?.replace === 'string' ? content.replace : '';
-  if (!replace) throw makeErr('The model did not return a usable fix — try again', ERR_VALIDATION);
+  // The accept path locates the edit by `find` (schema requires it non-empty),
+  // and the UI only lets the user edit `replace` — so a fix missing `find`
+  // would be shown but could never be applied. Reject it as unusable.
+  if (!find || !replace) throw makeErr('The model did not return a usable fix — try again', ERR_VALIDATION);
   const fix = { find, replace };
   // A `find` that isn't present verbatim can't be applied surgically; mark it
   // so the UI offers manual editing instead of a no-op accept.
