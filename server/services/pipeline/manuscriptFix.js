@@ -190,16 +190,18 @@ const sectionFrom = (issue, stageId, stage) => ({
 
 async function resolveMissingEditTargets(seriesId, comment, edits) {
   const targets = await resolveTargets(seriesId, comment);
+  const targetByKey = new Map(targets.map((s) => [`${s.issueId}:${s.stageId}`, s]));
   return edits.map((edit) => {
-    if (edit.issueId && edit.stageId) return edit;
-    const section = resolveEditSection(edit, targets);
+    const hasExplicitTarget = edit.issueId && edit.stageId;
+    const section = hasExplicitTarget ? targetByKey.get(`${edit.issueId}:${edit.stageId}`) : resolveEditSection(edit, targets);
+    if (hasExplicitTarget && !section) return { ...edit, issueId: null, stageId: null };
     return section
       ? { ...edit, issueId: section.issueId, stageId: section.stageId, issueNumber: section.number }
       : edit;
   });
 }
 
-async function applyEditsToSections(edits, comment) {
+async function planEditsBySection(edits, comment) {
   const groups = new Map();
   for (const edit of edits) {
     const key = `${edit.issueId}:${edit.stageId}`;
@@ -207,18 +209,31 @@ async function applyEditsToSections(edits, comment) {
     groups.get(key).edits.push(edit);
   }
 
-  const sections = [];
+  const planned = [];
   for (const group of groups.values()) {
-    const { issue, stage } = await updateStageWithLatest(group.issueId, group.stageId, (cur) => {
-      let text = stageTextOf(cur);
-      for (const edit of group.edits) {
-        const idx = locateFind(text, edit.find, comment.anchorQuote);
-        if (idx === -1) {
-          throw makeErr('Anchor text is no longer present in the manuscript — regenerate the fix', ERR_VALIDATION);
-        }
-        text = text.slice(0, idx) + edit.replace + text.slice(idx + edit.find.length);
+    const issue = await getIssue(group.issueId).catch(() => null);
+    if (!issue) throw makeErr(`Issue not found: ${group.issueId}`, ERR_NOT_FOUND);
+    let text = stageTextOf(issue.stages?.[group.stageId]);
+    for (const edit of group.edits) {
+      const idx = locateFind(text, edit.find, comment.anchorQuote);
+      if (idx === -1) {
+        throw makeErr('Anchor text is no longer present in the manuscript — regenerate the fix', ERR_VALIDATION);
       }
-      return { output: text, status: 'edited', lastRunId: `fix-${randomUUID()}` };
+      text = text.slice(0, idx) + edit.replace + text.slice(idx + edit.find.length);
+    }
+    planned.push({ ...group, originalText: stageTextOf(issue.stages?.[group.stageId]), output: text });
+  }
+  return planned;
+}
+
+async function applyPlannedEdits(planned) {
+  const sections = [];
+  for (const group of planned) {
+    const { issue, stage } = await updateStageWithLatest(group.issueId, group.stageId, (cur) => {
+      if (stageTextOf(cur) !== group.originalText) {
+        throw makeErr('Manuscript changed while applying the fix — regenerate the fix', ERR_VALIDATION);
+      }
+      return { output: group.output, status: 'edited', lastRunId: `fix-${randomUUID()}` };
     }, { snapshotPrior: true });
     sections.push(sectionFrom(issue, group.stageId, stage));
   }
@@ -320,7 +335,8 @@ export async function acceptManuscriptFix(seriesId, { commentId, find, replace, 
     throw makeErr('One selected edit is not anchored to a manuscript section — regenerate the fix', ERR_VALIDATION);
   }
 
-  const sections = await applyEditsToSections(acceptedEdits, comment);
+  const planned = await planEditsBySection(acceptedEdits, comment);
+  const sections = await applyPlannedEdits(planned);
   const updated = await updateComment(seriesId, commentId, { status: 'accepted' });
   return { comment: updated, section: sections[0] || null, sections };
 }

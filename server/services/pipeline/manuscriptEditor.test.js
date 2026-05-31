@@ -215,6 +215,51 @@ describe('manuscriptFix', () => {
     expect(after2.stages.prose.output).toContain('looks afraid');
   });
 
+  it('rejects explicit edit targets outside the comment manuscript scope', async () => {
+    const { s } = await setupSeriesWithDraft();
+    const other = await setupSeriesWithDraft('Other series text.');
+    const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
+
+    await expect(
+      fixer.acceptManuscriptFix(s.id, {
+        commentId: seeded.comments[0].id,
+        edits: [{
+          issueId: other.issue.id,
+          stageId: 'prose',
+          find: 'Other series text.',
+          replace: 'Tampered text.',
+        }],
+      }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+
+    const afterOther = await issuesSvc.getIssue(other.issue.id);
+    expect(afterOther.stages.prose.output).toBe('Other series text.');
+  });
+
+  it('validates every multi-section anchor before writing any section', async () => {
+    const { s, issue } = await setupSeriesWithDraft('First anchor.');
+    const issue2 = await issuesSvc.createIssue({
+      seriesId: s.id, number: 2, title: 'Two', arcPosition: 2,
+      stages: { prose: { output: 'Second anchor.', status: 'ready' } },
+    });
+    const seeded = await review.seedReviewFromFindings(s.id, [finding({ issueNumber: null, anchorQuote: '' })]);
+
+    await expect(
+      fixer.acceptManuscriptFix(s.id, {
+        commentId: seeded.comments[0].id,
+        edits: [
+          { issueId: issue.id, stageId: 'prose', find: 'First anchor.', replace: 'First changed.' },
+          { issueId: issue2.id, stageId: 'prose', find: 'Missing second anchor.', replace: 'Second changed.' },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+
+    const after1 = await issuesSvc.getIssue(issue.id);
+    const after2 = await issuesSvc.getIssue(issue2.id);
+    expect(after1.stages.prose.output).toBe('First anchor.');
+    expect(after2.stages.prose.output).toBe('Second anchor.');
+  });
+
   it('acceptManuscriptFix throws when the anchor text is gone', async () => {
     const { s } = await setupSeriesWithDraft();
     const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
