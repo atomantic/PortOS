@@ -31,6 +31,7 @@
 - **[importer-progress-hook]** The Importer's live analyze-progress checklist now runs on a shared, tested progress hook instead of page-local socket wiring — no change to behavior.
 - **[mediacollections-deterministic-loadone-fastpath]** Universe/series media-collection lookups now resolve their linked bucket in one direct read instead of scanning every collection, trimming the work done on each cross-machine sync push (no user-facing change).
 - **[data-versioning-centralize-cosagents-settings] Saving settings is now crash-safe and serialized.** `settings.json` is written through the shared atomic temp-file/rename writer and overlapping saves run one at a time, so a mid-write crash can no longer truncate the file and two near-simultaneous settings changes can no longer clobber each other (no user-facing change).
+- **[setup-data-import-drift-tables-from-migrations]** The setup script's "a prompt migration is pending" warning now derives its hash tables directly from the migration files instead of a hand-maintained copy, so the warning can't silently fall out of sync when a new prompt migration ships (no user-facing change).
 
 ## Fixed
 

@@ -82,10 +82,22 @@ const readDirOrEmpty = async (path) => readdir(path, { withFileTypes: true }).ca
 
 // Pre-rename shipped hashes. Auto-update only matches; customized templates
 // are left for the user to merge manually (setup-data.js will flag the drift).
-const OLD_PROMPTS_PLACES_MD5 = '24a33628cc94d80fa5ca60831d973daf';
-const NEW_PROMPTS_PLACES_MD5 = 'a7f68e51dd6b4421d20f5bd9d855d9b4';
-const OLD_PROMPTS_DEFERENCE_MD5 = '218f0e85643609ed85a12b1ccc7b5a8d';
-const NEW_PROMPTS_DEFERENCE_MD5 = 'a4681348c27776e414acf6e0be566a99';
+//
+// Exported under the standard drift-constant names so setup-data.js's
+// `buildPromptDriftTables` sweep reads these from a single source of truth.
+// `DRIFT_SUBDIRS` tells the sweep that `bible-deference.md` lives under
+// `prompts/_partials/` rather than the default `prompts/stages/`.
+export const ACCEPTED_OLD_MD5 = {
+  'writers-room-places.md': '24a33628cc94d80fa5ca60831d973daf',
+  'bible-deference.md': '218f0e85643609ed85a12b1ccc7b5a8d',
+};
+export const NEW_SHIPPED_MD5 = {
+  'writers-room-places.md': 'a7f68e51dd6b4421d20f5bd9d855d9b4',
+  'bible-deference.md': 'a4681348c27776e414acf6e0be566a99',
+};
+export const DRIFT_SUBDIRS = {
+  'bible-deference.md': '_partials',
+};
 
 // Each template has a sample twin at the same relative path under
 // `data.reference/…`. When an installed copy still hashes to the pre-rename
@@ -114,20 +126,18 @@ const RENAME_SUBSTITUTIONS = [
   [/the setting's baseline description/g, "the place's baseline description"],
 ];
 
-const PROMPT_TEMPLATES = [
-  {
-    rel: 'data/prompts/stages/writers-room-places.md',
-    sampleRel: 'data.reference/prompts/stages/writers-room-places.md',
-    oldHash: OLD_PROMPTS_PLACES_MD5,
-    newHash: NEW_PROMPTS_PLACES_MD5,
-  },
-  {
-    rel: 'data/prompts/_partials/bible-deference.md',
-    sampleRel: 'data.reference/prompts/_partials/bible-deference.md',
-    oldHash: OLD_PROMPTS_DEFERENCE_MD5,
-    newHash: NEW_PROMPTS_DEFERENCE_MD5,
-  },
-];
+// Derived from the exported drift constants so this migration's own
+// auto-update pass and the setup-data.js drift sweep can never disagree on a
+// hash. Each template resolves its subdir via DRIFT_SUBDIRS (default stages).
+const PROMPT_TEMPLATES = Object.keys(ACCEPTED_OLD_MD5).map((filename) => {
+  const subdir = DRIFT_SUBDIRS[filename] || 'stages';
+  return {
+    rel: `data/prompts/${subdir}/${filename}`,
+    sampleRel: `data.reference/prompts/${subdir}/${filename}`,
+    oldHash: ACCEPTED_OLD_MD5[filename],
+    newHash: NEW_SHIPPED_MD5[filename],
+  };
+});
 
 const migrateUniverseState = async (rootDir) => {
   const path = join(rootDir, 'data/universe-builder.json');
