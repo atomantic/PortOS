@@ -5,7 +5,7 @@ import { getAllProviders, getProviderById } from '../services/providers.js';
 import { getAllProviderStatuses } from '../services/providerStatus.js';
 import { listAccounts as listCalendarAccounts } from '../services/calendarAccounts.js';
 import { listAccounts as listMessageAccounts } from '../services/messageAccounts.js';
-import { getMemories } from '../services/memory.js';
+import { countMemories } from '../services/memoryBackend.js';
 import { getConfig as getCosConfig } from '../services/cos.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { getNetworkExposureStatus } from '../lib/networkExposure.js';
@@ -54,7 +54,7 @@ router.get('/', asyncHandler(async (req, res) => {
     providerStatuses,
     calendarAccounts,
     messageAccounts,
-    memories,
+    memoryCount,
     embeddingProviderConfigured,
     voiceConfig,
     genome,
@@ -66,7 +66,7 @@ router.get('/', asyncHandler(async (req, res) => {
     Promise.resolve().then(() => getAllProviderStatuses()).catch(() => ({})),
     listCalendarAccounts().catch(() => []),
     listMessageAccounts().catch(() => []),
-    getMemories({ status: 'active' }).catch(() => ({ total: 0 })),
+    countMemories({ status: 'active' }).catch(() => 0),
     resolveEmbeddingProviderConfigured().catch(() => false),
     getVoiceConfig().catch(() => ({})),
     getGenomeSummary().catch(() => ({ uploaded: false })),
@@ -82,8 +82,7 @@ router.get('/', asyncHandler(async (req, res) => {
     providerStatuses,
     calendarAccounts,
     messageAccounts,
-    // getMemories returns { total, memories } — use the count, not the wrapper.
-    memoryCount: Number(memories?.total) || 0,
+    memoryCount: Number(memoryCount) || 0,
     embeddingProviderConfigured,
     voiceConfig,
     network,

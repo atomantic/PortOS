@@ -153,9 +153,9 @@ export async function getMemory(id) {
 }
 
 /**
- * Get memories with filters
+ * Build shared filters for memory list/count queries.
  */
-export async function getMemories(options = {}) {
+function buildMemoryFilterWhere(options = {}) {
   const conditions = [];
   const params = [];
   let paramIdx = 1;
@@ -192,6 +192,21 @@ export async function getMemories(options = {}) {
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  return { where, params };
+}
+
+export async function countMemories(options = {}) {
+  const { where, params } = buildMemoryFilterWhere(options);
+  const countResult = await query(`SELECT COUNT(*) as total FROM memories ${where}`, params);
+  return parseInt(countResult.rows[0].total, 10);
+}
+
+/**
+ * Get memories with filters
+ */
+export async function getMemories(options = {}) {
+  const { where, params } = buildMemoryFilterWhere(options);
+  let paramIdx = params.length + 1;
 
   // Count total
   const countResult = await query(`SELECT COUNT(*) as total FROM memories ${where}`, params);
