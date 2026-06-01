@@ -254,6 +254,9 @@ export async function writeLayoutsDoc(path, doc) {
  * imported — this skips the heavier split/seed migrations (which pull in
  * server-side modules) and keeps the sweep a cheap, side-effect-free read.
  * `_`-prefixed files (this module) are excluded by the numeric-prefix filter.
+ * Specialist prompt lineages that manage their own drift inline without
+ * exporting these constants (e.g. the importer-stage migrations 015/016/020)
+ * are intentionally not swept — they were never in setup-data.js's tables.
  *
  * Returns `{ [subdir]: { oldMap, newMap, files } }` keyed by `'stages'` /
  * `'_partials'`, matching the shape `collectDrift` in setup-data.js consumes.
@@ -291,8 +294,7 @@ export async function buildPromptDriftTables(migrationsDir) {
     // to update *to* — skip it rather than emit a half table.
     if (newSeq.length === 0) continue;
     const current = newSeq[newSeq.length - 1];
-    const olds = new Set(old);
-    for (const intermediate of newSeq.slice(0, -1)) olds.add(intermediate);
+    const olds = new Set([...old, ...newSeq.slice(0, -1)]);
     olds.delete(current);
     const table = (tables[subdir] ||= { oldMap: {}, newMap: {}, files: [] });
     table.oldMap[name] = [...olds];
