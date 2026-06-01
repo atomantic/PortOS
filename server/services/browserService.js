@@ -38,7 +38,10 @@ const DEFAULT_CONFIG = {
   cdpHost: process.env.CDP_HOST || '127.0.0.1',
   healthPort: 5557,
   autoConnect: true,
-  headless: true,
+  // Default HEADED — the managed CDP browser is meant to be visible (see
+  // browser/server.js, which already launches headed unless `headless === true`).
+  // Keeping this fallback headed matches that and the shipped seed.
+  headless: false,
   userDataDir: DEFAULT_PROFILE_DIR,
   downloadDir: DEFAULT_DOWNLOAD_DIR
 };

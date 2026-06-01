@@ -102,6 +102,10 @@ async function applyCanaryToConfig(found) {
   }
   config.chromePath = found.bin;
   if (found.app) config.macAppBundle = found.app;
+  // Canary is a deliberately visible, differentiated browser — opting into it
+  // headless defeats the point. Force headed so the user actually sees the
+  // managed browser they just configured.
+  config.headless = false;
   delete config.canaryPromptDeclined;
   await saveConfig(config);
   console.log(`✅ PortOS browser set to Chrome Canary → ${found.bin}`);
