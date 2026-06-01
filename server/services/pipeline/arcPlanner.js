@@ -221,16 +221,19 @@ export async function collectManuscriptSections(seriesId, { stageOrder = MANUSCR
 // Header for one manuscript section. The corpus join below derives from
 // `collectManuscriptSections` so the text the LLM sees stays byte-identical to
 // the per-section text the editor renders — anchorQuote/find matching depends
-// on that invariant.
-const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
+// on that invariant. Exported so manuscriptFix.js shares the exact same shape.
+export const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
+
+// Join sections into one manuscript corpus. The single source of truth for
+// "render sections as a manuscript" — reused by collectIssueSourceText, the
+// completeness pass, and manuscriptFix so the LLM-visible text never drifts.
+export const sectionsCorpus = (sections) =>
+  sections.map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content || ''}`).join('\n\n---\n\n');
 
 export async function collectIssueSourceText(seriesId, { stageOrder = SOURCE_STAGE_ORDER } = {}) {
   if (!seriesId) return '';
   const sections = await collectManuscriptSections(seriesId, { stageOrder });
-  return sections
-    .map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content}`)
-    .join('\n\n---\n\n')
-    .slice(0, BACKFILL_SOURCE_MAX);
+  return sectionsCorpus(sections).slice(0, BACKFILL_SOURCE_MAX);
 }
 
 // Lightweight version list for a stage — `{ runId, createdAt }` per retained
@@ -722,11 +725,6 @@ const COMPLETENESS_OUTPUT_RESERVE_TOKENS = 6_000;
 const COMPLETENESS_PRIOR_DIGEST_MAX = 40;
 const COMPLETENESS_PRIOR_DIGEST_CHARS = 2_000;
 
-// Corpus string for a set of sections — byte-identical to collectIssueSourceText's
-// join so anchorQuote/find matching against the editor's per-section text holds.
-const sectionsCorpus = (sections) =>
-  sections.map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content}`).join('\n\n---\n\n');
-
 // One-line digest of prior-chunk findings so later chunks keep cross-chapter
 // continuity in view. Rides INSIDE the manuscript field, so the prompt template
 // is unchanged (no migration).
@@ -744,28 +742,14 @@ function priorFindingsDigest(findings) {
     + `continuity problems these earlier findings reveal.\n\n${body}\n\n---\n\n`;
 }
 
-// First-wins dedupe across chunks — a finding the same on (issue, category,
-// anchor, problem) is recorded once even if two chunks surface it.
+// First-wins dedupe key across chunks — a finding identical on (issue,
+// category, anchor, problem) is recorded once even if two chunks surface it.
 const findingKey = (f) => [
   f.issueNumber ?? '',
   f.category,
   (f.anchorQuote || '').trim().toLowerCase().slice(0, 120),
   (f.problem || '').trim().toLowerCase().slice(0, 120),
 ].join('|');
-
-function mergeFindingGroups(groups) {
-  const seen = new Set();
-  const out = [];
-  for (const group of groups) {
-    for (const f of group) {
-      const k = findingKey(f);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(f);
-    }
-  }
-  return out;
-}
 
 /**
  * Editor pass over the drafted manuscript itself: returns categorized
@@ -818,16 +802,21 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
   }
 
   console.log(`📚 completeness: chunked review series=${String(seriesId).slice(0, 12)} chunks=${plan.chunks.length} window=${contextWindow ?? 'floor'}`);
-  const groups = [];
+  // Accumulate findings into one first-wins map so the per-chunk digest is O(1)
+  // to derive (no re-merging every prior chunk).
+  const merged = new Map();
   let first = null;
   for (const chunk of plan.chunks) {
-    const digest = priorFindingsDigest(mergeFindingGroups(groups));
+    const digest = priorFindingsDigest([...merged.values()]);
     const corpus = sectionsCorpus(chunk.sections).slice(0, plan.usableChars);
     const result = await runOne(`${digest}${corpus}`);
     if (!first) first = result;
-    groups.push(shapeCompletenessFindings(result.content?.issues));
+    for (const f of shapeCompletenessFindings(result.content?.issues)) {
+      const k = findingKey(f);
+      if (!merged.has(k)) merged.set(k, f);
+    }
   }
-  const issues = mergeFindingGroups(groups);
+  const issues = [...merged.values()];
   return {
     issues,
     raw: { issues },

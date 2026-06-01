@@ -17,7 +17,7 @@ import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { planManuscriptPass, estimateTokens } from '../../lib/contextBudget.js';
 import { getSeries, MANUSCRIPT_TYPES } from './series.js';
 import { getIssue, updateStageWithLatest, updateStagesWithLatest } from './issues.js';
-import { collectManuscriptSections, stageVersionsOf } from './arcPlanner.js';
+import { collectManuscriptSections, stageVersionsOf, sectionsCorpus, manuscriptSectionHeader } from './arcPlanner.js';
 import { getComment, updateComment } from './manuscriptReview.js';
 
 export const ERR_VALIDATION = 'PIPELINE_MANUSCRIPT_FIX_VALIDATION';
@@ -32,14 +32,6 @@ async function loadStageText(issueId, stageId) {
   const issue = await getIssue(issueId).catch(() => null);
   if (!issue) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
   return stageTextOf(issue.stages?.[stageId]);
-}
-
-const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
-
-function manuscriptTextOf(sections) {
-  return sections
-    .map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content || ''}`)
-    .join('\n\n---\n\n');
 }
 
 function sectionLabel(s) {
@@ -338,7 +330,7 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
       stageId: s.stageId,
       manuscript: s.content || '',
     })),
-    manuscript: manuscriptTextOf(sections),
+    manuscript: sectionsCorpus(sections),
   });
   const runChunk = (sections) => runStagedLLM(FIX_STAGE, buildCtx(sections), {
     providerOverride,
