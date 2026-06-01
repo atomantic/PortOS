@@ -84,6 +84,7 @@ import { cosEvents } from './cosEvents.js';
 import {
   createMemory,
   getMemory,
+  countMemories,
   getMemories,
   updateMemory,
   updateMemoryEmbedding,
@@ -400,6 +401,53 @@ describe('memory service', () => {
 
       expect(result.total).toBe(0);
       expect(result.memories).toEqual([]);
+    });
+  });
+
+  // ===========================================================================
+  // countMemories
+  // ===========================================================================
+
+  describe('countMemories', () => {
+    const makeIndex = (memories) => ({
+      version: 1,
+      lastUpdated: '2025-01-01T00:00:00.000Z',
+      count: memories.length,
+      memories
+    });
+
+    const mem1 = { id: 'm1', type: 'fact', category: 'science', tags: ['physics'], summary: 'Gravity', importance: 0.8, createdAt: '2025-01-01T00:00:00.000Z', status: 'active', sourceAppId: 'app1' };
+    const mem2 = { id: 'm2', type: 'decision', category: 'engineering', tags: ['react'], summary: 'Use React', importance: 0.6, createdAt: '2025-01-02T00:00:00.000Z', status: 'active', sourceAppId: 'brain' };
+    const mem3 = { id: 'm3', type: 'fact', category: 'science', tags: ['math'], summary: 'Pi', importance: 0.9, createdAt: '2025-01-03T00:00:00.000Z', status: 'archived', sourceAppId: 'app1' };
+
+    beforeEach(() => {
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve(makeIndex([mem1, mem2, mem3]));
+        return Promise.resolve(def);
+      });
+    });
+
+    it('counts active memories by default', async () => {
+      await expect(countMemories()).resolves.toBe(2);
+    });
+
+    it('applies the same filters as getMemories without sorting or paginating', async () => {
+      const sortSpy = vi.spyOn(Array.prototype, 'sort');
+
+      try {
+        const result = await countMemories({
+          status: 'active',
+          tags: ['physics', 'react'],
+          limit: 1,
+          offset: 1,
+          sortBy: 'importance'
+        });
+
+        expect(result).toBe(2);
+        expect(sortSpy).not.toHaveBeenCalled();
+      } finally {
+        sortSpy.mockRestore();
+      }
     });
   });
 

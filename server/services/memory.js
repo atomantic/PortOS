@@ -213,37 +213,49 @@ export async function getMemory(id) {
 }
 
 /**
- * Get memories with filters
+ * Filter memory index entries.
  */
-export async function getMemories(options = {}) {
-  const index = await loadIndex();
-  let memories = [...index.memories];
-
+function filterMemoryIndex(memories, options = {}) {
   // Filter by status
   const status = options.status || 'active';
-  memories = memories.filter(m => m.status === status);
+  let filtered = memories.filter(m => m.status === status);
 
   // Filter by types
   if (options.types && options.types.length > 0) {
-    memories = memories.filter(m => options.types.includes(m.type));
+    filtered = filtered.filter(m => options.types.includes(m.type));
   }
 
   // Filter by categories
   if (options.categories && options.categories.length > 0) {
-    memories = memories.filter(m => options.categories.includes(m.category));
+    filtered = filtered.filter(m => options.categories.includes(m.category));
   }
 
   // Filter by tags (any match)
   if (options.tags && options.tags.length > 0) {
-    memories = memories.filter(m => m.tags.some(t => options.tags.includes(t)));
+    filtered = filtered.filter(m => m.tags.some(t => options.tags.includes(t)));
   }
 
   // Filter by app
   if (options.appId === '__not_brain') {
-    memories = memories.filter(m => m.sourceAppId !== 'brain');
+    filtered = filtered.filter(m => m.sourceAppId !== 'brain');
   } else if (options.appId) {
-    memories = memories.filter(m => m.sourceAppId === options.appId);
+    filtered = filtered.filter(m => m.sourceAppId === options.appId);
   }
+
+  return filtered;
+}
+
+export async function countMemories(options = {}) {
+  const index = await loadIndex();
+  return filterMemoryIndex(index.memories, options).length;
+}
+
+/**
+ * Get memories with filters
+ */
+export async function getMemories(options = {}) {
+  const index = await loadIndex();
+  let memories = filterMemoryIndex(index.memories, options);
 
   // Sort
   const sortBy = options.sortBy || 'createdAt';
