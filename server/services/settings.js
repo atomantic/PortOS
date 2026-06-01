@@ -1,7 +1,7 @@
-import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { EventEmitter } from 'events';
-import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { safeJSONParse, PATHS, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 
 // POLLUTING_KEYS (`__proto__`/`constructor`/`prototype`) is the project-wide
@@ -66,14 +66,23 @@ settingsEvents.setMaxListeners(50);
 // - A direct `saveSettings(badObject)` with store keys warns once after the
 //   write resolves.
 const loadRaw = async () => {
-  const raw = await readFile(SETTINGS_FILE, 'utf-8').catch(() => '{}');
-  return safeJSONParse(raw, {});
+  const raw = await tryReadFile(SETTINGS_FILE);
+  return safeJSONParse(raw ?? '{}', {});
 };
+
+// Serialize all writes to settings.json on a single tail so an updateSettings
+// read-merge-write can't interleave with a concurrent save (two browser tabs,
+// a background job racing a user save) and clobber the other's patch. Reads
+// stay off the queue — atomicWrite's temp-file+rename keeps every read whole.
+const queueWrite = createFileWriteQueue();
 
 const save = async (settings) => {
   const cleaned = stripStoreKeys(settings);
-  await writeFile(SETTINGS_FILE, JSON.stringify(cleaned, null, 2) + '\n');
-  // Warn AFTER the successful write so a thrown writeFile never produces
+  // atomicWrite (temp-file + rename) so a mid-write crash never truncates
+  // settings.json. Pass a pre-stringified string to preserve the trailing
+  // newline; atomicWrite's own JSON.stringify omits it.
+  await atomicWrite(SETTINGS_FILE, JSON.stringify(cleaned, null, 2) + '\n');
+  // Warn AFTER the successful write so a thrown write never produces
   // a misleading "stripped" log line for a write that didn't happen.
   if (isPlainObject(settings)) {
     const polluted = Object.keys(settings).filter((k) => MORTALLOOM_STORE_KEYS.has(k));
@@ -86,14 +95,16 @@ const save = async (settings) => {
 };
 
 export const getSettings = async () => stripStoreKeys(await loadRaw());
-export const saveSettings = save;
+export const saveSettings = (settings) => queueWrite(() => save(settings));
 
 // Merge against the unstripped on-disk snapshot so save() sees every
 // MortalLoom store key in one place — guaranteeing exactly one warning
-// per updateSettings call, only when the write succeeds.
-export const updateSettings = async (patch) => {
+// per updateSettings call, only when the write succeeds. The whole
+// read-merge-write runs inside one queued turn so it merges against the
+// freshest persisted snapshot, not a stale pre-image.
+export const updateSettings = (patch) => queueWrite(async () => {
   const raw = await loadRaw();
   const incoming = isPlainObject(patch) ? patch : {};
   const merged = { ...raw, ...incoming };
   return save(merged);
-};
+});

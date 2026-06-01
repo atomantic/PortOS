@@ -32,8 +32,8 @@ export async function loadAgentIndex() {
     }
 
     if (existsSync(INDEX_FILE)) {
-      const content = await readFile(INDEX_FILE, 'utf-8').catch(() => '{}');
-      const parsed = safeJSONParse(content, {});
+      const content = await tryReadFile(INDEX_FILE);
+      const parsed = safeJSONParse(content ?? '{}', {});
       agentIndex = new Map(Object.entries(parsed));
       console.log(`📂 Loaded agent index: ${agentIndex.size} entries`);
     } else {

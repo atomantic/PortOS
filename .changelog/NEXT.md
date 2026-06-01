@@ -29,6 +29,7 @@
 - **[unify-media-job-sse-hook-imagegen-videogen]** Image Gen and Video Gen now share one live-render progress subscriber, consolidating duplicated streaming code with no change to behavior.
 - **[importer-progress-hook]** The Importer's live analyze-progress checklist now runs on a shared, tested progress hook instead of page-local socket wiring — no change to behavior.
 - **[mediacollections-deterministic-loadone-fastpath]** Universe/series media-collection lookups now resolve their linked bucket in one direct read instead of scanning every collection, trimming the work done on each cross-machine sync push (no user-facing change).
+- **[data-versioning-centralize-cosagents-settings] Saving settings is now crash-safe and serialized.** `settings.json` is written through the shared atomic temp-file/rename writer and overlapping saves run one at a time, so a mid-write crash can no longer truncate the file and two near-simultaneous settings changes can no longer clobber each other (no user-facing change).
 
 ## Fixed
 
