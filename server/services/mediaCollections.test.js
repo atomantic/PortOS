@@ -406,6 +406,48 @@ describe('mediaCollections service', () => {
       expect(found?.id).toBe(linked.id);
     });
 
+    it('findCollectionByUniverseId falls back to the scan for a legacy record at a random id', async () => {
+      // A pre-migration-038 collection carries the universeId at a random id,
+      // so the deterministic loadOne fast-path misses it — the full scan must
+      // still resolve it.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uuid-legacy', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uuid-legacy');
+    });
+
+    it('findCollectionByUniverseId skips a tombstone at the deterministic id and finds the live legacy record', async () => {
+      // A tombstone sitting at uc-<id> must not shadow a still-live collection
+      // carrying the same universeId at a random id (fast-path excludes
+      // deleted, fallback scan finds the live one).
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uc-u-1', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now, deleted: true, deletedAt: now },
+        { id: 'uuid-live', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uuid-live');
+    });
+
+    it('findCollectionByUniverseId prefers the canonical deterministic id when a live random-id duplicate also carries the stamp', async () => {
+      // A transient duplicate — e.g. an unconverged peer pushed a random-id
+      // copy while a converged canonical copy already exists. The fast path
+      // deterministically returns the canonical uc-<id> record (the converged
+      // cross-machine identity) rather than whichever the directory scan
+      // happened to list first (the old loadAll order was filesystem-dependent,
+      // so this also removes a source of non-determinism). Items union-merge on
+      // sync, so the random-id duplicate is reconciled without loss.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uc-u-1', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+        { id: 'uuid-dupe', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uc-u-1');
+    });
+
     it('renameCollectionForUniverse cascades a new name onto the linked collection', async () => {
       const linked = await svc.findOrCreateCollectionByName({
         name: 'Universe: Foo', universeId: 'u-1',
@@ -760,6 +802,27 @@ describe('mediaCollections service', () => {
       });
       const found = await svc.findCollectionBySeriesId('ser-1');
       expect(found?.id).toBe(linked.id);
+    });
+
+    it('findCollectionBySeriesId falls back to the scan for a legacy record at a random id', async () => {
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uuid-legacy', name: 'Series: Foo', description: '', coverKey: null, seriesId: 'ser-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionBySeriesId('ser-1');
+      expect(found?.id).toBe('uuid-legacy');
+    });
+
+    it('findOrCreateSeriesCollection adopts a legacy series record at a random id instead of duplicating', async () => {
+      // The deterministic loadOne fast-path misses a pre-migration-038 record,
+      // so the full scan must still find + reuse it rather than minting a new
+      // sc-<id> collection.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uuid-legacy', name: 'Series: Foo', description: '', coverKey: null, seriesId: 'ser-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const got = await svc.findOrCreateSeriesCollection({ seriesId: 'ser-1', seriesName: 'Foo' });
+      expect(got.id).toBe('uuid-legacy');
     });
 
     it('findOrCreateSeriesCollection returns the existing series-linked collection on second call', async () => {

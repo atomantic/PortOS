@@ -362,6 +362,27 @@ export const linkedCollectionId = ({ universeId = null, seriesId = null } = {}) 
   return null;
 };
 
+// Resolve the live collection linked to `rawValue` on `field` ('universeId' or
+// 'seriesId'). Field-parameterized like clearOwnerLink / renameOwnerLinked so
+// the universe and series variants can't drift.
+//
+// Fast path: any collection provisioned after migration 038 lives at the
+// deterministic `uc-`/`sc-<id>` id, so one loadOne resolves the warm case in
+// O(1) — the hot path peerSync drives on every outbound push. Only fall
+// through to the full scan when that record is absent, tombstoned, or its
+// stamp doesn't match — that's a legacy/unconverged collection carrying the
+// link at a random id. Tombstones are excluded so "deleted" reads as gone
+// (matching listCollections and the upsert provisioners' adopt rule). Returns
+// null when nothing is linked; callers provision via findOrCreate*.
+async function findLinkedCollection(field, rawValue, maxLen) {
+  if (typeof rawValue !== 'string' || !rawValue) return null;
+  const needle = rawValue.slice(0, maxLen);
+  const canon = await store().loadOne(linkedCollectionId({ [field]: needle }));
+  if (canon && !canon.deleted && canon[field] === needle) return canon;
+  const all = await store().loadAll();
+  return all.find((c) => !c.deleted && c[field] === needle) || null;
+}
+
 // Look up an existing collection by its universeId stamp. Returns null if no
 // collection has ever been linked to this universe — callers fall back to
 // `findOrCreateUniverseCollection` (the universeId-first upsert) to provision
@@ -371,10 +392,7 @@ export const linkedCollectionId = ({ universeId = null, seriesId = null } = {}) 
 // an overlong id (e.g. from a malformed share manifest) matches whatever
 // the upsert helper would have persisted.
 export async function findCollectionByUniverseId(universeId) {
-  if (typeof universeId !== 'string' || !universeId) return null;
-  const needle = universeId.slice(0, UNIVERSE_ID_MAX);
-  const all = await listCollections();
-  return all.find((c) => c.universeId === needle) || null;
+  return findLinkedCollection('universeId', universeId, UNIVERSE_ID_MAX);
 }
 
 /**
@@ -423,11 +441,11 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
   const id = linkedCollectionId({ universeId: normalizedUniverseId });
   let createdId = null;
   const result = await store().queueRecordWrite(id, async () => {
-    // Scan by stamp (not a direct loadOne) so a legacy unconverged collection
-    // carrying this universeId at a random id is still found, not duplicated.
-    const all = await store().loadAll();
-    // Do not adopt a tombstoned universe-linked collection — deleted means gone.
-    const linked = all.find((c) => !c.deleted && c.universeId === normalizedUniverseId);
+    // Resolve any existing linked collection via the deterministic-id fast path
+    // (warm) with a full-scan fallback for a legacy unconverged record at a
+    // random id — never adopting a tombstone (deleted means gone, re-create
+    // below). Same lookup the read-only finder uses, so they can't drift.
+    const linked = await findLinkedCollection('universeId', normalizedUniverseId, UNIVERSE_ID_MAX);
     if (linked) return linked;
     // No universeId match — always create fresh. The runtime intentionally
     // does NOT adopt a same-named unlinked collection here: it can't tell
@@ -473,10 +491,7 @@ export const seriesCollectionNameFor = (seriesName) =>
   `Series: ${typeof seriesName === 'string' ? seriesName : ''}`.slice(0, NAME_MAX_LENGTH);
 
 export async function findCollectionBySeriesId(seriesId) {
-  if (typeof seriesId !== 'string' || !seriesId) return null;
-  const needle = seriesId.slice(0, SERIES_ID_MAX);
-  const all = await listCollections();
-  return all.find((c) => c.seriesId === needle) || null;
+  return findLinkedCollection('seriesId', seriesId, SERIES_ID_MAX);
 }
 
 export async function findOrCreateSeriesCollection({ seriesId, seriesName, description = '' }) {
@@ -495,9 +510,9 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
   const id = linkedCollectionId({ seriesId: normalizedSeriesId });
   let createdId = null;
   const result = await store().queueRecordWrite(id, async () => {
-    const all = await store().loadAll();
-    // Do not adopt a tombstoned series-linked collection — deleted means gone.
-    const linked = all.find((c) => !c.deleted && c.seriesId === normalizedSeriesId);
+    // Deterministic-id fast path + full-scan fallback for a legacy unconverged
+    // record; never adopts a tombstone. Shared with the read-only finder.
+    const linked = await findLinkedCollection('seriesId', normalizedSeriesId, SERIES_ID_MAX);
     if (linked) return linked;
     const now = new Date().toISOString();
     const next = {
