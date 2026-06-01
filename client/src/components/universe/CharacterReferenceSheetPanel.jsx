@@ -24,6 +24,7 @@ import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useMounted from '../../hooks/useMounted';
 import { readSheetPointer, LEGACY_SHEET_VARIANT_ID } from '../../lib/sheetPointers';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import MediaImage from '../MediaImage';
 
 // HEAD-poll for the rendered sheet at its destination URL, with backoff. The
@@ -153,25 +154,13 @@ function VariantRow({
         </div>
         <div className="flex items-center gap-1">
           {confirmingDelete ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={deleting}
-                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={deleting}
-                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-error/60 text-port-error hover:bg-port-error/15 disabled:opacity-40"
-              >
-                {deleting ? <Loader2 size={10} className="animate-spin" /> : <Trash2 size={10} />}
-                {deleting ? 'Deleting' : 'Delete'}
-              </button>
-            </>
+            <ConfirmButtonPair
+              confirmIcon={Trash2}
+              busy={deleting}
+              busyText="Deleting"
+              onConfirm={handleDelete}
+              onCancel={() => setConfirmingDelete(false)}
+            />
           ) : (
             <>
               {existing && !inFlight ? (

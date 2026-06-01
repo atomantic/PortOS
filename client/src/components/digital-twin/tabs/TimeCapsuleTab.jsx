@@ -15,6 +15,7 @@ import {Archive,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { formatBytes, formatDateTime, timeAgo } from '../../../utils/formatters';
 
 export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
@@ -352,20 +353,11 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                           )}
                         </button>
                         {confirmDelete === snap.id ? (
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => handleDelete(snap.id)}
-                              className="px-2 py-1 min-h-[40px] text-xs text-red-400 hover:text-red-300 font-medium"
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              onClick={() => setConfirmDelete(null)}
-                              className="px-2 py-1 min-h-[40px] text-xs text-gray-500 hover:text-white"
-                            >
-                              Cancel
-                            </button>
-                          </div>
+                          <ConfirmButtonPair
+                            confirmText="Confirm"
+                            onConfirm={() => handleDelete(snap.id)}
+                            onCancel={() => setConfirmDelete(null)}
+                          />
                         ) : (
                           <button
                             onClick={() => setConfirmDelete(snap.id)}

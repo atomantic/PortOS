@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical } from 'lucide-react';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, timeAgo } from '../../utils/formatters';
 import {
@@ -803,23 +804,14 @@ export function LocalLlmTab() {
                 Chat
               </Link>
               {confirmDeleteId === m.id ? (
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-xs text-port-error">Delete?</span>
-                  <button
-                    onClick={() => { setConfirmDeleteId(null); remove(m.id); }}
-                    disabled={busy}
-                    className="px-2 py-1 text-xs bg-port-error/30 hover:bg-port-error/50 text-port-error rounded disabled:opacity-50 flex items-center gap-1"
-                  >
-                    <Trash2 size={12} />
-                    Delete
-                  </button>
-                  <button
-                    onClick={() => setConfirmDeleteId(null)}
-                    className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <ConfirmButtonPair
+                  prompt="Delete?"
+                  confirmIcon={Trash2}
+                  busy={busy}
+                  className="shrink-0"
+                  onConfirm={() => { setConfirmDeleteId(null); remove(m.id); }}
+                  onCancel={() => setConfirmDeleteId(null)}
+                />
               ) : (
                 <button
                   onClick={() => setConfirmDeleteId(m.id)}

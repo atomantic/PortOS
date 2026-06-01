@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Play, Pause, Square, Zap, Trash2 } from 'lucide-react';
 import { STATUS_COLORS, STATUS_BG, PRIORITY_COLORS, SCHEDULE_LABELS, timeAgo } from './constants';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 
 export default function FeatureAgentCard({ agent, onStart, onPause, onResume, onStop, onTrigger, onDelete }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -76,23 +77,13 @@ export default function FeatureAgentCard({ agent, onStart, onPause, onResume, on
         )}
         <div className="flex-1" />
         {confirmingDelete ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">Delete?</span>
-            <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-              <button
-                onClick={() => { onDelete(agent.id); setConfirmingDelete(false); }}
-                className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs"
-              >
-                Yes
-              </button>
-              <button
-                onClick={() => setConfirmingDelete(false)}
-                className="px-2 py-1 bg-port-card text-gray-400 hover:bg-port-border/50 text-xs border-l border-port-border"
-              >
-                No
-              </button>
-            </div>
-          </div>
+          <ConfirmButtonPair
+            prompt="Delete?"
+            confirmText="Yes"
+            cancelText="No"
+            onConfirm={() => { onDelete(agent.id); setConfirmingDelete(false); }}
+            onCancel={() => setConfirmingDelete(false)}
+          />
         ) : (
           <button onClick={() => setConfirmingDelete(true)} className="flex items-center gap-1 px-2 py-1 text-xs text-port-error hover:bg-port-error/10 rounded transition-colors">
             <Trash2 size={12} />
