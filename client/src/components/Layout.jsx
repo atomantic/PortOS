@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Home,
@@ -341,6 +341,7 @@ export default function Layout() {
   // the whole sidebar. Tracks which section is open and the icon's screen rect.
   const [flyoutSection, setFlyoutSection] = useState(null);
   const [flyoutPos, setFlyoutPos] = useState({ top: 0, left: 0 });
+  const flyoutRef = useRef(null);
   const flyoutCloseTimer = useRef(null);
   const openFlyout = useCallback((event, label) => {
     clearTimeout(flyoutCloseTimer.current);
@@ -348,6 +349,20 @@ export default function Layout() {
     setFlyoutPos({ top: rect.top, left: rect.right + 4 });
     setFlyoutSection(label);
   }, []);
+  // After the flyout renders, shift it up if it would overflow the bottom of
+  // the viewport so the full menu of options stays visible (sections near the
+  // bottom of a collapsed sidebar otherwise clip off-screen). useLayoutEffect
+  // measures the actual rendered height and adjusts before paint (no flicker).
+  useLayoutEffect(() => {
+    if (!flyoutSection || !flyoutRef.current) return;
+    const MARGIN = 8;
+    const height = flyoutRef.current.offsetHeight;
+    const maxTop = window.innerHeight - height - MARGIN;
+    setFlyoutPos((prev) => {
+      const clampedTop = Math.max(MARGIN, Math.min(prev.top, maxTop));
+      return clampedTop === prev.top ? prev : { ...prev, top: clampedTop };
+    });
+  }, [flyoutSection]);
   const scheduleCloseFlyout = useCallback(() => {
     clearTimeout(flyoutCloseTimer.current);
     flyoutCloseTimer.current = setTimeout(() => setFlyoutSection(null), 180);
@@ -917,14 +932,15 @@ export default function Layout() {
         if (!item || !item.children || item.children.length === 0) return null;
         return (
           <div
+            ref={flyoutRef}
             role="menu"
             aria-label={`${item.label} pages`}
             onMouseEnter={cancelCloseFlyout}
             onMouseLeave={scheduleCloseFlyout}
             onFocus={cancelCloseFlyout}
             onBlur={scheduleCloseFlyout}
-            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed' }}
-            className="hidden lg:block z-[60] min-w-[200px] bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', maxHeight: 'calc(100vh - 16px)' }}
+            className="hidden lg:block z-[60] min-w-[200px] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
           >
             <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
               {item.label}
