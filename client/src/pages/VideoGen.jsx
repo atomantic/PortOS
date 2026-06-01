@@ -928,7 +928,9 @@ export default function VideoGen() {
       // Audio File goes through under the multipart field 'audioFile'. Server
       // routes it to the durable uploads dir and into the a2v helper.
       audioFile: mode === 'a2v' ? (audioFile || '') : '',
-      chunks: mode !== 'a2v' && chunks > 1 ? chunks : '',
+      // Keyframes anchor a single clip — the route rejects chunks > 1 with
+      // KEYFRAMES_CHUNKS_CONFLICT, so suppress chunking when keyframes are on.
+      chunks: mode !== 'a2v' && !keyframesActive && chunks > 1 ? chunks : '',
     };
   };
 
@@ -1356,10 +1358,11 @@ export default function VideoGen() {
                   {keyframes.map((kf, i) => (
                     <div key={i} className="flex items-start gap-2">
                       <div className="flex-1 space-y-1">
+                        <label htmlFor={`kf-file-${i}`} className="sr-only">{`Keyframe ${i + 1} gallery image`}</label>
                         <select
+                          id={`kf-file-${i}`}
                           value={kf.file}
                           onChange={(e) => updateKeyframe(i, { file: e.target.value })}
-                          aria-label={`Keyframe ${i + 1} gallery image`}
                           className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent"
                         >
                           <option value="">Pick from gallery…</option>
@@ -1608,13 +1611,16 @@ export default function VideoGen() {
 
             {mode !== 'a2v' && (
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" title="Chain N renders end-to-end. Each chunk's last frame seeds the next, then they're stitched into one clip. Wall time scales linearly with chunks.">
+                <label htmlFor="chunks-select" className="block text-xs font-medium text-gray-400 mb-1" title="Chain N renders end-to-end. Each chunk's last frame seeds the next, then they're stitched into one clip. Wall time scales linearly with chunks.">
                   Chunks
                 </label>
                 <select
-                  value={chunks}
+                  id="chunks-select"
+                  value={keyframesActive ? 1 : chunks}
                   onChange={(e) => setChunks(Number(e.target.value))}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                  disabled={keyframesActive}
+                  title={keyframesActive ? 'Multi-keyframe renders anchor a single clip — chunking is unavailable.' : undefined}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
                     <option key={n} value={n}>
