@@ -32,6 +32,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useSseProgress` | Generic JSON-frame EventSource subscriber. | New SSE progress stream — start here, build on top. |
 | `useModelDownloadStatus` | Image/video model cache-status + SSE pre-download. | Surfacing "Available" vs "Download" badge inline in the gen form. |
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
+| `useImporterProgress` | Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered); exports `stageStatusIcon` for the status→icon lookup. | Importer analyze progress UI only. |
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
 | `useMediaJobSse` | Imperative per-job `/{kind}-gen/:id/events` SSE; `attach()` returns a Promise that settles on the terminal frame. | POST-then-attach media render flows that await completion (ImageGen/VideoGen). |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |

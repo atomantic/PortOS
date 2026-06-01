@@ -26,6 +26,7 @@
 - Bumped the bundled slashdo submodule (`lib/slashdo`) to latest `main` (`11cb89c`).
 - **[media-job-progress-persist-debounce-count-test]** Hardened the test suite so the media-job progress-save coalescing can't silently regress to a per-event disk write.
 - **[unify-media-job-sse-hook-imagegen-videogen]** Image Gen and Video Gen now share one live-render progress subscriber, consolidating duplicated streaming code with no change to behavior.
+- **[importer-progress-hook]** The Importer's live analyze-progress checklist now runs on a shared, tested progress hook instead of page-local socket wiring — no change to behavior.
 
 ## Fixed
 

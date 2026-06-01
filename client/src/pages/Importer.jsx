@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2, Circle } from 'lucide-react';
+import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { useImporterProgress, stageStatusIcon } from '../hooks/useImporterProgress';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import EntryCard from '../components/universe/EntryCard';
 import { previewCanonFragments } from '../lib/canonPrompt';
@@ -87,32 +87,8 @@ export default function Importer() {
   const [preview, setPreview] = useState(null);
 
   // Live analyze-phase stage progress, driven by `importer:progress` socket
-  // frames. `null` = no run started yet (or reset before a fresh Analyze).
-  // The server broadcasts to all clients (single-user trust model), so each
-  // frame carries a `runId` and we ignore stage frames that don't match the
-  // run a `start` frame opened — guards against a straggler from a prior run.
-  const [analyzeStages, setAnalyzeStages] = useState(null);
-  const activeRunIdRef = useRef(null);
-  useEffect(() => {
-    const onProgress = (ev) => {
-      if (!ev || typeof ev !== 'object') return;
-      if (ev.type === 'start') {
-        activeRunIdRef.current = ev.runId;
-        setAnalyzeStages(
-          (Array.isArray(ev.stages) ? ev.stages : []).map((s) => ({ ...s, status: 'pending' })),
-        );
-        return;
-      }
-      if (ev.type === 'stage') {
-        if (ev.runId !== activeRunIdRef.current) return;
-        setAnalyzeStages((prev) =>
-          Array.isArray(prev) ? prev.map((s) => (s.id === ev.id ? { ...s, status: ev.status } : s)) : prev,
-        );
-      }
-    };
-    socket.on('importer:progress', onProgress);
-    return () => socket.off('importer:progress', onProgress);
-  }, []);
+  // frames. `null` = no run started yet. See `useImporterProgress`.
+  const { stages: analyzeStages, reset: resetAnalyzeStages } = useImporterProgress();
 
   // Server is the source of truth for the enums — a prior client-side copy
   // (`IMPORTER_ARC_ROLES_FALLBACK`) silently drifted, so we wait on the GET
@@ -213,8 +189,7 @@ export default function Importer() {
     abortConfigRef.current?.abort();
     // Clear any prior run's checklist; the server's `start` frame repopulates
     // it once the first AI pass begins (a generic spinner shows until then).
-    activeRunIdRef.current = null;
-    setAnalyzeStages(null);
+    resetAnalyzeStages();
     const payload = {
       universeName: intake.universeName.trim(),
       seriesName: intake.seriesName.trim(),
@@ -655,22 +630,17 @@ function ImporterProgress({ stages }) {
       </p>
       {Array.isArray(stages) && stages.length > 0 ? (
         <ul className="space-y-1.5 mt-2">
-          {stages.map((s) => (
-            <li key={s.id} className="flex items-center gap-2 text-sm">
-              {s.status === 'done' ? (
-                <CheckCircle2 className="w-4 h-4 text-port-success flex-shrink-0" />
-              ) : s.status === 'error' ? (
-                <AlertTriangle className="w-4 h-4 text-port-warning flex-shrink-0" />
-              ) : s.status === 'running' ? (
-                <Loader2 className="w-4 h-4 text-port-accent animate-spin flex-shrink-0" />
-              ) : (
-                <Circle className="w-4 h-4 text-port-text-muted/40 flex-shrink-0" />
-              )}
-              <span className={s.status === 'running' ? 'text-port-text' : 'text-port-text-muted'}>
-                {s.label}
-              </span>
-            </li>
-          ))}
+          {stages.map((s) => {
+            const { Icon, className } = stageStatusIcon(s.status);
+            return (
+              <li key={s.id} className="flex items-center gap-2 text-sm">
+                <Icon className={className} />
+                <span className={s.status === 'running' ? 'text-port-text' : 'text-port-text-muted'}>
+                  {s.label}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="text-xs text-port-text-muted">Starting…</p>

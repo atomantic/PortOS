@@ -42,6 +42,7 @@ export * from './useSharingNotifications.js';
 
 // === Progress & streaming (SSE / socket) ===
 export * from './useImageGenProgress.js';
+export * from './useImporterProgress.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineAutoRunProgress.js';
 export * from './usePipelineEditorialProgress.js';
