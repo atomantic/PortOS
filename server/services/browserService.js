@@ -12,6 +12,7 @@ import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 
 const execFileAsync = promisify(execFile);
 const PM2_SHELL = process.platform === 'win32';
@@ -108,7 +109,7 @@ export async function getHealthStatus() {
     };
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
   return {
     connected: data.status === 'healthy',
     processRunning: true,
@@ -204,7 +205,7 @@ export async function cdpRequest(path, options = {}) {
 export async function listCdpPages() {
   const response = await cdpRequest('/json/list', { timeout: HEALTH_TIMEOUT_MS }).catch(() => null);
   if (!response || !response.ok) return [];
-  return response.json();
+  return readResponseJson(response, { fallback: [], emptyValue: [] });
 }
 
 export async function findOrOpenPage(targetUrl) {
@@ -213,7 +214,7 @@ export async function findOrOpenPage(targetUrl) {
   if (existing) return existing;
   const response = await cdpRequest(`/json/new?${encodeURIComponent(targetUrl)}`, { method: 'PUT' });
   if (!response.ok) return null;
-  return response.json();
+  return readResponseJson(response);
 }
 
 export function isAuthPage(page) {
@@ -266,7 +267,7 @@ export async function navigateToUrl(url) {
     throw new Error(`CDP navigate failed (${response.status}): ${text}`);
   }
 
-  const page = await response.json();
+  const page = await readResponseJson(response);
   console.log(`🌐 Opened ${url} in CDP browser (tab ${page.id})`);
   return { id: page.id, title: page.title || '(loading)', url: page.url, type: page.type };
 }
@@ -288,7 +289,7 @@ export async function getOpenPages() {
 export async function getCdpVersion() {
   const response = await cdpRequest('/json/version', { timeout: HEALTH_TIMEOUT_MS }).catch(() => null);
   if (!response || !response.ok) return null;
-  return response.json();
+  return readResponseJson(response);
 }
 
 // ---------- Downloads ----------

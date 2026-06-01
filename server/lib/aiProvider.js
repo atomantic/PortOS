@@ -6,6 +6,7 @@
 import { getAllProviders } from '../services/providers.js';
 import { startAIOp } from '../services/aiStatusEvents.js';
 import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../services/ollamaManager.js';
+import { readResponseJson } from './readResponseJson.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 
@@ -143,7 +144,7 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
     return { error: `Provider returned ${response.status}: ${errorText}`, status: response.status, body: errorText };
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
   return { text: data.choices?.[0]?.message?.content || '' };
 }
 

@@ -122,6 +122,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
+| `readResponseJson.js` | Read a `Response` body as JSON, tolerating a non-JSON/HTML error page (no `Unexpected token <` crash). Object callers need no opts; pass `{ fallback, emptyValue }` for arrays or to surface the raw error text. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |

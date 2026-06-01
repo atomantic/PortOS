@@ -7,7 +7,7 @@
 
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 
 const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
 
@@ -15,19 +15,15 @@ const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
  * Read a runner response body as JSON, tolerating a non-JSON body.
  *
  * The runner can answer with an HTML error page (e.g. a 500 while PM2 is
- * restarting it mid-request) instead of JSON. Calling `response.json()` directly
- * on that body throws `Unexpected token <` and masks the runner's actual error.
- * We read the raw text and parse it tolerantly via `safeJSONParse`, falling back
- * to `{ error: <raw text> }` so callers surface the runner's real message.
- *
- * An empty body returns `{}` (an empty success, distinct from a parse failure),
- * so spreading callers like `getRunnerHealth` don't pick up a spurious `error`.
+ * restarting it mid-request) instead of JSON, which would crash a bare
+ * `response.json()` with `Unexpected token <`. The non-JSON fallback surfaces
+ * the runner's raw message as `{ error: <raw text> }` so callers throw a useful
+ * error; an empty body returns `{}` (the shared helper's `emptyValue`), distinct
+ * from a parse failure, so spreading callers like `getRunnerHealth` don't pick
+ * up a spurious `error`.
  */
-async function readRunnerJson(response) {
-  const text = await response.text();
-  if (!text) return {};
-  return safeJSONParse(text, { error: text.trim() });
-}
+const readRunnerJson = (response) =>
+  readResponseJson(response, { fallback: (text) => ({ error: text.trim() }) });
 
 // Socket.IO client for real-time events
 let socket = null;

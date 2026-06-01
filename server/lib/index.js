@@ -111,6 +111,7 @@ export * from './httpsState.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
+export * from './readResponseJson.js';
 export * from './peerUrl.js';
 export * from './sharingOrigin.js';
 export * from './syncIntegrity.js';

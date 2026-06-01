@@ -20,6 +20,7 @@ import { readdir, stat, link, mkdir } from 'fs/promises'
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { readResponseJson } from '../lib/readResponseJson.js'
 import { readJSONFile, sha256File } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
@@ -148,7 +149,7 @@ async function ollamaRequest(endpoint, options = {}) {
     const body = await response.text().catch(() => '')
     throw new Error(`Ollama API error: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`)
   }
-  return response.json()
+  return readResponseJson(response)
 }
 
 /**
@@ -461,7 +462,7 @@ async function getEmbeddings(text, options = {}) {
       const errBody = await response.text().catch(() => '')
       return { ok: false, status: response.status, error: errBody.slice(0, 200) }
     }
-    return { ok: true, data: await response.json() }
+    return { ok: true, data: await readResponseJson(response) }
   }
 
   // Modern endpoint: `/api/embed` returns `{ embeddings: [[...]] }`
