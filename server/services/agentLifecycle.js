@@ -238,6 +238,10 @@ export async function spawnAgentForTask(task) {
       if (userProvider) {
         emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
         provider = userProvider;
+        // The fallback pin belonged to the fallback provider we just replaced —
+        // it must not carry onto the user's explicitly chosen provider, which
+        // gets its own normal model selection.
+        fallbackModelPin = null;
       } else {
         emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
       }
