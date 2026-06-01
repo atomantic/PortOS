@@ -1,5 +1,10 @@
 import { safeJSONParse } from './fileUtils.js';
 
+// Private sentinel marking a failed parse — distinct from any value `safeJSONParse`
+// can return for a valid body (including `null`/`{}`/`[]`). Module-level so it
+// isn't reallocated per call.
+const PARSE_FAILED = Symbol('parse-failed');
+
 /**
  * Read a fetch `Response` body as JSON, tolerating a non-JSON body.
  *
@@ -31,11 +36,10 @@ import { safeJSONParse } from './fileUtils.js';
 export async function readResponseJson(response, { fallback = {}, emptyValue = {} } = {}) {
   const text = await response.text();
   if (!text) return emptyValue;
-  // Parse with a private sentinel so a successful parse is distinguishable from
-  // a parse failure, and the (possibly function) fallback is only materialized
+  // Parse against the sentinel so a successful parse is distinguishable from a
+  // parse failure, and the (possibly function) fallback is only materialized
   // when the body genuinely isn't JSON — never eagerly on every success.
-  const FAILED = Symbol('parse-failed');
-  const parsed = safeJSONParse(text, FAILED);
-  if (parsed !== FAILED) return parsed;
+  const parsed = safeJSONParse(text, PARSE_FAILED);
+  if (parsed !== PARSE_FAILED) return parsed;
   return typeof fallback === 'function' ? fallback(text) : fallback;
 }
