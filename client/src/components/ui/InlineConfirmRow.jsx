@@ -14,6 +14,15 @@ const TONES = {
   },
 };
 
+// Layout variants share the same tone + button styling and differ only in the
+// frame: `box` is a standalone rounded card (inline, text-xs); `separator` is a
+// full-width strip with a bottom border (text-sm), used as an attached header/
+// footer band above panel content. Button styling is identical across variants.
+const VARIANTS = {
+  box: { frame: 'p-2 border rounded', question: 'text-xs' },
+  separator: { frame: 'px-4 py-2 border-b', question: 'text-sm' },
+};
+
 export default function InlineConfirmRow({
   question,
   confirmText = 'Delete',
@@ -23,14 +32,16 @@ export default function InlineConfirmRow({
   onConfirm,
   onCancel,
   tone = 'error',
+  variant = 'box',
   className = '',
   ...rest
 }) {
   const t = TONES[tone] || TONES.error;
+  const v = VARIANTS[variant] || VARIANTS.box;
 
   return (
-    <div className={`flex items-center gap-2 p-2 border rounded ${t.wrapper} ${className}`.trim()} {...rest}>
-      <span className="text-xs text-white flex-1">{question}</span>
+    <div className={`flex items-center gap-2 ${v.frame} ${t.wrapper} ${className}`.trim()} {...rest}>
+      <span className={`${v.question} text-white flex-1`}>{question}</span>
       <button
         type="button"
         onClick={onConfirm}

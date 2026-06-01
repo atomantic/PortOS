@@ -4,6 +4,7 @@ import {BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, Save, Volume2, Setting
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
 import BrailleSpinner from '../../BrailleSpinner';
 
@@ -551,11 +552,12 @@ export default function DailyLogTab() {
         )}
 
         {confirmDelete && (
-          <div className="px-3 sm:px-4 py-2 bg-port-error/10 border-b border-port-error/30 flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
-            <span className="text-port-error flex-1 min-w-0">Delete the entry for {date} permanently?</span>
-            <button onClick={handleDelete} className="px-3 min-h-[40px] rounded bg-port-error text-white text-xs">Delete</button>
-            <button onClick={() => setConfirmDelete(false)} className="px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-xs">Cancel</button>
-          </div>
+          <InlineConfirmRow
+            variant="separator"
+            question={`Delete the entry for ${date} permanently?`}
+            onConfirm={handleDelete}
+            onCancel={() => setConfirmDelete(false)}
+          />
         )}
 
         {loading ? (

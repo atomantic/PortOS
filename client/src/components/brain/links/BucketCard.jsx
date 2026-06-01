@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Plus, Edit2, Trash2, Save, X, Check, GripVertical } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import LinkChip from './LinkChip';
 import { bucketColor, BUCKET_COLORS, BUCKET_COLOR_KEYS, LINK_DND_TYPE, BUCKET_DND_TYPE } from './bucketColors';
 
@@ -155,21 +156,12 @@ export default function BucketCard({
 
       {/* Delete confirm */}
       {confirmDelete && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-port-error/10 border-b border-port-error/30">
-          <span className="text-xs text-white flex-1">Delete bucket? Its links stay (ungrouped).</span>
-          <button
-            onClick={() => { onDelete(bucket.id); setConfirmDelete(false); }}
-            className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-          >
-            Delete
-          </button>
-          <button
-            onClick={() => setConfirmDelete(false)}
-            className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
+        <InlineConfirmRow
+          variant="separator"
+          question="Delete bucket? Its links stay (ungrouped)."
+          onConfirm={() => { onDelete(bucket.id); setConfirmDelete(false); }}
+          onCancel={() => setConfirmDelete(false)}
+        />
       )}
 
       {/* Chips */}

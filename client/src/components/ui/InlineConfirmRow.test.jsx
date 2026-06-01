@@ -69,4 +69,30 @@ describe('InlineConfirmRow', () => {
     const wrapper = screen.getByTestId('confirm-row');
     expect(wrapper.getAttribute('aria-label')).toBe('Confirm deletion');
   });
+
+  it('defaults to the box variant (rounded border, text-xs)', () => {
+    render(<InlineConfirmRow question="x" />);
+    const wrapper = screen.getByText('x').closest('div');
+    expect(wrapper.className).toContain('rounded');
+    expect(wrapper.className).not.toContain('border-b');
+    expect(screen.getByText('x').className).toContain('text-xs');
+  });
+
+  it('renders a full-width bottom-border strip at text-sm for the separator variant', () => {
+    render(<InlineConfirmRow question="x" variant="separator" />);
+    const wrapper = screen.getByText('x').closest('div');
+    expect(wrapper.className).toContain('border-b');
+    expect(wrapper.className).not.toContain('rounded');
+    expect(screen.getByText('x').className).toContain('text-sm');
+    // Buttons keep the shared (box) styling — filled confirm + ghost cancel with hover.
+    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('bg-port-error');
+    expect(screen.getByRole('button', { name: 'Cancel' }).className).toContain('hover:text-white');
+  });
+
+  it('falls back to the box variant for an unknown variant value', () => {
+    render(<InlineConfirmRow question="x" variant="bogus" />);
+    const wrapper = screen.getByText('x').closest('div');
+    expect(wrapper.className).toContain('rounded');
+    expect(wrapper.className).not.toContain('border-b');
+  });
 });
