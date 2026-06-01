@@ -200,11 +200,11 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
 // for reuse across many scenes — see episodeVideo) or pass `canon` and let
 // us build the map here. `series?.places` is no longer read — that field
 // was retired with the series-side canon teardown.
-export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', placeByKey = null, matchedCharacters = [], world = null, canon = null }) {
+export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', placeByKey = null, matchedCharacters = [], world = null, canon = null, characterAppearances = [] }) {
   const map = placeByKey || buildPlaceByKey(canon?.places);
   const scenePrompt = buildScenePrompt(
     series?.name || '',
-    { visualPrompt: description || '', slugline },
+    { visualPrompt: description || '', slugline, characterAppearances },
     matchedCharacters,
     stackStyle(series, extraStyle),
     matchScenePlace(slugline, map),
@@ -788,7 +788,13 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
   assertStageUnlocked(issue, stageId);
   const mode = resolveMode(options, settings);
-  const matchedCharacters = matchCharactersInText(options.description || '', canon.characters);
+  // Match on description + slugline so the featured-character set (and thus
+  // which wardrobe picks apply) stays consistent with the scene-video / shot
+  // paths and the storyboards picker UI — all of which match both fields.
+  const matchedCharacters = matchCharactersInText(
+    `${options.description || ''} ${options.slugline || ''}`,
+    canon.characters,
+  );
   const prompt = composeVisualPrompt({
     series,
     description: options.description,
@@ -797,6 +803,9 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     matchedCharacters,
     world,
     canon,
+    // Storyboard scene renders thread the scene's wardrobe picks through the
+    // generic visual-image route, which has no scene index to look them up.
+    characterAppearances: options.characterAppearances,
   });
   if (!prompt) {
     throw new ServerError('visual prompt is empty (no description, no style)', {
@@ -866,6 +875,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     matchedCharacters,
     world,
     canon,
+    characterAppearances: scene.characterAppearances,
   });
 
   const aspectRatio = ASPECT_PRESETS[options.aspectRatio] ? options.aspectRatio : '16:9';
@@ -963,6 +973,8 @@ export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotI
     matchedCharacters,
     world,
     canon,
+    // A shot inherits its parent scene's wardrobe picks.
+    characterAppearances: scene.characterAppearances,
   });
 
   const jobId = enqueueImageJob({

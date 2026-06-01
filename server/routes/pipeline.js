@@ -386,6 +386,15 @@ const visualGenerateSchema = z.object({
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
+  // Per-scene wardrobe picks threaded from the storyboards UI — the generic
+  // visual route has no scene index, so the client sends the selected
+  // appearances directly. Each pins one canon character to one of its
+  // wardrobes; the prompt builder appends the wardrobe after the character's
+  // physical description.
+  characterAppearances: z.array(z.object({
+    characterId: z.string().trim().min(1).max(120),
+    wardrobeId: z.string().trim().min(1).max(120).nullable().optional(),
+  })).max(50).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // Render-schema factory — every cover/back-cover render route shares the
