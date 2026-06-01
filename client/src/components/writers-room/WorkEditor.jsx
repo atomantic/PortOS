@@ -23,6 +23,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ProseEditor from '../ui/ProseEditor';
 import Drawer from '../Drawer';
 import useMounted from '../../hooks/useMounted';
 import useClickOutside from '../../hooks/useClickOutside';
@@ -803,16 +804,12 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
               />
             </div>
           ) : (
-            <textarea
+            <ProseEditor
               ref={textareaRef}
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder="Start writing… Use # Chapter, ## Scene, ### Beat headings to outline."
-              style={readingTheme === 'light'
-                ? { '--port-input-bg': 'var(--wr-reading-paper)', color: '#1a1a1a' }
-                : undefined}
-              className="w-full h-full resize-none px-6 py-6 font-serif text-base leading-relaxed focus:outline-none"
-              spellCheck
+              readingTheme={readingTheme}
+              className="w-full h-full resize-none px-6 py-6 text-base focus:outline-none"
             />
           )}
           <div

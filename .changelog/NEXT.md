@@ -12,6 +12,7 @@
 
 ## Changed
 
+- **[rich-text-editor-for-prose-stage-replace-plain] The pipeline prose stage now edits in the same reading-comfortable editor as the Writers Room.** Drafting a prose stage uses a serif, roomy-line-spacing, spellchecked editor with a heading-hint placeholder instead of the old code-style monospace box — so prose reads like prose while you write it. The script-shaped stages (comic script, teleplay) keep their monospace editor.
 - **[inline-confirm-row-primitive]** Consolidated the duplicated Brain delete-confirmation rows onto one shared component, so inline confirm prompts stay visually and behaviorally consistent (no user-facing change).
 - **[inline-confirm-row-border-b-variant] Delete confirmations across Notes, the wiki browser, the daily log, and link buckets now share one consistent look.** The four full-width "are you sure?" bars moved onto the same shared confirm component as the rest of the app, so their buttons and text now match every other inline delete prompt.
 - **[confirm-ux-button-pair-popover-audit] Inline "confirm/cancel" delete buttons across Apps, Feature Agents, local-LLM models, time-capsule snapshots, character reference sheets, and catalog types now look and behave the same.** Six places that each had their own slightly different little confirm buttons now use one shared control, so confirming a delete feels identical wherever you do it.

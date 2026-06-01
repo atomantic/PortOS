@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Sparkles, Save, History } from 'lucide-react';
 import toast from '../../ui/Toast';
+import ProseEditor from '../../ui/ProseEditor';
 import {
   generatePipelineStage, updatePipelineIssue,
   PIPELINE_STAGE_LABELS,
@@ -31,6 +32,10 @@ export default function TextStagePanel({
   generateLabel = 'Generate',
   extraActions = null,
   actionsGated = false,
+  // The prose stage opts into the shared reading-comfortable <ProseEditor>
+  // (serif, spellcheck) for its output; the script-shaped stages keep the
+  // mono textarea that suits slugline/panel markup.
+  proseEditor = false,
 }) {
   const stage = issue.stages?.[stageId] || { status: 'empty', input: '', output: '', runHistory: [] };
   const [draftOutput, setDraftOutput] = useState(stage.output || '');
@@ -200,13 +205,23 @@ export default function TextStagePanel({
 
       <label className="block">
         <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Output</span>
-        <textarea
-          value={draftOutput}
-          onChange={(e) => setDraftOutput(e.target.value)}
-          placeholder={outputPlaceholder}
-          rows={24}
-          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono leading-relaxed"
-        />
+        {proseEditor ? (
+          <ProseEditor
+            value={draftOutput}
+            onChange={(e) => setDraftOutput(e.target.value)}
+            placeholder={outputPlaceholder}
+            rows={24}
+            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+          />
+        ) : (
+          <textarea
+            value={draftOutput}
+            onChange={(e) => setDraftOutput(e.target.value)}
+            placeholder={outputPlaceholder}
+            rows={24}
+            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono leading-relaxed"
+          />
+        )}
       </label>
 
       {stage.errorMessage ? (
