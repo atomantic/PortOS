@@ -133,6 +133,30 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Qwen3-30B-A3B-GGUF'
   },
   {
+    key: 'gemma4-31b',
+    name: 'Gemma 4 31B',
+    category: 'chat',
+    params: '31B',
+    size: '20 GB',
+    family: 'gemma',
+    description: "Google's dense 31B with a 256K context window and vision — a strong long-context narrative editor that fits comfortably on 64GB+. MLX build on Apple Silicon: gemma4:31b-mlx.",
+    capabilities: ['chat', 'vision'],
+    ollama: 'gemma4:31b',
+    lmstudio: 'lmstudio-community/gemma-4-31B-it-GGUF'
+  },
+  {
+    key: 'gemma4-26b-a4b',
+    name: 'Gemma 4 26B-A4B',
+    category: 'chat',
+    params: '26B / 4B active',
+    size: '18 GB',
+    family: 'gemma',
+    description: "Google's MoE (4B active) with a 256K context window and vision — a fast long-context option for one-shot whole-manuscript review. MLX build on Apple Silicon: gemma4:26b-mlx.",
+    capabilities: ['chat', 'vision'],
+    ollama: 'gemma4:26b',
+    lmstudio: 'lmstudio-community/gemma-4-26B-A4B-it-GGUF'
+  },
+  {
     key: 'mistral',
     name: 'Mistral 7B',
     category: 'chat',
