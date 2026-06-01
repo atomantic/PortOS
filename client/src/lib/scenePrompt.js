@@ -86,6 +86,16 @@ export function matchObjectsInText(text, allObjects) {
   return matchEntriesByCandidates(text, allObjects, (o) => [o.name, ...(o.aliases || [])]);
 }
 
+// Append a user-selected wardrobe description AFTER physicalDescription
+// without clobbering it — mirror of server/lib/scenePrompt.js#appendWardrobe.
+function appendWardrobe(base, wardrobeDesc) {
+  if (!wardrobeDesc) return base;
+  const wearing = `Wearing: ${wardrobeDesc}`;
+  if (!base) return wearing;
+  const sep = /[.!?]$/.test(base) ? ' ' : '. ';
+  return `${base}${sep}${wearing}`;
+}
+
 export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedPlace = null) {
   const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
   const titlePart = workTitle ? `${workTitle}. ` : '';
@@ -108,11 +118,26 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     ...baselineFrags,
   ].filter(Boolean) : [];
 
+  // Per-scene wardrobe picks: `scene.characterAppearances` is
+  // [{ characterId, wardrobeId? }]. Mirror of server/lib/scenePrompt.js.
+  const appearanceByCharId = new Map(
+    (Array.isArray(scene?.characterAppearances) ? scene.characterAppearances : [])
+      .filter((a) => a && a.characterId)
+      .map((a) => [a.characterId, a]),
+  );
+
   // Accept either `physicalDescription` (writers-room shape) or
   // `description` (pipeline shape) — the composer doesn't care which
   // field carries the visual descriptor.
   const featuringFragments = (matchedCharacters || [])
-    .map((c) => ({ name: c.name, desc: (c.physicalDescription || c.description || '').trim() }))
+    .map((c) => {
+      const base = (c.physicalDescription || c.description || '').trim();
+      const appearance = appearanceByCharId.get(c.id);
+      const wardrobe = appearance?.wardrobeId
+        ? (c.wardrobes || []).find((w) => w && w.id === appearance.wardrobeId)
+        : null;
+      return { name: c.name, desc: appendWardrobe(base, (wardrobe?.description || '').trim()) };
+    })
     .filter((c) => c.desc)
     .map((c) => `${c.name}: ${c.desc}`);
 
