@@ -19,6 +19,7 @@
 - **[shared-bounded-concurrency-mapper] Bounded-concurrency worker pool extracted to a shared helper.** The cursor-based worker-pool idiom that was hand-rolled in `embeddings.js`, `catalogExtraction.js`, and `routes/imageVideoModels.js` is now a single tested `server/lib/mapWithConcurrency.js` (order-preserving, concurrency-bounded), with all three call sites migrated and behavior unchanged.
 - Bumped the bundled slashdo submodule (`lib/slashdo`) to latest `main` (`11cb89c`).
 - **[media-job-progress-persist-debounce-count-test]** Hardened the test suite so the media-job progress-save coalescing can't silently regress to a per-event disk write.
+- **[unify-media-job-sse-hook-imagegen-videogen]** Image Gen and Video Gen now share one live-render progress subscriber, consolidating duplicated streaming code with no change to behavior.
 
 ## Fixed
 
