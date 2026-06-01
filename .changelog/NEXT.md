@@ -34,6 +34,7 @@
 - **[data-versioning-centralize-cosagents-settings] Saving settings is now crash-safe and serialized.** `settings.json` is written through the shared atomic temp-file/rename writer and overlapping saves run one at a time, so a mid-write crash can no longer truncate the file and two near-simultaneous settings changes can no longer clobber each other (no user-facing change).
 - **[setup-data-import-drift-tables-from-migrations]** The setup script's "a prompt migration is pending" warning now derives its hash tables directly from the migration files instead of a hand-maintained copy, so the warning can't silently fall out of sync when a new prompt migration ships (no user-facing change).
 - **[cos-on-demand-mark-app-review-started-dedupe]** When several on-demand improvement requests for the same app are processed in one CoS dispatch cycle, the app's activity record is now marked review-started once instead of once per request (no user-facing change).
+- **[cos-agent-output-write-amplification] Streamed CoS agent output no longer rewrites the entire agent-state file once per line.** A shared ~250ms output batcher now coalesces the runner's per-line output events and direct-CLI stdout/stderr into single state writes (draining before an agent is marked complete), cutting agent-state write churn on chatty agents from dozens of writes/sec to a few — with no change to the live output tail (no user-facing change).
 
 ## Fixed
 
