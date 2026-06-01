@@ -77,6 +77,13 @@ export function useMediaJobSse(kind) {
       };
       es.onerror = () => {
         if (!isCurrent()) { es.close(); return; }
+        // Only a genuine terminal failure (readyState CLOSED — e.g. a non-2xx /
+        // non-event-stream response, which EventSource will NOT auto-retry) tears
+        // down the stream and rejects. A transient blip (readyState CONNECTING)
+        // is left alone so the browser's built-in auto-reconnect can recover; the
+        // server replays the job's last SSE payload on re-attach. Mirrors
+        // useSseProgress.js's CLOSED-only terminal handling.
+        if (es.readyState !== EventSource.CLOSED) return;
         es.close();
         const err = new Error('Lost connection to server');
         onConnectionError?.(err);
