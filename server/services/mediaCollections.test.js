@@ -431,6 +431,23 @@ describe('mediaCollections service', () => {
       expect(found?.id).toBe('uuid-live');
     });
 
+    it('findCollectionByUniverseId prefers the canonical deterministic id when a live random-id duplicate also carries the stamp', async () => {
+      // A transient duplicate — e.g. an unconverged peer pushed a random-id
+      // copy while a converged canonical copy already exists. The fast path
+      // deterministically returns the canonical uc-<id> record (the converged
+      // cross-machine identity) rather than whichever the directory scan
+      // happened to list first (the old loadAll order was filesystem-dependent,
+      // so this also removes a source of non-determinism). Items union-merge on
+      // sync, so the random-id duplicate is reconciled without loss.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uc-u-1', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+        { id: 'uuid-dupe', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uc-u-1');
+    });
+
     it('renameCollectionForUniverse cascades a new name onto the linked collection', async () => {
       const linked = await svc.findOrCreateCollectionByName({
         name: 'Universe: Foo', universeId: 'u-1',
