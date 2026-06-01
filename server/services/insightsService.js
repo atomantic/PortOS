@@ -195,7 +195,16 @@ async function callProviderAISimple(provider, model, prompt, { temperature = 0.3
       return { error: `Provider returned ${response.status}: ${errorText}` };
     }
 
-    const data = await readResponseJson(response);
+    // Sentinel fallback: a non-JSON/blank 200 body must surface as an error, not
+    // an empty `{ text: '' }` success — both callers persist the result
+    // (refreshCrossDomainNarrative → narrative.json, generateInsightThemes →
+    // themes.json), so a masqueraded-empty success would overwrite the cached
+    // narrative/themes with nothing. A valid body (even one with empty content)
+    // still flows through unchanged.
+    const data = await readResponseJson(response, { fallback: null, emptyValue: null });
+    if (!data) {
+      return { error: `Provider returned a non-JSON response (${response.status})` };
+    }
     return { text: data.choices?.[0]?.message?.content || '' };
   }
 
