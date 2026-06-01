@@ -73,10 +73,19 @@ export async function loadSlashdoCommand(commandName) {
   return content;
 }
 
+// Guard against double-init. Module import is side-effect-free now, so init is
+// an explicit call (server/index.js); the flag keeps a second call (e.g. a test
+// that re-invokes it, or a future re-init path) from double-binding the
+// cosEvents listeners and scheduling a duplicate orphan-cleanup timer.
+let spawnerInitialized = false;
+
 /**
  * Initialize the spawner — listen for task:ready events.
  */
 export async function initSpawner() {
+  if (spawnerInitialized) return;
+  spawnerInitialized = true;
+
   // Initialize provider status tracking
   await initProviderStatus().catch(err => {
     console.error(`⚠️ Failed to initialize provider status: ${err.message}`);

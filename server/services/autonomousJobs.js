@@ -87,8 +87,8 @@ function runMoltworldExploration() {
 async function agentDataCleanup() {
   // Active agent IDs so we never delete data / worktrees for running agents.
   // `getActiveAgentIds` lives in the side-effect-free `agentState.js`, so this
-  // script job doesn't pull in `subAgentSpawner.js` (and its module-load
-  // `initSpawner()` + scheduled orphan cleanup) just to read the maps.
+  // script job doesn't pull in the heavier `subAgentSpawner.js` orchestrator
+  // (which re-exports the whole agent-lifecycle module graph) just to read the maps.
   const activeIds = new Set(getActiveAgentIds())
 
   // Also protect PAUSED agents. Pausing intentionally preserves the agent's

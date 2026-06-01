@@ -348,9 +348,11 @@ initAutoFixer();
 initTaskLearning();
 
 // Initialize the CoS agent spawner (event wiring + orphan cleanup) explicitly,
-// now that the runner patch + task learning are ready. Fire-and-forget: the
-// spawner sets up its own listeners and recovers in-flight agents in the background.
-initSpawner().catch(err => {
+// now that the runner patch + task learning are ready. Capture the promise so
+// CoS auto-start can wait for the spawner's `task:ready` listener before it
+// emits (see cos.init below). The `.catch` resolves the chain even on failure,
+// so a spawner init error never blocks CoS init.
+const spawnerReady = initSpawner().catch(err => {
   console.error(`❌ Failed to initialize spawner: ${err.message}`);
 });
 
@@ -483,8 +485,13 @@ app.use('/api/ask', askRoutes);
 // /api/image-gen can enqueue (otherwise persist() can race with ensureDir).
 
 // Explicit call (not a module-level side effect) so test imports of cos.js
-// don't spin up its event listeners and timers.
-cos.init().catch(err => console.error(`❌ CoS init failed: ${err.message}`));
+// don't spin up its event listeners and timers. Gated on the spawner being
+// ready: CoS auto-start (alwaysOn) can emit `task:ready` for pending tasks
+// during init, which would be dropped if the spawner hadn't yet registered its
+// listener — so wait for `spawnerReady` before kicking off CoS init.
+spawnerReady
+  .then(() => cos.init())
+  .catch(err => console.error(`❌ CoS init failed: ${err.message}`));
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
