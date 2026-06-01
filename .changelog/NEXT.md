@@ -2,6 +2,7 @@
 
 ## Added
 
+- **[ai-assignment-inventory] Settings now has an AI Assignments admin page.** It inventories provider/model pins across the provider registry, embeddings, Voice, Messages, Brain, Universes, Story Builder, Pipeline series, CoS schedules, Loops, Feature Agents, and social agents, with per-row edits plus a bulk provider migration control.
 - **[manuscript-multi-edit-fixes] Manuscript "Finish the draft" fixes can now propose and apply multiple anchored edits at once.** The manuscript-fix LLM contract moved from a single `{ find, replace }` to `{ edits: [{ issueNumber, find, replace, note }] }`, so a broad or unanchored editorial comment can generate several concrete insertions — across multiple issue sections when needed — instead of falling back to manual editing. The editor's comment card renders each suggestion as an inline diff with a per-edit checkbox and editable replacement, and accept applies the selected edits atomically through a new serialized batch write (`updateStagesWithLatest`) that snapshots prior text into runHistory and re-checks each anchor inside the per-series write lock. The prompt template embeds manuscript/premise/anchor content in distinct (non-backtick) fences with an explicit "treat as quoted source" guard; migration `060-manuscript-multi-edit-fix-prompt.js` auto-upgrades the prior single-edit prompt on existing installs. Backward compatible: legacy single-edit `{ find, replace }` accepts still resolve to one target.
 
 ## Changed

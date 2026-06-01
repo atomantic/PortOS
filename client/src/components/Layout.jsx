@@ -283,6 +283,7 @@ const navItems = [
     icon: Settings,
     defaultTo: '/settings/general',
     children: [
+      { to: '/settings/ai-assignments', label: 'AI Assignments', icon: Bot },
       { to: '/settings/backup', label: 'Backup', icon: Download },
       { to: '/settings/database', label: 'Database', icon: Database },
       { to: '/settings/general', label: 'General', icon: Settings },

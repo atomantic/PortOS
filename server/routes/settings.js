@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { getSettings, updateSettings } from '../services/settings.js';
+import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import {
   setCodexParallelLimit,
   CODEX_PARALLEL_MIN,
@@ -11,6 +13,11 @@ import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSc
 import { catalogUserTypesSettingsSchema } from '../lib/catalogValidation.js';
 
 const router = Router();
+
+const aiAssignmentUpdateSchema = z.object({
+  providerId: z.string().trim().max(128).nullable().optional(),
+  model: z.string().trim().max(300).nullable().optional(),
+}).strict();
 
 // Server-authoritative bounds the client UI can render directly so the form
 // clamp never drifts away from what the queue actually enforces. Stitched
@@ -36,6 +43,17 @@ router.get('/', asyncHandler(async (req, res) => {
   const settings = await getSettings();
   const { secrets, ...safe } = settings;
   res.json(decorateBounds(safe));
+}));
+
+// GET /api/settings/ai-assignments
+router.get('/ai-assignments', asyncHandler(async (_req, res) => {
+  res.json(await getAiAssignments());
+}));
+
+// PUT /api/settings/ai-assignments/:id
+router.put('/ai-assignments/:id', asyncHandler(async (req, res) => {
+  const payload = validateRequest(aiAssignmentUpdateSchema, req.body || {});
+  res.json(await updateAiAssignment(req.params.id, payload));
 }));
 
 // PUT /api/settings
