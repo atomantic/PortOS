@@ -2813,7 +2813,9 @@ export async function reorderTasks(taskIds) {
   const content = await readFile(filePath, 'utf-8');
   const tasks = parseTasksMarkdown(content);
 
-  // Create a map of tasks by ID for quick lookup
+  // Create a map of tasks by ID for quick lookup. parseTasksMarkdown guarantees
+  // unique ids (it suffixes any duplicate it encounters), so this Map can't
+  // silently collapse colliding tasks and drop them on write-back.
   const taskMap = new Map(tasks.map(t => [t.id, t]));
 
   // Reorder based on the provided order
