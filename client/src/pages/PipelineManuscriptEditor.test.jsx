@@ -94,6 +94,36 @@ describe('PipelineManuscriptEditor', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
   });
 
+  it('preserves an in-progress fix edit made in the sidebar when accepting from the pinned overlay', async () => {
+    api.generatePipelineManuscriptFix.mockResolvedValue({
+      fix: { find: 'She left.', replace: 'She left, but paused.' },
+      comment: { ...comment, fix: { find: 'She left.', replace: 'She left, but paused.' } },
+    });
+    api.acceptPipelineManuscriptFix.mockResolvedValue({
+      comment: { ...comment, status: 'accepted', fix: { find: 'She left.', replace: 'edited in sidebar.' } },
+      section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. edited in sidebar.' },
+    });
+
+    renderEditor();
+    await screen.findByText('My Series');
+
+    // Generate a fix, then edit the replacement text in the sidebar card.
+    fireEvent.click(screen.getByText('Generate fix'));
+    const sidebarReplace = await screen.findByDisplayValue('She left, but paused.');
+    fireEvent.change(sidebarReplace, { target: { value: 'edited in sidebar.' } });
+
+    // Now jump → the overlay mounts a second card; it must carry the edit.
+    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
+    const overlay = await screen.findByRole('dialog', { name: 'Editorial comment' });
+    expect(within(overlay).getByDisplayValue('edited in sidebar.')).toBeInTheDocument();
+
+    // Accept from the overlay applies the edited replacement, not the original.
+    fireEvent.click(within(overlay).getByText('Accept'));
+    await waitFor(() => expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', {
+      edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'edited in sidebar.', fuzzy: undefined }],
+    }));
+  });
+
   it('closes the pinned overlay automatically when its comment is accepted', async () => {
     api.generatePipelineManuscriptFix.mockResolvedValue({
       fix: { find: 'She left.', replace: 'She left, but paused.' },

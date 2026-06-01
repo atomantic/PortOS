@@ -91,6 +91,14 @@ export default function PipelineManuscriptEditor() {
   // context (and its Generate/Accept/Dismiss actions) stay on screen after the
   // manuscript scrolls away from the sidebar card. null = no overlay.
   const [activeCommentId, setActiveCommentId] = useState(null);
+  // Per-comment fix-edit drafts (replacement text + which edits are checked),
+  // lifted out of CommentCard and keyed by comment id so the sidebar card and
+  // the pinned overlay card of the same comment share one editing state —
+  // editing a fix in one and accepting from the other no longer loses the
+  // in-progress edit. Each entry stamps the fixKey it was derived from.
+  const [fixDrafts, setFixDrafts] = useState({});
+  const setCommentDraft = (commentId, entry) =>
+    setFixDrafts((prev) => ({ ...prev, [commentId]: entry }));
   // textarea elements keyed by issue number, for jump-to-anchor.
   const sectionRefs = useRef(new Map());
   // Last-saved content per `${issueId}:${stageId}`, so a blur with no change
@@ -454,6 +462,8 @@ export default function PipelineManuscriptEditor() {
               onJump={jumpToComment}
               onCommentChange={updateCommentLocal}
               onAccepted={applyAccepted}
+              draft={fixDrafts[comment.id]}
+              onDraftChange={(entry) => setCommentDraft(comment.id, entry)}
             />
           ))}
 
@@ -473,6 +483,8 @@ export default function PipelineManuscriptEditor() {
           onJump={jumpToComment}
           onCommentChange={updateCommentLocal}
           onAccepted={applyAccepted}
+          draft={fixDrafts[activeComment.id]}
+          onDraftChange={(entry) => setCommentDraft(activeComment.id, entry)}
           onClose={() => setActiveCommentId(null)}
         />
       ) : null}
@@ -604,7 +616,7 @@ function Badge({ comment }) {
   );
 }
 
-function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJump, onCommentChange, onAccepted, idScope }) {
+function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJump, onCommentChange, onAccepted, idScope, draft, onDraftChange }) {
   // Namespace form ids so the overlay's copy of an open comment doesn't collide
   // with the sidebar's (duplicate ids break label/htmlFor association).
   const scope = idScope || comment.id;
@@ -627,19 +639,17 @@ function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJum
     () => fixEdits.map((e, i) => `${i}:${e.issueId || ''}:${e.stageId || ''}:${e.find}:${e.replace}`).join('\n---\n'),
     [fixEdits],
   );
-  const [editDrafts, setEditDrafts] = useState({});
-  const [selectedEdits, setSelectedEdits] = useState({});
-
-  useEffect(() => {
-    const nextDrafts = {};
-    const nextSelected = {};
-    fixEdits.forEach((edit, i) => {
-      nextDrafts[i] = edit.replace || '';
-      nextSelected[i] = true;
-    });
-    setEditDrafts(nextDrafts);
-    setSelectedEdits(nextSelected);
-  }, [fixKey, fixEdits]);
+  // Draft state is owned by the parent (keyed by comment id) and shared with the
+  // overlay copy of this comment. Use the stored entry only when it was derived
+  // from the current fix; a (re)generated fix has a new fixKey, so stale drafts
+  // fall back to fresh defaults (every edit checked, replacement prefilled).
+  const stored = draft && draft.fixKey === fixKey ? draft : null;
+  const editDrafts = stored ? stored.drafts : Object.fromEntries(fixEdits.map((e, i) => [i, e.replace || '']));
+  const selectedEdits = stored ? stored.selected : Object.fromEntries(fixEdits.map((_, i) => [i, true]));
+  const setEditDrafts = (updater) =>
+    onDraftChange({ fixKey, drafts: typeof updater === 'function' ? updater(editDrafts) : updater, selected: selectedEdits });
+  const setSelectedEdits = (updater) =>
+    onDraftChange({ fixKey, drafts: editDrafts, selected: typeof updater === 'function' ? updater(selectedEdits) : updater });
 
   const [runGenerate, generating] = useAsyncAction(
     () => generatePipelineManuscriptFix(seriesId, comment.id, { providerOverride, modelOverride }),
@@ -653,11 +663,9 @@ function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJum
   const generate = async () => {
     const result = await runGenerate();
     if (!result) return;
-    const nextEdits = Array.isArray(result.fix?.edits) && result.fix.edits.length
-      ? result.fix.edits
-      : (result.fix ? [{ ...result.fix, issueNumber: comment.issueNumber, issueId: comment.issueId, stageId: comment.stageId }] : []);
-    setEditDrafts(Object.fromEntries(nextEdits.map((edit, i) => [i, edit.replace || ''])));
-    setSelectedEdits(Object.fromEntries(nextEdits.map((_, i) => [i, true])));
+    // The regenerated fix flows in via onCommentChange → comment.fix → a new
+    // fixKey, so the drafts above auto-reset to the new fix's defaults; no need
+    // to set them here.
     if (result.comment) onCommentChange(result.comment);
     if (result.fix?.fuzzy) toast('The suggested anchor was not found verbatim — edit the manuscript directly, or adjust the replacement.');
   };
