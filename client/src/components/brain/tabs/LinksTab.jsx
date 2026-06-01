@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { timeAgo } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import BucketBoard from '../links/BucketBoard';
@@ -596,21 +597,12 @@ export default function LinksTab({ onRefresh }) {
 
             {/* Delete confirmation */}
             {confirmingDeleteId === link.id && (
-              <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded mb-2">
-                <span className="text-xs text-white flex-1">Delete this link? This cannot be undone.</span>
-                <button
-                  onClick={() => handleDelete(link.id)}
-                  className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-                >
-                  Delete
-                </button>
-                <button
-                  onClick={() => setConfirmingDeleteId(null)}
-                  className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
+              <InlineConfirmRow
+                question="Delete this link? This cannot be undone."
+                className="mb-2"
+                onConfirm={() => handleDelete(link.id)}
+                onCancel={() => setConfirmingDeleteId(null)}
+              />
             )}
 
             {/* Footer row */}
