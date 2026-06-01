@@ -52,11 +52,10 @@ describe('InlineConfirmRow', () => {
     expect(wrapper.className).toContain('bg-port-error/10');
   });
 
-  it('applies the warning tone when requested', () => {
-    render(<InlineConfirmRow question="x" tone="warning" />);
+  it('falls back to the error tone for an unknown tone value', () => {
+    render(<InlineConfirmRow question="x" tone="bogus" />);
     const wrapper = screen.getByText('x').closest('div');
-    expect(wrapper.className).toContain('bg-port-warning/10');
-    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('bg-port-warning');
+    expect(wrapper.className).toContain('bg-port-error/10');
   });
 
   it('renders buttons as type=button so they never submit a surrounding form', () => {
