@@ -313,15 +313,19 @@ export default function ImageGen() {
       setGenerating(true);
       setStatusMsg('Resuming…');
       resumeGenerate(activeJob);
-      // Re-attach the per-job SSE so raw status text resumes too. The reject
-      // on a terminal error/canceled frame is expected here (we only want the
-      // generating flag flipped off), so swallow it.
+      // Re-attach the per-job SSE so raw status text resumes too. Every
+      // terminal outcome (complete/error/canceled) and a lost connection just
+      // flips the generating flag off; the reject on the error/canceled/
+      // connection-loss paths is expected, so swallow it. onConnectionError is
+      // required so a connection blip can't leave the resumed render parked at
+      // "Resuming…" with generating stuck true.
       attachJobEvents(activeJob.generationId, {
         onStatus: (msg) => setStatusMsg(msg.message),
         onProgress: (msg) => setLocalProgress({ progress: msg.progress }),
         onComplete: () => setGenerating(false),
         onError: () => setGenerating(false),
         onCanceled: () => setGenerating(false),
+        onConnectionError: () => setGenerating(false),
       }).catch(() => {});
     }).catch(() => {});
     return () => eventSourceRef.current?.close();
