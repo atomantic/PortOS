@@ -166,8 +166,11 @@ function getLatestBloodValues(tests) {
 /**
  * Replicate callProviderAISimple pattern from taste-questionnaire.js.
  * API-type providers only. Returns { text } on success, { error } on failure.
+ * Exported for unit testing of the non-JSON-body guard — the public entries that
+ * reach it (refreshCrossDomainNarrative / generateThemeAnalysis) need the full
+ * genome/taste/health context mocked, so the guard is exercised directly.
  */
-async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
+export async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
   const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
 
   if (provider.type === 'api') {
