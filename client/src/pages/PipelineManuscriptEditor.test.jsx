@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const api = vi.hoisted(() => ({
@@ -61,6 +61,62 @@ describe('PipelineManuscriptEditor', () => {
     expect(screen.getByText('The ending is abrupt')).toBeInTheDocument();
     expect(screen.getByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
     expect(screen.getByText(/1 open/)).toBeInTheDocument();
+  });
+
+  it('pins the clicked comment in a dismissable overlay so its context survives the jump', async () => {
+    renderEditor();
+    await screen.findByText('My Series');
+
+    // Initially only the sidebar card exists.
+    expect(screen.getByText('The ending is abrupt')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument();
+
+    // Clicking Jump pins it as a floating overlay (problem text now appears twice).
+    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
+    const overlay = await screen.findByRole('dialog', { name: 'Editorial comment' });
+    expect(overlay).toBeInTheDocument();
+    expect(screen.getAllByText('The ending is abrupt').length).toBe(2);
+
+    // Closing the overlay leaves the sidebar card intact.
+    fireEvent.click(screen.getByTitle('Close pinned comment'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
+    expect(screen.getByText('The ending is abrupt')).toBeInTheDocument();
+  });
+
+  it('dismisses the pinned overlay on Escape', async () => {
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
+    await screen.findByRole('dialog', { name: 'Editorial comment' });
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
+  });
+
+  it('closes the pinned overlay automatically when its comment is accepted', async () => {
+    api.generatePipelineManuscriptFix.mockResolvedValue({
+      fix: { find: 'She left.', replace: 'She left, but paused.' },
+      comment: { ...comment, fix: { find: 'She left.', replace: 'She left, but paused.' } },
+    });
+    api.acceptPipelineManuscriptFix.mockResolvedValue({
+      comment: { ...comment, status: 'accepted', fix: { find: 'She left.', replace: 'She left, but paused.' } },
+      section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. She left, but paused.' },
+    });
+
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
+    const overlay = await screen.findByRole('dialog', { name: 'Editorial comment' });
+
+    // Act on the comment from inside the overlay.
+    fireEvent.click(within(overlay).getByText('Generate fix'));
+    fireEvent.click(await within(overlay).findByText('Accept'));
+
+    // Accepting flips status → the overlay vanishes on its own.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/0 open/)).toBeInTheDocument());
   });
 
   it('generates a fix, then accepts it — moving the comment to Accepted and updating the section', async () => {

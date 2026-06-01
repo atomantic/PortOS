@@ -87,6 +87,10 @@ export default function PipelineManuscriptEditor() {
   const [overrideModel, setOverrideModel] = useState('');
   // Per-issue free-text save state: 'saving' | 'saved' | undefined.
   const [saveState, setSaveState] = useState({});
+  // The comment last jumped to — pinned as a floating overlay so its editorial
+  // context (and its Generate/Accept/Dismiss actions) stay on screen after the
+  // manuscript scrolls away from the sidebar card. null = no overlay.
+  const [activeCommentId, setActiveCommentId] = useState(null);
   // textarea elements keyed by issue number, for jump-to-anchor.
   const sectionRefs = useRef(new Map());
   // Last-saved content per `${issueId}:${stageId}`, so a blur with no change
@@ -241,12 +245,15 @@ export default function PipelineManuscriptEditor() {
   // Jump to a comment's anchor: focus the issue's textarea, select the verbatim
   // quote (native selection highlights it), and scroll it into view.
   const jumpToComment = (comment) => {
+    // Pin the comment to the overlay first, so even an unanchored note keeps its
+    // context (and actions) visible while the user works in the manuscript.
+    setActiveCommentId(comment.id);
     const ta = comment.issueNumber != null ? sectionRefs.current.get(comment.issueNumber) : null;
     if (!ta) {
       toast('This comment is not anchored to a specific issue');
       return;
     }
-    ta.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    ta.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
     const quote = comment.anchorQuote || '';
     const idx = quote ? ta.value.indexOf(quote) : -1;
     ta.focus();
@@ -281,6 +288,13 @@ export default function PipelineManuscriptEditor() {
     accepted: comments.filter((c) => c.status === 'accepted'),
     dismissed: comments.filter((c) => c.status === 'dismissed'),
   }), [comments]);
+
+  // Only pin still-open comments — accepting/dismissing flips the status, which
+  // resolves this to null and closes the overlay automatically (resolved
+  // comments are navigational only, with no actions to keep on screen).
+  const activeComment = activeCommentId
+    ? comments.find((c) => c.id === activeCommentId && c.status === 'open')
+    : null;
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading manuscript…</div>;
 
@@ -447,6 +461,58 @@ export default function PipelineManuscriptEditor() {
           <ResolvedGroup label="Dismissed" icon={X} items={grouped.dismissed} onJump={jumpToComment} />
         </aside>
       </div>
+
+      {/* Pinned overlay: the just-jumped-to comment, kept on screen over the
+          manuscript so its context and actions travel with the scroll. */}
+      {activeComment ? (
+        <ActiveCommentOverlay
+          comment={activeComment}
+          seriesId={seriesId}
+          providerOverride={providerOverride}
+          modelOverride={modelOverride}
+          onJump={jumpToComment}
+          onCommentChange={updateCommentLocal}
+          onAccepted={applyAccepted}
+          onClose={() => setActiveCommentId(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// Floating, dismissable restatement of the comment the user just jumped to.
+// Anchored over the manuscript pane (bottom-left) — away from the right sidebar
+// and below the section that scrolled to the top — so the user can read/edit
+// the manuscript and act on the comment without losing either. Reuses
+// CommentCard with a distinct idScope so its form ids don't collide with the
+// sidebar's copy of the same open comment.
+function ActiveCommentOverlay({ comment, onClose, ...cardProps }) {
+  // Esc closes the pinned card — matches the dismiss convention of the app's
+  // other non-modal floating panels. (No click-outside: the overlay is meant to
+  // stay open while the user clicks into the manuscript to edit.)
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Editorial comment"
+      className="fixed bottom-4 left-4 z-40 w-[min(440px,calc(100vw-2rem))] max-h-[70vh] overflow-y-auto rounded-lg border border-port-accent/40 bg-port-card shadow-2xl shadow-black/60"
+    >
+      <div className="sticky top-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-port-border bg-port-bg/90 backdrop-blur">
+        <span className="text-[11px] uppercase tracking-wider text-gray-400 inline-flex items-center gap-1.5">
+          <CornerDownRight size={12} className="text-port-accent" /> Editorial comment
+        </span>
+        <button type="button" onClick={onClose} className="text-gray-500 hover:text-white" title="Close pinned comment">
+          <X size={14} />
+        </button>
+      </div>
+      <div className="p-2.5">
+        <CommentCard comment={comment} idScope={`overlay-${comment.id}`} {...cardProps} />
+      </div>
     </div>
   );
 }
@@ -537,7 +603,10 @@ function Badge({ comment }) {
   );
 }
 
-function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJump, onCommentChange, onAccepted }) {
+function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJump, onCommentChange, onAccepted, idScope }) {
+  // Namespace form ids so the overlay's copy of an open comment doesn't collide
+  // with the sidebar's (duplicate ids break label/htmlFor association).
+  const scope = idScope || comment.id;
   const hasFix = !!comment.fix;
   const fixEdits = useMemo(() => {
     if (Array.isArray(comment.fix?.edits) && comment.fix.edits.length) return comment.fix.edits;
@@ -657,9 +726,9 @@ function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJum
                 </label>
                 {edit.note ? <p className="px-2 pt-1.5 text-[11px] text-gray-500">{edit.note}</p> : null}
                 <InlineDiff oldText={edit.find || ''} newText={draft} emptyLabel="No replacement changes." />
-                <label htmlFor={`fix-replace-${comment.id}-${i}`} className="block px-2 pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Replacement (editable)</label>
+                <label htmlFor={`fix-replace-${scope}-${i}`} className="block px-2 pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Replacement (editable)</label>
                 <textarea
-                  id={`fix-replace-${comment.id}-${i}`}
+                  id={`fix-replace-${scope}-${i}`}
                   value={draft}
                   onChange={(e) => setEditDrafts((prev) => ({ ...prev, [i]: e.target.value }))}
                   rows={Math.min(14, Math.max(3, draft.split('\n').length + 1))}
