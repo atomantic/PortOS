@@ -7,6 +7,7 @@
 
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
 
@@ -16,20 +17,16 @@ const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
  * The runner can answer with an HTML error page (e.g. a 500 while PM2 is
  * restarting it mid-request) instead of JSON. Calling `response.json()` directly
  * on that body throws `Unexpected token <` and masks the runner's actual error.
- * We read the raw text and parse it ourselves, falling back to
- * `{ error: <raw text> }` so callers surface the runner's real message.
+ * We read the raw text and parse it tolerantly via `safeJSONParse`, falling back
+ * to `{ error: <raw text> }` so callers surface the runner's real message.
  *
- * The try/catch here is intentional tolerant-parsing — it deliberately converts
- * a parse failure into a value rather than letting it bubble, which is the point.
+ * An empty body returns `{}` (an empty success, distinct from a parse failure),
+ * so spreading callers like `getRunnerHealth` don't pick up a spurious `error`.
  */
 async function readRunnerJson(response) {
   const text = await response.text();
   if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text.trim() };
-  }
+  return safeJSONParse(text, { error: text.trim() });
 }
 
 // Socket.IO client for real-time events
