@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, wri
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { md5 } from './migrations/_lib.js';
+import { md5, buildPromptDriftTables } from './migrations/_lib.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -123,122 +123,25 @@ for (const { relPath, mergeKey } of JSON_MERGE_TARGETS) {
   mergeJsonStarter(relPath, mergeKey);
 }
 
-// Drift detection — warn when a data.reference/prompts/stages/*.md differs from
-// the installed data/prompts/stages/*.md copy. Only fires on existing installs
-// (fresh installs already got a full copy above). Prompt templates drift when
-// a PortOS update adds new template variables (e.g. {{lengthTargets.*}}) that
-// existing installs won't pick up because setup-data.js only copies *missing*
-// files.
+// Drift detection — warn when a data.reference/prompts/{stages,_partials}/*.md
+// differs from the installed copy. Only fires on existing installs (fresh
+// installs already got a full copy above). Prompt templates drift when a PortOS
+// update adds new template variables (e.g. {{lengthTargets.*}}) that existing
+// installs won't pick up because setup-data.js only copies *missing* files.
 //
-// NOTE: only the files managed by scripts/migrations/003+ are checked here —
-// scanning all stage prompts would produce misleading warnings for prompts
-// that have no migration counterpart (e.g. cd-evaluate.md, writers-room prompts).
-//
-// Mirror scripts/migrations/003+ NEW/OLD hashes. Array values let the check
-// recognize multi-migration lineages (file evolved through 003 → 004 → 005);
-// a user at any intermediate hash still gets the "run migrations" prompt.
-const SHIPPED_PROMPT_OLD_MD5 = {
-  // idea-expansion: aee… (pre-003), 41fa… (post-003, pre-004), and
-  // 1ee44c… (post-004, pre-025) all auto-updatable to the post-025
-  // (role/physicalDescription/personality/background plumbing) hash.
-  // post-054 ({{#sourceMaterials}} source-agnostic block) appends the prior
-  // post-025/post-027 hashes to each chain. post-054-fence adds tilde fences +
-  // injection-guard sentence to the sourceMaterials blocks (review fix).
-  'pipeline-idea-expansion.md': ['aee25112b2c596f643b17c559b772c22', '41facefbc0c0549d456bef9111f95ab9', '1ee44cf95851ff8debf18729ebcd40b4', '1f3c5d077a5ef9a4b610335d5e3edd9c', 'b5c47c94ffc74637983c95761ab0c66c'],
-  // prose: bfea5a… (pre-003) and 30ac30… (post-003, pre-027) both auto-
-  // updatable to the post-054-fence (source-agnostic + tilde-fence) hash.
-  'pipeline-prose.md':          ['bfea5aeeb471aae9749baee765b473a7', '30ac30ec2b9d3e2a9eb869c181732cc6', 'd1f8e3f1d214725b5aa67f309a81cd7d', 'bef1bc2767b78f585f2bd89f3d615130'],
-  // comic-script: 40e5fd… (pre-003), beab03… (post-003, pre-011), and 1e0af3…
-  // (post-011, pre-027) all auto-updatable to the post-054-fence hash.
-  'pipeline-comic-script.md':   ['40e5fdc1a1e68a7419b7dad936366c1a', 'beab031951859ca13579cdb9c4dbe769', '1e0af305c27d0c80c4b482d2ebcb4a0d', '133d200d069c2e8173b7c129eea58f53', 'e530fc76b89cedaef848ad7ec99c934c'],
-  // teleplay: 3f6fec… (pre-027) auto-updatable to the post-054-fence hash.
-  'pipeline-teleplay.md':       ['3f6fecc25573ed054b47db392250034a', '376f779f4687b598f1c92ca4e770fd5a', '1280ef6b1ad68fa44070ca7478ec2a5f', '2568e14beaa574d43f8018a5def51d04'],
-  // season-episodes: 6e349a… (pre-003) and c4928e… (post-003, pre-005) both
-  // auto-updatable to the post-005 (shape-aware) hash.
-  'pipeline-season-episodes.md': ['6e349ad26bed8a0ccb042571f03f03eb', 'c4928e2a5f833358116b29d2d669888d'],
-  // arc-overview: 6a3eca… (pre-005) and d34d72… (post-005, pre-019) both
-  // auto-updatable to the post-019 (worldCanonText) hash.
-  'pipeline-arc-overview.md':   ['6a3ecab43d1f46b7ef9aab6c69ea0326', 'd34d72b8e49ba303d38607845dd87f1c'],
-  // arc-verify: 52e31a… (pre-005) and ff56d8… (post-005, pre-019) both
-  // auto-updatable to the post-019 (worldCanonText) hash.
-  'pipeline-arc-verify.md':     ['52e31abc93e3105176236fcaa5d1575a', 'ff56d8387162017e08d5d0491060ddd6'],
-  // volume-verify: c6ea28… (pre-005) and 03f3c8… (post-005, pre-019) both
-  // auto-updatable to the post-019 (worldCanonText) hash.
-  'pipeline-volume-verify.md':  ['c6ea28e972ad6e229bafb2d602b4dda3', '03f3c874cb80e1c98abcf03168fa7a92'],
-  // arc-resolve: 87bc5c… (pre-005), a8677b… (post-005, pre-019), and
-  // 8e348f… (post-019, pre-023) all auto-updatable to the post-023
-  // (per-episode-synopsis anchor) hash.
-  'pipeline-arc-resolve.md':    ['87bc5c01f1a8a97b681727a38b05edc6', 'a8677bbe1eb38f871fb152a5b0fec7c6', '8e348f3d1894382889f9f0ee7d5c6792'],
-  // Shot decomposition additions (migration 006).
-  'pipeline-extract-scenes.md':  '59fa5ee305ce53d91eb15224d8b546d3',
-  // setting→place rename, migration 022. Two known auto-updatable hashes:
-  // pre-019 (`7f1f80…`, INT/EXT addition) and pre-022 (`24a336…`, the
-  // hash that was the NEW shipped before this rename). Both can be
-  // auto-bumped to the post-rename shape.
-  'writers-room-places.md':      ['7f1f80eb63d67a21161994cde115045e', '24a33628cc94d80fa5ca60831d973daf'],
-  // universe-character-expand: pre-027 shipped, auto-updatable to the post-027
-  // (`speechPattern` field added alongside `speechAccent`) hash.
-  'universe-character-expand.md': ['ef109eb8e12ddb664c11c790271b5139'],
-  // story-builder-idea-expand: pre-055 (seed-only) and post-055-pre-fence
-  // ({{sourceMaterial}} block, no guard) auto-updatable to the post-055-fence
-  // ({{sourceMaterial}} block + injection-guard sentence) hash.
-  'story-builder-idea-expand.md': ['a23939626a226f7420cebfb45d47950c', '778c86e2caa120856c36e4d5a4da3355'],
-  // editorial-analysis: pre-042 (pipe-separated arcDirection enum + ≤160
-  // excerpt) auto-updatable to the post-042 (single-value example, ≤200) hash.
-  'pipeline-editorial-analysis.md': ['14d9879697c66d51830cc798040d5369'],
-  // manuscript-completeness: pre-056 (location-only findings) auto-updatable to
-  // the post-056 (issueNumber + anchorQuote anchored findings) hash; and
-  // pre-057 (five categories) auto-updatable to the post-057 (comic-structure) hash.
-  'pipeline-manuscript-completeness.md': ['e6858c74ab2cead752d388e3f428406c', '4f2b95778aed85f5fc461d71eb461b79'],
-  // manuscript-fix: pre-060 single `{ find, replace }` contract auto-updatable
-  // to the post-060 `{ edits: [{ issueNumber, find, replace }] }` contract.
-  'pipeline-manuscript-fix.md': ['196625952f4a36f3cb962c729f60f0ee'],
-  // CoS agent prompt: drop obsolete "# Chief of Staff Agent Briefing" header
-  // and "You are an autonomous agent…" preamble (migration 009). Every
-  // historical shipped hash is auto-updatable to the new sample.
-  'cos-agent-briefing.md': [
-    '699d053875472df455258724a0162bd5',
-    '181b26838e526427173e4dccfc884d01',
-    '3e1ca7f7b14b799f89a193c568003624',
-    'af73fd50d6f29d561772474c12346e53',
-    '9bcd3a0167dd4aed7cfff7f404494dfb',
-    'd761133753da290a0c02eca1c87709e4',
-  ],
-};
-const SHIPPED_PROMPT_NEW_MD5 = {
-  'pipeline-idea-expansion.md': '49a208628290543ba2607a5ed48fdc8c',
-  'pipeline-prose.md':          '84523d531eeafa60959c65c553b2563f',
-  'pipeline-comic-script.md':   'dea7d497d1cb38e7574f236f4ff8e644',
-  'pipeline-teleplay.md':       'afa4215330bf856429d70d7e2f856605',
-  'pipeline-season-episodes.md':'50c68a29c3ebc275db3095d06bd87100',
-  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
-  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
-  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
-  'pipeline-arc-resolve.md':    '5b340885c6e8f8afc63424d6b5bc7eb7',
-  'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
-  'writers-room-places.md':     'a7f68e51dd6b4421d20f5bd9d855d9b4',
-  'cos-agent-briefing.md':      'dccb392a43cbd3dac900fee12c31619a',
-  'universe-character-expand.md':'67b6e73ed47f318451a730088b4cff14',
-  'story-builder-idea-expand.md':'c12d76fefaaded2838023065bfc94bb0',
-  'pipeline-editorial-analysis.md':'daeb02bd54b0c099b21af659c6298cfe',
-  'pipeline-manuscript-completeness.md':'1ee5ac936fbf1d365e0eaea99bcf1e77',
-  'pipeline-manuscript-fix.md':'c88a56304eb5e290ae0de9dadd20b310',
-};
-const SHIPPED_PROMPT_FILES = Object.keys(SHIPPED_PROMPT_OLD_MD5);
-
-// Shared `_partials/*.md` fragments are mustache-rendered into multiple
-// stage prompts (e.g. `bible-deference.md` is included by every stage
-// that references both character + place bibles). They get their own
-// drift table so the loop below scans them in parallel with stage
-// prompts and warns the user when a migration's pending.
-const SHIPPED_PARTIAL_OLD_MD5 = {
-  // setting→place rename, migration 022.
-  'bible-deference.md': '218f0e85643609ed85a12b1ccc7b5a8d',
-};
-const SHIPPED_PARTIAL_NEW_MD5 = {
-  'bible-deference.md': 'a4681348c27776e414acf6e0be566a99',
-};
-const SHIPPED_PARTIAL_FILES = Object.keys(SHIPPED_PARTIAL_OLD_MD5);
+// The drift tables are NOT hand-mirrored here — they are swept from each
+// migration's exported `ACCEPTED_OLD_MD5` / `NEW_SHIPPED_MD5` (+ optional
+// `DRIFT_SUBDIRS`) constants, so the migration that actually performs the
+// auto-update is the single source of truth. `buildPromptDriftTables` merges
+// each file's lineage (union of accepted-old + intermediate-new hashes; the
+// highest-numbered migration's new hash is the current shipped baseline) and
+// returns per-subdir `{ oldMap, newMap, files }` tables. Only the files
+// managed by a migration are checked, so prompts with no migration counterpart
+// (e.g. cd-evaluate.md) never produce misleading warnings.
+const driftTables = await buildPromptDriftTables(join(__dirname, 'migrations'));
+const EMPTY_DRIFT_TABLE = { oldMap: {}, newMap: {}, files: [] };
+const stageTable   = driftTables.stages    || EMPTY_DRIFT_TABLE;
+const partialTable = driftTables._partials || EMPTY_DRIFT_TABLE;
 
 // Walk one directory's worth of shipped prompt files against a hash table
 // and partition them into auto-updatable (still on a known old hash) vs.
@@ -254,6 +157,10 @@ const collectDrift = ({ sampleSubdir, dataSubdir, files, oldMap, newMap }) => {
   const customized    = [];
   for (const f of files) {
     const dataPath = join(dataSubpath, f);
+    // No data.reference twin → the prompt was renamed/retired upstream (e.g.
+    // pipeline-tv-script.md → pipeline-teleplay.md); there's nothing to
+    // auto-update *to*, so skip rather than warn about a phantom drift.
+    if (!existsSync(join(sampleSubpath, f))) continue;
     if (!existsSync(dataPath)) continue;
     const dataMd5 = md5(readFileSync(dataPath, 'utf8'));
     if (dataMd5 === newMap[f]) continue;
@@ -271,16 +178,16 @@ const collectDrift = ({ sampleSubdir, dataSubdir, files, oldMap, newMap }) => {
 const stageDrift = collectDrift({
   sampleSubdir: ['prompts', 'stages'],
   dataSubdir:   ['prompts', 'stages'],
-  files: SHIPPED_PROMPT_FILES,
-  oldMap: SHIPPED_PROMPT_OLD_MD5,
-  newMap: SHIPPED_PROMPT_NEW_MD5,
+  files: stageTable.files,
+  oldMap: stageTable.oldMap,
+  newMap: stageTable.newMap,
 });
 const partialDrift = collectDrift({
   sampleSubdir: ['prompts', '_partials'],
   dataSubdir:   ['prompts', '_partials'],
-  files: SHIPPED_PARTIAL_FILES,
-  oldMap: SHIPPED_PARTIAL_OLD_MD5,
-  newMap: SHIPPED_PARTIAL_NEW_MD5,
+  files: partialTable.files,
+  oldMap: partialTable.oldMap,
+  newMap: partialTable.newMap,
 });
 
 const autoUpdatable = [
