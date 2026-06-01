@@ -10,7 +10,7 @@ import { join } from 'path';
 import { readFile, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { emitLog, cosEvents } from './cosEvents.js';
-import { appendAgentOutput, updateAgent, completeAgent } from './cosAgents.js';
+import { createAgentOutputBatcher, updateAgent, completeAgent } from './cosAgents.js';
 import { initProviderStatus } from './providerStatus.js';
 import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable } from './cosRunnerClient.js';
 import { ensureDir, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
@@ -31,6 +31,29 @@ export { processAgentCompletion } from './agentCompletion.js';
 
 const ROOT_DIR = PATHS.root;
 const RUNS_DIR = PATHS.runs;
+
+// Per-agent debounced output batchers for the CoS Runner stream path. The
+// runner emits `agent:output` per parsed line (see cos-runner/index.js), so a
+// chatty agent would otherwise trigger a full state load+save per line. Each
+// batcher coalesces a ~250ms window; we drain + drop it when the agent
+// completes/errors so the final lines persist before the completion event.
+const runnerOutputBatchers = new Map();
+
+function getRunnerOutputBatcher(agentId) {
+  let batcher = runnerOutputBatchers.get(agentId);
+  if (!batcher) {
+    batcher = createAgentOutputBatcher(agentId);
+    runnerOutputBatchers.set(agentId, batcher);
+  }
+  return batcher;
+}
+
+async function flushRunnerOutputBatcher(agentId) {
+  const batcher = runnerOutputBatchers.get(agentId);
+  if (!batcher) return;
+  runnerOutputBatchers.delete(agentId);
+  await batcher.flush();
+}
 
 
 /**
@@ -95,7 +118,7 @@ export async function initSpawner() {
     // Set up event handlers for runner events
     onCosRunnerEvent('agent:output', async (data) => {
       const { agentId, text } = data;
-      await appendAgentOutput(agentId, text);
+      getRunnerOutputBatcher(agentId).push(text);
 
       // Update phase on first output
       const agent = runnerAgents.get(agentId);
@@ -113,6 +136,9 @@ export async function initSpawner() {
       if (agent) {
         clearTimeout(agent.initializationTimeout);
       }
+      // Drain pending output before completion so the final lines land in
+      // state before handleAgentCompletion writes the terminal record.
+      await flushRunnerOutputBatcher(agentId);
       await handleAgentCompletion(agentId, exitCode, success, duration);
     });
 
@@ -125,6 +151,7 @@ export async function initSpawner() {
         if (agent) {
           clearTimeout(agent.initializationTimeout);
         }
+        await flushRunnerOutputBatcher(orphan.agentId);
         await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0);
       }
     });
@@ -133,6 +160,7 @@ export async function initSpawner() {
       const { agentId, error } = data;
       console.error(`❌ Agent ${agentId} error from runner: ${error}`);
       cosEvents.emit('agent:error', { agentId, error });
+      await flushRunnerOutputBatcher(agentId);
       const agent = runnerAgents.get(agentId);
       if (agent) {
         clearTimeout(agent.initializationTimeout);

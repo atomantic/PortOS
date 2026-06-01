@@ -19,7 +19,8 @@ vi.mock('./cosState.js', () => ({
   withStateLock: async (fn) => fn()
 }));
 
-import { getAgent } from './cosAgents.js';
+import { getAgent, createAgentOutputBatcher } from './cosAgents.js';
+import { saveState } from './cosState.js';
 
 describe('cosAgents', () => {
   beforeEach(async () => {
@@ -52,5 +53,66 @@ describe('cosAgents', () => {
       { line: 'full line one', timestamp: pausedAt },
       { line: 'full line two', timestamp: pausedAt }
     ]);
+  });
+});
+
+describe('createAgentOutputBatcher', () => {
+  const agentId = 'agent-batch';
+
+  beforeEach(() => {
+    saveState.mockClear();
+    mockCosState.state = { agents: { [agentId]: { id: agentId, output: [] } } };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('coalesces many pushed lines into a single state write on flush', async () => {
+    const batcher = createAgentOutputBatcher(agentId);
+    batcher.push('line 1');
+    batcher.push('line 2');
+    batcher.push(['line 3', 'line 4']); // array push appends each line
+    await batcher.flush();
+
+    // Write-amplification guard: 4 lines, one load+save — not one per line.
+    expect(saveState).toHaveBeenCalledTimes(1);
+    expect(mockCosState.state.agents[agentId].output.map((o) => o.line)).toEqual([
+      'line 1', 'line 2', 'line 3', 'line 4'
+    ]);
+  });
+
+  it('flush() is a no-op (no state write) when nothing was pushed', async () => {
+    const batcher = createAgentOutputBatcher(agentId);
+    await batcher.flush();
+    expect(saveState).not.toHaveBeenCalled();
+  });
+
+  it('captures lines pushed during an in-flight drain', async () => {
+    const batcher = createAgentOutputBatcher(agentId);
+    batcher.push('first');
+    const flushing = batcher.flush();
+    batcher.push('raced-in'); // arrives while the first drain is awaiting
+    await flushing;
+    await batcher.flush(); // second flush picks up the raced-in line
+
+    expect(mockCosState.state.agents[agentId].output.map((o) => o.line)).toEqual([
+      'first', 'raced-in'
+    ]);
+  });
+
+  it('swallows + logs a state-write failure so flush() never rejects', async () => {
+    saveState.mockRejectedValueOnce(new Error('disk full'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const batcher = createAgentOutputBatcher(agentId);
+    batcher.push('doomed line');
+
+    await expect(batcher.flush()).resolves.toBeUndefined();
+    const logged = consoleSpy.mock.calls.some(
+      (args) => typeof args[0] === 'string' &&
+        args[0].startsWith(`❌ agent ${agentId} output batch flush failed:`)
+    );
+    expect(logged).toBe(true);
   });
 });

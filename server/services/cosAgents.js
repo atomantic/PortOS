@@ -389,6 +389,78 @@ export async function appendAgentOutputLines(agentId, lines) {
   return result;
 }
 
+// Debounce window for batching streamed agent output to state. A chatty
+// producer (CoS Runner stream events, non-stream CLI stdout) can emit dozens
+// of lines/sec; without batching, each line round-trips a full state
+// load+save (see appendAgentOutput). 250ms is invisible to the live tail but
+// cuts state I/O by 1-2 orders of magnitude. Matches OUTPUT_FLUSH_INTERVAL_MS
+// in agentTuiSpawning.js.
+const OUTPUT_FLUSH_INTERVAL_MS = 250;
+
+// Debounced per-agent output batcher. Wraps appendAgentOutputLines with a
+// ~250ms flush window so a hot streaming producer triggers one state load+save
+// per window instead of per line — the write-amplification guard documented in
+// CLAUDE.md ("High-frequency state writes must batch"). The TUI spawner rolls
+// its own equivalent inline because it co-flushes an output.txt appendFile in
+// the same batch; producers that only need the state write should use this.
+//
+// Callers MUST `await flush()` in their finish/cleanup path before the
+// completion event so the final lines land before the agent is marked done.
+export function createAgentOutputBatcher(agentId, { intervalMs = OUTPUT_FLUSH_INTERVAL_MS } = {}) {
+  let pending = [];
+  let timer = null;
+  let flushing = null;
+
+  const drain = async () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    // Swallow+log state-write failures so neither the debounced timer nor a
+    // caller's `await flush()` ever rejects — this runs in child-process /
+    // timer callbacks where an uncaught throw would crash Node (CLAUDE.md "No
+    // try/catch" exception). The authoritative transcript lives in output.txt;
+    // a dropped live-tail batch is non-fatal. Mirrors the TUI spawner's
+    // `.catch(() => {})` on its own batched append.
+    await appendAgentOutputLines(agentId, batch).catch((err) => {
+      console.error(`❌ agent ${agentId} output batch flush failed: ${err.message}`);
+    });
+  };
+
+  const schedule = () => {
+    if (timer || flushing) return;
+    timer = setTimeout(() => {
+      timer = null;
+      flushing = drain().finally(() => {
+        flushing = null;
+        // Catch lines that arrived during the in-flight drain — without this a
+        // producer that goes quiet right after the timer fires strands its last
+        // batch in `pending` until flush().
+        if (pending.length > 0) schedule();
+      });
+    }, intervalMs);
+  };
+
+  return {
+    push(lineOrLines) {
+      if (Array.isArray(lineOrLines)) {
+        if (lineOrLines.length === 0) return;
+        pending.push(...lineOrLines);
+      } else {
+        pending.push(lineOrLines);
+      }
+      schedule();
+    },
+    // Wait for any in-flight drain, then synchronously empty `pending`. A push
+    // can race in during the awaited drain, so drain once more to be sure.
+    async flush() {
+      if (flushing) await flushing;
+      await drain();
+      if (pending.length > 0) await drain();
+    },
+  };
+}
+
 // Get all agents from in-memory state (includes running and recently completed; archived agents loaded via getAgentsByDate)
 export async function getAgents() {
   const state = await loadState();
