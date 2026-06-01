@@ -25,9 +25,9 @@ export const setUseRunner = (val) => { useRunner = val; };
 
 // Active agent IDs (direct-mode + runner-mode), for zombie/orphan detection.
 // Lives here in the side-effect-free state module so callers (cleanup jobs,
-// zombie sweeps) can read it without importing `subAgentSpawner.js`, whose
-// module load runs `initSpawner()` + schedules orphan cleanup. `subAgentSpawner`
-// re-exports it for backward compatibility.
+// zombie sweeps) can read it without importing the heavier `subAgentSpawner.js`
+// orchestrator (which re-exports the whole agent-lifecycle module graph).
+// `subAgentSpawner` re-exports it for backward compatibility.
 export const getActiveAgentIds = () => [...activeAgents.keys(), ...runnerAgents.keys()];
 
 // Metadata booleans may arrive as true/'true' or false/'false' (JSON vs TASKS.md string round-trip)
