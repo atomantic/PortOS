@@ -7,7 +7,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [.changel
 Claimable, well-specified, no decision needed — `/claim`-able. Unordered.
 
 - [ ] [unify-llm-picker-components] **Three provider/model pickers still hand-roll their own two-select markup + provider fetch instead of the shared `ProviderModelSelector`.** `SeriesLlmPicker.jsx` (bound to `series.llm`, saves on change, shows an "Active provider (…)" empty option), `FeatureProviderPicker.jsx`, and `writers-room/StagePromptModelPicker.jsx` each re-implement the `getProviders → two <select>` shape that `client/src/components/ProviderModelSelector.jsx` + `useProviderModels` already provide (StoryBuilder's `ProviderModelPicker` was migrated onto the shared selector in `story-builder-extract-image-render-hook`). Promote them onto the shared selector too, preserving each one's persistence + activeProvider-fallback semantics. Deferred from that item to keep its diff scoped — these three have divergent save-on-change / active-provider behavior that needs per-component care.
-- [ ] [hidream-qwen-loras-runner-consumers] **Wire HIDREAM/QWEN through `client/src/pages/Loras.jsx`.** `imageGenResolutions.js` was extended on 2026-05-28 (`compatibilityKey` now returns HIDREAM/QWEN as their own keys). Still pending: `client/src/pages/Loras.jsx` `RUNNER_LABELS` / `RUNNER_BG_COLORS` / Top-LoRA section list omit HIDREAM/QWEN so the LoRA picker shows them as unlabeled / no badge color.
 
 ## Blocked / Deferred (skip for `/claim`)
 
