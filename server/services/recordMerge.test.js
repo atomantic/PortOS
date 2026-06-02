@@ -370,6 +370,34 @@ describe('recordMerge — mergeSeries (integration)', () => {
     await expect(seriesSvc.getSeries(loser.id)).rejects.toMatchObject({ code: seriesSvc.ERR_NOT_FOUND });
   });
 
+  it('repairs survivor issue numbering on re-run when a prior reassign partially persisted', async () => {
+    const u = await universeSvc.createUniverse({ name: 'U' });
+    const survivor = await seriesSvc.createSeries({ name: 'Twin', universeId: u.id });
+    const loser = await seriesSvc.createSeries({ name: 'Twin', universeId: u.id });
+
+    // reassignIssuesToSeries persists per-issue (saveIssuesNow → Promise.all of
+    // per-record writes), so a mid-flight failure can leave the loser's issues
+    // already moved under the survivor but with the survivor renumber only
+    // half-applied — AND zero issues left under the loser. On re-run the
+    // `loserIssues.length > 0` branch is skipped, so without the step-2.5 repair
+    // the dirty numbering would never be fixed before the tombstone. Fabricate
+    // that exact post-partial-persist on-disk state (non-contiguous 1/5/9, loser
+    // empty) — a live Promise.all partial failure has non-deterministic save
+    // ordering, so reproducing the resulting state directly keeps this stable.
+    const store = issuesSvc.issueStore();
+    await store.saveOneNow('iss-surv-a', { id: 'iss-surv-a', seriesId: survivor.id, title: 'A', number: 1 });
+    await store.saveOneNow('iss-surv-b', { id: 'iss-surv-b', seriesId: survivor.id, title: 'B', number: 5 });
+    await store.saveOneNow('iss-surv-c', { id: 'iss-surv-c', seriesId: survivor.id, title: 'C', number: 9 });
+    expect(await issuesSvc.listIssues({ seriesId: loser.id })).toHaveLength(0);
+
+    const result = await merge.mergeSeries(survivor.id, loser.id, {});
+    expect(result.merged).toBe(true);
+    // Step 2.5 renumbered the survivor to a contiguous sequence and tombstoned the loser.
+    const survivorIssues = await issuesSvc.listIssues({ seriesId: survivor.id });
+    expect(survivorIssues.map((i) => i.number).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    await expect(seriesSvc.getSeries(loser.id)).rejects.toMatchObject({ code: seriesSvc.ERR_NOT_FOUND });
+  });
+
   it('rejects merging series from different universes', async () => {
     const u1 = await universeSvc.createUniverse({ name: 'U1' });
     const u2 = await universeSvc.createUniverse({ name: 'U2' });

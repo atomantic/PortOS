@@ -32,7 +32,7 @@ import {
 import { mergeExtractedBible, BIBLE_KIND, isStr } from '../lib/storyBible.js';
 import { canonicalStringify, isEmptyScalar } from '../lib/objects.js';
 import { getSeries, updateSeries, deleteSeries, listSeries } from './pipeline/series.js';
-import { reassignIssuesToSeries, listIssues } from './pipeline/issues.js';
+import { reassignIssuesToSeries, recomputeIssueNumbersForSeries, listIssues } from './pipeline/issues.js';
 import {
   findCollectionByUniverseId, findOrCreateUniverseCollection,
   findCollectionBySeriesId, findOrCreateSeriesCollection,
@@ -485,16 +485,27 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
       const survivorSeasonId = survivorSeasonIdByNumber.get(ls.number);
       if (survivorSeasonId) seasonIdMap[ls.id] = survivorSeasonId;
     }
-    // The reassign is one queued write that persists nothing until it succeeds,
-    // so a failure leaves the issues fully under the loser. Abort BEFORE the
-    // tombstone (deleting the loser now would orphan its un-moved issues) and
-    // surface a resumable cascade error — the survivor already holds the union;
-    // re-running reassigns only the issues still under the loser, then tombstones.
+    // The reassign moves the loser's issues onto the survivor and renumbers the
+    // combined set. Its per-issue saves are NOT atomic, so a failure can leave
+    // some issues already moved (and the survivor's numbering half-applied).
+    // Abort BEFORE the tombstone — deleting the loser now would orphan any
+    // un-moved issues — and surface a resumable cascade error: re-running moves
+    // whatever issues are still under the loser. Step 2.5 below repairs the
+    // survivor's numbering even when the partial move left zero issues to re-run.
     await reassignIssuesToSeries(loserId, survivorId, { seasonIdMap }).catch((err) => {
       throw cascadeError('Series', survivorId, loserId,
         [{ id: loserId, name: loser.name, error: err?.message || String(err), step: 'reassign-issues' }]);
     });
   }
+
+  // 2.5. Repair the survivor's issue numbering before tombstoning. This is a
+  //      no-op on the happy path (the reassign already renumbered), but a prior
+  //      cascade that failed AFTER moving issues but BEFORE finishing the
+  //      survivor renumber leaves zero loser issues to re-run — so the renumber
+  //      above never fires on retry. Running it unconditionally here is
+  //      idempotent (it skips the write when numbering is already contiguous)
+  //      and closes that resumability gap.
+  await recomputeIssueNumbersForSeries(survivorId);
 
   // 3. Fold the loser's series-collection into the survivor's, then tombstone it.
   if (loserCollection && (loserCollection.items || []).length > 0) {
