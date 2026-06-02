@@ -1526,6 +1526,28 @@ describe('arcPlanner — refineReaderMap', () => {
     expect(out.readerMap.hooks[0].label).toBe('keep me');
   });
 
+  it('clears changes/rationale when falling back to the existing map (discarded refine)', async () => {
+    const s = await setupSeries({
+      arc: { logline: 'rise', summary: 'spine', readerMap: { hooks: [{ label: 'keep me' }] } },
+    });
+    // The LLM authored a change list + rationale but produced an empty map, so
+    // the refine is DISCARDED in favor of the existing map. Those changes/
+    // rationale describe edits that were never applied and must be cleared —
+    // otherwise the UI claims edits it threw away.
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        hooks: [], payoffs: [], beats: [], cliffhangers: [],
+        changes: ['rewrote the opening hook', 'added a midpoint payoff'],
+        rationale: 'tightened the front',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineReaderMap(s.id, 'tweak');
+    expect(out.readerMap.hooks[0].label).toBe('keep me');
+    expect(out.changes).toEqual([]);
+    expect(out.rationale).toBe('');
+  });
+
   it('throws (rather than returns null) when generateReaderMap yields an empty map', async () => {
     const s = await setupSeries({ arc: { logline: 'x', summary: 'y' } });
     stageRunnerSpy = vi.fn(async () => ({

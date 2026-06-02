@@ -937,7 +937,19 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
   if (!safeReaderMap) {
     throw makeErr('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
   }
-  return { readerMap: safeReaderMap, changes: trimChanges(content.changes), rationale, runId, providerId, model };
+  // When the refine produced nothing usable and we fell back to the existing
+  // map, the LLM's `changes`/`rationale` describe an attempt that was DISCARDED
+  // — surfacing them would tell the user we applied edits we threw away. Only
+  // report changes/rationale when the refined map is the one we're returning.
+  const usedRefinedMap = readerMap != null;
+  return {
+    readerMap: safeReaderMap,
+    changes: usedRefinedMap ? trimChanges(content.changes) : [],
+    rationale: usedRefinedMap ? rationale : '',
+    runId,
+    providerId,
+    model,
+  };
 }
 
 /**
