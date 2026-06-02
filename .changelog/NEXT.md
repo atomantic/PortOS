@@ -62,6 +62,7 @@
 - **[subagent-spawner-top-level-side-effects]** The CoS agent spawner now initializes explicitly at server startup instead of as a side effect of being imported, so importing it (in tests or elsewhere) no longer re-arms its event listeners and timers (no user-facing change).
 - **[settings-getsave-callers-stale-base]** Saving or clearing the HF / Civitai API keys now runs its read-modify-write inside the settings write queue, so a save landing at the same moment can't clobber it with a stale snapshot (no user-facing change).
 - **[settings-shallow-getsave-callers-tidy]** Saving Telegram config (method, bot token/chat id, forwarded types) and system-health alert thresholds now runs inside the settings write queue too, closing the same stale-snapshot clobber window (no user-facing change).
+- **[json-state-serialization-one-mechanism]** The Chief-of-Staff state file now serializes its writes with the same shared queue the rest of the app's JSON stores use, instead of a separate bespoke lock — one fewer concurrency mechanism to maintain (no user-facing change).
 - **[wardrobe-appearance-id-route-validation] Rendering a storyboard scene with a stale outfit pick now fails clearly instead of silently ignoring it.** If a scene's wardrobe selection points at a character or outfit that no longer exists (e.g. it was deleted after the pick was made), the render returns a clear error instead of quietly rendering the character without that outfit.
 
 ## Fixed
