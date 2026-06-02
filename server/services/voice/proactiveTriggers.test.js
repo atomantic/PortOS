@@ -335,4 +335,39 @@ describe('wireProactiveTriggers', () => {
     await flush();
     expect(speak).not.toHaveBeenCalled();
   });
+
+  it('announces an already-completed task only once when updated again', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    // A second updateTask() on the same already-completed task re-emits the
+    // event with the same terminal status; the once-guard must suppress it.
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    cosEvents.emit('tasks:changed', taskUpdate('completed', { title: 'now with a PR url' }));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+  });
+
+  it('dedups a same-tick duplicate completion burst to one line', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    // Both emit on the same tick (no flush between) — the synchronous guard
+    // must dedup before either reaches the async tail.
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+  });
+
+  it('still announces a distinct terminal outcome (blocked then completed)', async () => {
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    // Same task id, different terminal status: a blocked task later re-dispatched
+    // to completed is a NEW outcome and must speak its success line.
+    cosEvents.emit('tasks:changed', taskUpdate('blocked'));
+    await flush();
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(2);
+    const priorities = speak.mock.calls.map((c) => c[0].priority);
+    expect(priorities).toEqual(['high', 'normal']);
+  });
 });

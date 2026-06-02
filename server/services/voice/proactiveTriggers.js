@@ -136,6 +136,17 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   // isolated state and a rewire starts fresh.
   const lastSpokenAt = new Map();
 
+  // Terminal outcomes already announced, keyed `${taskId}:${status}`. A task's
+  // completion line is solicited and fires once at its terminal status, but
+  // `updateTask` on an already-terminal voice-dispatched task re-emits
+  // `tasks:changed action:'updated'` with the same status — without this guard
+  // the spoken line would re-fire on every such re-update. Keying on id+status
+  // (not id alone) keeps a DISTINCT outcome announceable: a blocked task later
+  // re-dispatched to completed still speaks its success line. Grows only with
+  // distinct voice-dispatched task outcomes (human-paced, rare), so no eviction
+  // is needed; cleared on unwire.
+  const announcedOutcomes = new Set();
+
   // Speak one line, advancing the source's rate-limit bucket. The slot is
   // reserved BEFORE awaiting `speak`: synthesis is async, so a same-tick burst
   // of same-source events (an error storm) would otherwise all read the stale
@@ -197,6 +208,15 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     if (status !== 'completed' && status !== 'blocked') return;
     if (!isMetaTrue(task.metadata?.voiceDispatch)) return;
     if (status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') return;
+    // Announce each terminal outcome at most once. Checked synchronously (before
+    // queueing onto the async tail) so a same-tick duplicate burst of identical
+    // events dedups to a single line too. A task without an id (shouldn't happen
+    // for real tasks) fails open — better to re-announce than to silently swallow.
+    const outcomeKey = task?.id != null ? `${task.id}:${status}` : null;
+    if (outcomeKey) {
+      if (announcedOutcomes.has(outcomeKey)) return;
+      announcedOutcomes.add(outcomeKey);
+    }
     taskCompleteTail = taskCompleteTail.then(async () => {
       const cfg = await getVoiceConfig();
       if (cfg?.llm?.codeAgent?.announceOnComplete === false) return;
@@ -219,5 +239,6 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     cosEvents.off('task:ready', onTaskReady);
     cosEvents.off('tasks:changed', onTaskUpdated);
     notificationEvents.off('added', onNotification);
+    announcedOutcomes.clear();
   };
 };
