@@ -18,6 +18,7 @@
 
 ## Changed
 
+- **[conflict-restore-additive] "Restore mine" in Sharing → Conflicts is now a faithful restore of your whole version.** Restoring a universe's archived version now replaces its categories exactly as your version had them — a category that slipped in from the other machine's edit (after the timestamp-overwrite) is removed, instead of lingering. Merging back a single field still overlays it without disturbing the rest of the record.
 - **[series-merge-season-rehoming] Merging two series now keeps each issue in its season.** When you merge a duplicate series into another, issues that belonged to a season are placed into the surviving series' matching season (paired by season number) instead of all landing un-grouped for you to re-file by hand. Issues that had no season stay un-grouped, as before.
 - **[conflict-journal-deep-diff] The Sharing → Conflicts tab now shows which sub-entry changed, not a wall of JSON.** For structured fields — universe categories and canon (characters/places/objects), series arc and seasons, issue stages — a conflict now breaks down into one focused before/after diff per changed entry, labelled by its name or key (e.g. just the character "Alice", or the "tone" category), instead of diffing the entire field as a single JSON blob. Restoring and merging still operate on the whole field.
 
