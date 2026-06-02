@@ -955,6 +955,12 @@ export async function pushRecordToPeer(sub, options = {}) {
     }).finally(() => clearTimeout(timeoutId));
   };
   let res = await postPayload(payload);
+  // Set when the older-peer retry below strips `manuscriptReview`: the retry
+  // succeeds with the review removed, so saving the full-payload hash would
+  // make the next push short-circuit as `unchanged` and never deliver the
+  // review once that peer upgrades. Withhold the hash (like reviewSyncPending)
+  // so the next cycle re-sends.
+  let reviewStrippedForLegacyPeer = false;
   // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
   // without a `portosMeta` field, so it 400-rejects our envelope at Zod
   // validation BEFORE its schema-version gate code (which doesn't exist on
@@ -986,7 +992,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       const stripped = [];
       if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
       if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
-      if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); }
+      if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
       // The series + issues still land; on a pre-feature peer the review simply
       // doesn't propagate until it upgrades, and a re-push after it upgrades
       // re-includes the stripped key(s).
@@ -1066,7 +1072,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the missing-assets case so the next push cycle re-sends the review instead
   // of short-circuiting on `unchanged` — the review has no independent
   // reconciliation path, so a saved hash here would strand the update.
-  const reviewSyncPending = body?.reviewSyncPending === true;
+  const reviewSyncPending = body?.reviewSyncPending === true || reviewStrippedForLegacyPeer;
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a

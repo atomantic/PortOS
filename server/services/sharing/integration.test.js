@@ -289,6 +289,58 @@ describe('sharing round-trip', () => {
     expect(after.comments).toHaveLength(0);
   });
 
+  it('keeps a manifest pending when a declared review file is present but unparseable', async () => {
+    const bucket = await buckets.createBucket({ name: 'CorruptReviewBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Corrupt Review Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the road', issueNumber: 1 },
+    ]);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const reviewFile = join(tempBucket, 'records', 'reviews', `${s.id}.json`);
+    const good = readFileSync(reviewFile, 'utf-8');
+    // Simulate a half-synced (truncated) file: present on disk but not valid JSON.
+    writeFileSync(reviewFile, good.slice(0, Math.floor(good.length / 2)));
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+
+    const r1 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r1.pending).toBe(true);
+    expect(r1.outcome.pendingReviews).toContain(s.id);
+
+    // The full file finishes syncing → reprocess → it merges.
+    writeFileSync(reviewFile, good);
+    const r2 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r2.pending).toBeFalsy();
+    expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
+  });
+
+  it('promoteInboxItem keeps the inbox row when the bundled review merge fails', async () => {
+    const bucket = await buckets.createBucket({ name: 'PromoteFailBucket', path: tempBucket, mode: 'inbox' });
+    const s = await series.createSeries({ name: 'Promote Fail Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the road', issueNumber: 1 },
+    ]);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename); // queues to inbox
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Force a transient review-merge failure during the manual promote.
+    const spy = vi.spyOn(manuscriptReview, 'mergeReviewFromSync').mockRejectedValueOnce(new Error('disk full'));
+    await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).rejects.toMatchObject({
+      code: 'SHARING_REVIEW_MERGE_FAILED',
+    });
+    spy.mockRestore();
+    // Inbox row preserved so the user can re-promote.
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Re-promote now succeeds and the review lands.
+    await importer.promoteInboxItem(bucket.id, exp.manifestId);
+    expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
+  });
+
   it('keeps a manifest retryable when the bundled review merge fails (no silent drop)', async () => {
     const bucket = await buckets.createBucket({ name: 'ReviewFailBucket', path: tempBucket, mode: 'auto-merge' });
     const s = await series.createSeries({ name: 'Review Fail Series', logline: 'A' });

@@ -363,6 +363,21 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
  * (chr-/set-/obj-) are sub-records of universes and never standalone, so they
  * are skipped without being tracked as missing.
  */
+// Declared manuscript-review files (records/reviews/<seriesId>.json) the manifest
+// says are bundled but aren't yet readable on disk. Parses each (not just
+// existsSync) so a present-but-partial/corrupt file mid-cloud-sync counts as
+// "not ready" and keeps the manifest pending — mirroring readReferencedRecords,
+// where an unparseable record file is treated as missing. Returns the seriesIds
+// still pending; legacy manifests (no reviewRefs) → [].
+async function missingDeclaredReviews(bucketPath, manifest) {
+  const refs = (Array.isArray(manifest.reviewRefs) ? manifest.reviewRefs : []).filter(isSafeRecordId);
+  const checks = await Promise.all(refs.map(async (sid) => {
+    const r = await readJSONFile(join(bucketPath, 'records', 'reviews', `${sid}.json`), null, { logError: false });
+    return r == null ? sid : null;
+  }));
+  return checks.filter(Boolean);
+}
+
 async function readReferencedRecords(bucketPath, manifest) {
   const records = { series: [], issues: [], universes: [], media: [] };
   const missing = [];
@@ -958,10 +973,7 @@ export async function processManifest(bucketId, manifestFilename) {
   // would read null, treat it as "no review", and markProcessed — permanently
   // dropping the review. Mirror the missingRecords pending gate. Legacy
   // manifests have no `reviewRefs` → empty → no wait (back-compat).
-  const declaredReviewRefs = Array.isArray(manifest.reviewRefs) ? manifest.reviewRefs : [];
-  const missingReviews = declaredReviewRefs.filter(
-    (sid) => isSafeRecordId(sid) && !existsSync(join(bucket.path, 'records', 'reviews', `${sid}.json`)),
-  );
+  const missingReviews = await missingDeclaredReviews(bucket.path, manifest);
 
   // Always copy assets + media-job records ahead of the merge so canon and
   // pipeline records that reference them point at present files. Asset and
@@ -1123,10 +1135,9 @@ export async function promoteInboxItem(bucketId, manifestId) {
     });
   }
   // Same out-of-order delivery guard as the auto-merge path: a declared review
-  // file that hasn't landed yet must block the promote, or applyAutoMerge would
-  // read null and silently drop the review.
-  const missingReviews = (Array.isArray(manifest.reviewRefs) ? manifest.reviewRefs : [])
-    .filter((sid) => isSafeRecordId(sid) && !existsSync(join(bucket.path, 'records', 'reviews', `${sid}.json`)));
+  // file that hasn't landed (or is present-but-unparseable) must block the
+  // promote, or applyAutoMerge would read null and silently drop the review.
+  const missingReviews = await missingDeclaredReviews(bucket.path, manifest);
   if (missingReviews.length > 0) {
     throw Object.assign(new Error(`Manifest reviews are still syncing (${missingReviews.length} missing)`), {
       code: 'SHARING_REVIEWS_PENDING',
@@ -1174,6 +1185,15 @@ export async function promoteInboxItem(bucketId, manifestId) {
     throw Object.assign(new Error(`Legacy series canon migration failed for ${outcome.legacyCanonPendingFailures.join(', ')} — retry after resolving the underlying error`), {
       code: 'SHARING_LEGACY_CANON_FAILED',
       pendingLegacyCanonFailures: outcome.legacyCanonPendingFailures,
+    });
+  }
+  // A transient manuscript-review merge failure must also keep the inbox row —
+  // otherwise the manual promote consumes it while the bundled review silently
+  // never lands (the review has no independent reconciliation cycle).
+  if (outcome.reviewMergeFailures) {
+    throw Object.assign(new Error(`Manuscript-review merge failed for ${outcome.reviewMergeFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_REVIEW_MERGE_FAILED',
+      reviewMergeFailures: outcome.reviewMergeFailures,
     });
   }
   // Drop from inbox.

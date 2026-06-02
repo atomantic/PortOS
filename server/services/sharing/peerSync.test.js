@@ -2939,6 +2939,11 @@ describe('peerSync', () => {
         expect(retryPayload.portosMeta).toBeDefined();
         expect(retryPayload.record.id).toBe('s1');
         expect(retryPayload.issues).toHaveLength(1);
+        // Hash withheld so the review re-sends once the peer upgrades (the
+        // retry landed with the review stripped, so saving the full-payload
+        // hash would short-circuit the next push as 'unchanged').
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        expect(refreshed.lastPushedHash).toBeFalsy();
       });
 
       it('does NOT retry on a 400 whose validation error is unrelated to portosMeta', async () => {
