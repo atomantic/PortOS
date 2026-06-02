@@ -94,11 +94,14 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
 // Which text stage an issue's verbatim excerpt seeds at commit. A content type
 // that is ALREADY in a script form seeds that script stage (ready) so the
 // pipeline renders the user's verbatim text instead of regenerating it; prose
-// types seed `stages.prose`. One table row per new structured type — e.g.
-// screenplay → 'teleplay' is the queued follow-up (PLAN.md
-// [importer-screenplay-teleplay-seed]).
+// types seed `stages.prose`. One table row per structured type. The scene
+// extractor (`extractScenes`) already adapts a verbatim teleplay into
+// storyboards via the `pipeline-extract-scenes` prompt, so a screenplay needs
+// no parser work — unlike the comic path, which had to teach `parseComicScript`
+// the bare PAGE/PANEL form.
 const CONTENT_TYPE_SEED_STAGE = Object.freeze({
   'comic-script': 'comicScript',
+  'screenplay': 'teleplay',
 });
 const DEFAULT_SEED_STAGE = 'prose';
 const seedStageFor = (contentType) => CONTENT_TYPE_SEED_STAGE[contentType] || DEFAULT_SEED_STAGE;
@@ -1292,9 +1295,10 @@ export async function commitImport({
       const stages = {};
       if (proposal.proseExcerpt) {
         // Route the verbatim excerpt to the stage that matches the source form
-        // (see CONTENT_TYPE_SEED_STAGE): a comic-script seeds stages.comicScript
-        // (ready) so the pipeline renders the user's verbatim script instead of
-        // regenerating it; everything else seeds stages.prose.
+        // (see CONTENT_TYPE_SEED_STAGE): a script-form type seeds its script
+        // stage ready (comic-script → comicScript, screenplay → teleplay) so the
+        // pipeline renders the user's verbatim script instead of regenerating
+        // it; prose-like types seed stages.prose.
         stages[seedStageFor(contentType)] = { status: 'ready', output: proposal.proseExcerpt };
       }
       const ideaSeed = [

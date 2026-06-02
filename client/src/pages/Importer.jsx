@@ -27,6 +27,17 @@ const CONTENT_TYPE_LABELS = {
   'comic-script': 'Comic Script',
 };
 
+// Mirrors the server's CONTENT_TYPE_SEED_STAGE (server/services/importer.js):
+// a script-form content type seeds its matching script stage (ready) instead
+// of prose. Drives the Review-panel copy + per-issue excerpt label so they
+// name the stage the verbatim excerpt actually lands in.
+const SEED_STAGE_DISPLAY = {
+  'comic-script': { stagePath: 'stages.comicScript.output', excerptLabel: 'Comic script excerpt' },
+  'screenplay': { stagePath: 'stages.teleplay.output', excerptLabel: 'Screenplay excerpt' },
+};
+const DEFAULT_SEED_STAGE_DISPLAY = { stagePath: 'stages.prose.output', excerptLabel: 'Prose excerpt' };
+const seedStageDisplayFor = (contentType) => SEED_STAGE_DISPLAY[contentType] || DEFAULT_SEED_STAGE_DISPLAY;
+
 // Whitelist of arc fields forwarded to the commit endpoint. The wire schema
 // (`importerArcShape`) is `.passthrough()` today and `sanitizeArc` ignores
 // unknowns, but `arcDraft` starts as a shallow clone of the LLM's arc
@@ -274,8 +285,9 @@ export default function Importer() {
       seriesId: preview.series.id,
       issues: issuesDraft,
       // Routes the verbatim excerpt to the right stage server-side — a
-      // comic-script import seeds stages.comicScript (ready) so the pipeline
-      // renders the user's script as-is instead of regenerating it.
+      // script-form import (comic-script → comicScript, screenplay → teleplay)
+      // seeds that script stage (ready) so the pipeline renders the user's
+      // script as-is instead of regenerating it.
       contentType: intake.contentType,
     };
     const payload = arcAlreadyPersisted
@@ -686,10 +698,10 @@ function ReviewPanel({
     });
   };
 
-  // A comic-script import seeds the verbatim excerpt into stages.comicScript
-  // (not stages.prose) — keep the Review copy + per-issue label accurate.
-  const isComic = contentType === 'comic-script';
-  const excerptLabel = isComic ? 'Comic script excerpt' : 'Prose excerpt';
+  // A script-form import (comic-script → comicScript, screenplay → teleplay)
+  // seeds the verbatim excerpt into its script stage, not stages.prose — keep
+  // the Review copy + per-issue label accurate to the actual seed stage.
+  const { stagePath: seedStagePath, excerptLabel } = seedStageDisplayFor(contentType);
 
   return (
     <div className="space-y-6">
@@ -706,7 +718,7 @@ function ReviewPanel({
           <p className="text-xs text-port-text-muted mt-1">
             Review the canon below, edit any issue titles or synopses, then click Commit to seed
             the pipeline. The verbatim excerpt for each issue lands in{' '}
-            <code>{isComic ? 'stages.comicScript.output' : 'stages.prose.output'}</code>.
+            <code>{seedStagePath}</code>.
           </p>
           {preview.isExistingSeries && (
             <label className={`text-xs mt-2 flex items-center gap-2 cursor-pointer ${replaceMode ? 'text-port-error' : 'text-port-text-muted'}`}>
