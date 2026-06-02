@@ -9,8 +9,14 @@ the SSE / stage-marker / stepwise / cancel plumbing on the JS side stays the
 same.
 
 Z-Image-Turbo (Tongyi/Alibaba) is Apache 2.0 — no HF token / license probe
-needed. Runs on MPS (Apple Silicon) or CUDA via diffusers. Reuses the FLUX.2
-venv at ~/.portos/venv-flux2 (already has diffusers from git HEAD + torch).
+needed for its own weights. Runs on MPS (Apple Silicon) or CUDA via diffusers.
+Reuses the FLUX.2 venv at ~/.portos/venv-flux2 (already has diffusers from git
+HEAD + torch).
+
+Other models routed through this runner can require a gated external text
+encoder (e.g. HiDream-I1 loads Llama-3.1-8B-Instruct as `text_encoder_4`), so
+`load_external_text_encoder()` probes HF auth up front — mirroring the
+`probe_hf_auth()` fail-fast in `flux2_macos.py`.
 """
 
 import argparse
@@ -38,6 +44,36 @@ from _runner_common import (  # noqa: E402
 from lora_utils import apply_loras  # noqa: E402
 
 
+def probe_hf_auth(repo: str) -> None:
+    """Fail early with a clear message when HF_TOKEN is missing or the
+    license hasn't been accepted. Without this probe, the user sees a vague
+    HTTP 401 stack trace mid-pipeline-load."""
+    from huggingface_hub import HfApi
+    from huggingface_hub.utils import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+    try:
+        HfApi().model_info(repo)
+    except GatedRepoError:
+        print(
+            f"❌ HF gated repo: accept license at https://huggingface.co/{repo} "
+            f"and set HF_TOKEN before generating.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    except RepositoryNotFoundError:
+        print(f"❌ HF repo not found: {repo}", file=sys.stderr)
+        sys.exit(2)
+    except HfHubHTTPError as err:
+        if getattr(err.response, "status_code", None) == 401:
+            print(
+                f"❌ HF auth required for {repo}. Set HF_TOKEN (and accept the "
+                f"license at https://huggingface.co/{repo}).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        # Network blip / HF down — let the pipeline call retry.
+        print(f"⚠️ HF probe non-fatal error: {err}", file=sys.stderr)
+
+
 def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: str, dtype):
     """Load a separately-distributed text encoder + its tokenizer.
 
@@ -62,6 +98,10 @@ def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: s
     if tok_cls is None:
         print(f"❌ Unknown transformers tokenizer class: {tokenizer_class}", file=sys.stderr)
         sys.exit(2)
+    # Gated encoders (e.g. HiDream's Llama-3.1-8B-Instruct) 401 deep inside
+    # transformers after a multi-GB download attempt. Probe HF auth first so a
+    # missing/unaccepted-license HF_TOKEN fails fast with a clear message.
+    probe_hf_auth(repo)
     with heartbeat("loading-text-encoder"):
         # output_hidden_states / output_attentions are required for HiDream
         # (it reaches into Llama's hidden states for prompt conditioning).
