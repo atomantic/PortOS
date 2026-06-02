@@ -15,6 +15,30 @@
 //
 // The listener only calls `controller.abort()`, which can't throw — safe to attach
 // outside the request lifecycle without a try/catch.
+// Combine several AbortSignals into one that fires when any of them aborts.
+// Prefers the native `AbortSignal.any` (Node 20.3+ / 18.17+) and falls back to a
+// manual fan-in for older Node 18 builds — PortOS's `package.json` engines accept
+// Node 18, and `AbortSignal.any` is absent on the early-18 line. Mirrors the guard
+// in `fetchWithTimeout.js`. The fallback's listeners are `{ once: true }` and self-
+// removing on first abort, so there's nothing to clean up.
+export function anyAbortSignal(signals) {
+  const live = signals.filter(Boolean);
+  if (live.length === 0) return undefined;
+  if (live.length === 1) return live[0];
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') {
+    return AbortSignal.any(live);
+  }
+  const controller = new AbortController();
+  for (const signal of live) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
 export function abortSignalFromResponse(res) {
   const controller = new AbortController();
   if (res?.writableEnded) return controller.signal; // finished normally — never a cancel

@@ -5,6 +5,7 @@ import { getProviderById } from './providers.js';
 import { markProviderAvailable } from './providerStatus.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
+import { anyAbortSignal } from '../lib/requestAbort.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
 
@@ -210,14 +211,12 @@ export async function runLocalLlmTest({
 
     // The timeout controller aborts the upstream read (its plain AbortError keeps
     // the "Timed out after Xms" mapping below). A client disconnect — the user hit
-    // Cancel, closing the browser fetch — aborts `clientSignal`; AbortSignal.any
+    // Cancel, closing the browser fetch — aborts `clientSignal`; `anyAbortSignal`
     // composes both so whichever fires first tears down the upstream reader instead
     // of running on to the full timeout with no one listening.
     const timeoutController = new AbortController();
     const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
-    const signal = clientSignal
-      ? AbortSignal.any([clientSignal, timeoutController.signal])
-      : timeoutController.signal;
+    const signal = anyAbortSignal([clientSignal, timeoutController.signal]);
     const text = await streamChatCompletion({
       provider,
       backend,

@@ -123,7 +123,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
-| `requestAbort.js` | `abortSignalFromResponse(res)` — AbortSignal that fires only when an Express client disconnects *before the response finishes*, so a streaming handler can tear down its upstream read on cancel (keyed off `res` close + `writableEnded`, not `req`). |
+| `requestAbort.js` | `abortSignalFromResponse(res)` — AbortSignal that fires only when an Express client disconnects *before the response finishes* (keyed off `res` close + `writableEnded`). Plus `anyAbortSignal(signals)` — combine several signals into one (native `AbortSignal.any` with a Node-18 fallback). |
 | `readResponseJson.js` | Read a `Response` body as JSON, tolerating a non-JSON/HTML error page (no `Unexpected token <` crash). Object callers need no opts; pass `{ fallback, emptyValue }` for arrays or to surface the raw error text. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |

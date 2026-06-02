@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { abortSignalFromResponse } from './requestAbort.js';
+import { abortSignalFromResponse, anyAbortSignal } from './requestAbort.js';
 
 // Minimal stand-in for an Express response: an EventEmitter carrying the
 // `writableEnded` flag the helper keys off.
@@ -41,5 +41,33 @@ describe('abortSignalFromResponse', () => {
 
   it('tolerates a missing response object', () => {
     expect(abortSignalFromResponse(undefined).aborted).toBe(false);
+  });
+});
+
+describe('anyAbortSignal', () => {
+  it('returns undefined when no live signals are given', () => {
+    expect(anyAbortSignal([])).toBeUndefined();
+    expect(anyAbortSignal([null, undefined])).toBeUndefined();
+  });
+
+  it('returns the sole signal unchanged when only one is live', () => {
+    const c = new AbortController();
+    expect(anyAbortSignal([null, c.signal])).toBe(c.signal);
+  });
+
+  it('fires when any source signal aborts', () => {
+    const a = new AbortController();
+    const b = new AbortController();
+    const combined = anyAbortSignal([a.signal, b.signal]);
+    expect(combined.aborted).toBe(false);
+    b.abort();
+    expect(combined.aborted).toBe(true);
+  });
+
+  it('is already aborted when a source was aborted before combining', () => {
+    const a = new AbortController();
+    const b = new AbortController();
+    a.abort();
+    expect(anyAbortSignal([a.signal, b.signal]).aborted).toBe(true);
   });
 });
