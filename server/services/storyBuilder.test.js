@@ -242,6 +242,35 @@ describe('storyBuilder — generate delegation', () => {
   });
 });
 
+describe('storyBuilder — refine delegation', () => {
+  it('refineStep(plotArc) persists the refined arc narrative onto the series', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'old', summary: 'old summary', shape: 'man-in-hole' } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'refined logline', summary: 'refined summary', changes: ['x'], rationale: 'y' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await sb.refineStep(s.id, 'plotArc', { feedback: 'sharpen it' });
+    expect(stageRunnerSpy).toHaveBeenCalledWith('story-builder-arc-refine', expect.any(Object), expect.objectContaining({ returnsJson: true }));
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.arc.logline).toBe('refined logline');
+    expect(series.arc.summary).toBe('refined summary');
+    // narrative-only refine preserves the picked shape.
+    expect(series.arc.shape).toBe('man-in-hole');
+    expect(out.changes).toEqual(['x']);
+    expect(out.rationale).toBe('y');
+  });
+
+  it('refineStep(plotArc) refuses when the arc is locked', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc'); // sets series.locked.arc = true
+    stageRunnerSpy = vi.fn();
+    await expect(sb.refineStep(s.id, 'plotArc', { feedback: 'x' })).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+    expect(stageRunnerSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('generateStep backfill (fromDownstream)', () => {
   // Record the stage + vars of the most recent staged-LLM call so a test can
   // assert which prompt a backfill routed through.

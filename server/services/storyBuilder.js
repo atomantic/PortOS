@@ -37,7 +37,7 @@ import {
   createSeries, getSeries, updateSeries, setArcFieldLock,
 } from './pipeline/series.js';
 import {
-  generateArcOverview, generateArcFromSource, generateReaderMap, refineReaderMap, commitSeasonsWithRemap,
+  generateArcOverview, generateArcFromSource, generateReaderMap, refineReaderMap, refineArc, commitSeasonsWithRemap,
   collectIssueSourceText, generateSeasonEpisodes, commitEpisodesToIssues,
   ERR_VALIDATION as ARC_ERR_VALIDATION,
 } from './pipeline/arcPlanner.js';
@@ -668,6 +668,19 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
       ...(refined.influences ? { influences: refined.influences } : {}),
     });
     return { result: updated, changes: refined.changes || [], rationale: refined.rationale || '' };
+  }
+  if (stepId === 'plotArc') {
+    if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+    emit('Refining the plot arc…', 'generate');
+    const { arc, changes, rationale, runId } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
+    emit('Saving…', 'persist');
+    // Persist through commitSeasonsWithRemap (passing the EXISTING seasons
+    // unchanged) so per-field arc locks are honored, exactly like the plotArc
+    // generate path — refine only rewrites the arc's narrative fields, never
+    // the season breakdown.
+    const series = await getSeries(session.seriesId);
+    const { series: updated } = await commitSeasonsWithRemap(series, { arc, seasons: series.seasons || [] });
+    return { result: updated, changes, rationale, runId };
   }
   if (stepId === 'readerMap') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
