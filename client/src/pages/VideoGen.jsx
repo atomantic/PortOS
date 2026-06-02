@@ -93,6 +93,25 @@ const videoModelMemoryGb = (model) => {
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 };
 
+// Mirror of server computeFflfSafeFrames (server/services/videoGen/local.js):
+// the largest numFrames that fits the FFLF/ltx2 stage-2 pixel-frame budget at
+// this resolution, rounded down to the LTX 8k+1 latent boundary. The budget
+// itself comes from /status (`fflfLtx2PixelBudget`, honors the env override) so
+// only this back-solve arithmetic is duplicated — not the constant. Lets the
+// multi-keyframe picker reject out-of-budget indices before submit instead of
+// letting the worker 400 mid-render. Returns numFrames when it already fits or
+// the budget is unknown (fail-open — the server still enforces the real cap).
+const computeFflfSafeFrames = (width, height, numFrames, budget) => {
+  const wh = Number(width) * Number(height);
+  const nf = Number(numFrames);
+  const b = Number(budget);
+  if (!(wh > 0) || !(nf > 0) || !(b > 0)) return nf;
+  if (wh * nf <= b) return nf;
+  const safeRaw = Math.floor(b / wh);
+  const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
+  return safeLatent * 8 + 1;
+};
+
 // Mode-compatibility predicate for the Model dropdown. a2v requires the
 // ltx2 runtime (dgrauet's pipeline) — the legacy mlx_video pipeline has no
 // audio-conditioned mode, and Wan/Hunyuan don't either. Server enforces the
@@ -643,6 +662,15 @@ export default function VideoGen() {
   // file, indices strictly ascending and within [0, numFrames-1].
   const keyframesSupported = currentModel?.runtime === 'ltx2';
   const keyframesActive = mode === 'fflf' && keyframesMode && keyframesSupported;
+  // The worker clamps FFLF/ltx2 numFrames down to fit a pixel-frame budget that
+  // depends on resolution, so at default 768×512 the real frame ceiling is far
+  // below numFrames. Compute the same cap the server enforces so the picker can
+  // gate indices (and the auto-seed) against it. Falls back to numFrames when
+  // the budget hasn't loaded yet (server still enforces the real cap).
+  const maxSafeFrames = useMemo(
+    () => computeFflfSafeFrames(width, height, numFrames, status?.fflfLtx2PixelBudget),
+    [width, height, numFrames, status?.fflfLtx2PixelBudget],
+  );
   const keyframesError = useMemo(() => {
     if (!keyframesActive) return null;
     if (keyframes.length < 2) return 'Add at least 2 keyframes.';
@@ -653,11 +681,17 @@ export default function VideoGen() {
       if (!kf.file) return `Keyframe ${i + 1} needs a gallery image.`;
       if (!Number.isInteger(kf.index) || kf.index < 0) return `Keyframe ${i + 1} needs a frame index ≥ 0.`;
       if (kf.index > numFrames - 1) return `Keyframe ${i + 1} frame ${kf.index} must be below numFrames (${numFrames}).`;
+      // Effective cap from the resolution-dependent pixel budget (< numFrames at
+      // higher resolutions). Mirrors the worker's clamp so we don't POST a
+      // render that 400s with LTX2_FFLF_PIXEL_BUDGET_EXCEEDED.
+      if (maxSafeFrames < numFrames && kf.index > maxSafeFrames - 1) {
+        return `Keyframe ${i + 1} frame ${kf.index} exceeds the ${width}×${height} pixel budget (max frame ${maxSafeFrames - 1}). Lower the resolution or raise FFLF_LTX2_PIXEL_BUDGET.`;
+      }
       if (kf.index <= prev) return 'Keyframe frame indices must be strictly ascending.';
       prev = kf.index;
     }
     return null;
-  }, [keyframesActive, keyframes, numFrames]);
+  }, [keyframesActive, keyframes, numFrames, maxSafeFrames, width, height]);
   const keyframesBlocked = keyframesActive && !!keyframesError;
 
   // Probe the per-runtime status BEFORE the user hits Generate — without
@@ -734,13 +768,19 @@ export default function VideoGen() {
     setLastImageUpload(null);
   };
 
+  // The last addressable frame index — the smaller of numFrames and the
+  // resolution-dependent pixel-budget cap (maxSafeFrames), minus 1. Seeding new
+  // keyframe rows against this keeps the auto-seeded index inside the budget the
+  // server enforces, so toggling keyframes on at a high resolution doesn't seed
+  // an index that immediately trips keyframesError.
+  const lastSeedableIndex = Math.max(0, Math.min(numFrames, maxSafeFrames) - 1);
   // Multi-keyframe list mutators. A new row defaults its index to the prior
   // row's index + 1 (clamped to the last addressable frame) so the strictly-
   // ascending invariant holds out of the box without the user hand-typing it.
   const addKeyframe = () => setKeyframes((prev) => {
     if (prev.length >= 8) return prev;
     const lastIndex = prev.length ? prev[prev.length - 1].index : -1;
-    const nextIndex = Math.min(lastIndex + 1, Math.max(0, numFrames - 1));
+    const nextIndex = Math.min(lastIndex + 1, lastSeedableIndex);
     return [...prev, { file: '', index: nextIndex }];
   });
   const updateKeyframe = (i, patch) => setKeyframes((prev) =>
@@ -757,7 +797,7 @@ export default function VideoGen() {
       clearLastImage();
       setKeyframes((prev) => (prev.length >= 2 ? prev : [
         { file: '', index: 0 },
-        { file: '', index: Math.max(1, numFrames - 1) },
+        { file: '', index: Math.max(1, lastSeedableIndex) },
       ]));
     } else {
       setKeyframes([]);

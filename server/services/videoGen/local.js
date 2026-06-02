@@ -205,6 +205,33 @@ export const cancel = () => {
 export const loadHistory = () => readJSONFile(HISTORY_FILE, []);
 export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 
+// Effective FFLF/ltx2 stage-2 pixel-frame budget (width × height × numFrames).
+// The default fit 48 GB unified RAM in testing; FFLF_LTX2_PIXEL_BUDGET lets
+// users with more RAM raise it. This is the SINGLE source of truth for the cap
+// — `buildLtx2Args` enforces it server-side AND the /status route advertises it
+// so the client can gate keyframe indices before submit (see computeFflfSafeFrames).
+export const resolveFflfLtx2PixelBudget = () => {
+  const envBudget = Number(process.env.FFLF_LTX2_PIXEL_BUDGET);
+  return Number.isFinite(envBudget) && envBudget > 0
+    ? envBudget
+    : 704 * 448 * 25; // ≈7.9M pixel-frames, confirmed to fit 48 GB unified RAM
+};
+
+// Back-solve the largest numFrames that fits `budget` at this resolution,
+// rounded DOWN to the LTX 8k+1 latent boundary (so the model doesn't silently
+// snap). Returns the input numFrames unchanged when it already fits. Pure and
+// shared: the server clamps with it, the client mirrors it to validate keyframe
+// indices against the same cap the worker will enforce.
+export const computeFflfSafeFrames = (width, height, numFrames, budget = resolveFflfLtx2PixelBudget()) => {
+  const wh = Number(width) * Number(height);
+  const nf = Number(numFrames);
+  if (!(wh > 0) || !(nf > 0) || !(budget > 0)) return nf;
+  if (wh * nf <= budget) return nf;
+  const safeRaw = Math.floor(budget / wh);
+  const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
+  return safeLatent * 8 + 1;
+};
+
 // Build the spawn args for dgrauet's ltx-2-mlx runtime via our Python helper.
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
@@ -266,15 +293,10 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   // to the LTX 8k+1 latent-boundary so the model doesn't silently snap.
   // FFLF_LTX2_PIXEL_BUDGET env var lets users with more RAM raise the cap.
   if (helperMode === 'fflf') {
-    const envBudget = Number(process.env.FFLF_LTX2_PIXEL_BUDGET);
-    const pixelBudget = Number.isFinite(envBudget) && envBudget > 0
-      ? envBudget
-      : 704 * 448 * 25; // ≈7.9M pixel-frames, confirmed to fit 48 GB unified RAM
+    const pixelBudget = resolveFflfLtx2PixelBudget();
     const requested = Number(width) * Number(height) * Number(numFrames);
     if (requested > pixelBudget) {
-      const safeRaw = Math.floor(pixelBudget / (Number(width) * Number(height)));
-      const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
-      const safeFrames = safeLatent * 8 + 1;
+      const safeFrames = computeFflfSafeFrames(width, height, numFrames, pixelBudget);
       // Multi-keyframe renders pin specific pixel-frame indices — clamping
       // numFrames below `max(keyframe.index)` would either drop a keyframe
       // or hand the Python helper an out-of-range index that hard-fails

@@ -387,3 +387,73 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
     expect(args[args.indexOf('--last-image') + 1]).toBe(join(tmpdir(), `resized-last-${jobId}.png`));
   });
 });
+
+describe('FFLF/ltx2 pixel-budget helpers', () => {
+  const DEFAULT_BUDGET = 704 * 448 * 25; // ≈7.9M pixel-frames
+
+  let resolveFflfLtx2PixelBudget;
+  let computeFflfSafeFrames;
+
+  beforeEach(async () => {
+    ({ resolveFflfLtx2PixelBudget, computeFflfSafeFrames } = await import('./local.js'));
+    delete process.env.FFLF_LTX2_PIXEL_BUDGET;
+  });
+
+  afterEach(() => {
+    delete process.env.FFLF_LTX2_PIXEL_BUDGET;
+  });
+
+  describe('resolveFflfLtx2PixelBudget', () => {
+    it('defaults to the 48 GB-RAM budget when the env var is unset', () => {
+      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+    });
+
+    it('honors a positive numeric FFLF_LTX2_PIXEL_BUDGET override', () => {
+      process.env.FFLF_LTX2_PIXEL_BUDGET = '12000000';
+      expect(resolveFflfLtx2PixelBudget()).toBe(12_000_000);
+    });
+
+    it('ignores a non-positive or non-numeric override and falls back to the default', () => {
+      process.env.FFLF_LTX2_PIXEL_BUDGET = '0';
+      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+      process.env.FFLF_LTX2_PIXEL_BUDGET = '-5';
+      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+      process.env.FFLF_LTX2_PIXEL_BUDGET = 'lots';
+      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+    });
+  });
+
+  describe('computeFflfSafeFrames', () => {
+    it('returns numFrames unchanged when the request already fits the budget', () => {
+      expect(computeFflfSafeFrames(704, 448, 25, DEFAULT_BUDGET)).toBe(25);
+      expect(computeFflfSafeFrames(704, 448, 10, DEFAULT_BUDGET)).toBe(10);
+    });
+
+    it('clamps down to the 8k+1 latent boundary when the request exceeds the budget', () => {
+      // 768×512 = 393216 px/frame. budget/wh ≈ 20.05 → safeLatent floor((20-1)/8)=2 → 2*8+1=17.
+      const safe = computeFflfSafeFrames(768, 512, 121, DEFAULT_BUDGET);
+      expect(safe).toBe(17);
+      expect(safe).toBeLessThan(121);
+      expect(768 * 512 * safe).toBeLessThanOrEqual(DEFAULT_BUDGET);
+      // The clamp lands on the latent boundary (8k+1).
+      expect((safe - 1) % 8).toBe(0);
+    });
+
+    it('never returns below the minimum single-latent frame count (8*1+1)', () => {
+      // A resolution so large that even one latent block barely fits.
+      const safe = computeFflfSafeFrames(4000, 4000, 200, DEFAULT_BUDGET);
+      expect(safe).toBe(9);
+    });
+
+    it('falls open (returns numFrames) when inputs are invalid', () => {
+      expect(computeFflfSafeFrames(0, 448, 25, DEFAULT_BUDGET)).toBe(25);
+      expect(computeFflfSafeFrames(704, 448, 0, DEFAULT_BUDGET)).toBe(0);
+      expect(computeFflfSafeFrames(704, 448, 25, 0)).toBe(25);
+    });
+
+    it('defaults the budget arg to the resolved env budget', () => {
+      process.env.FFLF_LTX2_PIXEL_BUDGET = String(704 * 448 * 25);
+      expect(computeFflfSafeFrames(704, 448, 25)).toBe(25);
+    });
+  });
+});

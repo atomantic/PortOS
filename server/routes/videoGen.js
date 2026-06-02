@@ -36,6 +36,7 @@ import {
   stitchVideos,
   upscaleHistoryItem,
   DEFAULT_NUM_FRAMES,
+  resolveFflfLtx2PixelBudget,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
@@ -174,6 +175,11 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // Rounded to nearest GB; sub-GB precision isn't useful for the
     // model-size comparison and reads more cleanly in the UI.
     systemMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
+    // Effective FFLF/ltx2 stage-2 pixel-frame budget (honors
+    // FFLF_LTX2_PIXEL_BUDGET). The multi-keyframe picker mirrors the
+    // back-solve so it can reject out-of-budget keyframe indices before
+    // submit instead of letting the worker 400 mid-render.
+    fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
   });
 }));
 

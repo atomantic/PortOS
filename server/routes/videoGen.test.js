@@ -29,6 +29,10 @@ vi.mock('../services/videoGen/local.js', () => ({
   // Mirrors the real export — keeps the route's keyframe-range check in
   // sync with whatever the service actually defaults to.
   DEFAULT_NUM_FRAMES: 121,
+  // /status advertises the FFLF pixel-frame budget so the client can mirror
+  // the keyframe-index clamp. Mock returns the real default so the status
+  // shape test sees a concrete number.
+  resolveFflfLtx2PixelBudget: vi.fn(() => 704 * 448 * 25),
   // The route gates pythonPath enforcement on this allowlist (ltx2/wan22/
   // hunyuan bring their own venv). Mirror the real export so the
   // "accepts BYOV-runtime when pythonPath missing" case passes and the
@@ -187,6 +191,10 @@ describe('videoGen routes', () => {
       // presence + type so a future accidental removal is caught here.
       expect(typeof r.body.systemMemoryGb).toBe('number');
       expect(r.body.systemMemoryGb).toBeGreaterThan(0);
+      // fflfLtx2PixelBudget lets the client mirror the FFLF keyframe-index
+      // clamp without hardcoding the constant. Pin presence + type.
+      expect(typeof r.body.fflfLtx2PixelBudget).toBe('number');
+      expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
     });
 
     it('reports disconnected with reason + missingPackages when packages fail to import', async () => {
