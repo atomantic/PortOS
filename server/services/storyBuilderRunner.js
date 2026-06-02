@@ -55,22 +55,32 @@ function broadcast(key, payload) {
  * model, fromDownstream for generate; feedback, entryId, providerId, model for
  * refine) plus an `onProgress` callback the conductor uses to emit phase frames.
  */
+// Identity of a kickoff request: what work it would actually do. Two clicks
+// with the same signature run the same work, so the second can safely attach to
+// the first's in-flight run; a different signature would do different work, so
+// it must NOT bind onto the running one (else its success handler fires off
+// another request's terminal frame — e.g. refining character B while character
+// A's refine is in flight would toast "Refined B" for A's run).
+const requestSig = (op, { entryId, feedback, fromDownstream } = {}) =>
+  JSON.stringify({ op, entryId: entryId ?? null, feedback: feedback ?? null, fromDownstream: !!fromDownstream });
+
 export function startStepRun(sessionId, stepId, { op = 'generate', ...options } = {}) {
   const key = runKey(sessionId, stepId);
-  // Coalesce a second click onto the in-flight run, but surface that run's `op`
-  // so the caller can tell a same-op re-click (reload mid-run — safe to attach)
-  // from a different-op collision (a refine landing on an in-flight generate).
-  // The two ops persist to the same records, so the client must NOT bind a
-  // refine's success handler to a generate's terminal frame.
+  const sig = requestSig(op, options);
+  // Coalesce a second click onto the in-flight run only when it's doing the SAME
+  // work (matching signature) — a reload mid-run re-attaching to its own request.
+  // A different signature (different op, or a refine of a different target/note)
+  // would do different work, so we refuse to coalesce and report `conflict` so
+  // the client doesn't bind its success handler to the running request's frame.
   //
-  // Only coalesce onto a run that's still WORKING. A completed run lingers in
-  // `runs` for the SSE replay grace window (closeJobAfterDelay); coalescing onto
-  // it would re-run no work and replay the stale terminal frame as a false
-  // success. A fresh kickoff in that window starts a new run that replaces the
-  // lingering record under the same key.
+  // Only a still-WORKING run blocks. A completed run lingers in `runs` for the
+  // SSE replay grace window (closeJobAfterDelay); coalescing onto it would re-run
+  // no work and replay the stale terminal frame as a false success. A fresh
+  // kickoff in that window starts a new run that replaces the lingering record.
   const inFlight = runs.get(key);
   if (inFlight && !inFlight.done) {
-    return { runId: inFlight.runId, alreadyRunning: true, op: inFlight.op };
+    if (inFlight.sig === sig) return { runId: inFlight.runId, alreadyRunning: true };
+    return { runId: inFlight.runId, alreadyRunning: true, conflict: true, op: inFlight.op };
   }
 
   const runId = randomUUID();
@@ -81,6 +91,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
     startedAt: new Date().toISOString(),
     stepId,
     op,
+    sig,
     done: false,
   };
   runs.set(key, record);

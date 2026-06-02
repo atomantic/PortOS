@@ -76,17 +76,35 @@ describe('storyBuilderRunner', () => {
     await flush();
   });
 
-  it('surfaces the in-flight op when a different op coalesces onto the same step', async () => {
+  it('flags a conflict when a different-op request collides with an in-flight run', async () => {
     let resolve;
     conductor.generateStep.mockImplementation(() => new Promise((r) => { resolve = () => r({}); }));
     startStepRun('stb-1', 'plotArc', { op: 'generate' });
     // A refine click lands on the same step while the generate is in flight: it
-    // coalesces but must report the live op so the client refuses to bind its
+    // must report `conflict` + the live op so the client refuses to bind its
     // "Refined" handler to the generate's terminal frame.
     const collision = startStepRun('stb-1', 'plotArc', { op: 'refine', feedback: 'x' });
     expect(collision.alreadyRunning).toBe(true);
+    expect(collision.conflict).toBe(true);
     expect(collision.op).toBe('generate');
     expect(conductor.refineStep).not.toHaveBeenCalled();
+    resolve();
+    await flush();
+  });
+
+  it('flags a conflict when a refine of a DIFFERENT target collides, but re-attaches the same one', async () => {
+    let resolve;
+    conductor.refineStep.mockImplementation(() => new Promise((r) => { resolve = () => r({}); }));
+    const first = startStepRun('stb-1', 'characters', { op: 'refine', entryId: 'char-A' });
+    // Same target + op → same work → safe re-attach (no conflict, same runId).
+    const same = startStepRun('stb-1', 'characters', { op: 'refine', entryId: 'char-A' });
+    expect(same.alreadyRunning).toBe(true);
+    expect(same.conflict).toBeUndefined();
+    expect(same.runId).toBe(first.runId);
+    // Different target → different work → conflict, must not bind onto char-A's run.
+    const other = startStepRun('stb-1', 'characters', { op: 'refine', entryId: 'char-B' });
+    expect(other.conflict).toBe(true);
+    expect(conductor.refineStep).toHaveBeenCalledTimes(1);
     resolve();
     await flush();
   });
