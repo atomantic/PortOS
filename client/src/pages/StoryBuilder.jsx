@@ -19,10 +19,12 @@ import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
-  getUniverse, getPipelineSeries, listPipelineIssues,
+  getUniverse, getPipelineSeries, listPipelineIssues, updatePipelineSeries,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
   getProviders, getSettings, generateImage, updateUniverse,
 } from '../services/api';
+import ArcCanvas from '../components/pipeline/ArcCanvas';
+import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
@@ -359,6 +361,70 @@ function FieldBlock({ label, value }) {
   );
 }
 
+// A compact timeline of the reader map's emotional beats: each beat is a bar
+// positioned along the arc (normalized from `atArcPosition`) with its height
+// set by `intensity` and its color by `kind`. Gives the reader-map step the
+// at-a-glance escalation/pacing view the plain list can't. Beats without a
+// position fall back to even spacing so they still render.
+function ReaderMapBeatTimeline({ readerMap }) {
+  const beats = Array.isArray(readerMap?.beats) ? readerMap.beats : [];
+  if (beats.length === 0) return null;
+
+  const W = 320;
+  const H = 64;
+  const PAD = 4;
+  // Normalize positions: beats use an arbitrary `atArcPosition` scale (0..9999),
+  // so map the observed [min,max] span onto the plot width. When every beat
+  // shares a position (or none have one), fall back to even spacing by index.
+  const positioned = beats.filter((b) => Number.isFinite(b.atArcPosition));
+  const minPos = positioned.length ? Math.min(...positioned.map((b) => b.atArcPosition)) : 0;
+  const maxPos = positioned.length ? Math.max(...positioned.map((b) => b.atArcPosition)) : 0;
+  const span = maxPos - minPos;
+  const xFor = (b, i) => {
+    const usable = W - PAD * 2;
+    if (span > 0 && Number.isFinite(b.atArcPosition)) {
+      return PAD + ((b.atArcPosition - minPos) / span) * usable;
+    }
+    return beats.length === 1 ? W / 2 : PAD + (i / (beats.length - 1)) * usable;
+  };
+
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Beat timeline</div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-16 bg-port-bg border border-port-border rounded"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Reader-map beat timeline — ${beats.length} beats`}
+      >
+        <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="#2a2a2a" strokeWidth="1" />
+        {beats.map((b, i) => {
+          const x = xFor(b, i);
+          const intensity = Number.isFinite(b.intensity) ? Math.max(0, Math.min(1, b.intensity)) : 0.5;
+          // Floor the drawn height so a real beat with intensity 0 still shows a
+          // visible marker instead of a zero-height (invisible) bar.
+          const barH = Math.max(2, (H - PAD * 2) * intensity);
+          const color = getBeatKindColor(b.kind);
+          return (
+            <g key={b.id || i}>
+              <rect x={x - 1.5} y={H - PAD - barH} width="3" height={barH} fill={color} rx="1" />
+              <title>{`${b.kind}${b.intensity != null ? ` ${Math.round(intensity * 100)}%` : ''}${b.note ? ` — ${b.note}` : ''}`}</title>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+        {Object.entries(BEAT_KIND_COLORS).map(([kind, color]) => (
+          <span key={kind} className="inline-flex items-center gap-1 text-[10px] text-gray-500">
+            <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: color }} /> {kind}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReaderMapView({ readerMap }) {
   if (!readerMap) return <p className="text-gray-600 italic text-sm">No reader map yet. Generate one to plan the audience experience.</p>;
   const Section = ({ title, items, render }) => (
@@ -471,7 +537,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
   );
 }
 
-function StepPanel({ session, universe, series, issues, stepId, locked, onChanged }) {
+function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const { start, busy, phase, op } = useStepStream(session.id, stepId);
   const arc = series?.arc || {};
   const isRunning = (which) => busy && op === which;
@@ -567,26 +633,52 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     );
   }
   if (stepId === 'plotArc') {
+    const hasArc = Boolean((arc.logline || arc.summary || '').trim());
     return (
       <div className="space-y-3">
-        <FieldBlock label="Arc logline" value={arc.logline} />
-        <FieldBlock label="Arc summary" value={arc.summary} />
-        <FieldBlock label="Protagonist arc" value={arc.protagonistArc} />
-        <FieldBlock label="Themes" value={(arc.themes || []).join(', ')} />
-        <FieldBlock label="Emotional shape (Vonnegut)" value={arc.shape} />
         <div className="flex items-center gap-2 flex-wrap">
-          {!locked && genButton('Generate plot arc', Boolean((arc.logline || arc.summary || '').trim()))}
+          {!locked && genButton('Generate plot arc', hasArc)}
           {!locked && issuesHaveContent && backfillButton()}
           {series?.id && (
             <Link to={`/pipeline/series/${series.id}`} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-port-accent">
-              <ExternalLink className="w-4 h-4" /> Deep-edit on the Arc Canvas
+              <ExternalLink className="w-4 h-4" /> Open the full Arc Canvas page
             </Link>
           )}
         </div>
-        {issuesHaveContent && (
+        {issuesHaveContent && !hasArc && (
           <p className="text-xs text-gray-500">Started from drafted issues? Backfill extracts the arc from their scripts / prose.</p>
         )}
-        {!locked && (arc.logline || arc.summary) && (
+        {/* Embed the Arc Canvas inline once an arc exists AND the step is
+            unlocked, so the logline / summary / protagonist arc / themes /
+            Vonnegut shape AND the season roadmap are editable in-builder instead
+            of read-only field blocks + a deep-link. The arc step is the right
+            home for the whole-roadmap editor: it owns series.arc. We show the
+            read-only field summary when there's no arc yet (ArcCanvas has
+            nothing to render) OR when the step is LOCKED — ArcCanvas has no
+            read-only mode and could otherwise edit (or internally unlock) a
+            locked arc, bypassing the builder's "Unlock to revise" lock workflow.
+            The deep-link below covers intentional editing of a locked arc. The
+            `@container` wrapper activates ArcCanvas's `@5xl:` two-column layout. */}
+        {hasArc && !locked ? (
+          <div className="@container">
+            <ArcCanvas
+              series={series}
+              issues={issues}
+              onSeriesUpdate={onSeriesUpdate}
+              onIssuesUpdate={onIssuesUpdate}
+              onFlushPending={onFlushPending}
+            />
+          </div>
+        ) : (
+          <>
+            <FieldBlock label="Arc logline" value={arc.logline} />
+            <FieldBlock label="Arc summary" value={arc.summary} />
+            <FieldBlock label="Protagonist arc" value={arc.protagonistArc} />
+            <FieldBlock label="Themes" value={(arc.themes || []).join(', ')} />
+            <FieldBlock label="Emotional shape (Vonnegut)" value={arc.shape} />
+          </>
+        )}
+        {!locked && hasArc && (
           <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />
         )}
       </div>
@@ -595,6 +687,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
   if (stepId === 'readerMap') {
     return (
       <div className="space-y-3">
+        <ReaderMapBeatTimeline readerMap={arc.readerMap} />
         <ReaderMapView readerMap={arc.readerMap} />
         {!locked && genButton('Generate reader map', Boolean(arc.readerMap))}
         {!locked && arc.readerMap && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />}
@@ -878,6 +971,61 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     setLoading(false);
   }, [storyId]);
 
+  // ── Embedded ArcCanvas wiring (plotArc step) ──────────────────────────────
+  // The Arc Canvas edits series.arc + the issue roadmap in place, so it needs
+  // server-confirmed setters. Mirrors PipelineSeries.jsx: a `lastSavedRef`
+  // dirty-check, an `updateSeriesFromServer` that keeps it aligned, and an
+  // issues setter that accepts ArcCanvas's `setState(fn)`-shaped updates.
+  const lastSavedRef = useRef(null);
+  // Capture the server snapshot as the dirty-check baseline, but only on the
+  // FIRST load of each series (keyed on id) — NOT on every `series` change,
+  // which would clobber the baseline on an unrelated refetch and defeat
+  // flushPending's dirty-check (it would always see series === lastSaved).
+  // Re-keying on id also resets the baseline when this mounted detail view
+  // navigates to a different story/series. After capture, the ref only advances
+  // via updateSeriesFromServer (a server-confirmed save).
+  useEffect(() => {
+    if (series && lastSavedRef.current?.id !== series.id) lastSavedRef.current = series;
+  }, [series]);
+
+  const updateSeriesFromServer = useCallback((next) => {
+    setSeries(next);
+    lastSavedRef.current = next;
+  }, []);
+
+  // ArcCanvas mutates issues via a setter-style update (`setState(fn)`-shaped);
+  // plain arrays also work — flatten through Array.isArray to support both.
+  const handleIssuesUpdate = useCallback((update) => {
+    setIssues((prev) => {
+      if (typeof update === 'function') return update(prev);
+      if (Array.isArray(update)) return update;
+      return prev;
+    });
+  }, []);
+
+  // ArcCanvas calls this before a generate/verify so the server works against
+  // the on-screen bible fields. The Story Builder edits those fields on their
+  // own steps (not inside the arc step), so the only divergence to flush here
+  // is whatever ArcCanvas itself set via updateSeriesFromServer — which already
+  // persisted. So flush is a no-op unless a future inline bible edit lands;
+  // kept for API-shape parity with ArcCanvas's contract.
+  const flushPending = useCallback(async () => {
+    if (!series) return false;
+    const saved = lastSavedRef.current || series;
+    const fields = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'universeId'];
+    const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
+      || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
+    if (!dirty) return false;
+    const updated = await updatePipelineSeries(series.id, {
+      name: series.name, logline: series.logline, premise: series.premise,
+      universeId: series.universeId, styleNotes: series.styleNotes,
+      issueCountTarget: series.issueCountTarget, llm: series.llm || { provider: null, model: null },
+    }, { silent: true }).catch(() => null);
+    if (!updated) return false;
+    updateSeriesFromServer(updated);
+    return true;
+  }, [series, updateSeriesFromServer]);
+
   // Load the step manifest first; gate the loading spinner on BOTH it and the
   // session so the detail view never renders with an empty step rail.
   useEffect(() => {
@@ -1026,6 +1174,9 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               key={activeStepId}
               session={session} universe={universe} series={series} issues={issues}
               stepId={activeStepId} locked={stepState.locked} onChanged={reload}
+              onSeriesUpdate={updateSeriesFromServer}
+              onIssuesUpdate={handleIssuesUpdate}
+              onFlushPending={flushPending}
             />
 
             {/* Footer: lock + navigation */}
