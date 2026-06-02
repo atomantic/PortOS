@@ -125,6 +125,10 @@ let _baseHashes = null;       // Map<`${kind}:${id}`, sha256>
 let _loadPromise = null;
 let _baseDirty = false;
 let _flushTail = Promise.resolve();
+// >0 while a `withBaseHashFlushBatch` scope is active. Defers the disk write so
+// an await-separated multi-record push loop (peer:online convergence) collapses
+// N `sync_base_hashes.json` rewrites into one at the batch's terminal flush.
+let _flushBatchDepth = 0;
 
 const baseKey = (kind, id) => `${kind}:${id}`;
 
@@ -169,9 +173,17 @@ export async function deleteSyncBaseHash(kind, id) {
 }
 
 /** Persist the base-hash map if dirty. Serialized so concurrent flushes can't
- *  interleave file writes. Call once after a merge's write loop. */
+ *  interleave file writes. Call once after a merge's write loop.
+ *
+ *  Inside a `withBaseHashFlushBatch` scope the write is deferred: the in-memory
+ *  stamps stay coalesced (`_baseDirty`) and the single disk write fires when the
+ *  outermost batch closes. Callers still get a thenable (`_flushTail`) so any
+ *  `await flushBaseHashes()` resolves immediately rather than blocking inside
+ *  the batch. */
 export function flushBaseHashes() {
-  if (!_baseDirty) return _flushTail;
+  // Defer while inside a batch, and no-op when nothing is dirty — either way the
+  // outstanding `_flushTail` thenable is the right thing to await.
+  if (_flushBatchDepth > 0 || !_baseDirty) return _flushTail;
   _flushTail = _flushTail.then(async () => {
     if (!_baseDirty) return;
     _baseDirty = false;
@@ -183,6 +195,40 @@ export function flushBaseHashes() {
     console.error(`❌ conflictJournal: base-hash flush failed: ${err?.message || err}`);
   });
   return _flushTail;
+}
+
+/**
+ * Run `fn` with base-hash disk writes coalesced into ONE flush at the end.
+ *
+ * The base-hash map already coalesces SYNCHRONOUS bursts (the `_baseDirty` flag
+ * means a run of `setSyncBaseHash` calls before a single `flushBaseHashes` pays
+ * one write). What it can't collapse on its own is an AWAIT-SEPARATED loop that
+ * stamps + flushes per iteration: each flush lands on the previous one's settled
+ * `_flushTail`, so an N-iteration loop rewrites `sync_base_hashes.json` N times.
+ * Wrapping the loop in this scope defers every interior flush; the single
+ * terminal write captures all N stamps. (Caller in the tree today: the
+ * `peer:online` convergence walk `retryPendingPushesForPeer`, which pushes —
+ * and stamps — every subscribed record in sequence.)
+ *
+ * Re-entrant (depth-counted) so nested scopes collapse to the outermost batch,
+ * and the terminal flush runs in `finally` so a thrown/rejected `fn` still
+ * persists whatever stamps landed before it failed. Unlike a `setTimeout`
+ * debounce (tried and reverted — the unref'd timer leaked into `peerSync.test.js`'s
+ * settle-waits and made the suite flaky), this is deterministic: the flush is
+ * tied to the scope boundary, not a wall-clock timer, so tests just `await` it.
+ *
+ * Contract note: stamps performed inside the scope must have settled (the
+ * in-memory `setSyncBaseHash` awaited) before `fn` returns, or the terminal
+ * flush won't see `_baseDirty` for them. The current caller awaits its stamps.
+ */
+export async function withBaseHashFlushBatch(fn) {
+  _flushBatchDepth += 1;
+  try {
+    return await fn();
+  } finally {
+    _flushBatchDepth -= 1;
+    if (_flushBatchDepth === 0) await flushBaseHashes();
+  }
 }
 
 // ---- conflict detection + journaling ----
@@ -383,5 +429,6 @@ export function __resetBaseHashCacheForTests() {
   _loadPromise = null;
   _baseDirty = false;
   _flushTail = Promise.resolve();
+  _flushBatchDepth = 0;
   _store = null;
 }

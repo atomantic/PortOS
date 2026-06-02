@@ -46,7 +46,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
-import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
+import { setSyncBaseHash, contentHashForRecord, flushBaseHashes, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
@@ -1003,9 +1003,14 @@ export async function pushRecordToPeer(sub, options = {}) {
   // shared-state base for the two journaled kinds. This is the symmetric
   // convergence point to the receiver advancing its base in mergeXxxFromSync —
   // it keeps a peer's echo (reverse-subscription push-back) from later looking
-  // like a divergence. Best-effort; never block the push result on it — the
-  // stamp + filesystem flush run fire-and-forget so a slow disk can't delay the
-  // push loop. The `.catch()` keeps the rejection from escaping as unhandled.
+  // like a divergence. Best-effort; never block the push result on a slow DISK
+  // — only the filesystem flush runs fire-and-forget. The in-memory stamps ARE
+  // awaited: `setSyncBaseHash` just mutates the cached map (no disk I/O), so
+  // awaiting it costs nothing once the map is loaded, and it guarantees
+  // `_baseDirty` is set before this push returns. That matters under
+  // `withBaseHashFlushBatch` — the batch's terminal flush only writes when a
+  // stamp landed, so a stamp still pending when the batch closed would be lost
+  // until the next flush. The `.catch()` keeps a rejection from escaping.
   if (PEER_SUBSCRIBABLE_KINDS.includes(sub.recordKind) && payload.record) {
     // For mediaCollection, contentHashForRecord hashes only the scalar subset
     // (items are union-merged on the receiver, so the post-push collections are
@@ -1025,9 +1030,11 @@ export async function pushRecordToPeer(sub, options = {}) {
         if (issue?.id) stamps.push(setSyncBaseHash('issue', issue.id, contentHashForRecord('issue', issue)));
       }
     }
-    Promise.all(stamps)
-      .then(() => flushBaseHashes())
-      .catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
+    await Promise.all(stamps).catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
+    // Non-blocking disk write. Inside a flush batch this is a no-op (the batch's
+    // terminal flush coalesces every record's stamps into one rewrite); outside
+    // a batch it fires async exactly as before.
+    flushBaseHashes().catch((err) => console.log(`⚠️ peerSync: base-hash flush after push failed: ${err?.message || err}`));
   }
   return {
     pushed: true,
@@ -2056,16 +2063,22 @@ export async function retryPendingPushesForPeer(peerId) {
   // the network call for any sub whose content is unchanged — we still
   // "walked" the sub but never pushed it.
   let pushed = 0;
-  for (const sub of subs) {
-    // peer:online fired — re-probe schema-blocked subs immediately (peer
-    // may have upgraded since the last 409). Edit-triggered pushes still
-    // respect the cooldown.
-    const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
-      console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
-      return null;
-    });
-    if (result?.pushed) pushed += 1;
-  }
+  // Coalesce the per-push base-hash flushes: this loop pushes every subscribed
+  // record in sequence, and each push would otherwise rewrite
+  // sync_base_hashes.json once. The flush batch defers them into a single
+  // terminal write covering all N records' stamps.
+  await withBaseHashFlushBatch(async () => {
+    for (const sub of subs) {
+      // peer:online fired — re-probe schema-blocked subs immediately (peer
+      // may have upgraded since the last 409). Edit-triggered pushes still
+      // respect the cooldown.
+      const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
+        console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
+        return null;
+      });
+      if (result?.pushed) pushed += 1;
+    }
+  });
   return { walked: subs.length, pushed };
 }
 
