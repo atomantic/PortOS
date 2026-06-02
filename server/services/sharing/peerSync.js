@@ -1502,11 +1502,15 @@ export async function applyIncomingPush(payload) {
 
   // Merge into local state via the existing LWW path. The merge functions
   // honor `deleted: true` + bump `updatedAt`, so this is the single
-  // tombstone-aware reconciliation point.
+  // tombstone-aware reconciliation point. Attribute any conflict journaled by
+  // the merge to THIS push's origin peer so the Conflicts tab can show which
+  // peer collided (without `source`, the merge fns fall back to
+  // `{ via:'sync', peerId:null }` and the attribution is lost).
+  const source = { via: 'peer-push', peerId: sourceInstanceId };
   if (kind === 'universe') {
-    await mergeUniversesFromSync([record]);
+    await mergeUniversesFromSync([record], { source });
   } else if (kind === 'series') {
-    await mergeSeriesFromSync([record]);
+    await mergeSeriesFromSync([record], { source });
     // Bundled issues: skip the entire batch if the LOCAL series is
     // ephemeral. mergeSeriesFromSync already refused the parent record on
     // its own, but child issue merges are a separate code path —
@@ -1514,10 +1518,10 @@ export async function applyIncomingPush(payload) {
     // the parent is marked ephemeral, so without this gate a stale reverse
     // subscription could overwrite the private fork's issue stages.
     if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
-      await mergeIssuesFromSync(issues);
+      await mergeIssuesFromSync(issues, { source });
     }
   } else if (kind === 'mediaCollection') {
-    await mergeMediaCollectionsFromSync([record]);
+    await mergeMediaCollectionsFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -1540,7 +1544,7 @@ export async function applyIncomingPush(payload) {
   //     explicitly opted out of sync for this record, so peer-pushed
   //     collection mutations must not land.
   if (!localEphemeral && record.deleted !== true && isPlainObject(linkedCollection)) {
-    await mergeMediaCollectionsFromSync([linkedCollection]).catch((err) => {
+    await mergeMediaCollectionsFromSync([linkedCollection], { source }).catch((err) => {
       console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
     });
   }

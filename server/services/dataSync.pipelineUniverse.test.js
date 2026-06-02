@@ -22,6 +22,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 afterAll(cleanup);
 
 const dataSync = await import('./dataSync.js');
+const conflictJournal = await import('../lib/conflictJournal.js');
 const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 
 const SERIES_DIR = join(tempRoot, 'pipeline-series');
@@ -252,6 +253,61 @@ describe('dataSync — universe category', () => {
     expect(persisted.runs).toHaveLength(1);
     expect(persisted.runs[0].id).toBe('r1');
     expect(persisted.runs[0].universeId).toBe('u-local');
+  });
+});
+
+describe('dataSync — conflict-journal source attribution (snapshot path)', () => {
+  // The snapshot apply path (syncOrchestrator → dataSync.applyRemote → the
+  // service merge fns) must stamp journaled conflicts with `via: 'snapshot'`
+  // and the source peer's id. Before [conflict-source-attribution] the param
+  // was dropped, so the Conflicts tab showed `via: sync (peerId: null)` and
+  // couldn't say which peer collided.
+  const journalDir = () => join(tempRoot, 'conflict-journal');
+  const readJournalEntries = () => {
+    if (!existsSync(journalDir())) return [];
+    return readdirSync(journalDir(), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => readJSON(join(journalDir(), e.name, 'index.json')));
+  };
+  // Seed local + a divergent base so the incoming remote is a true 3-way
+  // conflict (local ≠ base, remote ≠ base, remote ≠ local) and the merge
+  // journals before overwriting. Remote `updatedAt` is newer so it wins LWW.
+  async function seedConflict(id) {
+    writeUniverseState({
+      universes: [{ id, name: 'Local Edit', updatedAt: '2026-05-17T10:00:00Z' }],
+    });
+    await conflictJournal.setSyncBaseHash('universe', id, `base-hash-${id}-distinct`);
+    await conflictJournal.flushBaseHashes();
+  }
+
+  beforeEach(() => {
+    // The base-hash cache is module-level; reset it so the wiped temp root
+    // doesn't bleed seeds across tests.
+    conflictJournal.__resetBaseHashCacheForTests();
+  });
+
+  it('records via:snapshot + the source peerId when the orchestrator passes one', async () => {
+    await seedConflict('u-attr');
+    const result = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-attr', name: 'Remote Edit', updatedAt: '2026-05-18T10:00:00Z' }],
+    }, { peerId: 'peer-zeta' });
+    expect(result.applied).toBe(true);
+
+    const entries = readJournalEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].recordKind).toBe('universe');
+    expect(entries[0].recordId).toBe('u-attr');
+    expect(entries[0].source).toEqual({ via: 'snapshot', peerId: 'peer-zeta' });
+  });
+
+  it('defaults peerId to null (not undefined) when the caller omits it — manual REST apply', async () => {
+    await seedConflict('u-anon');
+    await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-anon', name: 'Remote Edit', updatedAt: '2026-05-18T10:00:00Z' }],
+    });
+    const entries = readJournalEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].source).toEqual({ via: 'snapshot', peerId: null });
   });
 });
 

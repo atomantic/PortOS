@@ -410,6 +410,9 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // can't sync universes" and the user knows what to do.
   const result = await dataSync.applyRemote(category, snapshot.data, {
     portosMeta: snapshot.portosMeta,
+    // Attribute any journaled conflict to the peer this snapshot came from so
+    // the Conflicts tab shows `via: snapshot (<peerId>)` instead of peerId:null.
+    peerId,
   });
   if (result.blockedBySchema) {
     await recordPeerSchemaGap(peerId, category, result.blockedBySchema)

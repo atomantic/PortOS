@@ -1776,9 +1776,10 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
-      expect(mergeUniversesFromSync).toHaveBeenCalledWith([
-        expect.objectContaining({ id: 'u1' }),
-      ]);
+      expect(mergeUniversesFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'u1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
     });
 
     it('routes a bundled linkedCollection through mergeMediaCollectionsFromSync', async () => {
@@ -1794,7 +1795,10 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
-      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([linkedCollection]);
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith(
+        [linkedCollection],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
     });
 
     it('skips mergeMediaCollectionsFromSync when no linkedCollection is bundled', async () => {
@@ -1848,10 +1852,14 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
-      expect(mergeSeriesFromSync).toHaveBeenCalled();
-      expect(mergeIssuesFromSync).toHaveBeenCalledWith([
-        expect.objectContaining({ id: 'i1' }),
-      ]);
+      expect(mergeSeriesFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 's1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+      expect(mergeIssuesFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'i1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
     });
 
     it('reports missing assets in the response', async () => {
@@ -2213,9 +2221,10 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 5 } },
         });
-        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
-          expect.objectContaining({ id: 'u1' }),
-        ]);
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith(
+          [expect.objectContaining({ id: 'u1' })],
+          { source: { via: 'peer-push', peerId: 'peer-a' } },
+        );
       });
 
       it('passes through when sender is BEHIND local (sanitizer handles the backfill)', async () => {
@@ -2228,9 +2237,10 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 4 } },
         });
-        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
-          expect.objectContaining({ id: 'u1' }),
-        ]);
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith(
+          [expect.objectContaining({ id: 'u1' })],
+          { source: { via: 'peer-push', peerId: 'peer-a' } },
+        );
       });
 
       it('passes through legacy peers that send NO portosMeta at all', async () => {
@@ -2260,9 +2270,10 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, mediaCollections: 2 } },
         });
-        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
-          expect.objectContaining({ id: 'u1' }),
-        ]);
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith(
+          [expect.objectContaining({ id: 'u1' })],
+          { source: { via: 'peer-push', peerId: 'peer-a' } },
+        );
       });
 
       it('does NOT reject a series push with NO bundled issues when the sender is ahead on pipelineIssues only', async () => {
@@ -2324,9 +2335,10 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
         });
-        expect(mergeUniversesFromSync).toHaveBeenCalledWith([
-          expect.objectContaining({ id: 'u1', deleted: true }),
-        ]);
+        expect(mergeUniversesFromSync).toHaveBeenCalledWith(
+          [expect.objectContaining({ id: 'u1', deleted: true })],
+          { source: { via: 'peer-push', peerId: 'peer-a' } },
+        );
       });
 
       it('DOES reject a deleted-series push that bundles a LIVE issue when the sender is ahead on pipelineIssues', async () => {
@@ -2361,9 +2373,10 @@ describe('peerSync', () => {
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 9 } },
         });
         expect(mergeSeriesFromSync).toHaveBeenCalled();
-        expect(mergeIssuesFromSync).toHaveBeenCalledWith([
-          expect.objectContaining({ id: 'i1', deleted: true }),
-        ]);
+        expect(mergeIssuesFromSync).toHaveBeenCalledWith(
+          [expect.objectContaining({ id: 'i1', deleted: true })],
+          { source: { via: 'peer-push', peerId: 'peer-a' } },
+        );
       });
     });
 
@@ -2693,9 +2706,10 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-abc',
       });
 
-      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
-        expect.objectContaining({ id: 'col-x', name: 'Synced' }),
-      ]);
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'col-x', name: 'Synced' })],
+        { source: { via: 'peer-push', peerId: 'peer-abc' } },
+      );
 
       // Confirm the record landed on disk via the real listCollections.
       const all = await real.listCollections();
@@ -2711,9 +2725,10 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-abc',
       });
-      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([
-        expect.objectContaining({ id: 'col-y' }),
-      ]);
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'col-y' })],
+        { source: { via: 'peer-push', peerId: 'peer-abc' } },
+      );
     });
 
     it('auto-creates a reverse subscription back to the sender for a syncable local collection', async () => {
