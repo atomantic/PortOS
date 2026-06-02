@@ -13,11 +13,12 @@
  * reload and shows in both the Universe Builder and the Story Builder
  * aesthetic step.
  */
-import { useState, useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { Sparkles } from 'lucide-react';
-import { generateImage, getSettings, updateUniverse } from '../../services/api';
+import { updateUniverse } from '../../services/api';
 import { universeStylePreset } from '../../lib/universeStylePreset';
-import { pipelineImageCfgToRenderOpts, readPipelineImageSettings, PIPELINE_IMAGE_DEFAULTS } from '../../lib/pipelineImageDefaults';
+import useImageRenderSettings from '../../hooks/useImageRenderSettings';
+import useSingleImageRender from '../../hooks/useSingleImageRender';
 import EntryThumbSlot from './EntryThumbSlot';
 import toast from '../ui/Toast';
 
@@ -57,20 +58,10 @@ export const shouldPersistProbe = ({ styleDirty, capturedKey, currentKey }) =>
   !styleDirty && capturedKey !== null && currentKey === capturedKey;
 
 export default function StyleProbeImage({ universe, onUniverseChange, canRender = true, styleDirty = false, onPreview = null, onRenderComplete = null }) {
-  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
-  const [jobId, setJobId] = useState(null);
-  // MediaJobThumb's onFilename effect can fire more than once — process each
-  // completed filename's persist exactly once.
-  const processedRef = useRef(new Set());
+  const { imageCfg } = useImageRenderSettings();
   // The style key the in-flight probe was queued against, captured at render
   // time so the async completion can detect mid-render style drift.
   const probeStyleKeyRef = useRef(null);
-
-  useEffect(() => {
-    getSettings({ silent: true })
-      .then((s) => setImageCfg(readPipelineImageSettings(s)))
-      .catch(() => {});
-  }, []);
 
   const styleReady = hasStyleForProbe(universe);
   // The probe prompt is built from the in-memory `influences`, but `onComplete`
@@ -81,25 +72,8 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
   // draft). Block rendering until the style is saved.
   const canProbe = canRender && !styleDirty;
 
-  const render = async () => {
-    if (styleDirty) { toast.error('Save your style changes before probing the base style'); return; }
-    if (!styleReady) { toast.error('Add embrace influences before probing the base style'); return; }
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
-    const probe = buildStyleProbePrompt(universe);
-    const queued = await generateImage(
-      { ...baseOpts, prompt: probe.prompt, negativePrompt: probe.negativePrompt || undefined },
-      { silent: true },
-    ).catch((err) => { toast.error(err?.message || 'Style render failed'); return null; });
-    if (!queued?.jobId) return;
-    probeStyleKeyRef.current = JSON.stringify(probe);
-    setJobId(queued.jobId);
-  };
-
   const onComplete = async (filename) => {
-    setJobId(null);
-    if (!filename || !universe?.id) return;
-    if (processedRef.current.has(filename)) return; // multi-fire guard
-    processedRef.current.add(filename);
+    if (!universe?.id) return;
     // The probe job is async; only persist when the draft still equals the saved
     // record AND the live style matches what the probe was queued against — else
     // the image would pin to a record built from different influences (the very
@@ -124,6 +98,22 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     }
   };
 
+  const { jobId, render: queueRender, handleComplete } = useSingleImageRender({
+    buildPrompt: () => buildStyleProbePrompt(universe),
+    onComplete,
+    onError: (err) => toast.error(err?.message || 'Style render failed'),
+  });
+
+  const render = async () => {
+    if (styleDirty) { toast.error('Save your style changes before probing the base style'); return; }
+    if (!styleReady) { toast.error('Add embrace influences before probing the base style'); return; }
+    // Capture the style key the moment the job is queued so the async completion
+    // can detect mid-render style drift.
+    const probe = buildStyleProbePrompt(universe);
+    const queuedJobId = await queueRender(imageCfg);
+    if (queuedJobId) probeStyleKeyRef.current = JSON.stringify(probe);
+  };
+
   const hasExistingImage = Array.isArray(universe?.styleImageRefs) && universe.styleImageRefs.length > 0;
   const regenerateEnabled = canProbe && Boolean(universe?.id) && styleReady && !jobId;
 
@@ -133,7 +123,7 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
         imageRefs={universe?.styleImageRefs}
         inFlightJobId={jobId}
         onRender={render}
-        onComplete={onComplete}
+        onComplete={handleComplete}
         onPreview={onPreview}
         canRender={canProbe && Boolean(universe?.id) && styleReady}
         alt="Base style"

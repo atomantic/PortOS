@@ -25,7 +25,7 @@ grep -i "what you want to do" client/src/lib/README.md
 |---|---|
 | `canonPrompt.js` | Mirror of `server/lib/canonPrompt.js`. SHORT/RICH/PREVIEW spec + `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` / `descriptorForCanonEntry`. |
 | `scenePrompt.js` | Mirror of `server/lib/scenePrompt.js`. Scene-prompt composer + bible matchers. |
-| `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. |
+| `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. `composeCanonStyledPrompt` builds the `"<name>: <description>"` + universe-preset render the canon section and characters step share. |
 | `cleanPlatePrompt.js` | Clean-plate prompt builder for setting canon entries (Cluster A — A4). |
 | `seasonStructure.js` | Mirror of `server/lib/seasonStructure.js`. |
 | `sheetPointers.js` | Mirror of the character-sheet pointer helpers from `server/lib/storyBible.js`. `LEGACY_SHEET_VARIANT_ID` + `readSheetPointer` / `listSheetPointers` / `applySheetPointer` for traversing both the legacy `referenceSheetImageRef` field and the `referenceSheets` map. |

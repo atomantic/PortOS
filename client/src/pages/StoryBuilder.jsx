@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { filterSelectableModels } from '../utils/providers';
-import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { universeStylePreset } from '../lib/universeStylePreset';
+import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
-import { pipelineImageCfgToRenderOpts, readPipelineImageSettings, PIPELINE_IMAGE_DEFAULTS } from '../lib/pipelineImageDefaults';
+import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
+import useImageRenderSettings from '../hooks/useImageRenderSettings';
+import useSingleImageRender from '../hooks/useSingleImageRender';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import StyleProbeImage from '../components/universe/StyleProbeImage';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
@@ -21,7 +23,7 @@ import {
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
-  getProviders, getSettings, generateImage, updateUniverse,
+  getProviders, updateUniverse,
 } from '../services/api';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
@@ -50,7 +52,13 @@ const CONTENT_TYPE_LABELS = {
 // Builder operation (idea expand, aesthetic, arc, reader map, character refine,
 // and the importer's analyze) — see the session.llm fallback in the conductor.
 // `value` is `{ provider, model }`; empty strings mean "use the stage default".
-function ProviderModelPicker({ value, onChange, id = 'stb' }) {
+//
+// The two selects are rendered by the shared `ProviderModelSelector` so the
+// markup matches every other provider/model picker. The value is parent-
+// controlled (session.llm / the import-panel state), so this stays controlled
+// rather than using the self-owning `useProviderModels` hook — it just fetches
+// the enabled provider list to feed the selector's options.
+function ProviderModelPicker({ value, onChange }) {
   const [providers, setProviders] = useState([]);
   useEffect(() => {
     let cancelled = false;
@@ -59,33 +67,24 @@ function ProviderModelPicker({ value, onChange, id = 'stb' }) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
-  const models = useMemo(() => {
+  const availableModels = useMemo(() => {
     const p = providers.find((x) => x.id === value?.provider);
     return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   }, [providers, value?.provider]);
 
   return (
-    <div className="flex items-center gap-2">
-      <label htmlFor={`${id}-provider`} className="text-xs text-gray-500 whitespace-nowrap">AI</label>
-      <select
-        id={`${id}-provider`} value={value?.provider || ''}
-        onChange={(e) => onChange({ provider: e.target.value, model: '' })}
-        className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs max-w-[10rem]"
-      >
-        <option value="">Default provider</option>
-        {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-      </select>
-      {models.length > 0 && (
-        <select
-          id={`${id}-model`} aria-label="Model" value={value?.model || ''}
-          onChange={(e) => onChange({ provider: value?.provider || '', model: e.target.value })}
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs max-w-[12rem]"
-        >
-          <option value="">Default model</option>
-          {models.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-      )}
-    </div>
+    <ProviderModelSelector
+      providers={providers}
+      selectedProviderId={value?.provider || ''}
+      selectedModel={value?.model || ''}
+      availableModels={availableModels}
+      onProviderChange={(provider) => onChange({ provider, model: '' })}
+      onModelChange={(model) => onChange({ provider: value?.provider || '', model })}
+      label="AI"
+      compact
+      emptyProviderOption="Default provider"
+      emptyModelOption="Default model"
+    />
   );
 }
 
@@ -307,7 +306,7 @@ function ImportPanel({ onCreated }) {
       </p>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-xs text-gray-500">Provider/model used for this import and every later step:</span>
-        <ProviderModelPicker value={llm} onChange={setLlm} id="imp" />
+        <ProviderModelPicker value={llm} onChange={setLlm} />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -762,53 +761,22 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
 
 // Characters step — review the cast and generate a styled preview image per
 // character so the world style + character style can be eyeballed together.
-// Reuses the Universe Builder's exact render path: composeStyledPrompt +
-// universeStylePreset → generateImage → EntryThumbSlot (spinner → image), and
-// persists the resulting filename onto the universe canon entry's imageRefs.
+// Reuses the Universe Builder's exact render path via the shared
+// `composeCanonStyledPrompt` helper + `useSingleImageRender` jobId lifecycle →
+// EntryThumbSlot (spinner → image), and persists the resulting filename onto
+// the universe canon entry's imageRefs.
 function StepCharacters({ session, universe, locked, onChanged }) {
   const cast = universe?.characters || [];
-  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
-  const [renderingJobs, setRenderingJobs] = useState({});
+  const { imageCfg } = useImageRenderSettings();
   const [refiningId, setRefiningId] = useState(null);
   const { start: startRefine, busy: refineBusy, phase: refinePhase } = useStepStream(session.id, 'characters');
-  // MediaJobThumb's onFilename effect can fire more than once (StrictMode +
-  // the unstable per-render onComplete arrow); guard so each (char, filename)
-  // append runs exactly once.
-  const processedRef = useRef(new Set());
-
-  useEffect(() => {
-    getSettings({ silent: true })
-      .then((s) => setImageCfg(readPipelineImageSettings(s)))
-      .catch(() => {});
-  }, []);
-
-  const renderChar = async (c) => {
-    const description = descriptorForCanonEntry('characters', c);
-    if (!description.trim()) { toast.error(`Add a description for ${c.name} before generating a preview`); return; }
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
-    const styled = composeStyledPrompt(
-      `${c.name}: ${description}`,
-      baseOpts.negativePrompt || '',
-      universe ? universeStylePreset(universe) : null,
-    );
-    const queued = await generateImage(
-      { ...baseOpts, prompt: styled.prompt, negativePrompt: styled.negativePrompt || undefined },
-      { silent: true },
-    ).catch((err) => { toast.error(err?.message || 'Render failed'); return null; });
-    if (!queued?.jobId) return;
-    setRenderingJobs((p) => ({ ...p, [c.id]: queued.jobId }));
-  };
 
   // Section-local renders don't carry a universeRun tag, so the server's
   // imageRef append hook never fires — persist the filename ourselves. Refetch
   // the freshest universe before appending so a sibling character's just-
   // persisted imageRef isn't clobbered by a stale full-array PATCH.
-  const onCharRendered = async (charId, filename) => {
-    setRenderingJobs((p) => { if (!p[charId]) return p; const n = { ...p }; delete n[charId]; return n; });
-    if (!filename || !universe?.id) return;
-    const key = `${charId}:${filename}`;
-    if (processedRef.current.has(key)) return; // multi-fire guard
-    processedRef.current.add(key);
+  const onCharRendered = async (filename, charId) => {
+    if (!universe?.id) return;
     const fresh = await getUniverse(universe.id, { silent: true }).catch(() => null);
     const chars = (fresh?.characters) || universe.characters || [];
     const list = chars.map((e) => (
@@ -819,6 +787,25 @@ function StepCharacters({ session, universe, locked, onChanged }) {
     await updateUniverse(universe.id, { characters: list }, { silent: true }).catch(() => {});
     onChanged();
   };
+
+  // One render per character, keyed by char id. `buildPrompt(charId)` composes
+  // the universe-styled prompt for that character; a blank description aborts
+  // the render (the hook returns null) after toasting why. Reuses the canon
+  // styled-render routine the Universe Builder's canon section renders through.
+  const { renderingJobs, render: queueCharRender, handleComplete: onCharComplete } = useSingleImageRender({
+    buildPrompt: (charId) => {
+      const c = cast.find((x) => x.id === charId);
+      if (!c) return null;
+      const description = descriptorForCanonEntry('characters', c);
+      if (!description.trim()) { toast.error(`Add a description for ${c.name} before generating a preview`); return null; }
+      const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+      return composeCanonStyledPrompt({ name: c.name, description, universe, baseNegative: baseOpts.negativePrompt });
+    },
+    onComplete: onCharRendered,
+    onError: (err) => toast.error(err?.message || 'Render failed'),
+  });
+
+  const renderChar = (c) => queueCharRender(imageCfg, c.id);
 
   const refineChar = (entryId) => {
     if (refineBusy) return;
@@ -849,7 +836,7 @@ function StepCharacters({ session, universe, locked, onChanged }) {
             imageRefs={c.imageRefs}
             inFlightJobId={renderingJobs[c.id] || null}
             onRender={() => renderChar(c)}
-            onComplete={(fn) => onCharRendered(c.id, fn)}
+            onComplete={(fn) => onCharComplete(fn, c.id)}
             canRender={!locked && Boolean(universe?.id)}
             alt={c.name}
           />
@@ -1121,7 +1108,6 @@ function StoryBuilderDetail({ storyId, stepParam }) {
           <ProviderModelPicker
             value={{ provider: session.llm?.provider || '', model: session.llm?.model || '' }}
             onChange={saveLlm}
-            id="stb-detail"
           />
         </header>
 

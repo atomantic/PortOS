@@ -13,6 +13,8 @@ export { default as useClickOutside } from './useClickOutside.js';
 export { default as useContainerWidth } from './useContainerWidth.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
+export { default as useImageRenderSettings } from './useImageRenderSettings.js';
+export { default as useSingleImageRender } from './useSingleImageRender.js';
 export { default as useMediaPreviewActions } from './useMediaPreviewActions.js';
 export { default as useKeyboardControls } from './useKeyboardControls.js';
 export { default as useMediaJobProgress } from './useMediaJobProgress.js';
