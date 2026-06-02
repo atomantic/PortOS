@@ -256,6 +256,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "story-builder-arc-refine": {
+      "name": "Story Builder — Plot Arc Refine",
+      "description": "Refine an existing plot arc's narrative fields (logline, summary, protagonist arc, themes) against free-text feedback, returning the full revised arc plus a changes list and rationale (the AI-feedback affordance for the Story Builder plot-arc step). Does not re-plan the season breakdown.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-arc-overview": {
       "name": "Pipeline — Series Arc Overview",
       "description": "Plan the top-level multi-season story spine for a series from its bible: a series-level logline, summary, themes, protagonist arc, and a 2–5 season breakdown with per-season loglines, ending hooks, and episode-count targets. Runs at `heavy` tier — most expensive single call in the pipeline.",

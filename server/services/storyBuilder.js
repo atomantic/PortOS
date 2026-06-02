@@ -37,7 +37,7 @@ import {
   createSeries, getSeries, updateSeries, setArcFieldLock,
 } from './pipeline/series.js';
 import {
-  generateArcOverview, generateArcFromSource, generateReaderMap, refineReaderMap, commitSeasonsWithRemap,
+  generateArcOverview, generateArcFromSource, generateReaderMap, refineReaderMap, refineArc, commitSeasonsWithRemap, mergeArcWithLocks,
   collectIssueSourceText, generateSeasonEpisodes, commitEpisodesToIssues,
   ERR_VALIDATION as ARC_ERR_VALIDATION,
 } from './pipeline/arcPlanner.js';
@@ -668,6 +668,29 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
       ...(refined.influences ? { influences: refined.influences } : {}),
     });
     return { result: updated, changes: refined.changes || [], rationale: refined.rationale || '' };
+  }
+  if (stepId === 'plotArc') {
+    if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
+    emit('Refining the plot arc…', 'generate');
+    const { arc, changes, rationale, runId } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
+    emit('Saving…', 'persist');
+    // Persist arc-ONLY (never the season breakdown), so we deliberately do NOT
+    // route through commitSeasonsWithRemap — passing a stale season snapshot as
+    // the "proposed" set there could mis-remap/orphan a season edited during the
+    // LLM call. Re-read the latest series, apply per-field arc locks via
+    // mergeArcWithLocks (the same guard commitSeasonsWithRemap uses), and write
+    // only `arc` — seasons are untouched.
+    const latest = await getSeries(session.seriesId);
+    // Re-check the whole-arc lock against the LATEST series, not just the
+    // pre-LLM snapshot refineArc saw — commitSeasonsWithRemap does the same, and
+    // dropping that re-check (this path bypasses it) would let a refine land if
+    // the arc was locked while the LLM call was in flight.
+    if (latest.locked?.arc === true) {
+      throw makeErr('Arc is locked — unlock it on the Arc Canvas before refining', ARC_ERR_VALIDATION);
+    }
+    const mergedArc = mergeArcWithLocks(latest.arc, arc, latest.locked?.arcFields);
+    const updated = await updateSeries(session.seriesId, { arc: mergedArc });
+    return { result: updated, changes, rationale, runId };
   }
   if (stepId === 'readerMap') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);

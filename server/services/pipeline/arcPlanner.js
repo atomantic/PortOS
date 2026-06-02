@@ -29,6 +29,7 @@ import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEven
 import { getSeason } from './seasons.js';
 import {
   sanitizeArc,
+  cleanThemes,
   sanitizeSeasonList,
   sanitizeSeason,
   buildSeason,
@@ -39,7 +40,7 @@ import {
   renderArcShapeGuidance,
   renderArcShapePositionSummary,
 } from '../../lib/storyArc.js';
-import { runPromptRefineRaw } from './refineHelpers.js';
+import { runPromptRefineRaw, trimChanges } from './refineHelpers.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -936,10 +937,77 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
   if (!safeReaderMap) {
     throw makeErr('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
   }
-  const changes = Array.isArray(content.changes)
-    ? content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 12)
-    : [];
-  return { readerMap: safeReaderMap, changes, rationale, runId, providerId, model };
+  return { readerMap: safeReaderMap, changes: trimChanges(content.changes), rationale, runId, providerId, model };
+}
+
+/**
+ * Refine an existing plot arc's NARRATIVE fields (logline / summary /
+ * protagonist arc / themes) against free-text feedback — the AI-feedback
+ * affordance the arc step lacked (it only had full regenerate). Deliberately
+ * does NOT re-plan seasons or change the Vonnegut shape: the refine prompt
+ * authors only the narrative fields, and `shape`/`readerMap` are carried over
+ * from the current arc. Returns the merged arc plus `changes` + `rationale`.
+ *
+ * Honors the absent-vs-intentionally-empty rule: a field the LLM omits or
+ * returns empty falls back to the current value (refine PRESERVES; it must
+ * never null out an arc the user already has). The same `locked.arc` guard the
+ * arc-overview regenerator uses applies.
+ */
+export async function refineArc(seriesId, feedback, options = {}) {
+  const series = await getSeries(seriesId);
+  if (series.locked?.arc === true) {
+    throw makeErr('Arc is locked — unlock it on the Arc Canvas before refining', ERR_VALIDATION);
+  }
+  const arc = series.arc || {};
+  const { content, rationale, runId, providerId, model } = await runPromptRefineRaw({
+    templateName: 'story-builder-arc-refine',
+    variables: {
+      currentLogline: arc.logline || '',
+      currentSummary: arc.summary || '',
+      currentProtagonistArc: arc.protagonistArc || '',
+      currentThemesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
+      shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+      series: { name: series.name, premise: series.premise },
+      feedback: typeof feedback === 'string' ? feedback.trim().slice(0, 4000) : '',
+    },
+    options,
+    source: 'story-builder-arc-refine',
+    logTag: `Story Builder arc refine series=${seriesId.slice(0, 8)}`,
+  });
+  // Merge the refined narrative fields over the current arc, preserving any the
+  // LLM omitted (absent) or returned empty (a refine should never blank a field
+  // the user already had). `shape`, `readerMap`, and status pass through from
+  // the current arc — this pass is narrative-only. sanitizeArc trims/cleans the
+  // fields (incl. themes) on the way in, so pass raw values and only choose
+  // between the refined value and the current one here.
+  const refinedStr = (next, current) => {
+    const trimmed = typeof next === 'string' ? next.trim() : '';
+    return trimmed || current || '';
+  };
+  // Clean the candidate themes BEFORE deciding to keep them: an LLM array of
+  // only blanks/nulls (`['  ']`, `[null]`) is non-empty but sanitizes to [],
+  // which would wipe the existing themes. Fall back to current when the cleaned
+  // candidate is empty (preserve, per the absent-vs-empty rule).
+  const cleanedCandidateThemes = cleanThemes(content.themes);
+  const refinedThemes = cleanedCandidateThemes.length > 0
+    ? cleanedCandidateThemes
+    : (arc.themes || []);
+  const refinedArc = sanitizeArc({
+    logline: refinedStr(content.logline, arc.logline),
+    summary: refinedStr(content.summary, arc.summary),
+    protagonistArc: refinedStr(content.protagonistArc, arc.protagonistArc),
+    themes: refinedThemes,
+    shape: arc.shape ?? null,
+    readerMap: arc.readerMap ?? null,
+    status: 'draft',
+  });
+  // sanitizeArc returns null only when every identifying field is empty — which,
+  // because every field above falls back to the current arc, means the current
+  // arc was ALSO empty and the LLM added nothing. Nothing to preserve, so error.
+  if (!refinedArc) {
+    throw makeErr('LLM returned an empty arc and there is none to preserve', ERR_VALIDATION);
+  }
+  return { arc: refinedArc, changes: trimChanges(content.changes), rationale, runId, providerId, model };
 }
 
 /**

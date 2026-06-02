@@ -1536,6 +1536,88 @@ describe('arcPlanner — refineReaderMap', () => {
   });
 });
 
+describe('arcPlanner — refineArc', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    stageRunnerSpy = undefined;
+  });
+
+  it('returns the revised arc narrative fields plus changes and rationale', async () => {
+    const s = await setupSeries({
+      arc: { logline: 'old logline', summary: 'old summary', protagonistArc: 'old arc', themes: ['loss'], shape: 'man-in-hole' },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        logline: 'sharper logline',
+        summary: 'sharper summary',
+        protagonistArc: 'sharper protagonist arc',
+        themes: ['loss', 'redemption'],
+        changes: ['sharpened the logline'],
+        rationale: 'tightened the spine',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.refineArc(s.id, 'make the logline sharper');
+    expect(stageRunnerSpy).toHaveBeenCalledWith('story-builder-arc-refine', expect.any(Object), expect.objectContaining({ returnsJson: true }));
+    expect(out.arc.logline).toBe('sharper logline');
+    expect(out.arc.summary).toBe('sharper summary');
+    expect(out.arc.themes).toEqual(['loss', 'redemption']);
+    // shape is narrative-only refine → carried over unchanged.
+    expect(out.arc.shape).toBe('man-in-hole');
+    expect(out.changes).toEqual(['sharpened the logline']);
+    expect(out.rationale).toBe('tightened the spine');
+  });
+
+  it('preserves the picked Vonnegut shape and any reader map (narrative-only refine)', async () => {
+    const s = await setupSeries({
+      arc: {
+        logline: 'L', summary: 'S', shape: 'man-in-hole',
+        readerMap: { hooks: [{ label: 'keep me' }], payoffs: [], beats: [], cliffhangers: [], status: 'draft' },
+      },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'L2', summary: 'S2', changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak');
+    expect(out.arc.shape).toBe('man-in-hole');
+    expect(out.arc.readerMap?.hooks?.[0]?.label).toBe('keep me');
+  });
+
+  it('preserves a field the LLM returns empty (refine never blanks existing content)', async () => {
+    const s = await setupSeries({ arc: { logline: 'keep logline', summary: 'keep summary', protagonistArc: 'keep arc' } });
+    // LLM rewrites the summary but blanks logline + omits protagonistArc — both
+    // must fall back to the current values (absent-vs-intentionally-empty rule).
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: '', summary: 'new summary', changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak the summary');
+    expect(out.arc.logline).toBe('keep logline');
+    expect(out.arc.summary).toBe('new summary');
+    expect(out.arc.protagonistArc).toBe('keep arc');
+  });
+
+  it('preserves existing themes when the LLM returns a non-empty but all-blank themes array', async () => {
+    // `['  ', null]` is non-empty so a naive length check would accept it, then
+    // sanitizeArc cleans it to [] and wipes the user's themes. Must fall back.
+    const s = await setupSeries({ arc: { logline: 'L', summary: 'S', themes: ['betrayal', 'hope'] } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'L2', summary: 'S2', themes: ['   ', null], changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak');
+    expect(out.arc.themes).toEqual(['betrayal', 'hope']);
+  });
+
+  it('throws when the arc is locked', async () => {
+    const s = await setupSeries({ arc: { logline: 'x', summary: 'y' }, locked: { arc: true } });
+    await expect(planner.refineArc(s.id, 'x')).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+  });
+});
+
 describe('arcPlanner — manuscript completeness + derive-from-manuscript', () => {
   beforeEach(() => {
     fileStore.clear();

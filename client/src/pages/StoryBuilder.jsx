@@ -586,6 +586,9 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         {issuesHaveContent && (
           <p className="text-xs text-gray-500">Started from drafted issues? Backfill extracts the arc from their scripts / prose.</p>
         )}
+        {!locked && (arc.logline || arc.summary) && (
+          <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />
+        )}
       </div>
     );
   }
