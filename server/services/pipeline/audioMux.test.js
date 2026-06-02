@@ -60,7 +60,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-const { muxMusicBed, muxVoLines, buildVoMuxArgs, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
+const { muxMusicBed, muxVoLines, buildVoMuxArgs, selectPlacedVoLines, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
 
 beforeEach(async () => {
   spawnCalls.length = 0;
@@ -177,6 +177,27 @@ describe('muxMusicBed', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/ffmpeg exit 1/);
     expect(result.reason).toContain('last line of stderr');
+  });
+});
+
+describe('selectPlacedVoLines', () => {
+  it('keeps only rendered + placed lines and resolves paths under PATHS.audio', () => {
+    const out = selectPlacedVoLines([
+      { audioFilename: 'a.wav', offsetSec: 2 },     // rendered + placed ✓
+      { audioFilename: 'b.wav', offsetSec: null },  // rendered, not placed ✗
+      { audioFilename: null, offsetSec: 5 },        // placed, not rendered ✗
+      { audioFilename: 'c.wav', offsetSec: -1 },    // negative offset ✗
+      { audioFilename: 'd.wav', offsetSec: 0 },     // offset 0 is valid ✓
+    ]);
+    expect(out).toEqual([
+      { path: expect.stringMatching(/a\.wav$/), offsetSec: 2 },
+      { path: expect.stringMatching(/d\.wav$/), offsetSec: 0 },
+    ]);
+  });
+  it('returns [] for non-array / empty input', () => {
+    expect(selectPlacedVoLines(null)).toEqual([]);
+    expect(selectPlacedVoLines(undefined)).toEqual([]);
+    expect(selectPlacedVoLines([])).toEqual([]);
   });
 });
 

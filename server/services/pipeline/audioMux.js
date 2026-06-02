@@ -57,6 +57,24 @@ export async function resolveMusicTrackPath(trackFilename) {
 }
 
 /**
+ * Pure: map an issue's raw `stages.audio.lines` to the VO lines that are
+ * actually muxable — *rendered* (have an `audioFilename`) AND *placed* (have a
+ * finite, >= 0 `offsetSec`). Returns `[{ path, offsetSec }]` with each
+ * filename resolved under PATHS.audio. The single source of truth for "what
+ * counts as a placed VO line", shared by the CD stitch and any future batch
+ * export so the predicate can't drift across call sites.
+ */
+export function selectPlacedVoLines(lines) {
+  if (!Array.isArray(lines)) return [];
+  // `typeof === 'number'` (not Number(x)) so a null offset — the sanitizer's
+  // "not placed yet" sentinel — is excluded rather than coerced to 0 and
+  // stacked at the episode start (Number(null) === 0).
+  return lines
+    .filter((l) => l?.audioFilename && typeof l.offsetSec === 'number' && Number.isFinite(l.offsetSec) && l.offsetSec >= 0)
+    .map((l) => ({ path: join(PATHS.audio, l.audioFilename), offsetSec: l.offsetSec }));
+}
+
+/**
  * Mix a music bed onto `inputVideoPath`, replacing the file in place.
  * Returns `{ ok: true }` on success, `{ ok: false, reason }` on failure.
  * `musicGain` is a linear amplitude (1.0 = full volume); default ~-6 dB.
@@ -184,10 +202,10 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
   if (!inputVideoPath || !existsSync(inputVideoPath)) {
     return { ok: false, reason: 'input video missing' };
   }
-  const placed = (Array.isArray(voLines) ? voLines : []).filter((l) => {
-    const off = Number(l?.offsetSec);
-    return l?.path && existsSync(l.path) && Number.isFinite(off) && off >= 0;
-  });
+  const placed = (Array.isArray(voLines) ? voLines : []).filter((l) => (
+    // `typeof === 'number'` so a null offset isn't coerced to 0 (Number(null) === 0).
+    l?.path && existsSync(l.path) && typeof l.offsetSec === 'number' && Number.isFinite(l.offsetSec) && l.offsetSec >= 0
+  ));
   if (!placed.length) return { ok: false, reason: 'no placed VO lines' };
   // A missing music file is not fatal — drop to a VO-only mux rather than
   // failing, so a stale `music.trackFilename` pointer can't suppress dialogue.
