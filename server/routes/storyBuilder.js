@@ -108,7 +108,12 @@ router.post('/:id/steps/:stepId/generate', asyncHandler(async (req, res) => {
   assertStep(req.params.stepId);
   const input = validateRequest(storyStepGenerateSchema, req.body || {});
   await getStorySession(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const run = startStepRun(req.params.id, req.params.stepId, { op: 'generate', ...input });
+  // Backfill (fromDownstream) and forward generate both dispatch through
+  // generateStep, but tag distinct ops so the client's backfill button (op:
+  // 'backfill') re-attaches to an in-flight backfill instead of being told a
+  // different op is running. The runner routes any non-'refine' op to generateStep.
+  const op = input.fromDownstream ? 'backfill' : 'generate';
+  const run = startStepRun(req.params.id, req.params.stepId, { op, ...input });
   res.json({ ...run, sseUrl: `/api/story-builder/${req.params.id}/steps/${req.params.stepId}/progress` });
 }));
 

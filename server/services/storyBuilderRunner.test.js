@@ -103,6 +103,22 @@ describe('storyBuilderRunner', () => {
     expect(conductor.refineStep).toHaveBeenCalledWith('stb-2', 'universeAesthetic', expect.objectContaining({ feedback: 'tighter' }));
   });
 
+  it('starts a fresh run (not a stale coalesce) for a kickoff during the replay grace window', async () => {
+    // First run completes synchronously; its record lingers in `runs` for the
+    // closeJobAfterDelay grace window (done: true). A second kickoff in that
+    // window must run real work, not coalesce onto the finished record.
+    conductor.generateStep.mockResolvedValue({ providerId: 'p1' });
+    const first = startStepRun('stb-1', 'idea', { op: 'generate' });
+    await flush(); // first run reaches its terminal frame + marks done
+    expect(conductor.generateStep).toHaveBeenCalledTimes(1);
+
+    const second = startStepRun('stb-1', 'idea', { op: 'generate' });
+    expect(second.alreadyRunning).toBe(false);
+    expect(second.runId).not.toBe(first.runId);
+    await flush();
+    expect(conductor.generateStep).toHaveBeenCalledTimes(2);
+  });
+
   it('attachClient returns false when no run is active for the step', () => {
     const res = fakeRes();
     expect(attachClient('stb-none', 'idea', res)).toBe(false);

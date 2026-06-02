@@ -392,10 +392,16 @@ function useStepStream(sessionId, stepId) {
   const [phase, setPhase] = useState('');
   const [op, setOp] = useState(null);
   const handlersRef = useRef(null);
+  // The runId we're waiting on. useSseProgress only resets its `latest` a render
+  // AFTER `enabled` flips true, so on the subscribe render `latest` still holds
+  // the PREVIOUS run's terminal frame. Gating the terminal branches on a frame's
+  // runId stops that stale frame from firing the new run's onComplete instantly.
+  const runIdRef = useRef(null);
   const { latest, closed } = useStoryStepProgress(sessionId, stepId, { enabled: active });
 
   const settle = useCallback(() => {
     setActive(false); setPhase(''); setOp(null);
+    runIdRef.current = null;
     const h = handlersRef.current; handlersRef.current = null;
     return h;
   }, []);
@@ -408,9 +414,12 @@ function useStepStream(sessionId, stepId) {
   // (server pruned a fast run, or the connection dropped) so the button unsticks.
   useEffect(() => {
     if (!active) return;
-    if (latest && typeof latest.label === 'string' && latest.label) setPhase(latest.label);
-    if (latest?.type === 'complete') settle()?.onComplete?.(latest);
-    else if (latest?.type === 'error') settle()?.onError?.(new Error(latest.error || 'Generation failed'));
+    // Ignore frames belonging to a previous run (stale `latest` not yet reset by
+    // the SSE hook). closed is reset on every (re)subscribe, so it never lingers.
+    const mine = latest && latest.runId === runIdRef.current;
+    if (mine && typeof latest.label === 'string' && latest.label) setPhase(latest.label);
+    if (mine && latest.type === 'complete') settle()?.onComplete?.(latest);
+    else if (mine && latest.type === 'error') settle()?.onError?.(new Error(latest.error || 'Generation failed'));
     else if (closed) settle()?.onError?.(new Error('Lost connection to the generation stream'));
   }, [latest, closed, active, settle]);
 
@@ -431,6 +440,7 @@ function useStepStream(sessionId, stepId) {
       return;
     }
     handlersRef.current = handlers;
+    runIdRef.current = res.runId; // only frames from this run drive our handlers
     setActive(true); // enable the SSE subscription now that the run is registered
   }, [starting, active]);
 

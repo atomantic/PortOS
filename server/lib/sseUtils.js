@@ -51,9 +51,23 @@ export const attachSseClient = (jobs, jobId, res) => {
 
 // Drains any late-connecting EventSource clients then removes the job
 // from the per-provider job map. Both providers do this on child exit.
-export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS) => {
+//
+// `expectedJob` (optional) guards against a fresh run replacing this one under
+// the same key during the grace window: if the map no longer holds the job this
+// timer was scheduled for, end only the original job's lingering clients and
+// leave the replacement (and the map entry) untouched. Without it, restarting a
+// run for the same key inside SSE_CLEANUP_DELAY_MS would have the old timer
+// evict the new run and close its clients. Callers that never restart within
+// the window can omit it for the original delete-by-key behavior.
+export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, expectedJob = null) => {
   setTimeout(() => {
     const job = jobs.get(jobId);
+    if (expectedJob && job !== expectedJob) {
+      // A newer run took this key — drain the stale job's clients but don't
+      // delete the live entry.
+      for (const c of expectedJob.clients || []) c.end();
+      return;
+    }
     if (job) for (const c of job.clients) c.end();
     jobs.delete(jobId);
   }, delay);

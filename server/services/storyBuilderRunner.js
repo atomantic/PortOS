@@ -62,9 +62,15 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
   // from a different-op collision (a refine landing on an in-flight generate).
   // The two ops persist to the same records, so the client must NOT bind a
   // refine's success handler to a generate's terminal frame.
-  if (runs.has(key)) {
-    const existing = runs.get(key);
-    return { runId: existing.runId, alreadyRunning: true, op: existing.op };
+  //
+  // Only coalesce onto a run that's still WORKING. A completed run lingers in
+  // `runs` for the SSE replay grace window (closeJobAfterDelay); coalescing onto
+  // it would re-run no work and replay the stale terminal frame as a false
+  // success. A fresh kickoff in that window starts a new run that replaces the
+  // lingering record under the same key.
+  const inFlight = runs.get(key);
+  if (inFlight && !inFlight.done) {
+    return { runId: inFlight.runId, alreadyRunning: true, op: inFlight.op };
   }
 
   const runId = randomUUID();
@@ -75,6 +81,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
     startedAt: new Date().toISOString(),
     stepId,
     op,
+    done: false,
   };
   runs.set(key, record);
 
@@ -88,7 +95,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
     // must never break the run.
     const onProgress = (frame) => {
       try {
-        broadcast(key, { type: 'progress', ...frame });
+        broadcast(key, { type: 'progress', runId, ...frame });
       } catch (err) {
         console.error(`❌ story-builder progress emit failed: ${err?.message || err}`);
       }
@@ -117,9 +124,14 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
       console.error(`❌ story-builder ${op} failed — session=${sessionId.slice(0, 8)} step=${stepId} ${message}`);
       broadcast(key, { type: 'error', runId, stepId, op, error: message, failedAt: new Date().toISOString() });
     } finally {
+      // Mark terminal so a kickoff during the grace window starts a fresh run
+      // instead of coalescing onto this finished one.
+      record.done = true;
       // Hold the SSE list open briefly so a client that attached just after the
       // terminal frame still replays it (matches the auto-runner / mediaJobQueue).
-      closeJobAfterDelay(runs, key);
+      // Pass this record as `expectedJob` so a replacement run that took the key
+      // during the window isn't evicted by this timer.
+      closeJobAfterDelay(runs, key, undefined, record);
     }
   })();
 
