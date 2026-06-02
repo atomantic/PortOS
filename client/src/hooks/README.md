@@ -25,6 +25,12 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useAgentFeedbackToast` | Agent completion toast with thumbs-up/down UI. | Show actionable agent-run completion feedback. |
 | `useSharingNotifications` | Subscriber for share-bucket notifications. | Wire once to surface federation/sync events. |
 
+## Pipeline / Story Builder wiring
+
+| Hook | Purpose | Use when |
+|---|---|---|
+| `useArcCanvasSync` | Host-side wiring for the embedded `<ArcCanvas>`: `lastSavedRef` dirty-check + `updateSeriesFromServer` / `handleIssuesUpdate` / `flushPending`. Parameterized by `flushFields` (which bible fields to flush) + `silent`/`onFlushError`. | Embedding `<ArcCanvas>` in a host that owns `series`/`issues` state (PipelineSeries, Story Builder arc step). Don't re-implement the setter contract. |
+
 ## Progress & streaming (SSE / socket)
 
 | Hook | Purpose | Use when |

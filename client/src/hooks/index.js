@@ -41,6 +41,9 @@ export * from './useErrorNotifications.js';
 export * from './useNotifications.js';
 export * from './useSharingNotifications.js';
 
+// === Pipeline / Story Builder wiring ===
+export * from './useArcCanvasSync.js';
+
 // === Progress & streaming (SSE / socket) ===
 export * from './useImageGenProgress.js';
 export * from './useImporterProgress.js';

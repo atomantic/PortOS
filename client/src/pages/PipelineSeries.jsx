@@ -10,7 +10,7 @@
  * Mobile (< lg): single column, sidebar reflows above canvas.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
@@ -29,6 +29,7 @@ import {
 } from '../services/api';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
+import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
 
@@ -40,6 +41,20 @@ const STYLE_OVERRIDE_MODE_TABS = [
   { id: 'append', label: 'Append' },
   { id: 'override', label: 'Replace' },
 ];
+
+// Bible fields the host flushes before an ArcCanvas generate/verify, plus the
+// empty-value defaults the server expects for the optional ones. Module-level
+// constants so the `useArcCanvasSync` callbacks keep a stable identity.
+const ARC_FLUSH_FIELDS = [
+  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author',
+  'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId',
+];
+const ARC_PAYLOAD_DEFAULTS = {
+  titleLogo: '',
+  author: '',
+  stylePromptOverride: '',
+  stylePromptOverrideMode: STYLE_OVERRIDE_MODE_DEFAULT,
+};
 
 export default function PipelineSeries() {
   const { seriesId } = useParams();
@@ -79,54 +94,21 @@ export default function PipelineSeries() {
 
   const toggleSidebar = () => setSidebarCollapsed((prev) => !prev);
 
-  // Track the last server-persisted snapshot so `flushPending` knows whether
-  // the local draft has diverged. Ref instead of state — we don't want
-  // re-renders, just up-to-date comparison data for the async LLM hooks below.
-  const lastSavedRef = useRef(null);
-  useEffect(() => { if (series && !lastSavedRef.current) lastSavedRef.current = series; }, [series]);
-
   const patchSeries = (patch) => setSeries((prev) => ({ ...prev, ...patch }));
 
-  // Wrapped setter that ArcCanvas (and other LLM-flow children) use when the
-  // server has just confirmed a save. Keeps the dirty-check ref aligned so a
-  // subsequent flushPending() doesn't re-PATCH the same state.
-  const updateSeriesFromServer = (next) => {
-    setSeries(next);
-    lastSavedRef.current = next;
-  };
-
-  // If local bible fields diverged from the last server snapshot, PATCH so
-  // generate / verify / resolve work against the on-screen state. Returns
-  // `true` if a save occurred so the caller can decide whether to surface a
-  // confirmation toast.
-  const flushPending = async () => {
-    if (!series) return false;
-    const saved = lastSavedRef.current || series;
-    const fields = ['name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId'];
-    const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
-      || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
-    if (!dirty) return false;
-    const updated = await updatePipelineSeries(series.id, {
-      name: series.name,
-      logline: series.logline,
-      premise: series.premise,
-      universeId: series.universeId,
-      styleNotes: series.styleNotes,
-      titleLogo: series.titleLogo || '',
-      author: series.author || '',
-      stylePromptOverride: series.stylePromptOverride || '',
-      stylePromptOverrideMode: series.stylePromptOverrideMode || STYLE_OVERRIDE_MODE_DEFAULT,
-      issueCountTarget: series.issueCountTarget,
-      llm: series.llm || { provider: null, model: null },
-    }).catch((err) => {
-      toast.error(`Pre-flush save failed: ${err.message}`);
-      return null;
-    });
-    if (!updated) return false;
-    setSeries(updated);
-    lastSavedRef.current = updated;
-    return true;
-  };
+  // Host-side ArcCanvas wiring (lastSavedRef dirty-check + server-confirmed
+  // setters). Flushes the full bible field-set; the API helper's auto-toast is
+  // suppressed (silent) so `onFlushError` emits the single failure toast that
+  // tells the user their edits didn't persist.
+  const { updateSeriesFromServer, handleIssuesUpdate, flushPending } = useArcCanvasSync({
+    series,
+    setSeries,
+    setIssues,
+    flushFields: ARC_FLUSH_FIELDS,
+    payloadDefaults: ARC_PAYLOAD_DEFAULTS,
+    silent: true,
+    onFlushError: (err) => toast.error(`Pre-flush save failed: ${err.message}`),
+  });
 
   const handleSave = async () => {
     if (!series) return;
@@ -134,18 +116,6 @@ export default function PipelineSeries() {
     const didSave = await flushPending();
     setSaving(false);
     if (didSave) toast.success('Series saved');
-  };
-
-  // ArcCanvas mutates issues via a setter-style update (`setState(fn)`-shaped)
-  // so child components can do prev-aware patches without parent intervention.
-  // Plain array updates also work — flatten through `Array.isArray` to keep
-  // both shapes supported.
-  const handleIssuesUpdate = (update) => {
-    setIssues((prev) => {
-      if (typeof update === 'function') return update(prev);
-      if (Array.isArray(update)) return update;
-      return prev;
-    });
   };
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading series…</div>;

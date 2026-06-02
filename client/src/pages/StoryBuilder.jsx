@@ -19,15 +19,22 @@ import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
-  getUniverse, getPipelineSeries, listPipelineIssues, updatePipelineSeries,
+  getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
   getProviders, getSettings, generateImage, updateUniverse,
 } from '../services/api';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
+import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
+
+// Bible fields the embedded arc step flushes before an ArcCanvas generate/verify.
+// The Story Builder edits these on their own steps (not inside the arc step), so
+// the flush is usually a no-op — kept for API-shape parity with ArcCanvas's
+// contract. Module-level so the `useArcCanvasSync` callbacks keep a stable identity.
+const ARC_FLUSH_FIELDS = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'universeId'];
 const pickArcFields = (arc) => {
   if (!arc) return null;
   const out = {};
@@ -1005,58 +1012,16 @@ function StoryBuilderDetail({ storyId, stepParam }) {
 
   // ── Embedded ArcCanvas wiring (plotArc step) ──────────────────────────────
   // The Arc Canvas edits series.arc + the issue roadmap in place, so it needs
-  // server-confirmed setters. Mirrors PipelineSeries.jsx: a `lastSavedRef`
-  // dirty-check, an `updateSeriesFromServer` that keeps it aligned, and an
-  // issues setter that accepts ArcCanvas's `setState(fn)`-shaped updates.
-  const lastSavedRef = useRef(null);
-  // Capture the server snapshot as the dirty-check baseline, but only on the
-  // FIRST load of each series (keyed on id) — NOT on every `series` change,
-  // which would clobber the baseline on an unrelated refetch and defeat
-  // flushPending's dirty-check (it would always see series === lastSaved).
-  // Re-keying on id also resets the baseline when this mounted detail view
-  // navigates to a different story/series. After capture, the ref only advances
-  // via updateSeriesFromServer (a server-confirmed save).
-  useEffect(() => {
-    if (series && lastSavedRef.current?.id !== series.id) lastSavedRef.current = series;
-  }, [series]);
-
-  const updateSeriesFromServer = useCallback((next) => {
-    setSeries(next);
-    lastSavedRef.current = next;
-  }, []);
-
-  // ArcCanvas mutates issues via a setter-style update (`setState(fn)`-shaped);
-  // plain arrays also work — flatten through Array.isArray to support both.
-  const handleIssuesUpdate = useCallback((update) => {
-    setIssues((prev) => {
-      if (typeof update === 'function') return update(prev);
-      if (Array.isArray(update)) return update;
-      return prev;
-    });
-  }, []);
-
-  // ArcCanvas calls this before a generate/verify so the server works against
-  // the on-screen bible fields. The Story Builder edits those fields on their
-  // own steps (not inside the arc step), so the only divergence to flush here
-  // is whatever ArcCanvas itself set via updateSeriesFromServer — which already
-  // persisted. So flush is a no-op unless a future inline bible edit lands;
-  // kept for API-shape parity with ArcCanvas's contract.
-  const flushPending = useCallback(async () => {
-    if (!series) return false;
-    const saved = lastSavedRef.current || series;
-    const fields = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'universeId'];
-    const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
-      || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
-    if (!dirty) return false;
-    const updated = await updatePipelineSeries(series.id, {
-      name: series.name, logline: series.logline, premise: series.premise,
-      universeId: series.universeId, styleNotes: series.styleNotes,
-      issueCountTarget: series.issueCountTarget, llm: series.llm || { provider: null, model: null },
-    }, { silent: true }).catch(() => null);
-    if (!updated) return false;
-    updateSeriesFromServer(updated);
-    return true;
-  }, [series, updateSeriesFromServer]);
+  // server-confirmed setters. The flush is usually a no-op here (the bible
+  // fields are edited on their own steps, not inside the arc step), so a
+  // pre-flush save failure is swallowed (silent) rather than toasted.
+  const { updateSeriesFromServer, handleIssuesUpdate, flushPending } = useArcCanvasSync({
+    series,
+    setSeries,
+    setIssues,
+    flushFields: ARC_FLUSH_FIELDS,
+    silent: true,
+  });
 
   // Load the step manifest first; gate the loading spinner on BOTH it and the
   // session so the detail view never renders with an empty step rail.
