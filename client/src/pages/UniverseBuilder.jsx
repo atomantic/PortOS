@@ -898,13 +898,25 @@ export default function UniverseBuilder() {
     return () => clearTimeout(t);
   }, [location.hash, selectedId, draft.id]);
 
-  // Create-from-selector path: builds a universe from just the typed name
-  // (everything else empty) and navigates to it. Distinct from handleSave so
-  // typing a new name while an existing universe is selected doesn't rename
-  // that universe — Create always makes a new record.
+  // Create-from-selector path. Two cases, distinguished by whether a universe
+  // is already open:
+  //   - No universe selected (unsaved new draft): the user has been building a
+  //     draft in place — e.g. expanded a starter idea into a starterPrompt,
+  //     categories, and canon — then typed a name. That work must be preserved,
+  //     so delegate to handleSave (which persists the FULL draft, not just the
+  //     name). Previously this path spread emptyTemplate() and silently
+  //     obliterated the generated idea/content, creating a blank universe.
+  //   - An existing universe is selected: typing a new name must NOT rename or
+  //     clone the open universe — make a fresh blank record from just the name.
   const handleCreateNamed = async (rawName) => {
     const name = (rawName || '').trim();
     if (!name) { toast.error('Name is required'); return; }
+    if (!selectedId) {
+      // draft.name already mirrors the typed value (selector value === draft.name),
+      // so handleSave creates a new universe carrying the full in-progress draft.
+      await handleSave();
+      return;
+    }
     setSaving(true);
     const result = await createUniverse({
       ...emptyTemplate(),
