@@ -39,7 +39,7 @@ import {
   renderArcShapeGuidance,
   renderArcShapePositionSummary,
 } from '../../lib/storyArc.js';
-import { runPromptRefineRaw } from './refineHelpers.js';
+import { runPromptRefineRaw, trimChanges } from './refineHelpers.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -936,10 +936,7 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
   if (!safeReaderMap) {
     throw makeErr('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
   }
-  const changes = Array.isArray(content.changes)
-    ? content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 12)
-    : [];
-  return { readerMap: safeReaderMap, changes, rationale, runId, providerId, model };
+  return { readerMap: safeReaderMap, changes: trimChanges(content.changes), rationale, runId, providerId, model };
 }
 
 /**
@@ -998,17 +995,15 @@ export async function refineArc(seriesId, feedback, options = {}) {
     readerMap: arc.readerMap ?? null,
     status: 'draft',
   });
-  // sanitizeArc returns null only when every identifying field is empty —
-  // impossible here unless the current arc was already empty AND the LLM
-  // returned nothing. Preserve the current arc in that degenerate case.
-  const safeArc = refinedArc || (arc.logline || arc.summary ? arc : null);
-  if (!safeArc) {
+  // sanitizeArc returns null only when every identifying field is empty — which,
+  // because every field above falls back to the current arc, means the current
+  // arc was ALSO empty and the LLM added nothing. Nothing to preserve, so error.
+  if (!refinedArc) {
     throw makeErr('LLM returned an empty arc and there is none to preserve', ERR_VALIDATION);
   }
-  const changes = Array.isArray(content.changes)
-    ? content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 12)
-    : [];
-  return { arc: safeArc, changes, rationale, runId, providerId, model };
+  // Return the freshly-read series so the caller can persist without a second
+  // getSeries round-trip (it needs series.seasons for commitSeasonsWithRemap).
+  return { arc: refinedArc, changes: trimChanges(content.changes), rationale, runId, providerId, model, series };
 }
 
 /**

@@ -34,6 +34,16 @@ export async function runPromptRefineRaw({
   return { content, rationale, runId: result.runId, providerId: result.providerId, model: result.model };
 }
 
+// Normalize an LLM-returned `changes` array (the short "what I changed" bullet
+// list every refine prompt emits) to trimmed, non-empty, capped strings. Shared
+// by the raw-refine callers (arc / reader-map) that hand-rolled this identically;
+// `runPromptRefine` applies the same shape inline via `changesLimit`.
+export function trimChanges(raw, limit = 12) {
+  return Array.isArray(raw)
+    ? raw.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, limit)
+    : [];
+}
+
 // Single-field refine wrapper for the comic-panel / storyboard-scene /
 // character-physicalDescription paths. `resultField` keeps the helper
 // prompt-agnostic; `changes` are trimmed + capped on the way out.

@@ -672,13 +672,13 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
   if (stepId === 'plotArc') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
     emit('Refining the plot arc…', 'generate');
-    const { arc, changes, rationale, runId } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
+    // refineArc returns the series it read, so we persist without a 2nd fetch.
+    const { arc, changes, rationale, runId, series } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
     emit('Saving…', 'persist');
     // Persist through commitSeasonsWithRemap (passing the EXISTING seasons
     // unchanged) so per-field arc locks are honored, exactly like the plotArc
     // generate path — refine only rewrites the arc's narrative fields, never
     // the season breakdown.
-    const series = await getSeries(session.seriesId);
     const { series: updated } = await commitSeasonsWithRemap(series, { arc, seasons: series.seasons || [] });
     return { result: updated, changes, rationale, runId };
   }
