@@ -11,7 +11,7 @@ vi.mock('../../services/api', () => ({
   updateUniverse: vi.fn(() => Promise.resolve(null)),
 }));
 
-import StyleProbeImage, { buildStyleProbePrompt, hasStyleForProbe } from './StyleProbeImage';
+import StyleProbeImage, { buildStyleProbePrompt, hasStyleForProbe, probeStyleKey } from './StyleProbeImage';
 
 describe('StyleProbeImage — buildStyleProbePrompt', () => {
   it('uses embrace tokens as positive and avoid tokens as negative', () => {
@@ -55,6 +55,22 @@ describe('StyleProbeImage — hasStyleForProbe', () => {
   it('is false with no style at all', () => {
     expect(hasStyleForProbe(null)).toBe(false);
     expect(hasStyleForProbe({ influences: { embrace: [], avoid: ['bright'] } })).toBe(false);
+  });
+});
+
+describe('StyleProbeImage — probeStyleKey (mid-render drift guard)', () => {
+  it('changes when the influences that feed the probe change', () => {
+    const a = { influences: { embrace: ['noir'], avoid: [] } };
+    const b = { influences: { embrace: ['noir', 'cinematic'], avoid: [] } };
+    // The completion handler compares this key against the render-time capture
+    // to skip persisting a probe whose style drifted while it rendered.
+    expect(probeStyleKey(a)).not.toBe(probeStyleKey(b));
+  });
+
+  it('is stable across edits that do not reach the image model (styleNotes)', () => {
+    const a = { styleNotes: 'one', influences: { embrace: ['noir'], avoid: [] } };
+    const b = { styleNotes: 'two', influences: { embrace: ['noir'], avoid: [] } };
+    expect(probeStyleKey(a)).toBe(probeStyleKey(b));
   });
 });
 

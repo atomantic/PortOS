@@ -35,12 +35,23 @@ export function hasStyleForProbe(universe) {
   return Boolean(prompt.trim());
 }
 
+// Stable key for the influences a probe was actually built from. The render job
+// is async — between queuing it and its completion the user can edit *and save*
+// influences, which re-points the saved record. Capturing this key when the
+// probe is queued lets the completion handler skip persisting if the live style
+// has since drifted, so a stale image can't be pinned to a record built from
+// different influences.
+export const probeStyleKey = (universe) => JSON.stringify(buildStyleProbePrompt(universe));
+
 export default function StyleProbeImage({ universe, onUniverseChange, canRender = true, styleDirty = false, onPreview = null, onRenderComplete = null }) {
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
   const [jobId, setJobId] = useState(null);
   // MediaJobThumb's onFilename effect can fire more than once — process each
   // completed filename's persist exactly once.
   const processedRef = useRef(new Set());
+  // The style key the in-flight probe was queued against, captured at render
+  // time so the async completion can detect mid-render style drift.
+  const probeStyleKeyRef = useRef(null);
 
   useEffect(() => {
     getSettings({ silent: true })
@@ -67,6 +78,7 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Style render failed'); return null; });
     if (!queued?.jobId) return;
+    probeStyleKeyRef.current = JSON.stringify(probe);
     setJobId(queued.jobId);
   };
 
@@ -75,6 +87,14 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     if (!filename || !universe?.id) return;
     if (processedRef.current.has(filename)) return; // multi-fire guard
     processedRef.current.add(filename);
+    // The probe job is async; if the live style drifted from what it was queued
+    // against (the user edited + saved influences while it rendered), the image
+    // no longer represents the saved record — drop it rather than pin a
+    // mismatched ref the gate at render time meant to prevent.
+    if (probeStyleKeyRef.current !== null && probeStyleKey(universe) !== probeStyleKeyRef.current) {
+      toast.error('Style changed while the base style rendered — re-run the probe');
+      return;
+    }
     const existing = Array.isArray(universe.styleImageRefs) ? universe.styleImageRefs : [];
     if (existing.includes(filename)) return;
     const next = [...existing, filename];
