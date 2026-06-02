@@ -226,7 +226,10 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
 }
 
 /**
- * One sweep cycle. Returns `{ universes, series, issues, collections, refused }`.
+ * One sweep cycle. Returns `{ universes, series, issues, collections,
+ * orphanBaseHashes, orphanSubscriptions, refused }` — the four per-kind
+ * tombstone-prune counts, the two post-prune orphan-sweep counts, and the
+ * list of kinds whose cutoff was refused.
  *
  * `graceMs` defaults to 24h so the orchestrator path is unchanged; the
  * manual-trigger UI / CLI passes 0 to skip the post-delete buffer. The
