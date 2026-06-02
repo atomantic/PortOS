@@ -416,18 +416,23 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
   }
   requireResolved(conflicts);
 
-  // 1. Write the unioned survivor.
-  await updateSeries(survivorId, record);
+  // 1. Write the unioned survivor. Capture the PERSISTED record — `updateSeries`
+  //    runs `sanitizeSeasonList` (which caps at SEASONS_PER_SERIES_MAX), so the
+  //    saved seasons can differ from the in-memory union; the season map below
+  //    must pair against what actually landed on disk.
+  const persistedSurvivor = await updateSeries(survivorId, record);
 
   // 2. Re-point the loser's issues to the survivor before tombstone, preserving
-  //    season grouping. The unioned `record.seasons` carries a season for every
-  //    loser season number (a number collision gap-fills the survivor's
-  //    same-number season; a non-colliding loser season is appended verbatim),
-  //    so pair each loser season to the survivor season sharing its number. An
-  //    issue whose loser season has no number, or maps nowhere, lands un-grouped.
+  //    season grouping. The persisted survivor carries a season for every loser
+  //    season number that survived the union (a number collision gap-fills the
+  //    survivor's same-number season; a non-colliding loser season is appended
+  //    verbatim), so pair each loser season to the survivor season sharing its
+  //    number. An issue whose loser season has no number, or maps to a season
+  //    that didn't persist (e.g. dropped at the season cap), lands un-grouped —
+  //    the map only ever holds ids that exist on the saved survivor.
   if (loserIssues.length > 0) {
     const survivorSeasonIdByNumber = new Map(
-      (record.seasons || [])
+      (persistedSurvivor.seasons || [])
         .filter((s) => Number.isFinite(s?.number) && isStr(s?.id))
         .map((s) => [s.number, s.id]),
     );

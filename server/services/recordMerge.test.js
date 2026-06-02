@@ -292,6 +292,29 @@ describe('recordMerge — mergeSeries (integration)', () => {
     expect(merged.seasons.map((s) => s.number).sort()).toEqual([1, 2]);
   });
 
+  it('drops an over-cap loser season from the map so its issues land un-grouped (not dangling)', async () => {
+    const u = await universeSvc.createUniverse({ name: 'U' });
+    // Survivor already at the 50-season cap (numbers 1..50).
+    const survSeasons = Array.from({ length: 50 }, (_, i) => ({ id: `sea-s${i + 1}`, number: i + 1, title: `S${i + 1}` }));
+    const survivor = await seriesSvc.createSeries({ name: 'Big', universeId: u.id, seasons: survSeasons });
+    // Loser adds one NON-colliding season (number 99) — it can't survive the
+    // union's season cap, so it must never end up in the season map.
+    const loser = await seriesSvc.createSeries({ name: 'Big', universeId: u.id, seasons: [{ id: 'sea-overflow', number: 99, title: 'Overflow' }] });
+    const loserSeason = (await seriesSvc.getSeries(loser.id)).seasons.find((s) => s.number === 99);
+    const iss = await issuesSvc.createIssue({ seriesId: loser.id, title: 'Overflow Issue' });
+    await issuesSvc.updateIssue(iss.id, { seasonId: loserSeason.id });
+
+    await merge.mergeSeries(survivor.id, loser.id, {});
+
+    // The survivor stays at the cap; the number-99 season never persisted.
+    const merged = await seriesSvc.getSeries(survivor.id);
+    expect(merged.seasons).toHaveLength(50);
+    expect(merged.seasons.some((s) => s.number === 99)).toBe(false);
+    // The moved issue maps to no persisted season → un-grouped, not a dangling ref.
+    const [moved] = (await issuesSvc.listIssues({ seriesId: survivor.id })).filter((i) => i.title === 'Overflow Issue');
+    expect(moved.seasonId).toBeNull();
+  });
+
   it('rejects merging series from different universes', async () => {
     const u1 = await universeSvc.createUniverse({ name: 'U1' });
     const u2 = await universeSvc.createUniverse({ name: 'U2' });
