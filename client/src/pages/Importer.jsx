@@ -570,6 +570,7 @@ function IntakeForm({
             onProviderChange={onProviderChange}
             onModelChange={onModelChange}
             compact
+            label="AI Provider"
             emptyProviderOption="Default (stage provider)"
             emptyModelOption="Default model"
           />

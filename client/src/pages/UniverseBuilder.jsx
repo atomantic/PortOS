@@ -3016,6 +3016,7 @@ function BibleTab({
               onProviderChange={(id) => updateDraft({ llm: { ...draft.llm, provider: id || null, model: null } })}
               onModelChange={(m) => updateDraft({ llm: { ...draft.llm, model: m || null } })}
               compact
+              label="LLM for expansion"
               layout="stacked"
               emptyProviderOption={`Active provider (${providerLabel(activeProviderId)})`}
               emptyModelOption="Default model"

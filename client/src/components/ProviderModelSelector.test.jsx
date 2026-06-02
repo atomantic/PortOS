@@ -65,6 +65,16 @@ describe('ProviderModelSelector', () => {
     expect(opts.map((o) => o.textContent)).toEqual(['Pretty Name', 'bare']);
   });
 
+  it('skips nullish model entries instead of crashing (sparse/empty provider list)', () => {
+    // useProviderModels can pass `[undefined]` for a provider with no models;
+    // modelOption must tolerate it and the map must skip it.
+    expect(() =>
+      renderSelector({ availableModels: [undefined, 'm2', null], alwaysShowModel: true })
+    ).not.toThrow();
+    const modelSelect = screen.getAllByRole('combobox')[1];
+    expect([...modelSelect.querySelectorAll('option')].map((o) => o.value)).toEqual(['m2']);
+  });
+
   it('fires onProviderChange/onModelChange with the selected value', () => {
     const onProviderChange = vi.fn();
     const onModelChange = vi.fn();

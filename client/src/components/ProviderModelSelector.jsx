@@ -29,8 +29,11 @@ import { useId } from 'react';
 const SELECT_CLASS =
   'w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm';
 
-// Normalize a model entry (string or `{ id, name }`) to `{ value, label }`.
+// Normalize a model entry (string or `{ id, name }`) to `{ value, label }`,
+// or null for a nullish entry so the caller can skip it (a provider with an
+// empty/sparse model list shouldn't render a blank option or crash).
 function modelOption(m) {
+  if (m == null) return null;
   if (typeof m === 'string') return { value: m, label: m };
   return { value: m.id, label: m.name || m.id };
 }
@@ -64,6 +67,7 @@ export default function ProviderModelSelector({
           onChange={(e) => onProviderChange(e.target.value)}
           disabled={disabled}
           title={compact ? label : undefined}
+          aria-label={compact ? label : undefined}
           className={SELECT_CLASS}
         >
           {emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
@@ -81,12 +85,14 @@ export default function ProviderModelSelector({
             onChange={(e) => onModelChange(e.target.value)}
             disabled={disabled}
             title={compact ? 'Model' : undefined}
+            aria-label={compact ? 'Model' : undefined}
             className={SELECT_CLASS}
           >
             {emptyModelOption != null && <option value="">{emptyModelOption}</option>}
             {availableModels.map(m => {
-              const { value, label: optLabel } = modelOption(m);
-              return <option key={value} value={value}>{optLabel}</option>;
+              const opt = modelOption(m);
+              if (!opt) return null;
+              return <option key={opt.value} value={opt.value}>{opt.label}</option>;
             })}
           </select>
         </div>

@@ -26,7 +26,12 @@ export default function useProviderModels({ filter, allowDefault = false, silent
 
   const load = useCallback(async () => {
     setLoading(true);
-    const data = await api.getProviders(silent ? { silent: true } : undefined).catch(() => ({ providers: [] }));
+    const data = await api.getProviders(silent ? { silent: true } : undefined).catch((err) => {
+      // Log even when `silent` suppresses the toast, so a failed fetch leaves
+      // a breadcrumb (matches the prior inline console.warn behavior).
+      console.warn(`⚠️ Provider list fetch failed: ${err?.message || err}`);
+      return { providers: [] };
+    });
     const filterFn = filter || (p => p.enabled);
     const filtered = (data.providers || []).filter(filterFn);
     setProviders(filtered);
@@ -46,7 +51,10 @@ export default function useProviderModels({ filter, allowDefault = false, silent
   );
 
   const availableModels = useMemo(
-    () => filterSelectableModels(currentProvider?.models || [currentProvider?.defaultModel]),
+    // No selected provider (allowDefault, or the brief pre-load window) → no
+    // models. Guard before falling back to `[defaultModel]`, which would be
+    // `[undefined]` and surface a bogus blank option.
+    () => (currentProvider ? filterSelectableModels(currentProvider.models || [currentProvider.defaultModel]) : []),
     [currentProvider]
   );
 
