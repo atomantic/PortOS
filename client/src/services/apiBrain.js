@@ -161,6 +161,14 @@ export const updateBrainLink = (id, data, options = {}) => request(`/brain/links
   body: JSON.stringify(data),
   ...options
 });
+// Batch reorder: apply a whole drag gesture's { id, bucketId, bucketOrder }
+// changes in one atomic server write (avoids N concurrent PUTs racing the
+// shared links store).
+export const reorderBrainLinks = (updates, options = {}) => request('/brain/links/reorder', {
+  method: 'POST',
+  body: JSON.stringify({ updates }),
+  ...options
+});
 export const deleteBrainLink = (id) => request(`/brain/links/${id}`, { method: 'DELETE' });
 export const cloneBrainLink = (id) => request(`/brain/links/${id}/clone`, { method: 'POST' });
 export const pullBrainLink = (id) => request(`/brain/links/${id}/pull`, { method: 'POST' });

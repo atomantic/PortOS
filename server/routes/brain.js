@@ -29,6 +29,7 @@ import {
   settingsUpdateInputSchema,
   linkInputSchema,
   linkUpdateInputSchema,
+  linkReorderSchema,
   linksQuerySchema,
   bucketInputSchema,
   bucketUpdateInputSchema,
@@ -528,6 +529,19 @@ router.get('/links', asyncHandler(async (req, res) => {
   links = links.slice(offset, offset + limit);
 
   res.json({ links, total, limit, offset });
+}));
+
+/**
+ * POST /api/brain/links/reorder
+ * Apply a batch of { id, bucketId, bucketOrder } updates for one drag gesture
+ * in a single atomic write — N concurrent single-link PUTs against the shared
+ * links store can lose-update each other. Mirrors POST /buckets/reorder.
+ * (Registered before /links/:id so "reorder" isn't captured as an :id.)
+ */
+router.post('/links/reorder', asyncHandler(async (req, res) => {
+  const { updates } = validateRequest(linkReorderSchema, req.body);
+  const links = await brainService.reorderLinks(updates);
+  res.json({ links });
 }));
 
 /**

@@ -698,6 +698,7 @@ export const getLinkById = storage.getLinkById;
 export const getLinkByUrl = storage.getLinkByUrl;
 export const createLink = storage.createLink;
 export const updateLink = storage.updateLink;
+export const reorderLinks = storage.reorderLinks;
 export const deleteLink = storage.deleteLink;
 export const getBuckets = storage.getBuckets;
 export const getBucketById = storage.getBucketById;

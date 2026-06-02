@@ -60,6 +60,7 @@ vi.mock('../services/brain.js', () => ({
   getLinkByUrl: vi.fn(),
   createLink: vi.fn(),
   updateLink: vi.fn(),
+  reorderLinks: vi.fn(),
   deleteLink: vi.fn(),
   // Buckets
   getBuckets: vi.fn(),
@@ -1242,6 +1243,38 @@ describe('Brain Routes', () => {
       expect(brainService.updateBucket).toHaveBeenNthCalledWith(1, id3, { order: 0 });
       expect(brainService.updateBucket).toHaveBeenNthCalledWith(2, id1, { order: 1 });
       expect(brainService.updateBucket).toHaveBeenNthCalledWith(3, id2, { order: 2 });
+    });
+  });
+
+  describe('POST /api/brain/links/reorder', () => {
+    it('applies the whole batch in one atomic reorderLinks call', async () => {
+      const updates = [
+        { id: 'l2', bucketId: 'b1', bucketOrder: 0 },
+        { id: 'l1', bucketId: 'b1', bucketOrder: 1 }
+      ];
+      brainService.reorderLinks.mockResolvedValue(updates.map(u => ({ ...u, url: 'x' })));
+      const res = await request(app).post('/api/brain/links/reorder').send({ updates });
+      expect(res.status).toBe(200);
+      // One atomic call (not N concurrent updateLink PUTs).
+      expect(brainService.reorderLinks).toHaveBeenCalledTimes(1);
+      expect(brainService.reorderLinks).toHaveBeenCalledWith(updates);
+      expect(brainService.updateLink).not.toHaveBeenCalled();
+      expect(res.body.links).toHaveLength(2);
+    });
+
+    it('rejects an empty or malformed batch', async () => {
+      const res = await request(app).post('/api/brain/links/reorder').send({ updates: [] });
+      expect(res.status).toBe(400);
+      expect(brainService.reorderLinks).not.toHaveBeenCalled();
+    });
+
+    it('is matched before /links/:id so "reorder" is not treated as an id', async () => {
+      brainService.reorderLinks.mockResolvedValue([]);
+      const res = await request(app)
+        .post('/api/brain/links/reorder')
+        .send({ updates: [{ id: 'l1', bucketId: 'b1', bucketOrder: 0 }] });
+      expect(res.status).toBe(200);
+      expect(brainService.reorderLinks).toHaveBeenCalledTimes(1);
     });
   });
 

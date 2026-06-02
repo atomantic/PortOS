@@ -27,6 +27,7 @@ import {
   linkRecordSchema,
   linkInputSchema,
   linkUpdateInputSchema,
+  linkReorderSchema,
   linksQuerySchema,
   bucketInputSchema,
   bucketUpdateInputSchema,
@@ -611,6 +612,34 @@ describe('brainValidation.js', () => {
 
     it('should reject non-uuid entries', () => {
       expect(bucketReorderSchema.safeParse({ ids: ['nope'] }).success).toBe(false);
+    });
+  });
+
+  describe('linkReorderSchema', () => {
+    it('should accept a batch of { id, bucketId, bucketOrder }', () => {
+      const result = linkReorderSchema.safeParse({
+        updates: [
+          { id: 'l1', bucketId: 'b1', bucketOrder: 0 },
+          { id: 'l2', bucketId: 'b1', bucketOrder: 1 }
+        ]
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept a null bucketId (ungrouped landing)', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ id: 'l1', bucketId: null, bucketOrder: 0 }] }).success).toBe(true);
+    });
+
+    it('should reject an empty batch', () => {
+      expect(linkReorderSchema.safeParse({ updates: [] }).success).toBe(false);
+    });
+
+    it('should reject a non-integer bucketOrder', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ id: 'l1', bucketId: 'b1', bucketOrder: 1.5 }] }).success).toBe(false);
+    });
+
+    it('should reject an entry missing its id', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ bucketId: 'b1', bucketOrder: 0 }] }).success).toBe(false);
     });
   });
 

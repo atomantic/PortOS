@@ -187,8 +187,9 @@ export default function LinksTab({ onRefresh }) {
 
   // Reposition a chip within (or into) a bucket at a specific index — the
   // intra-bucket reorder the bucket board's "append on assign" path can't do.
-  // Renumbers the destination bucket densely and PATCHes only the chips that
-  // actually moved.
+  // Renumbers the destination bucket densely and persists the whole batch in
+  // one atomic call: N concurrent single-link PUTs would race the shared links
+  // store and silently lose-update some chips' bucketOrder.
   const handleMoveLinkToIndex = async (link, bucketId, targetIndex) => {
     const { renumbered, changed } = reorderLinksInBucket(links, link, bucketId, targetIndex);
     if (changed.length === 0) return;
@@ -198,11 +199,8 @@ export default function LinksTab({ onRefresh }) {
       const r = byId.get(l.id);
       return r ? { ...l, bucketId: r.bucketId, bucketOrder: r.bucketOrder } : l;
     }));
-    const results = await Promise.all(changed.map(r =>
-      api.updateBrainLink(r.id, { bucketId: r.bucketId, bucketOrder: r.bucketOrder }, { silent: true })
-        .catch(() => null)
-    ));
-    if (results.some(r => r === null)) {
+    const ok = await api.reorderBrainLinks(changed, { silent: true }).catch(() => null);
+    if (!ok) {
       toast.error('Failed to reorder links');
       fetchLinks(); // revert optimistic change on failure
     }
