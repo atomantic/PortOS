@@ -25,6 +25,7 @@
 
 ## Changed
 
+- **[unify-llm-picker-components]** The Series AI-provider picker now renders through the same shared provider/model selector used by the other pickers, consolidating the last hand-rolled copy of that markup (no user-facing change).
 - **Comic-script prompt-migration hashes resynced.** Internal fix so the comic-script stage-prompt auto-upgrade recognizes the current shipped template across all install ages (no user-facing change).
 - **[story-builder-hash-shape-vs-derivation-tests]** Hardened the Story Builder step-locking test so it verifies the stamped staleness hash is actually derived from the step's upstream inputs, not merely a hex string — guarding against silent drift in the staleness detection (no user-facing change).
 - **[wan22-hunyuan-setup-pin-shas] Installing the Wan 2.2 and HunyuanVideo local video runtimes now pins to a tested version.** The optional installers for both community MLX ports previously cloned whatever was on the project's latest commit that day, so two machines set up days apart could end up with different (and possibly broken) code. They now check out a known-good commit (each repo's latest as of 2026-06-02) for reproducible installs; set `WAN22_PIN=main` or `HUNYUAN_PIN=main` to track upstream instead.
