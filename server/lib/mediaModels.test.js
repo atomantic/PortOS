@@ -406,6 +406,51 @@ describe('mediaModels registry', () => {
     expect(onDisk._shippedDefaults.image.list).toContain('z-image-turbo-bf16');
   });
 
+  // editOnly — backfilled like cfgDisabled so the route/UI can reject a
+  // text-only render against a pipeline that requires a source image.
+
+  it('fresh install: qwen-image-edit ships with editOnly: true', async () => {
+    const { loadMediaModels, getImageModels, isEditOnly } = await import('./mediaModels.js');
+    loadMediaModels();
+    const qwenEdit = getImageModels().find((m) => m.id === 'qwen-image-edit');
+    expect(qwenEdit).toBeDefined();
+    expect(qwenEdit.editOnly).toBe(true);
+    expect(isEditOnly(qwenEdit)).toBe(true);
+    // The plain text-to-image qwen entry must NOT be flagged edit-only.
+    const qwen = getImageModels().find((m) => m.id === 'qwen-image');
+    expect(isEditOnly(qwen)).toBe(false);
+  });
+
+  it('backfills editOnly onto a pre-flag qwen-image-edit entry (no migration needed)', async () => {
+    // Simulate an install that stored qwen-image-edit before the editOnly flag
+    // existed — the entry lacks the field entirely.
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'qwen-image-edit', name: 'Qwen-Image-Edit', runner: 'qwen', repo: 'Qwen/Qwen-Image-Edit', pipelineClass: 'QwenImageEditPipeline', steps: 30, guidance: 4 },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+    }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const qwenEdit = getImageModels().find((m) => m.id === 'qwen-image-edit');
+    expect(qwenEdit.editOnly).toBe(true);
+  });
+
+  it('preserves an explicit editOnly: false user override', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'qwen-image-edit', name: 'Qwen-Image-Edit', runner: 'qwen', repo: 'Qwen/Qwen-Image-Edit', pipelineClass: 'QwenImageEditPipeline', steps: 30, guidance: 4, editOnly: false },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+    }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const qwenEdit = getImageModels().find((m) => m.id === 'qwen-image-edit');
+    expect(qwenEdit.editOnly).toBe(false);
+  });
+
   it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.
