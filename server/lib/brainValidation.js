@@ -437,8 +437,8 @@ export const bucketReorderSchema = z.object({
 // concurrent single-record PUTs can.
 export const linkReorderSchema = z.object({
   updates: z.array(z.object({
-    id: z.string().min(1),
-    bucketId: z.string().min(1).nullable(),
+    id: z.string().uuid(),
+    bucketId: z.string().uuid().nullable(),
     bucketOrder: z.number().int()
   })).min(1)
 });

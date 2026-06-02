@@ -540,6 +540,18 @@ router.get('/links', asyncHandler(async (req, res) => {
  */
 router.post('/links/reorder', asyncHandler(async (req, res) => {
   const { updates } = validateRequest(linkReorderSchema, req.body);
+  // All-or-nothing: reject before any write if a batch references a link that
+  // no longer exists, so the response can't report success after a partial
+  // apply (mirrors the single-link PUT's 404 on an unknown id).
+  const known = new Set((await brainService.getLinks()).map(l => l.id));
+  const missing = updates.filter(u => !known.has(u.id)).map(u => u.id);
+  if (missing.length) {
+    throw new ServerError('Unknown link id in reorder batch', {
+      status: 404,
+      code: 'NOT_FOUND',
+      context: { missing }
+    });
+  }
   const links = await brainService.reorderLinks(updates);
   res.json({ links });
 }));
