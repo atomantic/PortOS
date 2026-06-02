@@ -1012,7 +1012,20 @@ export async function pushRecordToPeer(sub, options = {}) {
     // NOT byte-identical — but their scalars converge, which is what the base
     // hash tracks). For universe/series it's the full wire record. Same call
     // either way; the narrowing lives in contentHashForRecord.
-    setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))
+    const stamps = [setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))];
+    // A series push bundles its child issues (`payload.issues`, already in
+    // wire form). The receiver seeds each issue's base hash on insert in
+    // mergeIssuesFromSync; stamp the SAME base here so the SENDER side also
+    // detects the first issue divergence on a later push-back. Issues never
+    // carry their own subscription — they ride the series push — so this is
+    // the only place the origin can seed an `issue`-keyed base hash. Without
+    // it, issue conflict journaling would be one-sided (receiver-only).
+    if (sub.recordKind === 'series' && Array.isArray(payload.issues)) {
+      for (const issue of payload.issues) {
+        if (issue?.id) stamps.push(setSyncBaseHash('issue', issue.id, contentHashForRecord('issue', issue)));
+      }
+    }
+    Promise.all(stamps)
       .then(() => flushBaseHashes())
       .catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
   }

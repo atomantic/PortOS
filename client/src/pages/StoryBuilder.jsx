@@ -17,7 +17,7 @@ import { useLockToggle } from '../hooks/useLockToggle';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
-  generateStoryStep, refineStoryStep, setStoryIssueLock,
+  generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
   getProviders, getSettings, generateImage, updateUniverse,
@@ -670,6 +670,8 @@ function StepCharacters({ session, universe, locked, onChanged }) {
 function IssuesPanel({ session, series, issues, onChanged }) {
   const locks = session.steps?.issues?.issueLocks || {};
   const [busyId, setBusyId] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const hasSeasons = Array.isArray(series?.seasons) && series.seasons.length > 0;
 
   const toggleIssue = async (issueId, next) => {
     setBusyId(issueId);
@@ -679,18 +681,69 @@ function IssuesPanel({ session, series, issues, onChanged }) {
     if (res) { toast.success(next ? 'Issue marked done' : 'Issue reopened'); onChanged(); }
   };
 
+  // Seed issues from the arc — generates a per-episode breakdown for every
+  // season and persists one issue per episode, so the user never leaves the
+  // builder. Provider/model is resolved server-side from the session picker.
+  const generateIssues = async () => {
+    setGenerating(true);
+    const res = await generateStoryIssues(session.id, {}, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to generate issues'); return null; });
+    setGenerating(false);
+    if (!res) return;
+    const created = res.createdIssues?.length || 0;
+    const seasons = res.seasons || [];
+    // Skipped = genuinely ineligible (locked / no synopsis); failed = a
+    // transient provider/LLM error. Surface them separately so an infra
+    // failure never reads as a config skip. Distinct reasons are deduped so a
+    // multi-season batch shows every cause, not just the first.
+    const skipped = seasons.filter((s) => s.skipped);
+    const failed = seasons.filter((s) => s.failed);
+    const reasons = (list) => [...new Set(list.map((s) => s.reason).filter(Boolean))].join('; ');
+    const noun = (n) => (n === 1 ? 'season' : 'seasons');
+    if (created > 0) {
+      toast.success(`Created ${created} issue${created === 1 ? '' : 's'} from the arc`);
+      // A skipped season is an expected config state (locked / no synopsis) —
+      // warn (yellow), don't error (red). A failed season is a real error.
+      if (skipped.length) toast.warning(`Skipped ${skipped.length} ${noun(skipped.length)}: ${reasons(skipped)}`);
+      if (failed.length) toast.error(`Couldn't generate ${failed.length} ${noun(failed.length)}: ${reasons(failed)}`);
+    } else if (failed.length) {
+      toast.error(`Couldn't generate issues — ${reasons(failed) || 'a provider error occurred'}`);
+    } else if (skipped.length) {
+      toast.warning(`No issues created — ${reasons(skipped)}`);
+    } else {
+      toast.error('No issues were generated');
+    }
+    onChanged();
+  };
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-sm text-gray-400">Complete issues one at a time. Lock issue #1 before moving to #2.</p>
-        {series?.id && (
-          <Link to={`/pipeline/series/${series.id}`} className="text-sm text-port-accent inline-flex items-center gap-1">
-            Plan issues in Pipeline <ExternalLink className="w-4 h-4" />
-          </Link>
-        )}
+        <div className="flex items-center gap-3">
+          {hasSeasons && (
+            <button
+              onClick={generateIssues} disabled={generating}
+              title="Generate a per-episode breakdown for every season and create the issues here"
+              className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+            >
+              {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              Generate issues from arc
+            </button>
+          )}
+          {series?.id && (
+            <Link to={`/pipeline/series/${series.id}`} className="text-sm text-port-accent inline-flex items-center gap-1">
+              Plan issues in Pipeline <ExternalLink className="w-4 h-4" />
+            </Link>
+          )}
+        </div>
       </div>
       {(!issues || issues.length === 0) && (
-        <p className="text-gray-600 italic text-sm">No issues yet — generate seasons on the plot-arc step, then plan issues in the Pipeline.</p>
+        <p className="text-gray-600 italic text-sm">
+          {hasSeasons
+            ? 'No issues yet — “Generate issues from arc” seeds one issue per episode for each season, or plan them in the Pipeline.'
+            : 'No issues yet — generate seasons on the plot-arc step first, then seed issues from the arc.'}
+        </p>
       )}
       {(issues || []).map((i) => {
         const isLocked = locks[i.id]?.locked;

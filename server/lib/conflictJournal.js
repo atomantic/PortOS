@@ -34,7 +34,7 @@ import { join } from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from './fileUtils.js';
 import { createCollectionStore } from './collectionStore.js';
-import { canonicalStringify } from './objects.js';
+import { canonicalStringify, isPlainObject } from './objects.js';
 import { sanitizeRecordForWire } from './syncWire.js';
 
 const JOURNAL_TYPE_SCHEMA_VERSION = 1;
@@ -69,20 +69,41 @@ export const conflictJournalStore = () => store();
 // edit is a real conflict — mirrors the universe/series delete-vs-edit case).
 const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'coverKey', 'universeId', 'seriesId']);
 
+// Fields dropped from the conflict-detection hash, per kind. These are
+// server-managed values that mutate WITHOUT a user edit (and without bumping
+// `updatedAt`), so leaving them in the hash would read as a false divergence
+// and journal a spurious conflict. Issue `number` is renumber-managed:
+// `applyVolumeOrderedNumbers` shifts it in place when a *sibling* issue is
+// added/removed, so a local sibling-delete would otherwise make this issue's
+// `localHash !== base` even though no restorable content changed (the resulting
+// conflict card would have an empty diffSummary, since `number` isn't
+// restorable). Excluding it keeps the hash aligned with the restorable-field
+// set the UI actually shows. (mediaCollection narrows via its own scalar
+// projection below; universe/series exclude nothing, so their already-seeded
+// base hashes stay valid across upgrade.)
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'] });
+
 /**
  * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
  * canonicalStringify so the sender hashing what it pushes and the receiver
  * hashing its local copy agree byte-for-byte. For mediaCollection the wire form
  * is further narrowed to its overwritable scalars (see
- * MEDIA_COLLECTION_SCALAR_FIELDS) — both sides apply the same narrowing, so the
- * base hash stays consistent across peers. Returns null when the record has no
- * wire form (ephemeral non-tombstone, or invalid) — callers treat a null hash
- * as "cannot compare".
+ * MEDIA_COLLECTION_SCALAR_FIELDS); for issue the renumber-managed `number` is
+ * dropped (see HASH_EXCLUDED_FIELDS) — both sides apply the same narrowing, so
+ * the base hash stays consistent across peers. Returns null when the record has
+ * no wire form (ephemeral non-tombstone, or invalid) — callers treat a null
+ * hash as "cannot compare".
  */
 export function contentHashForRecord(kind, record) {
   const wire = sanitizeRecordForWire(kind, record);
   if (!wire) return null;
-  const hashInput = kind === 'mediaCollection' ? projectCollectionScalars(wire) : wire;
+  let hashInput = wire;
+  if (kind === 'mediaCollection') {
+    hashInput = projectCollectionScalars(wire);
+  } else if (HASH_EXCLUDED_FIELDS[kind]) {
+    const excluded = HASH_EXCLUDED_FIELDS[kind];
+    hashInput = Object.fromEntries(Object.entries(wire).filter(([k]) => !excluded.includes(k)));
+  }
   return createHash('sha256').update(canonicalStringify(hashInput)).digest('hex');
 }
 
@@ -192,11 +213,101 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // are structural links managed by the link/unlink helpers, not `updateCollection`
   // patches — so they're hashed for DETECTION but not offered for restore.
   mediaCollection: ['name', 'description', 'coverKey'],
+  // Issue: the user-authored content the merge can restore. `stages` carries
+  // the bulk of the work (prose, comic pages, render metadata). Server-owned /
+  // structural fields are excluded deliberately — `number` is renumber-managed,
+  // `seriesId` is the immutable parent link, `origin` is share provenance —
+  // and `mergeIssuePatch` accepts every field listed here.
+  issue: ['title', 'status', 'seasonId', 'arcPosition', 'arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget', 'stages'],
 });
 
-// Top-level shallow diff over the kind's restorable content fields — enough for
-// the UI to render "Name, Premise differ" with InlineDiff and offer each as a
-// selectable merge-field. Deep field diffing is a follow-up.
+const present = (v) => v !== undefined;
+const changedFlag = (lv, rv) => (present(lv) && present(rv) ? 'both' : (present(rv) ? 'remote-only' : 'local-only'));
+
+// First non-empty string among `fields`, in order — used both to pick a stable
+// PAIR key for an array element and to pick a human display LABEL for it.
+const firstStringField = (el, fields) => {
+  for (const k of fields) {
+    if (typeof el?.[k] === 'string' && el[k].trim()) return el[k];
+  }
+  return null;
+};
+// Stable key used to PAIR two array elements across the local/remote sides
+// (prefer an explicit id so a reorder/insert doesn't cascade). Null ⇒ the
+// element carries no identity and the array isn't deep-diffable by identity.
+const entryMatchKey = (el) => firstStringField(el, ['id', 'key', 'slug', 'name']);
+// Human-friendly LABEL for a changed sub-entry (a uuid id is a poor label, so a
+// name/title is preferred for display even when the match used the id).
+const entryLabel = (el, fallback) => firstStringField(el, ['name', 'title', 'label', 'key', 'slug', 'id']) ?? fallback;
+
+// Diff two key→value maps: one part per key whose value differs. Each part
+// carries a STABLE, unique `path` (the map key — used as the React render key)
+// and a human `label(key, lv, rv)` for display; for an object map the two are
+// the same, but for an identity-paired array the path is the (unique) match key
+// while the label is a friendly name that may collide. Returns the parts array,
+// or null when nothing differs.
+const diffEntryMaps = (lMap, rMap, label) => {
+  const parts = [];
+  for (const key of new Set([...lMap.keys(), ...rMap.keys()])) {
+    const lv = lMap.get(key);
+    const rv = rMap.get(key);
+    if (canonicalStringify(lv) === canonicalStringify(rv)) continue;
+    parts.push({ path: key, label: label(key, lv, rv), localValue: lv, remoteValue: rv, changed: changedFlag(lv, rv) });
+  }
+  return parts.length ? parts : null;
+};
+
+// Build a Map keyed by each element's stable match key. Returns null — so the
+// caller falls back to the whole-field diff — when ANY element is identity-less
+// (null key) OR two elements share a key (a duplicate id, or two entries that
+// both fall back to the same name): identity pairing isn't reliable, and a
+// last-wins Map would silently drop the collided element from the diff.
+const buildKeyedMap = (arr) => {
+  const map = new Map();
+  for (const el of arr) {
+    const key = entryMatchKey(el);
+    if (key === null || map.has(key)) return null;
+    map.set(key, el);
+  }
+  return map;
+};
+
+/**
+ * One-level structural diff of a single restorable field, used to render the
+ * Conflicts tab as "which sub-entry changed" instead of one giant JSON blob.
+ * Returns an array of changed sub-entries `[{ path, label, localValue,
+ * remoteValue, changed }]`, or `null` when the field isn't deepenable — a
+ * scalar, an array of scalars, an array of objects without unique stable
+ * identities, or a shape-mismatch (object vs array) — in which case the caller
+ * keeps the whole-field diff. Only entries that actually differ are emitted.
+ *
+ * - Object map / structured object (`categories`, `stages`, `arc`): one part
+ *   per key whose value differs (path = label = key).
+ * - Array of identity-bearing objects (`characters`, `places`, `seasons`):
+ *   paired by `entryMatchKey`; one part per identity that differs (a side
+ *   missing ⇒ added/removed). The `path` is the unique match key; the `label`
+ *   is a human name.
+ */
+export function deepFieldDiff(localVal, remoteVal) {
+  if (isPlainObject(localVal) && isPlainObject(remoteVal)) {
+    return diffEntryMaps(new Map(Object.entries(localVal)), new Map(Object.entries(remoteVal)), (key) => key);
+  }
+  if (Array.isArray(localVal) && Array.isArray(remoteVal)) {
+    if (localVal.length === 0 && remoteVal.length === 0) return null;
+    const lMap = buildKeyedMap(localVal);
+    const rMap = buildKeyedMap(remoteVal);
+    if (!lMap || !rMap) return null; // identity-less or duplicate keys → whole-field diff
+    return diffEntryMaps(lMap, rMap, (key, lv, rv) => entryLabel(lv ?? rv, key));
+  }
+  return null;
+}
+
+// Per-field diff over the kind's restorable content fields. A scalar field
+// carries its whole-field `localValue`/`remoteValue` for InlineDiff; an
+// object-map or array-of-objects field instead carries `parts` (the changed
+// sub-entries) so the UI renders one focused diff per entry rather than a
+// single giant JSON blob. The merge-fields selection stays at FIELD granularity
+// (the resolver applies whole snapshot fields) — `parts` is display-only.
 const diffSummary = (kind, local, remote) => {
   const fields = RESTORABLE_FIELDS[kind] || [];
   const out = [];
@@ -204,13 +315,10 @@ const diffSummary = (kind, local, remote) => {
     const lv = local?.[field];
     const rv = remote?.[field];
     if (canonicalStringify(lv) === canonicalStringify(rv)) continue;
-    const present = (v) => v !== undefined;
-    out.push({
-      field,
-      localValue: lv,
-      remoteValue: rv,
-      changed: present(lv) && present(rv) ? 'both' : (present(rv) ? 'remote-only' : 'local-only'),
-    });
+    const changed = changedFlag(lv, rv);
+    const parts = deepFieldDiff(lv, rv);
+    if (parts) out.push({ field, changed, parts });
+    else out.push({ field, localValue: lv, remoteValue: rv, changed });
   }
   return out;
 };

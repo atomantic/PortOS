@@ -24,7 +24,7 @@ import { planManuscriptPass, estimateTokens } from '../../lib/contextBudget.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
 import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS, MANUSCRIPT_TYPES } from './series.js';
-import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStage, updateStageWithLatest, assertStageUnlocked } from './issues.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStage, updateStageWithLatest, assertStageUnlocked, createIssue } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
@@ -1098,6 +1098,44 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
     providerId,
     model,
   };
+}
+
+/**
+ * Persist a season's generated episodes as issue records — one issue per
+ * episode, with the season pointer + arcPosition + arcRole + length profile
+ * forwarded so the downstream auto-run-text chain has a seed to expand
+ * against. Shared by the pipeline season-episodes route and the Story
+ * Builder's "generate issues from arc" action so both mint byte-identical
+ * issue shapes. The episode's logline + synopsis land in `stages.idea.input`.
+ */
+export async function commitEpisodesToIssues(seriesId, seasonId, episodes = []) {
+  const created = [];
+  for (const ep of episodes) {
+    const issue = await createIssue({
+      seriesId,
+      title: ep.title,
+      // Issue `number` is derived from (volume order, arcPosition) by
+      // `createIssue`'s renumber pass — a new episode falls into its volume's
+      // slot and later volumes' numbers shift to make room.
+      seasonId,
+      arcPosition: ep.number,
+      // `arcRole` carries the LLM's pilot / complication / midpoint / etc.
+      // classification forward so the idea-expansion prompt can size beats to
+      // the role (a finale needs a different cadence than a complication).
+      arcRole: ep.arcRole,
+      // Episode-level length sizing from the season-episodes LLM pass.
+      // Defaults to 'standard' inside the issue sanitizer when missing.
+      lengthProfile: ep.lengthProfile,
+      stages: {
+        idea: {
+          status: ep.synopsis ? 'edited' : 'empty',
+          input: [ep.logline, ep.synopsis].filter(Boolean).join('\n\n'),
+        },
+      },
+    });
+    created.push(issue);
+  }
+  return created;
 }
 
 /**

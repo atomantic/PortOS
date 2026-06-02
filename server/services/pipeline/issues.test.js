@@ -34,6 +34,7 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 const svc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
+const cj = await import('../../lib/conflictJournal.js');
 const { recordEvents } = await import('../sharing/recordEvents.js');
 
 describe('pipeline issues service', () => {
@@ -890,6 +891,51 @@ describe('pipeline issues service', () => {
         const live = await svc.listIssues({ seriesId: 'ser-sync-renum' });
         expect(live.map((i) => i.title)).toEqual(['A', 'C']);
         expect(live.map((i) => i.number)).toEqual([1, 2]);
+      });
+
+      describe('conflict journaling', () => {
+        beforeEach(() => cj.__resetBaseHashCacheForTests());
+
+        it('seeds a base hash for an issue inserted via sync (so a future divergence is detectable)', async () => {
+          const t0 = '2026-05-01T00:00:00Z';
+          const rec = { id: 'iss-seed-1', seriesId: 'ser-seed', title: 'Seeded', number: 1, status: 'draft', stages: {}, createdAt: t0, updatedAt: t0 };
+          const r = await svc.mergeIssuesFromSync([rec]);
+          expect(r).toEqual({ applied: true, count: 1 });
+          const stored = await svc.getIssue('iss-seed-1');
+          expect(await cj.getSyncBaseHash('issue', 'iss-seed-1')).toBe(cj.contentHashForRecord('issue', stored));
+          // No overwrite happened → nothing journaled.
+          expect(await cj.conflictJournalStore().loadAll()).toHaveLength(0);
+        });
+
+        it('archives the losing local issue on a true 3-way divergence before the LWW overwrite', async () => {
+          const t0 = '2026-05-01T00:00:00Z';
+          // Insert a base record from sync — seeds base = H(base).
+          const base = { id: 'iss-conf-1', seriesId: 'ser-conf', title: 'Base', number: 1, status: 'draft', stages: {}, createdAt: t0, updatedAt: t0 };
+          await svc.mergeIssuesFromSync([base]);
+          // Local diverges from base (title edit bumps updatedAt to ~now).
+          await svc.updateIssue('iss-conf-1', { title: 'LOCAL edit' });
+          // Remote also diverges AND is newer → overwrite wins; the divergence
+          // is a true 3-way conflict → the local edit is archived.
+          const remoteTs = new Date(Date.now() + 60_000).toISOString();
+          const r = await svc.mergeIssuesFromSync([{ ...base, title: 'REMOTE edit', updatedAt: remoteTs }], { source: { via: 'peer-push', peerId: 'peer-A' } });
+          expect(r.applied).toBe(true);
+          expect((await svc.getIssue('iss-conf-1')).title).toBe('REMOTE edit');
+          const entries = await cj.conflictJournalStore().loadAll();
+          expect(entries).toHaveLength(1);
+          expect(entries[0]).toMatchObject({ recordKind: 'issue', recordId: 'iss-conf-1', status: 'pending' });
+          expect(entries[0].localSnapshot.title).toBe('LOCAL edit');
+          expect(entries[0].source).toMatchObject({ via: 'peer-push', peerId: 'peer-A' });
+        });
+
+        it('does NOT journal a clean sequential sync update (local matches the base)', async () => {
+          const t0 = '2026-05-01T00:00:00Z';
+          const base = { id: 'iss-clean-1', seriesId: 'ser-clean', title: 'Base', number: 1, status: 'draft', stages: {}, createdAt: t0, updatedAt: t0 };
+          await svc.mergeIssuesFromSync([base]);
+          // Local untouched since base; remote is just a newer edit → clean LWW.
+          const remoteTs = new Date(Date.now() + 60_000).toISOString();
+          await svc.mergeIssuesFromSync([{ ...base, title: 'Remote-only edit', updatedAt: remoteTs }]);
+          expect(await cj.conflictJournalStore().loadAll()).toHaveLength(0);
+        });
       });
     });
 

@@ -1023,6 +1023,63 @@ describe('promptRunner — retry-with-fallback', () => {
     }));
     expect(status.markUnavailable).not.toHaveBeenCalled();
   });
+
+  it('coalesces a 10-concurrent-failure storm into one provider-map read + one mark-unavailable', async () => {
+    // Acceptance for [coalesce-fallback-provider-failure-storm]: when a
+    // stuck provider has N simultaneous in-flight calls, the per-provider
+    // mark-and-pick (getAllProviders + markUnavailable) must run ONCE for
+    // the whole storm — not once per failing call — while every call still
+    // recovers via its own fallback run.
+    const status = mockToolkitWithFallback();
+    // clearAllMocks() resets call history but NOT mockImplementation, so a
+    // throwing noteFallbackHandled impl set by an earlier test would leak in
+    // here as best-effort-suppressed stderr. Reset it to a clean no-op.
+    autoFixer.noteFallbackHandled.mockImplementation(() => {});
+
+    // Gate the provider-map read so the first failure's mark-and-pick stays
+    // in-flight long enough for all 10 failures to pile onto it. Without
+    // this hold the first could settle before later calls reach their catch,
+    // defeating the coalescing the test means to assert.
+    let releaseGetAll;
+    const getAllGate = new Promise((resolve) => { releaseGetAll = resolve; });
+    providers.getAllProviders.mockReturnValue(
+      getAllGate.then(() => ({ activeProvider: null, providers: [primaryCli, primaryApi, fallbackApi] }))
+    );
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'storm boom' });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    const calls = Array.from({ length: 10 }, () => runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    }));
+
+    // Let every call fail its primary run and register on the shared
+    // in-flight mark-and-pick, THEN release the gated read.
+    await new Promise((r) => setTimeout(r, 0));
+    releaseGetAll();
+
+    const results = await Promise.all(calls);
+
+    // Every call recovered through its own fallback run.
+    expect(results).toHaveLength(10);
+    for (const out of results) {
+      expect(out.text).toBe('fallback content');
+      expect(out.usedFallback).toBe(true);
+    }
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(10);
+
+    // ...but the storm read the provider map and benched the provider once.
+    expect(providers.getAllProviders).toHaveBeenCalledTimes(1);
+    expect(status.getFallbackProvider).toHaveBeenCalledTimes(1);
+    expect(status.markUnavailable).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('resolveProviderAndModel', () => {

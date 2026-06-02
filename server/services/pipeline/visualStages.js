@@ -773,6 +773,55 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
 }
 
 /**
+ * Validate per-scene wardrobe picks at the request boundary. The generic
+ * visual-image route accepts `characterAppearances` ([{ characterId,
+ * wardrobeId? }]) threaded from the storyboards picker; the Zod schema only
+ * checks shape (non-empty ids), so this is the first point that can confirm
+ * the ids actually resolve to a canon character + one of its wardrobes.
+ *
+ * Throws a 400 ServerError on a dangling characterId/wardrobeId rather than
+ * leaning on `buildScenePrompt`'s defensive read, which would silently drop
+ * the pick. A dangling id is a client/state bug (stale picker, deleted
+ * character) worth surfacing — not a no-op. A null/absent `wardrobeId` is
+ * valid (the character renders on their canonical body description); only a
+ * non-empty wardrobeId is resolved against the character's wardrobes.
+ *
+ * Scoped to the request boundary on purpose: the persisted-scene paths
+ * (`enqueueStoryboardSceneVideo`, `enqueueStoryboardShotStartFrame`) and the
+ * shared `composeVisualPrompt` primitive — also used by episode-video batch
+ * stitching — keep `buildScenePrompt`'s resilient silent-drop convention so a
+ * single dangling pick can't abort a whole batch render.
+ */
+export function assertCharacterAppearancesResolve(characterAppearances, characters) {
+  const picks = Array.isArray(characterAppearances) ? characterAppearances : [];
+  if (!picks.length) return;
+  const charById = new Map(
+    (Array.isArray(characters) ? characters : [])
+      .filter((c) => c && c.id)
+      .map((c) => [c.id, c]),
+  );
+  for (const pick of picks) {
+    if (!pick || !pick.characterId) continue;
+    const character = charById.get(pick.characterId);
+    if (!character) {
+      throw new ServerError(
+        `characterAppearances references unknown character id "${pick.characterId}"`,
+        { status: 400, code: 'PIPELINE_VISUAL_BAD_CHARACTER' },
+      );
+    }
+    if (pick.wardrobeId) {
+      const wardrobe = (character.wardrobes || []).find((w) => w && w.id === pick.wardrobeId);
+      if (!wardrobe) {
+        throw new ServerError(
+          `characterAppearances references unknown wardrobe id "${pick.wardrobeId}" for character "${character.name || pick.characterId}"`,
+          { status: 400, code: 'PIPELINE_VISUAL_BAD_WARDROBE' },
+        );
+      }
+    }
+  }
+}
+
+/**
  * Enqueue one image render for a pipeline issue's visual stage. The caller
  * records the returned jobId on the issue's stage artifact list
  * (e.g. stages.comicPages.pages[i].panels[j].imageJobId).
@@ -787,6 +836,10 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
   assertStageUnlocked(issue, stageId);
+  // Resolve wardrobe picks against canon at the request boundary — a dangling
+  // characterId/wardrobeId is a client/state bug worth a 400, not the silent
+  // drop buildScenePrompt would otherwise apply.
+  assertCharacterAppearancesResolve(options.characterAppearances, canon.characters);
   const mode = resolveMode(options, settings);
   // Match on description + slugline so the featured-character set (and thus
   // which wardrobe picks apply) stays consistent with the scene-video / shot

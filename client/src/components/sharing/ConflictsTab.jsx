@@ -118,8 +118,24 @@ function ConflictEntry({ entry, onResolved }) {
                 <input type="checkbox" checked={selectedFields.has(d.field)} onChange={() => toggleField(d.field)} />
                 {d.field} <span className="text-[10px] text-gray-500">({d.changed})</span>
               </label>
-              {/* old = your archived local value, new = the version that synced in */}
-              <InlineDiff oldText={asText(d.localValue)} newText={asText(d.remoteValue)} />
+              {/* old = your archived local value, new = the version that synced in.
+                  A deep-diffable field (object map / array of canon entries) carries
+                  `parts` — one focused diff per changed sub-entry, labelled by its
+                  key/name — instead of one giant JSON blob. */}
+              {Array.isArray(d.parts) ? (
+                <div className="space-y-2">
+                  {d.parts.map((p) => (
+                    <div key={p.path} className="pl-2 border-l-2 border-port-border">
+                      <div className="font-mono text-[10px] text-gray-400 mb-1">
+                        {p.label ?? p.path} <span className="text-gray-600">({p.changed})</span>
+                      </div>
+                      <InlineDiff oldText={asText(p.localValue)} newText={asText(p.remoteValue)} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <InlineDiff oldText={asText(d.localValue)} newText={asText(d.remoteValue)} />
+              )}
             </div>
           ))}
           <div className="flex justify-end">
