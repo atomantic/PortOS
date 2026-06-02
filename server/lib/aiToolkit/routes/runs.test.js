@@ -109,11 +109,14 @@ describe('POST /api/runs — fallback-model execution', () => {
     });
 
     it('CLI: clones the fallback provider with the pinned model as defaultModel', async () => {
-      const { app, runnerService } = makeApp(
-        runData({ providerType: 'cli', defaultModel: 'fallback-default', usedFallback: true, fallbackModel: PINNED })
-      );
+      const run = runData({ providerType: 'cli', defaultModel: 'fallback-default', usedFallback: true, fallbackModel: PINNED });
+      const { app, runnerService } = makeApp(run);
       await post(app);
-      expect(runnerService.executeCliRun.mock.calls[0][1].defaultModel).toBe(PINNED);
+      const cliProvider = runnerService.executeCliRun.mock.calls[0][1];
+      expect(cliProvider.defaultModel).toBe(PINNED);
+      // runModel !== provider.defaultModel, so the route must hand a *clone* to the
+      // CLI runner — never mutate the shared fallback provider record.
+      expect(cliProvider).not.toBe(run.provider);
     });
   });
 
@@ -148,6 +151,9 @@ describe('POST /api/runs — fallback-model execution', () => {
       const cliProvider = runnerService.executeCliRun.mock.calls[0][1];
       expect(cliProvider.defaultModel).toBe(FALLBACK_DEFAULT);
       expect(cliProvider.defaultModel).not.toBe(REQUEST_MODEL);
+      // No pin and runModel === provider.defaultModel, so the route skips the clone
+      // and passes the fallback provider as-is (its default is already correct).
+      expect(cliProvider).toBe(provider.provider);
     });
   });
 
