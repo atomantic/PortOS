@@ -97,8 +97,9 @@ export default function PipelineSeries() {
   const patchSeries = (patch) => setSeries((prev) => ({ ...prev, ...patch }));
 
   // Host-side ArcCanvas wiring (lastSavedRef dirty-check + server-confirmed
-  // setters). Flushes the full bible field-set; a pre-flush failure surfaces a
-  // toast (non-silent) so the user knows their edits didn't persist.
+  // setters). Flushes the full bible field-set; the API helper's auto-toast is
+  // suppressed (silent) so `onFlushError` emits the single failure toast that
+  // tells the user their edits didn't persist.
   const { updateSeriesFromServer, handleIssuesUpdate, flushPending } = useArcCanvasSync({
     series,
     setSeries,
