@@ -60,7 +60,7 @@ import {
 import { extractCanonFromProse, summarizeCanonExtraction } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
-import { mergeSeries } from '../services/recordMerge.js';
+import { mergeSeries, buildCascadeContext } from '../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
@@ -133,11 +133,18 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NO_RENDERED_ISSUES]: 409,
   // recordMerge validation (unresolved conflicts, bad ids, cross-universe).
   MERGE_VALIDATION: 400,
+  // recordMerge cascade partially completed (the issue reassign failed) → 409 so
+  // the client can surface "merge incomplete, re-run to finish".
+  MERGE_CASCADE_INCOMPLETE: 409,
 };
 
 const mapServiceError = (err) => {
   const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
+  if (status) {
+    // An incomplete merge cascade forwards the survivor/loser ids + which step
+    // failed so the UI can tell the user exactly what didn't move.
+    return new ServerError(err.message, { status, code: err.code, context: buildCascadeContext(err) });
+  }
   return err;
 };
 

@@ -162,6 +162,7 @@ describe('recordMerge — pure union helpers', () => {
 
 describe('recordMerge — mergeUniverses (integration)', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
     mkdirSync(TEST_DATA_ROOT, { recursive: true });
     uuidCounter = 0;
@@ -221,6 +222,36 @@ describe('recordMerge — mergeUniverses (integration)', () => {
     expect(survivorCol.items.map((i) => i.ref)).toContain('loser-pic.png');
   });
 
+  it('aborts the cascade before tombstoning when a child re-point fails, and is resumable', async () => {
+    const { survivor, loser } = await seed();
+    const childA = await seriesSvc.createSeries({ name: 'A', universeId: loser.id });
+    const childB = await seriesSvc.createSeries({ name: 'B', universeId: loser.id });
+
+    // Force ONLY the second child's re-point to fail (disk error mid-cascade).
+    const realUpdate = seriesSvc.updateSeries;
+    const spy = vi.spyOn(seriesSvc, 'updateSeries').mockImplementation((id, patch) =>
+      (id === childB.id ? Promise.reject(new Error('disk full')) : realUpdate(id, patch)));
+
+    await expect(merge.mergeUniverses(survivor.id, loser.id, {}))
+      .rejects.toMatchObject({ code: 'MERGE_CASCADE_INCOMPLETE', failed: [{ id: childB.id }] });
+
+    // Loser left LIVE (NOT tombstoned over its un-moved child).
+    expect((await universeSvc.getUniverse(loser.id)).deleted).toBeFalsy();
+    // Survivor already holds the union (the write is idempotent across re-runs).
+    expect(Object.keys((await universeSvc.getUniverse(survivor.id)).categories))
+      .toEqual(expect.arrayContaining(['landscapes', 'outfits']));
+    // Child A moved; child B is still under the loser.
+    expect((await seriesSvc.getSeries(childA.id)).universeId).toBe(survivor.id);
+    expect((await seriesSvc.getSeries(childB.id)).universeId).toBe(loser.id);
+
+    // Clear the fault and re-run → converges: B re-points, loser tombstoned.
+    spy.mockRestore();
+    const result = await merge.mergeUniverses(survivor.id, loser.id, {});
+    expect(result.merged).toBe(true);
+    expect((await seriesSvc.getSeries(childB.id)).universeId).toBe(survivor.id);
+    await expect(universeSvc.getUniverse(loser.id)).rejects.toMatchObject({ code: universeSvc.ERR_NOT_FOUND });
+  });
+
   it('refuses to execute with an unresolved scalar conflict', async () => {
     const survivor = await universeSvc.createUniverse({ name: 'X', starterPrompt: 'survivor-prompt' });
     const loser = await universeSvc.createUniverse({ name: 'X', starterPrompt: 'loser-prompt' });
@@ -234,6 +265,7 @@ describe('recordMerge — mergeUniverses (integration)', () => {
 
 describe('recordMerge — mergeSeries (integration)', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
     mkdirSync(TEST_DATA_ROOT, { recursive: true });
     uuidCounter = 0;
@@ -313,6 +345,57 @@ describe('recordMerge — mergeSeries (integration)', () => {
     // The moved issue maps to no persisted season → un-grouped, not a dangling ref.
     const [moved] = (await issuesSvc.listIssues({ seriesId: survivor.id })).filter((i) => i.title === 'Overflow Issue');
     expect(moved.seasonId).toBeNull();
+  });
+
+  it('aborts the series cascade before tombstoning when the issue reassign fails, and is resumable', async () => {
+    const u = await universeSvc.createUniverse({ name: 'U' });
+    const survivor = await seriesSvc.createSeries({ name: 'Twin', universeId: u.id });
+    const loser = await seriesSvc.createSeries({ name: 'Twin', universeId: u.id });
+    await issuesSvc.createIssue({ seriesId: loser.id, title: 'Loser Issue' });
+
+    const spy = vi.spyOn(issuesSvc, 'reassignIssuesToSeries').mockRejectedValueOnce(new Error('reassign boom'));
+
+    await expect(merge.mergeSeries(survivor.id, loser.id, {}))
+      .rejects.toMatchObject({ code: 'MERGE_CASCADE_INCOMPLETE', failed: [{ step: 'reassign-issues' }] });
+
+    // Loser left LIVE; its issue is still under the loser (nothing was moved).
+    await expect(seriesSvc.getSeries(loser.id)).resolves.toMatchObject({ id: loser.id });
+    expect(await issuesSvc.listIssues({ seriesId: loser.id })).toHaveLength(1);
+
+    // Clear the fault and re-run → converges: issue moves, loser tombstoned.
+    spy.mockRestore();
+    const result = await merge.mergeSeries(survivor.id, loser.id, {});
+    expect(result.merged).toBe(true);
+    expect(await issuesSvc.listIssues({ seriesId: survivor.id })).toHaveLength(1);
+    await expect(seriesSvc.getSeries(loser.id)).rejects.toMatchObject({ code: seriesSvc.ERR_NOT_FOUND });
+  });
+
+  it('repairs survivor issue numbering on re-run when a prior reassign partially persisted', async () => {
+    const u = await universeSvc.createUniverse({ name: 'U' });
+    const survivor = await seriesSvc.createSeries({ name: 'Twin', universeId: u.id });
+    const loser = await seriesSvc.createSeries({ name: 'Twin', universeId: u.id });
+
+    // reassignIssuesToSeries persists per-issue (saveIssuesNow → Promise.all of
+    // per-record writes), so a mid-flight failure can leave the loser's issues
+    // already moved under the survivor but with the survivor renumber only
+    // half-applied — AND zero issues left under the loser. On re-run the
+    // `loserIssues.length > 0` branch is skipped, so without the step-2.5 repair
+    // the dirty numbering would never be fixed before the tombstone. Fabricate
+    // that exact post-partial-persist on-disk state (non-contiguous 1/5/9, loser
+    // empty) — a live Promise.all partial failure has non-deterministic save
+    // ordering, so reproducing the resulting state directly keeps this stable.
+    const store = issuesSvc.issueStore();
+    await store.saveOneNow('iss-surv-a', { id: 'iss-surv-a', seriesId: survivor.id, title: 'A', number: 1 });
+    await store.saveOneNow('iss-surv-b', { id: 'iss-surv-b', seriesId: survivor.id, title: 'B', number: 5 });
+    await store.saveOneNow('iss-surv-c', { id: 'iss-surv-c', seriesId: survivor.id, title: 'C', number: 9 });
+    expect(await issuesSvc.listIssues({ seriesId: loser.id })).toHaveLength(0);
+
+    const result = await merge.mergeSeries(survivor.id, loser.id, {});
+    expect(result.merged).toBe(true);
+    // Step 2.5 renumbered the survivor to a contiguous sequence and tombstoned the loser.
+    const survivorIssues = await issuesSvc.listIssues({ seriesId: survivor.id });
+    expect(survivorIssues.map((i) => i.number).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    await expect(seriesSvc.getSeries(loser.id)).rejects.toMatchObject({ code: seriesSvc.ERR_NOT_FOUND });
   });
 
   it('rejects merging series from different universes', async () => {
