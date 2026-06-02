@@ -11,7 +11,7 @@ vi.mock('../../services/api', () => ({
   updateUniverse: vi.fn(() => Promise.resolve(null)),
 }));
 
-import StyleProbeImage, { buildStyleProbePrompt, hasStyleForProbe, probeStyleKey } from './StyleProbeImage';
+import StyleProbeImage, { buildStyleProbePrompt, hasStyleForProbe, probeStyleKey, shouldPersistProbe } from './StyleProbeImage';
 
 describe('StyleProbeImage — buildStyleProbePrompt', () => {
   it('uses embrace tokens as positive and avoid tokens as negative', () => {
@@ -71,6 +71,34 @@ describe('StyleProbeImage — probeStyleKey (mid-render drift guard)', () => {
     const a = { styleNotes: 'one', influences: { embrace: ['noir'], avoid: [] } };
     const b = { styleNotes: 'two', influences: { embrace: ['noir'], avoid: [] } };
     expect(probeStyleKey(a)).toBe(probeStyleKey(b));
+  });
+});
+
+describe('StyleProbeImage — shouldPersistProbe (async completion guard)', () => {
+  const A = 'keyA';
+  const B = 'keyB';
+
+  it('persists when the draft is clean and the live style still matches the queued probe', () => {
+    expect(shouldPersistProbe({ styleDirty: false, capturedKey: A, currentKey: A })).toBe(true);
+  });
+
+  it('drops when influences were saved to a different style mid-render', () => {
+    // queued A, then edited + saved B → live key is now B (clean), captured A.
+    expect(shouldPersistProbe({ styleDirty: false, capturedKey: A, currentKey: B })).toBe(false);
+  });
+
+  it('drops the codex revert case: queued A, saved B, draft reverted to A but unsaved', () => {
+    // draft key matches captured A, but draft != saved (B) so styleDirty is true.
+    // Without the styleDirty guard the A image would wrongly pin to the saved B record.
+    expect(shouldPersistProbe({ styleDirty: true, capturedKey: A, currentKey: A })).toBe(false);
+  });
+
+  it('drops on unsaved style edits during render (conservative — safe re-run)', () => {
+    expect(shouldPersistProbe({ styleDirty: true, capturedKey: A, currentKey: B })).toBe(false);
+  });
+
+  it('drops when no probe was queued (captured key absent)', () => {
+    expect(shouldPersistProbe({ styleDirty: false, capturedKey: null, currentKey: A })).toBe(false);
   });
 });
 

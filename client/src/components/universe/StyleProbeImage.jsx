@@ -43,6 +43,19 @@ export function hasStyleForProbe(universe) {
 // different influences.
 export const probeStyleKey = (universe) => JSON.stringify(buildStyleProbePrompt(universe));
 
+// Decide whether a completed probe may be persisted onto the saved record. The
+// render-time gate ensures a probe only STARTS while the style is clean, but the
+// job is async — so the completion handler must re-confirm two things hold:
+//   1. the draft still equals the saved record (`!styleDirty`) — otherwise the
+//      image would pin to a record whose influences differ from the draft (e.g.
+//      the user saved a different style, or reverted the draft without saving);
+//   2. the live style still matches what the probe was queued against — so a
+//      save-to-a-different-style mid-render can't pin a stale image either.
+// Conservative by design: it would rather drop a still-valid image (asking for a
+// harmless re-run) than ever pin one built from different influences.
+export const shouldPersistProbe = ({ styleDirty, capturedKey, currentKey }) =>
+  !styleDirty && capturedKey !== null && currentKey === capturedKey;
+
 export default function StyleProbeImage({ universe, onUniverseChange, canRender = true, styleDirty = false, onPreview = null, onRenderComplete = null }) {
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
   const [jobId, setJobId] = useState(null);
@@ -87,11 +100,11 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     if (!filename || !universe?.id) return;
     if (processedRef.current.has(filename)) return; // multi-fire guard
     processedRef.current.add(filename);
-    // The probe job is async; if the live style drifted from what it was queued
-    // against (the user edited + saved influences while it rendered), the image
-    // no longer represents the saved record — drop it rather than pin a
-    // mismatched ref the gate at render time meant to prevent.
-    if (probeStyleKeyRef.current !== null && probeStyleKey(universe) !== probeStyleKeyRef.current) {
+    // The probe job is async; only persist when the draft still equals the saved
+    // record AND the live style matches what the probe was queued against — else
+    // the image would pin to a record built from different influences (the very
+    // mismatch the render-time gate exists to prevent).
+    if (!shouldPersistProbe({ styleDirty, capturedKey: probeStyleKeyRef.current, currentKey: probeStyleKey(universe) })) {
       toast.error('Style changed while the base style rendered — re-run the probe');
       return;
     }
