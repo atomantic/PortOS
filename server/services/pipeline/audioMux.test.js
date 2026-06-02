@@ -60,7 +60,7 @@ vi.mock('child_process', async () => {
   };
 });
 
-const { muxMusicBed, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
+const { muxMusicBed, muxVoLines, buildVoMuxArgs, selectPlacedVoLines, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
 
 beforeEach(async () => {
   spawnCalls.length = 0;
@@ -177,5 +177,157 @@ describe('muxMusicBed', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/ffmpeg exit 1/);
     expect(result.reason).toContain('last line of stderr');
+  });
+});
+
+describe('selectPlacedVoLines', () => {
+  it('keeps only rendered + placed lines and resolves paths under PATHS.audio', () => {
+    const out = selectPlacedVoLines([
+      { audioFilename: 'a.wav', offsetSec: 2 },     // rendered + placed ✓
+      { audioFilename: 'b.wav', offsetSec: null },  // rendered, not placed ✗
+      { audioFilename: null, offsetSec: 5 },        // placed, not rendered ✗
+      { audioFilename: 'c.wav', offsetSec: -1 },    // negative offset ✗
+      { audioFilename: 'd.wav', offsetSec: 0 },     // offset 0 is valid ✓
+    ]);
+    expect(out).toEqual([
+      { path: expect.stringMatching(/a\.wav$/), offsetSec: 2 },
+      { path: expect.stringMatching(/d\.wav$/), offsetSec: 0 },
+    ]);
+  });
+  it('returns [] for non-array / empty input', () => {
+    expect(selectPlacedVoLines(null)).toEqual([]);
+    expect(selectPlacedVoLines(undefined)).toEqual([]);
+    expect(selectPlacedVoLines([])).toEqual([]);
+  });
+});
+
+describe('buildVoMuxArgs', () => {
+  it('delays each VO line to its offset and pads to video length (no music)', () => {
+    const args = buildVoMuxArgs({
+      inputVideoPath: '/v.mp4',
+      voLines: [{ path: '/a.wav', offsetSec: 1.5 }, { path: '/b.wav', offsetSec: 4 }],
+      outPath: '/out.mp4',
+    });
+    // video is input 0, the two VO wavs are inputs 1 and 2 (no music input)
+    expect(args.slice(0, 6)).toEqual(['-i', '/v.mp4', '-i', '/a.wav', '-i', '/b.wav']);
+    expect(args).not.toContain('-stream_loop');
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    // offsets become adelay milliseconds, all channels
+    expect(filter).toContain('[1:a]adelay=1500:all=1');
+    expect(filter).toContain('[2:a]adelay=4000:all=1');
+    // two lines → amix at full level, then padded so -shortest matches video
+    expect(filter).toContain('amix=inputs=2:normalize=0');
+    expect(filter).toContain('apad[aout]');
+    // no music → no sidechain ducking
+    expect(filter).not.toContain('sidechaincompress');
+    expect(args).toContain('-shortest');
+    expect(args[args.indexOf('-map') + 1]).toBe('0:v');
+    expect(args[args.length - 1]).toBe('/out.mp4');
+  });
+
+  it('ducks the music bed under VO via sidechain compression when music is present', () => {
+    const args = buildVoMuxArgs({
+      inputVideoPath: '/v.mp4',
+      voLines: [{ path: '/a.wav', offsetSec: 0 }],
+      musicPath: '/m.mp3',
+      musicGain: 0.4,
+      outPath: '/out.mp4',
+    });
+    // music is the looped last input (index 2 here: video=0, vo=1, music=2)
+    expect(args).toContain('-stream_loop');
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('asplit=2[voscraw][vomain]');
+    expect(filter).toContain('[2:a]volume=0.400');
+    expect(filter).toContain('sidechaincompress=threshold=');
+    expect(filter).toContain('[bed][vosc]sidechaincompress');
+    expect(filter).toContain('[ducked][vomain]amix=inputs=2:normalize=0[aout]');
+    // The sidechain KEY must be padded to infinity so the music bed survives
+    // past the last VO line (sidechaincompress ends with its shortest input).
+    expect(filter).toContain('[voscraw]apad[vosc]');
+  });
+
+  it('uses a single VO label without amix for one line', () => {
+    const args = buildVoMuxArgs({
+      inputVideoPath: '/v.mp4',
+      voLines: [{ path: '/a.wav', offsetSec: 2 }],
+      outPath: '/out.mp4',
+    });
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('[vo0]apad[aout]');
+    expect(filter).not.toContain('amix');
+  });
+});
+
+describe('muxVoLines', () => {
+  it('returns ok:false when no VO line is placed (lets caller fall back to music bed)', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'v.mp4');
+    await writeFile(video, Buffer.from('vid'));
+    // line missing offsetSec → not placed; non-existent path → dropped
+    const result = await muxVoLines(video, { voLines: [
+      { path: join(TEST_HOME, 'a.wav'), offsetSec: null },
+      { path: join(TEST_HOME, 'ghost.wav'), offsetSec: 2 },
+    ] });
+    expect(result).toEqual({ ok: false, reason: 'no placed VO lines' });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it('returns ok:false when the input video is missing', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const result = await muxVoLines(join(TEST_HOME, 'nope.mp4'), { voLines: [{ path: 'x', offsetSec: 0 }] });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('input video missing');
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it('builds the VO mux and swaps the file in on success', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'v.mp4');
+    const wav = join(TEST_HOME, 'a.wav');
+    await writeFile(video, Buffer.from('vid'));
+    await writeFile(wav, Buffer.from('wav'));
+
+    const result = await muxVoLines(video, { voLines: [{ path: wav, offsetSec: 3 }] });
+    expect(result.ok).toBe(true);
+    expect(result.lineCount).toBe(1);
+    expect(result.ducked).toBe(false);
+    expect(spawnCalls).toHaveLength(1);
+    const { args } = spawnCalls[0];
+    expect(args[args.indexOf('-filter_complex') + 1]).toContain('adelay=3000:all=1');
+    // output is a uniquely-suffixed temp that gets renamed over the input
+    expect(args[args.length - 1]).toMatch(/\.vomux\.[0-9a-f-]+\.mp4$/);
+  });
+
+  it('drops a missing music file to a VO-only mux rather than failing', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'v.mp4');
+    const wav = join(TEST_HOME, 'a.wav');
+    await writeFile(video, Buffer.from('vid'));
+    await writeFile(wav, Buffer.from('wav'));
+
+    const result = await muxVoLines(video, {
+      voLines: [{ path: wav, offsetSec: 0 }],
+      musicPath: join(TEST_HOME, 'gone.mp3'),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ducked).toBe(false);
+    const filter = spawnCalls[0].args[spawnCalls[0].args.indexOf('-filter_complex') + 1];
+    expect(filter).not.toContain('sidechaincompress');
+  });
+
+  it('ducks the music bed when both VO and a real music file are present', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'v.mp4');
+    const wav = join(TEST_HOME, 'a.wav');
+    const music = join(FAKE_MUSIC_DIR, 'm.mp3');
+    await writeFile(video, Buffer.from('vid'));
+    await writeFile(wav, Buffer.from('wav'));
+    await writeFile(music, Buffer.from('mus'));
+
+    const result = await muxVoLines(video, { voLines: [{ path: wav, offsetSec: 1 }], musicPath: music });
+    expect(result.ok).toBe(true);
+    expect(result.ducked).toBe(true);
+    const filter = spawnCalls[0].args[spawnCalls[0].args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('sidechaincompress');
   });
 });

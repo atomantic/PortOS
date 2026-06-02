@@ -11,6 +11,8 @@
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
 #   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 0; opt in with INSTALL_LTX2=1.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
+#   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
+#   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 
 set -euo pipefail
 
@@ -273,6 +275,69 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
   echo "✅ HunyuanVideo_MLX venv ready: ${HUNYUAN_PY}"
 fi
 
+INSTALL_MUSICGEN="${INSTALL_MUSICGEN:-0}"
+if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
+  # Local background-music generation for the pipeline audio stage (Phase
+  # 4c.2). Meta's MusicGen runs on Apple Silicon via MLX, but the MLX
+  # implementation lives in ml-explore/mlx-examples (`musicgen/`), which isn't
+  # a pip package — so we clone the repo and build a sibling venv. The sidecar
+  # `scripts/generate_musicgen.py` imports `MusicGen` from the clone;
+  # server/lib/pythonSetup.js (resolveMusicgenPython) looks for python3 here.
+  if ! is_macos; then
+    echo "⚠️ INSTALL_MUSICGEN=1 is macOS / Apple-Silicon only (MLX). Skipping." >&2
+  else
+    if ! have git; then
+      echo "❌ INSTALL_MUSICGEN=1 requires git." >&2
+      exit 1
+    fi
+    MUSICGEN_VENV="${HOME}/.portos/venv-musicgen"
+    MUSICGEN_PY="$MUSICGEN_VENV/bin/python3"
+    MLX_EXAMPLES_DIR="${HOME}/.portos/mlx-examples"
+    MLX_EXAMPLES_PIN="${MLX_EXAMPLES_PIN:-main}"
+    mkdir -p "${HOME}/.portos"
+
+    if [[ ! -d "${MLX_EXAMPLES_DIR}/.git" ]]; then
+      echo "📦 Cloning ml-explore/mlx-examples → ${MLX_EXAMPLES_DIR}..."
+      git clone https://github.com/ml-explore/mlx-examples.git "${MLX_EXAMPLES_DIR}"
+    fi
+    # Pin to a known commit when MLX_EXAMPLES_PIN is set to a SHA; default
+    # 'main' tracks HEAD (the musicgen example is stable, but a pin keeps new
+    # installs reproducible — mirror of the LTX2_PIN pattern above).
+    (cd "${MLX_EXAMPLES_DIR}" && git fetch --quiet origin && git checkout --quiet "${MLX_EXAMPLES_PIN}")
+
+    if [[ ! -x "$MUSICGEN_PY" ]]; then
+      echo "📦 Creating MusicGen venv at ${MUSICGEN_VENV}..."
+      "$PYTHON_BIN" -m venv "$MUSICGEN_VENV"
+    fi
+    echo "📦 Installing MusicGen (MLX) packages into ${MUSICGEN_VENV}..."
+    "$MUSICGEN_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # mlx + numpy run the model; transformers (<5 for MLX compat) + sentencepiece
+    # provide the T5 text conditioner's tokenizer; scipy is imported by the
+    # mlx-examples musicgen utils. torch is required because MusicGen.from_pretrained
+    # loads the upstream PyTorch checkpoints (torch.load) before converting to MLX —
+    # without it generation fails at model-load even though the class imports fine.
+    # We write WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
+    "$MUSICGEN_PY" -m pip install --upgrade \
+      mlx \
+      numpy \
+      torch \
+      "transformers<5" \
+      sentencepiece \
+      "huggingface_hub[hf_xet]" \
+      scipy
+    # Verify BOTH that the class imports AND that torch loaded — the import alone
+    # passed even when torch was missing, so install used to report ready and
+    # then fail on the first generation.
+    if ! PORTOS_MUSICGEN_RUNTIME_DIR="${MLX_EXAMPLES_DIR}/musicgen" \
+         "$MUSICGEN_PY" -c "import sys, os, torch; sys.path.insert(0, os.environ['PORTOS_MUSICGEN_RUNTIME_DIR']); from musicgen import MusicGen" 2>/dev/null; then
+      echo "❌ MusicGen venv built but 'import torch; from musicgen import MusicGen' failed." >&2
+      echo "   Check that ${MLX_EXAMPLES_DIR}/musicgen exists and torch installed cleanly." >&2
+      exit 1
+    fi
+    echo "✅ MusicGen venv ready: $MUSICGEN_PY (runtime: ${MLX_EXAMPLES_DIR}/musicgen @ ${MLX_EXAMPLES_PIN:0:12})"
+  fi
+fi
+
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
@@ -342,6 +407,9 @@ echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"
 if [[ "$INSTALL_LTX2" == "1" ]]; then
   echo "   LTX-2.3:   ${HOME}/.portos/ltx-2-mlx/.venv/bin/python3 (separate venv, dgrauet pipeline @ ${LTX2_PIN:0:12})"
+fi
+if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
+  echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
 fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"

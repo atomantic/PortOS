@@ -383,6 +383,20 @@ const AUDIO_LINE_TEXT_MAX = 4000;
 const AUDIO_LINES_MAX = 1000;
 const AUDIO_FILENAME_MAX = 500;
 const AUDIO_LINE_ID_MAX = 80;
+// Cap a per-line VO offset at a generous episode length so a corrupted record
+// can't push an `adelay` filter into absurd territory. Two hours is far beyond
+// any single issue's runtime.
+const AUDIO_LINE_OFFSET_MAX_SEC = 7200;
+// Normalize a per-line start offset (seconds into the stitched episode where
+// this VO line plays). `null` = "not placed yet" — kept distinct from `0`
+// ("plays at the very start") so the muxer can skip un-placed lines instead of
+// stacking them all at t=0. Negative / non-finite input collapses to null.
+export const sanitizeLineOffset = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.min(n, AUDIO_LINE_OFFSET_MAX_SEC);
+};
 const sanitizeAudioLine = (raw, i) => {
   if (!raw || typeof raw !== 'object') return null;
   const text = trimTo(raw.text, AUDIO_LINE_TEXT_MAX);
@@ -398,6 +412,9 @@ const sanitizeAudioLine = (raw, i) => {
     audioFilename: isStr(raw.audioFilename) && raw.audioFilename
       ? raw.audioFilename.slice(0, AUDIO_FILENAME_MAX)
       : null,
+    // Per-line start offset for muxing VO into the stitched episode (Phase
+    // 4d.2). null until the user (or a future auto-spacer) places it.
+    offsetSec: sanitizeLineOffset(raw.offsetSec),
   };
 };
 
