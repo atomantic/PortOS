@@ -926,6 +926,7 @@ describe('commitImport', () => {
     const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
     expect(issue.stages.prose.output).toBe('Plain prose.');
     expect(issue.stages.comicScript?.output).toBeFalsy();
+    expect(issue.stages.teleplay?.output).toBeFalsy();
   });
 
   it('replace mode overwrites the bible, clearing stale fields when the new arc lacks them', async () => {

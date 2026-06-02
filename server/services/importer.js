@@ -1295,9 +1295,10 @@ export async function commitImport({
       const stages = {};
       if (proposal.proseExcerpt) {
         // Route the verbatim excerpt to the stage that matches the source form
-        // (see CONTENT_TYPE_SEED_STAGE): a comic-script seeds stages.comicScript
-        // (ready) so the pipeline renders the user's verbatim script instead of
-        // regenerating it; everything else seeds stages.prose.
+        // (see CONTENT_TYPE_SEED_STAGE): a script-form type seeds its script
+        // stage ready (comic-script → comicScript, screenplay → teleplay) so the
+        // pipeline renders the user's verbatim script instead of regenerating
+        // it; prose-like types seed stages.prose.
         stages[seedStageFor(contentType)] = { status: 'ready', output: proposal.proseExcerpt };
       }
       const ideaSeed = [

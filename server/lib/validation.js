@@ -1692,7 +1692,8 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
 // active provider's context window.
 const importerSourceField = z.string().min(1).max(5_000_000);
 
-// Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript).
+// Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript /
+// stages.teleplay).
 // MUST stay ≤ `STAGE_OUTPUT_MAX` in server/services/pipeline/issues.js (400_000)
 // — createIssue trims stage output to that, so a larger excerpt would be
 // SILENTLY TRUNCATED on commit despite the import being advertised as verbatim.
@@ -1817,11 +1818,12 @@ export const importerCommitSchema = z.object({
   arc: importerArcShape.nullable().optional(),
   seasons: z.array(importerSeasonEntry).max(50).default([]),
   issues: z.array(importerIssueEntry).min(1).max(50),
-  // Drives which stage each issue's verbatim excerpt seeds: a `comic-script`
-  // import is already script-form, so its excerpt seeds `stages.comicScript`
-  // (ready) and the pipeline never regenerates — every other type seeds
-  // `stages.prose`. Optional + defaulting to prose-seed keeps older clients
-  // (which don't send it) on the prior behavior.
+  // Drives which stage each issue's verbatim excerpt seeds: a script-form
+  // import seeds its matching script stage (ready) and the pipeline never
+  // regenerates — `comic-script` → `stages.comicScript`, `screenplay` →
+  // `stages.teleplay`; prose-like types seed `stages.prose`. Optional +
+  // defaulting to prose-seed keeps older clients (which don't send it) on the
+  // prior behavior.
   contentType: z.enum(IMPORTER_CONTENT_TYPES).optional(),
   // Replace-mode flag — when true, every existing issue on the series is
   // deleted before the incoming `issues` are created, and `series.arc` +
