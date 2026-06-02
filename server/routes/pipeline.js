@@ -1183,38 +1183,14 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
   const result = await arcPlanner.generateSeasonEpisodes(req.params.id, req.params.seasonId, body)
     .catch((err) => { throw mapServiceError(err); });
 
-  const createdIssues = [];
+  let createdIssues = [];
   let bibleExtracted = null;
   if (body.commit) {
     // Create one issue per episode under this season. The issue sanitizer
-    // already accepts `seasonId` + `arcPosition`, so we forward them in the
-    // create payload. The episode's `synopsis` lands in `stages.idea.input`
-    // so the downstream auto-run-text chain has a seed to expand against.
-    for (const ep of result.episodes) {
-      const created = await issuesSvc.createIssue({
-        seriesId: req.params.id,
-        title: ep.title,
-        // Issue `number` is derived from (volume order, arcPosition) by
-        // `createIssue`'s renumber pass — a new V1 episode falls into V1's
-        // slot and later volumes' numbers shift to make room.
-        seasonId: req.params.seasonId,
-        arcPosition: ep.number,
-        // `arcRole` carries the LLM's pilot / complication / midpoint / etc.
-        // classification forward so the idea-expansion prompt can size beats
-        // to the role (a finale needs a different cadence than a complication).
-        arcRole: ep.arcRole,
-        // Episode-level length sizing from the season-episodes LLM pass.
-        // Defaults to 'standard' inside the issue sanitizer when missing.
-        lengthProfile: ep.lengthProfile,
-        stages: {
-          idea: {
-            status: ep.synopsis ? 'edited' : 'empty',
-            input: [ep.logline, ep.synopsis].filter(Boolean).join('\n\n'),
-          },
-        },
-      });
-      createdIssues.push(created);
-    }
+    // already accepts `seasonId` + `arcPosition`; the shared helper owns the
+    // per-episode → createIssue mapping so the Story Builder's batch path
+    // mints identical issue shapes.
+    createdIssues = await arcPlanner.commitEpisodesToIssues(req.params.id, req.params.seasonId, result.episodes);
 
     // Non-fatal: episode creation already succeeded, so a noisy extraction
     // failure must not invalidate the user's accepted breakdown. Phase B.4:

@@ -329,3 +329,131 @@ describe('generateStep backfill (fromDownstream)', () => {
       .rejects.toThrow(/No issue content/);
   });
 });
+
+describe('generateIssuesFromArc (issues step)', () => {
+  // Attach one or more seasons to a freshly-minted seed session's series and
+  // return the persisted season ids (sanitizer may re-mint them).
+  async function seedSeasons(seriesId, seasons) {
+    await seriesSvc.updateSeries(seriesId, { seasons });
+    const series = await seriesSvc.getSeries(seriesId);
+    return series.seasons;
+  }
+
+  // The season-episodes LLM pass returns `{ episodes: [...] }`; shapeEpisodes
+  // keeps title + number + arcRole + lengthProfile + logline/synopsis.
+  function episodesSpy(episodesBySeasonTitle) {
+    stageRunnerSpy = vi.fn(async (stage, vars) => {
+      if (stage !== 'pipeline-season-episodes') return { content: {}, runId: 'r', providerId: 'p', model: 'm' };
+      const episodes = episodesBySeasonTitle[vars?.season?.title] || [];
+      return { content: { episodes }, runId: 'r', providerId: 'p', model: 'm' };
+    });
+  }
+
+  it('creates one issue per episode for every season and seeds idea input', async () => {
+    const s = await sb.createStorySession({ title: 'Arc Seed' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'foundry goes silent' },
+    ]);
+    episodesSpy({
+      'Vol 1': [
+        { number: 1, title: 'Pilot', logline: 'it begins', synopsis: 'cold open', arcRole: 'pilot', lengthProfile: 'standard' },
+        { number: 2, title: 'Complication', logline: 'it worsens', synopsis: '', arcRole: 'complication' },
+      ],
+    });
+    const res = await sb.generateIssuesFromArc(s.id);
+    expect(res.createdIssues).toHaveLength(2);
+    expect(res.seasons).toEqual([
+      expect.objectContaining({ seasonId: seasons[0].id, created: 2, skipped: false }),
+    ]);
+    const issues = await issuesSvc.listIssues({ seriesId: s.seriesId });
+    expect(issues.map((i) => i.title).sort()).toEqual(['Complication', 'Pilot']);
+    const pilot = issues.find((i) => i.title === 'Pilot');
+    expect(pilot.seasonId).toBe(seasons[0].id);
+    // logline + synopsis land in stages.idea.input; status is 'edited' when a
+    // synopsis exists, 'empty' otherwise.
+    expect(pilot.stages.idea.input).toBe('it begins\n\ncold open');
+    expect(pilot.stages.idea.status).toBe('edited');
+    const comp = issues.find((i) => i.title === 'Complication');
+    expect(comp.stages.idea.status).toBe('empty');
+    expect(comp.stages.idea.input).toBe('it worsens');
+  });
+
+  it('skips a locked season but still seeds the eligible ones (partial batch)', async () => {
+    const s = await sb.createStorySession({ title: 'Partial' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'open', locked: true },
+      { number: 2, title: 'Vol 2', synopsis: 'rises' },
+    ]);
+    episodesSpy({ 'Vol 2': [{ number: 1, title: 'V2 E1', arcRole: 'pilot' }] });
+    const res = await sb.generateIssuesFromArc(s.id);
+    expect(res.createdIssues).toHaveLength(1);
+    const locked = res.seasons.find((r) => r.seasonId === seasons[0].id);
+    const open = res.seasons.find((r) => r.seasonId === seasons[1].id);
+    // A locked season is an ineligible-config skip, not a failure.
+    expect(locked).toMatchObject({ skipped: true, failed: false, created: 0 });
+    expect(locked.reason).toMatch(/locked/i);
+    expect(open).toMatchObject({ skipped: false, failed: false, created: 1 });
+  });
+
+  it('reports a transient provider/LLM error as failed (not skipped)', async () => {
+    const s = await sb.createStorySession({ title: 'Flaky' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'open' },
+      { number: 2, title: 'Vol 2', synopsis: 'rises' },
+    ]);
+    // Vol 1's episodes pass throws a plain (non-validation) error — provider
+    // down / timeout. Vol 2 succeeds. The batch must not abort, and Vol 1 must
+    // be `failed`, not `skipped`.
+    stageRunnerSpy = vi.fn(async (stage, vars) => {
+      if (vars?.season?.title === 'Vol 1') throw new Error('provider unavailable');
+      return { content: { episodes: [{ number: 1, title: 'V2 E1', arcRole: 'pilot' }] }, runId: 'r', providerId: 'p', model: 'm' };
+    });
+    const res = await sb.generateIssuesFromArc(s.id);
+    expect(res.createdIssues).toHaveLength(1);
+    const bad = res.seasons.find((r) => r.seasonId === seasons[0].id);
+    const good = res.seasons.find((r) => r.seasonId === seasons[1].id);
+    expect(bad).toMatchObject({ skipped: false, failed: true, created: 0 });
+    expect(bad.reason).toMatch(/provider unavailable/);
+    expect(good).toMatchObject({ skipped: false, failed: false, created: 1 });
+  });
+
+  it('scopes to a single season when seasonId is given', async () => {
+    const s = await sb.createStorySession({ title: 'Scoped' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'a' },
+      { number: 2, title: 'Vol 2', synopsis: 'b' },
+    ]);
+    episodesSpy({
+      'Vol 1': [{ number: 1, title: 'V1 E1', arcRole: 'pilot' }],
+      'Vol 2': [{ number: 1, title: 'V2 E1', arcRole: 'pilot' }],
+    });
+    const res = await sb.generateIssuesFromArc(s.id, { seasonId: seasons[1].id });
+    expect(res.seasons).toHaveLength(1);
+    expect(res.seasons[0].seasonId).toBe(seasons[1].id);
+    const issues = await issuesSvc.listIssues({ seriesId: s.seriesId });
+    expect(issues.map((i) => i.title)).toEqual(['V2 E1']);
+  });
+
+  it('forwards the session.llm provider/model into the episodes pass', async () => {
+    const s = await sb.createStorySession({ title: 'LLM', llm: { provider: 'prov-x', model: 'model-y' } });
+    await seedSeasons(s.seriesId, [{ number: 1, title: 'Vol 1', synopsis: 'a' }]);
+    episodesSpy({ 'Vol 1': [{ number: 1, title: 'E1', arcRole: 'pilot' }] });
+    await sb.generateIssuesFromArc(s.id);
+    expect(stageRunnerSpy).toHaveBeenCalledWith(
+      'pipeline-season-episodes', expect.any(Object),
+      expect.objectContaining({ providerOverride: 'prov-x', modelOverride: 'model-y' }),
+    );
+  });
+
+  it('throws when the series has no seasons yet', async () => {
+    const s = await sb.createStorySession({ title: 'No Seasons' });
+    await expect(sb.generateIssuesFromArc(s.id)).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+  });
+
+  it('throws when the scoped seasonId is unknown', async () => {
+    const s = await sb.createStorySession({ title: 'Bad Season' });
+    await seedSeasons(s.seriesId, [{ number: 1, title: 'Vol 1', synopsis: 'a' }]);
+    await expect(sb.generateIssuesFromArc(s.id, { seasonId: 'season-nope' }))
+      .rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+  });
+});

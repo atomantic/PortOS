@@ -7,6 +7,7 @@ import {
   storyStepGenerateSchema,
   storyStepRefineSchema,
   storyIssueLockSchema,
+  storyIssuesGenerateSchema,
 } from '../lib/validation.js';
 import { STEPS, isValidStepId } from '../lib/storyBuilderSteps.js';
 import {
@@ -21,6 +22,7 @@ import {
   setIssueLock,
   generateStep,
   refineStep,
+  generateIssuesFromArc,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
 } from '../services/storyBuilder.js';
@@ -110,7 +112,15 @@ router.post('/:id/steps/:stepId/refine', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// ── Per-issue locks (issues step loop) ───────────────────────────────────────
+// ── Issues step: seed issues from the arc + per-issue locks ──────────────────
+
+// Generate the per-episode breakdown for the linked series' seasons and
+// persist one issue per episode, so the user never has to leave the builder.
+router.post('/:id/issues/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(storyIssuesGenerateSchema, req.body || {});
+  const result = await generateIssuesFromArc(req.params.id, input).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
 
 router.post('/:id/issues/:issueId/lock', asyncHandler(async (req, res) => {
   const { locked } = validateRequest(storyIssueLockSchema, req.body || {});

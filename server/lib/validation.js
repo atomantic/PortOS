@@ -1899,3 +1899,11 @@ export const storyStepRefineSchema = z.object({
 export const storyIssueLockSchema = z.object({
   locked: z.boolean(),
 }).strict();
+
+export const storyIssuesGenerateSchema = z.object({
+  providerId: storyProviderField,
+  model: storyModelField,
+  // Optional: scope generation to a single season; omit to cover every season
+  // on the arc.
+  seasonId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
+}).strict();

@@ -50,6 +50,13 @@ export const refineStoryStep = (id, stepId, payload = {}, options = {}) =>
     ...options,
   });
 
+export const generateStoryIssues = (id, payload = {}, options = {}) =>
+  request(`/story-builder/${id}/issues/generate`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    ...options,
+  });
+
 export const setStoryIssueLock = (id, issueId, locked, options = {}) =>
   request(`/story-builder/${id}/issues/${issueId}/lock`, {
     method: 'POST',
