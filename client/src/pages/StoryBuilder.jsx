@@ -702,12 +702,14 @@ function IssuesPanel({ session, series, issues, onChanged }) {
     const noun = (n) => (n === 1 ? 'season' : 'seasons');
     if (created > 0) {
       toast.success(`Created ${created} issue${created === 1 ? '' : 's'} from the arc`);
-      if (skipped.length) toast.error(`Skipped ${skipped.length} ${noun(skipped.length)}: ${reasons(skipped)}`);
+      // A skipped season is an expected config state (locked / no synopsis) —
+      // warn (yellow), don't error (red). A failed season is a real error.
+      if (skipped.length) toast.warning(`Skipped ${skipped.length} ${noun(skipped.length)}: ${reasons(skipped)}`);
       if (failed.length) toast.error(`Couldn't generate ${failed.length} ${noun(failed.length)}: ${reasons(failed)}`);
     } else if (failed.length) {
       toast.error(`Couldn't generate issues — ${reasons(failed) || 'a provider error occurred'}`);
     } else if (skipped.length) {
-      toast.error(`No issues created — ${reasons(skipped)}`);
+      toast.warning(`No issues created — ${reasons(skipped)}`);
     } else {
       toast.error('No issues were generated');
     }
