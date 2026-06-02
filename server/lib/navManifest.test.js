@@ -7,21 +7,47 @@ import { NAV_COMMANDS, getNavAliasMap, resolveNavCommand } from './navManifest.j
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
-// Maps URL prefix → file holding the page's TABS constant. Each page validates
-// the :tab param against its own TABS list, so the nav manifest must agree.
+// Maps URL prefix → how to extract the page's own tab set from its source. Each
+// page validates the :tab/:section param against this list, so the nav manifest
+// must agree. Two source shapes are supported:
+//   kind 'ids'   — `export const <constName> = [{ id: '<slug>', … }]`, where each
+//                  tab lives at `<prefix>/<slug>` (Brain/CoS/Calendar/Goals/…).
+//   kind 'links' — `export const <constName> = [{ to|path: '<abs path>', … }]`,
+//                  where the page's own tabs are the entries whose path is exactly
+//                  `<prefix>` or under `<prefix>/`; entries pointing elsewhere
+//                  (e.g. Settings' "Prompts" → /prompts) are cross-links, not tabs.
 const TABBED_PAGES = [
-  { prefix: '/brain', constantsFile: 'client/src/components/brain/constants.js' },
-  { prefix: '/cos', constantsFile: 'client/src/components/cos/constants.js' },
-  { prefix: '/digital-twin', constantsFile: 'client/src/components/digital-twin/constants.js' },
-  { prefix: '/meatspace', constantsFile: 'client/src/components/meatspace/constants.js' },
+  { prefix: '/brain', file: 'client/src/components/brain/constants.js', kind: 'ids', constName: 'TABS' },
+  { prefix: '/cos', file: 'client/src/components/cos/constants.js', kind: 'ids', constName: 'TABS' },
+  { prefix: '/digital-twin', file: 'client/src/components/digital-twin/constants.js', kind: 'ids', constName: 'TABS' },
+  { prefix: '/meatspace', file: 'client/src/components/meatspace/constants.js', kind: 'ids', constName: 'TABS' },
+  { prefix: '/calendar', file: 'client/src/pages/Calendar.jsx', kind: 'ids', constName: 'TABS' },
+  { prefix: '/goals', file: 'client/src/pages/Goals.jsx', kind: 'ids', constName: 'TABS' },
+  { prefix: '/insights', file: 'client/src/pages/Insights.jsx', kind: 'ids', constName: 'TABS' },
+  { prefix: '/messages', file: 'client/src/pages/Messages.jsx', kind: 'ids', constName: 'TABS' },
+  { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
+  { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
+  { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
 ];
 
-// Extract `id: '<value>'` from the first `export const TABS = [ ... ];` block.
-function extractTabIds(constantsPath) {
-  const src = fs.readFileSync(constantsPath, 'utf8');
-  const block = src.match(/export const TABS\s*=\s*\[([\s\S]*?)\];/);
-  if (!block) throw new Error(`No TABS array found in ${constantsPath}`);
-  return [...block[1].matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+// Pull the inner text of `export const <constName> = [ … ];` (requiring `export`
+// also asserts the constant stays importable — a forgotten `export` fails loudly).
+function extractConstArrayBlock(src, constName) {
+  const block = src.match(new RegExp(`export const ${constName}\\s*=\\s*\\[([\\s\\S]*?)\\];`));
+  if (!block) throw new Error(`No exported ${constName} array found`);
+  return block[1];
+}
+
+// The set of absolute tab paths a page serves under its own prefix.
+function extractTabPaths(filePath, { kind, constName, prefix }) {
+  const block = extractConstArrayBlock(fs.readFileSync(filePath, 'utf8'), constName);
+  if (kind === 'ids') {
+    return [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
+  }
+  // kind 'links': keep only entries that point at this page, dropping cross-links.
+  return [...block.matchAll(/(?:to|path):\s*['"]([^'"]+)['"]/g)]
+    .map((m) => m[1])
+    .filter((p) => p === prefix || p.startsWith(`${prefix}/`));
 }
 
 describe('navManifest — shape invariants', () => {
@@ -110,27 +136,31 @@ describe('resolveNavCommand — fuzzy matching', () => {
   });
 });
 
-describe('nav contract — tabbed pages match their TABS constants', () => {
-  for (const { prefix, constantsFile } of TABBED_PAGES) {
+describe('nav contract — tabbed pages match their tab constants', () => {
+  for (const page of TABBED_PAGES) {
+    const { prefix, file } = page;
     describe(prefix, () => {
-      // Read inside it() bodies (not at describe time) so a moved/renamed
-      // constants file surfaces as a focused test failure rather than
-      // aborting the entire suite during Vitest's collection phase.
-      const navEntries = NAV_COMMANDS.filter((c) => c.path.startsWith(`${prefix}/`));
-      const navTabs = navEntries.map((c) => ({ tab: c.path.slice(prefix.length + 1), command: c }));
+      // The nav manifest paths owned by this page: exactly `<prefix>` (a default
+      // section served at the bare prefix, e.g. /sharing → buckets) or anything
+      // under `<prefix>/`. Compare on the bare path so deep-link query/hash
+      // variants (e.g. /media/image?settings=1) normalize first.
+      const navPaths = NAV_COMMANDS
+        .map((c) => c.path.split(/[?#]/)[0])
+        .filter((p) => p === prefix || p.startsWith(`${prefix}/`));
 
-      it('every nav manifest tab resolves to a real TAB id', () => {
-        const tabIdSet = new Set(extractTabIds(path.join(REPO_ROOT, constantsFile)));
-        const orphans = navTabs
-          .filter(({ tab }) => !tabIdSet.has(tab))
-          .map(({ command, tab }) => `${command.id} (${command.path}) → unknown tab "${tab}"`);
+      // Read inside it() bodies (not at describe time) so a moved/renamed source
+      // file surfaces as a focused test failure rather than aborting the entire
+      // suite during Vitest's collection phase.
+      it('every nav manifest path resolves to a real page tab', () => {
+        const tabPaths = new Set(extractTabPaths(path.join(REPO_ROOT, file), page));
+        const orphans = navPaths.filter((p) => !tabPaths.has(p));
         expect(orphans).toEqual([]);
       });
 
-      it('every TAB id is reachable via the nav manifest', () => {
-        const tabIds = extractTabIds(path.join(REPO_ROOT, constantsFile));
-        const navTabSet = new Set(navTabs.map((t) => t.tab));
-        const missing = tabIds.filter((id) => !navTabSet.has(id));
+      it('every page tab is reachable via the nav manifest', () => {
+        const tabPaths = extractTabPaths(path.join(REPO_ROOT, file), page);
+        const navSet = new Set(navPaths);
+        const missing = tabPaths.filter((p) => !navSet.has(p));
         expect(missing).toEqual([]);
       });
     });

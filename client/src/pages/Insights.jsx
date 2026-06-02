@@ -12,7 +12,8 @@ import CrossDomainTab from '../components/insights/CrossDomainTab';
 import ConfidenceBadge from '../components/insights/ConfidenceBadge';
 import { timeAgo } from '../utils/formatters';
 
-const TABS = [
+// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
+export const TABS = [
   { id: 'overview', label: 'Overview', icon: Lightbulb },
   { id: 'genome-health', label: 'Genome-Health', icon: Dna },
   { id: 'taste-identity', label: 'Taste & Identity', icon: Palette },

@@ -7,7 +7,8 @@ import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import BrailleSpinner from '../components/BrailleSpinner';
 
-const TABS = [
+// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
+export const TABS = [
   { id: 'list', label: 'List', icon: List },
   { id: 'tree', label: 'Tree', icon: TreePine }
 ];

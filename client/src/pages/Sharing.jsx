@@ -40,7 +40,8 @@ export function isLiveSubscription(item, now = Date.now()) {
 
 // Top-level deep-linkable sections. Buckets is the bucket-management view;
 // Duplicates + Conflicts are the sync-hygiene review surfaces.
-const SECTIONS = [
+// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
+export const SECTIONS = [
   { id: 'buckets', label: 'Buckets', icon: Folder, path: '/sharing' },
   { id: 'duplicates', label: 'Duplicates', icon: Copy, path: '/sharing/duplicates' },
   { id: 'conflicts', label: 'Conflicts', icon: GitMerge, path: '/sharing/conflicts' },
