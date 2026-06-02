@@ -69,20 +69,41 @@ export const conflictJournalStore = () => store();
 // edit is a real conflict — mirrors the universe/series delete-vs-edit case).
 const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'coverKey', 'universeId', 'seriesId']);
 
+// Fields dropped from the conflict-detection hash, per kind. These are
+// server-managed values that mutate WITHOUT a user edit (and without bumping
+// `updatedAt`), so leaving them in the hash would read as a false divergence
+// and journal a spurious conflict. Issue `number` is renumber-managed:
+// `applyVolumeOrderedNumbers` shifts it in place when a *sibling* issue is
+// added/removed, so a local sibling-delete would otherwise make this issue's
+// `localHash !== base` even though no restorable content changed (the resulting
+// conflict card would have an empty diffSummary, since `number` isn't
+// restorable). Excluding it keeps the hash aligned with the restorable-field
+// set the UI actually shows. (mediaCollection narrows via its own scalar
+// projection below; universe/series exclude nothing, so their already-seeded
+// base hashes stay valid across upgrade.)
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'] });
+
 /**
  * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
  * canonicalStringify so the sender hashing what it pushes and the receiver
  * hashing its local copy agree byte-for-byte. For mediaCollection the wire form
  * is further narrowed to its overwritable scalars (see
- * MEDIA_COLLECTION_SCALAR_FIELDS) — both sides apply the same narrowing, so the
- * base hash stays consistent across peers. Returns null when the record has no
- * wire form (ephemeral non-tombstone, or invalid) — callers treat a null hash
- * as "cannot compare".
+ * MEDIA_COLLECTION_SCALAR_FIELDS); for issue the renumber-managed `number` is
+ * dropped (see HASH_EXCLUDED_FIELDS) — both sides apply the same narrowing, so
+ * the base hash stays consistent across peers. Returns null when the record has
+ * no wire form (ephemeral non-tombstone, or invalid) — callers treat a null
+ * hash as "cannot compare".
  */
 export function contentHashForRecord(kind, record) {
   const wire = sanitizeRecordForWire(kind, record);
   if (!wire) return null;
-  const hashInput = kind === 'mediaCollection' ? projectCollectionScalars(wire) : wire;
+  let hashInput = wire;
+  if (kind === 'mediaCollection') {
+    hashInput = projectCollectionScalars(wire);
+  } else if (HASH_EXCLUDED_FIELDS[kind]) {
+    const excluded = HASH_EXCLUDED_FIELDS[kind];
+    hashInput = Object.fromEntries(Object.entries(wire).filter(([k]) => !excluded.includes(k)));
+  }
   return createHash('sha256').update(canonicalStringify(hashInput)).digest('hex');
 }
 
@@ -192,6 +213,12 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // are structural links managed by the link/unlink helpers, not `updateCollection`
   // patches — so they're hashed for DETECTION but not offered for restore.
   mediaCollection: ['name', 'description', 'coverKey'],
+  // Issue: the user-authored content the merge can restore. `stages` carries
+  // the bulk of the work (prose, comic pages, render metadata). Server-owned /
+  // structural fields are excluded deliberately — `number` is renumber-managed,
+  // `seriesId` is the immutable parent link, `origin` is share provenance —
+  // and `mergeIssuePatch` accepts every field listed here.
+  issue: ['title', 'status', 'seasonId', 'arcPosition', 'arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget', 'stages'],
 });
 
 // Top-level shallow diff over the kind's restorable content fields — enough for

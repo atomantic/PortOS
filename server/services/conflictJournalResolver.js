@@ -30,6 +30,7 @@ import { conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.
 import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeBuilder.js';
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
+import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -68,7 +69,8 @@ async function applyToRecord(kind, recordId, patch) {
   // resolution. Translate the services' not-found codes into ERR_TARGET_GONE so
   // the route maps it to a clean 409 ("discard the entry") instead of a 500.
   const translateGone = (err) => {
-    if (err?.code === UNIVERSE_NOT_FOUND || err?.code === SERIES_NOT_FOUND || err?.code === COLLECTION_NOT_FOUND) {
+    if (err?.code === UNIVERSE_NOT_FOUND || err?.code === SERIES_NOT_FOUND
+        || err?.code === COLLECTION_NOT_FOUND || err?.code === ISSUE_NOT_FOUND) {
       throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
     }
     throw err;
@@ -91,6 +93,12 @@ async function applyToRecord(kind, recordId, patch) {
     const { name: _lockedName, ...withoutName } = patch;
     const effective = (cur?.universeId || cur?.seriesId) ? withoutName : patch;
     if (Object.keys(effective).length > 0) await updateCollection(recordId, effective).catch(translateGone);
+  } else if (kind === 'issue') {
+    // updateIssue deep-merges `stages` per-stage (mergeIssuePatch), so a
+    // restore re-applies the archived stage content without clobbering a
+    // sibling stage the live record gained since detection — same additive
+    // overlay semantics as universe categories (see the NOTE above).
+    await updateIssue(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }
