@@ -43,6 +43,12 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
 
+// Record kinds that participate in the non-blocking conflict journal. Universe,
+// series, AND issue all seed a base hash on first import and archive a losing
+// local version before an LWW overwrite. (Media collections are journaled
+// separately via their own merge path; see mediaCollections.js.)
+const JOURNALED_KINDS = new Set(['universe', 'series', 'issue']);
+
 function isSelfAuthored(senderInstanceId, localInstanceId) {
   return !!localInstanceId
     && !!senderInstanceId
@@ -493,7 +499,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
         // seed on their insert branch too; without this a bucket-imported
         // record has base==null and the first conflict would be missed). Hash
         // the STORED record so the base matches a future `local` hash exactly.
-        if (kind === 'universe' || kind === 'series') {
+        if (JOURNALED_KINDS.has(kind)) {
           const stored = await getFn(record.id).catch(() => null);
           if (stored) await setSyncBaseHash(kind, record.id, contentHashForRecord(kind, stored));
         }
@@ -511,11 +517,11 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       if (kind === 'series' && !record.universeId && existing.universeId) {
         record = { ...record, universeId: existing.universeId };
       }
-      // Non-blocking conflict journal for the two synced top-level kinds — a
+      // Non-blocking conflict journal for every synced record kind — a
       // share-bucket import that LWW-overwrites a locally-diverged record
-      // archives the losing local version first. Issues ride LWW silently
-      // (child-issue conflict journaling is a v1 follow-up).
-      if (kind === 'universe' || kind === 'series') {
+      // archives the losing local version first. Issues are included now
+      // (they previously rode LWW silently).
+      if (JOURNALED_KINDS.has(kind)) {
         await maybeJournalBeforeOverwrite({
           kind, id: record.id, local: existing, remote: record,
           source: { via: 'share-bucket', bucketId: bucket.id, peerId: manifest.senderInstanceId ?? null },

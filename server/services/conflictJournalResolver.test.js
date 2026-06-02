@@ -20,15 +20,16 @@ vi.mock('crypto', async () => {
 const resolver = await import('./conflictJournalResolver.js');
 const universeSvc = await import('./universeBuilder.js');
 const collSvc = await import('./mediaCollections.js');
+const issueSvc = await import('./pipeline/issues.js');
 const cj = await import('../lib/conflictJournal.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
 // Seed a pending journal entry whose localSnapshot holds the "lost" values.
-const seedEntry = async (recordId, localSnapshot) => {
+const seedEntry = async (recordId, localSnapshot, recordKind = 'universe') => {
   const id = `entry-${++uuidCounter}`;
   await cj.conflictJournalStore().saveOne(id, {
-    id, recordKind: 'universe', recordId, detectedAt: '2026-05-01T00:00:00Z',
+    id, recordKind, recordId, detectedAt: '2026-05-01T00:00:00Z',
     source: { via: 'sync' }, baseHash: 'b', localHash: 'l', remoteHash: 'r',
     localSnapshot, remoteSnapshot: {}, localUpdatedAt: null, remoteUpdatedAt: null,
     diffSummary: [], status: 'pending', resolvedAt: null, resolution: null,
@@ -65,6 +66,43 @@ describe('conflictJournalResolver', () => {
     const fresh = await universeSvc.getUniverse(u.id);
     expect(fresh.logline).toBe('local logline');  // overlaid
     expect(fresh.starterPrompt).toBe('REMOTE prompt'); // untouched
+  });
+
+  it('restore-all re-applies an archived ISSUE snapshot (title + prose stage)', async () => {
+    const issue = await issueSvc.createIssue({ seriesId: 'ser-restore', title: 'Remote Title' });
+    // Remote LWW-overwrote both the title and the prose output.
+    await issueSvc.updateIssue(issue.id, { title: 'Remote Title', stages: { prose: { status: 'ready', output: 'REMOTE prose' } } });
+    const entryId = await seedEntry(
+      issue.id,
+      { id: issue.id, seriesId: 'ser-restore', title: 'MY Title', stages: { prose: { status: 'ready', output: 'MY prose' } } },
+      'issue',
+    );
+
+    const resolved = await resolver.resolveConflict(entryId, { action: 'restore-all' });
+    expect(resolved.status).toBe('resolved');
+
+    const fresh = await issueSvc.getIssue(issue.id);
+    expect(fresh.title).toBe('MY Title');
+    expect(fresh.stages.prose.output).toBe('MY prose');
+  });
+
+  it('issue merge-fields overlays only the chosen field; unsupported kind is rejected', async () => {
+    const issue = await issueSvc.createIssue({ seriesId: 'ser-merge', title: 'Keep Title' });
+    await issueSvc.updateIssue(issue.id, { stages: { prose: { status: 'ready', output: 'REMOTE prose' } } });
+    const entryId = await seedEntry(
+      issue.id,
+      { id: issue.id, seriesId: 'ser-merge', title: 'IGNORED local title', stages: { prose: { status: 'ready', output: 'MY prose' } } },
+      'issue',
+    );
+    await resolver.resolveConflict(entryId, { action: 'merge-fields', fields: ['stages'] });
+    const fresh = await issueSvc.getIssue(issue.id);
+    expect(fresh.stages.prose.output).toBe('MY prose'); // overlaid
+    expect(fresh.title).toBe('Keep Title');             // untouched
+
+    // `number` is server-owned — not in RESTORABLE_FIELDS.issue, so it's rejected.
+    const e2 = await seedEntry(issue.id, { id: issue.id, number: 99 }, 'issue');
+    await expect(resolver.resolveConflict(e2, { action: 'merge-fields', fields: ['number'] }))
+      .rejects.toMatchObject({ code: resolver.ERR_VALIDATION });
   });
 
   it('merge-fields rejects fields outside the restorable allowlist', async () => {

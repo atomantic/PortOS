@@ -36,6 +36,7 @@ import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeCoverLike } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { applyVolumeOrderedNumbers, UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
+import { maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
 import * as seriesSvc from './series.js';
 
 // TYPE-level (storage layout) schema version stamped on
@@ -1091,7 +1092,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
  * valid id format). LWW by `updatedAt`; returns `{ applied, count }` where
  * `count` is the number of issues actually changed/added.
  */
-export async function mergeIssuesFromSync(remoteIssues) {
+export async function mergeIssuesFromSync(remoteIssues, { source = { via: 'sync', peerId: null } } = {}) {
   if (!Array.isArray(remoteIssues)) return { applied: false, count: 0 };
   // Series IDs whose issue set saw at least one delete-transition — drives a
   // post-write renumber so the receiver's issue numbering catches up with the
@@ -1142,6 +1143,11 @@ export async function mergeIssuesFromSync(remoteIssues) {
         // to compact; firing `emitRecordUpdated('series', …)` for a series
         // we may not even own would spuriously re-export.
         localById.set(sanitized.id, sanitized);
+        // Seed the conflict-journal base hash so a FUTURE divergence on this
+        // issue is detected. Issues are pushed under their parent series'
+        // subscription, so peerSync never seeds an `issue`-keyed base hash —
+        // this merge path (and the importer) own it.
+        await setSyncBaseHash('issue', sanitized.id, contentHashForRecord('issue', sanitized));
         changed++;
       } else if (local.ephemeral === true) {
         // Local-ephemeral issues are immune to inbound merges. See
@@ -1151,6 +1157,10 @@ export async function mergeIssuesFromSync(remoteIssues) {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
+          // Non-blocking conflict journal — archive the losing local issue on
+          // a true 3-way divergence; always advances the base hash. Never
+          // throws into the merge (convergence wins).
+          await maybeJournalBeforeOverwrite({ kind: 'issue', id: sanitized.id, local, remote: sanitized, source });
           localById.set(sanitized.id, sanitized);
           // Renumber on EITHER direction of the transition: a delete leaves
           // a gap, a resurrection (deleted→live) reintroduces a previously-
@@ -1183,6 +1193,9 @@ export async function mergeIssuesFromSync(remoteIssues) {
     for (const seriesId of seriesNeedingRenumber) {
       emitRecordUpdated('series', seriesId);
     }
+    // Persist the batched conflict-journal base-hash updates (seeds on insert,
+    // advances on overwrite) accumulated in the loop above.
+    await flushBaseHashes();
     return { applied: true, count: changed };
   });
 }

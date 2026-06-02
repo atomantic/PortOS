@@ -17,6 +17,11 @@ afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 // adds the soft-delete pair). Distinct content → distinct content hashes.
 const uni = (over = {}) => ({ id: 'u-1', name: 'X', starterPrompt: 'base', updatedAt: '2026-05-01T00:00:00Z', ...over });
 
+// Minimal issue-shaped record — sanitizeRecordForWire('issue', …) passes the
+// content through verbatim (it does NOT run sanitizeIssue), so `stages` and
+// `number` round-trip as-is for the content hash.
+const iss = (over = {}) => ({ id: 'iss-1', seriesId: 'ser-1', title: 'T', number: 1, status: 'draft', stages: {}, updatedAt: '2026-05-01T00:00:00Z', ...over });
+
 const pendingEntries = async () => cj.conflictJournalStore().loadAll();
 
 describe('conflictJournal', () => {
@@ -93,6 +98,27 @@ describe('conflictJournal', () => {
     expect(fields).toContain('starterPrompt');
     expect(fields).not.toContain('schemaVersion');
     expect(fields).not.toContain('id');
+  });
+
+  it('journals an issue 3-way divergence; diffSummary covers title + stages, never number/seriesId', async () => {
+    const base = iss();
+    await cj.setSyncBaseHash('issue', 'iss-1', cj.contentHashForRecord('issue', base));
+    // Both sides diverge on the title AND the prose stage content (and a
+    // server-owned `number` that must NOT surface in the diff).
+    const local = iss({ title: 'LOCAL', number: 9, stages: { prose: { status: 'ready', output: 'mine' } }, updatedAt: '2026-05-02T00:00:00Z' });
+    const remote = iss({ title: 'REMOTE', number: 4, stages: { prose: { status: 'ready', output: 'theirs' } }, updatedAt: '2026-05-03T00:00:00Z' });
+    await cj.maybeJournalBeforeOverwrite({ kind: 'issue', id: 'iss-1', local, remote, source: { via: 'share-bucket', bucketId: 'b-1' } });
+    const entries = await pendingEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ recordKind: 'issue', recordId: 'iss-1', status: 'pending' });
+    expect(entries[0].localSnapshot.title).toBe('LOCAL');
+    const fields = entries[0].diffSummary.map((d) => d.field);
+    expect(fields).toContain('title');
+    expect(fields).toContain('stages');
+    expect(fields).not.toContain('number');
+    expect(fields).not.toContain('seriesId');
+    // Base advanced to remote → an idempotent replay must NOT re-journal.
+    expect(await cj.getSyncBaseHash('issue', 'iss-1')).toBe(cj.contentHashForRecord('issue', remote));
   });
 
   it('does NOT journal when the local side is a tombstone (no content to lose)', async () => {
