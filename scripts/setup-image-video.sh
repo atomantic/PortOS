@@ -24,6 +24,22 @@ PORTOS_DATA="${PORTOS_DATA:-${REPO_ROOT}/data}"
 have() { command -v "$1" >/dev/null 2>&1; }
 is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
 
+# Check out a pin (a commit SHA, tag, or branch name) in an already-fetched
+# clone. A bare `git checkout <branch>` lands on the *local* branch created at
+# clone time, which `git fetch origin` never advances — so re-running with a
+# branch pin like `main` would stick on a stale commit. When the pin names a
+# remote branch, hard-reset to `origin/<pin>` so branch pins always track the
+# freshly-fetched upstream tip; SHA / tag pins (no matching `origin/<pin>`)
+# fall through to the detached checkout untouched.
+git_checkout_pin() {
+  local dir="$1" pin="$2"
+  if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/${pin}"; then
+    git -C "$dir" checkout --quiet -B "$pin" "origin/${pin}"
+  else
+    git -C "$dir" checkout --quiet "$pin"
+  fi
+}
+
 if ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
   exit 1
@@ -148,7 +164,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
     (cd "${LTX2_DIR}" && git fetch origin)
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
-  (cd "${LTX2_DIR}" && git checkout --quiet "${LTX2_PIN}")
+  git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
   # Force Python 3.11 — ltx-core-mlx pins requires-python>=3.11 and the
   # macOS bundled python3 is sometimes 3.10. uv resolves this for us when
   # the env doesn't already exist.
@@ -181,10 +197,10 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   # translation layer (PortOS arg stability) while upstream owns the
   # actual inference (upstream-tracked changes).
   #
-  # EXPERIMENTAL — upstream CLI hasn't been pinned across releases; if a
-  # commit reshapes --task / --ckpt_dir, set `broken: true` on the
-  # wan22_* entries in data/media-models.json until generate_wan22.py is
-  # updated to match.
+  # EXPERIMENTAL — the clone is pinned (WAN22_PIN below) so new installs are
+  # reproducible, but bumping that pin can still reshape --task / --ckpt_dir;
+  # if it does, set `broken: true` on the wan22_* entries in
+  # data/media-models.json until generate_wan22.py is updated to match.
   if ! have uv; then
     echo "❌ INSTALL_WAN22=1 requires the 'uv' Python installer." >&2
     echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
@@ -194,7 +210,12 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     echo "❌ INSTALL_WAN22=1 requires git." >&2
     exit 1
   fi
-  WAN22_PIN="${WAN22_PIN:-main}"
+  # Pinned to a known-good commit (the repo's HEAD as of 2026-06-02). Floating
+  # `main` on a community-maintained port means every new install gets whatever
+  # HEAD is that day — a pin keeps installs reproducible. To upgrade: bump this
+  # SHA and verify with PortOS's video gen smoke tests. Set WAN22_PIN=main to
+  # bypass the pin and track upstream HEAD for development.
+  WAN22_PIN="${WAN22_PIN:-0b6b09aaa0d0b7cd7360fa358208437646dece60}"
   WAN22_DIR="${HOME}/.portos/wan2.2-mlx"
   WAN22_PY="${WAN22_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -205,7 +226,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     echo "📦 Fetching Wan2.2-mlx updates..."
     (cd "${WAN22_DIR}" && git fetch origin)
   fi
-  (cd "${WAN22_DIR}" && git checkout --quiet "${WAN22_PIN}")
+  git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
   if [[ ! -x "${WAN22_PY}" ]]; then
     echo "📦 Creating Wan2.2-mlx venv with Python 3.11..."
     (cd "${WAN22_DIR}" && uv venv --python 3.11)
@@ -230,8 +251,9 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
   # 4-bit Gemma text encoder + everything else evicted (see the Memory
   # Management panel under Settings → Local LLMs).
   #
-  # EXPERIMENTAL — same caveat as Wan 2.2: upstream CLI isn't pinned. If
-  # sample_video.py args drift, flip `hunyuan_video` broken in
+  # EXPERIMENTAL — same caveat as Wan 2.2: the clone is pinned (HUNYUAN_PIN
+  # below) for reproducible installs, but bumping that pin can still drift
+  # sample_video.py args. If it does, flip `hunyuan_video` broken in
   # data/media-models.json and update scripts/generate_hunyuan.py.
   if ! have uv; then
     echo "❌ INSTALL_HUNYUAN=1 requires the 'uv' Python installer." >&2
@@ -241,7 +263,12 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
     echo "❌ INSTALL_HUNYUAN=1 requires git." >&2
     exit 1
   fi
-  HUNYUAN_PIN="${HUNYUAN_PIN:-main}"
+  # Pinned to a known-good commit (the repo's HEAD as of 2026-06-02). Floating
+  # `main` on a community-maintained port means every new install gets whatever
+  # HEAD is that day — a pin keeps installs reproducible. To upgrade: bump this
+  # SHA and verify with PortOS's video gen smoke tests. Set HUNYUAN_PIN=main to
+  # bypass the pin and track upstream HEAD for development.
+  HUNYUAN_PIN="${HUNYUAN_PIN:-d5ec346aac3322066c1f1cb149830d1246dbe6dd}"
   HUNYUAN_DIR="${HOME}/.portos/hunyuan-video-mlx"
   HUNYUAN_PY="${HUNYUAN_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -252,7 +279,7 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
     echo "📦 Fetching HunyuanVideo_MLX updates..."
     (cd "${HUNYUAN_DIR}" && git fetch origin)
   fi
-  (cd "${HUNYUAN_DIR}" && git checkout --quiet "${HUNYUAN_PIN}")
+  git_checkout_pin "${HUNYUAN_DIR}" "${HUNYUAN_PIN}"
   if [[ ! -x "${HUNYUAN_PY}" ]]; then
     echo "📦 Creating HunyuanVideo_MLX venv with Python 3.11..."
     (cd "${HUNYUAN_DIR}" && uv venv --python 3.11)
@@ -303,7 +330,8 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
     # Pin to a known commit when MLX_EXAMPLES_PIN is set to a SHA; default
     # 'main' tracks HEAD (the musicgen example is stable, but a pin keeps new
     # installs reproducible — mirror of the LTX2_PIN pattern above).
-    (cd "${MLX_EXAMPLES_DIR}" && git fetch --quiet origin && git checkout --quiet "${MLX_EXAMPLES_PIN}")
+    git -C "${MLX_EXAMPLES_DIR}" fetch --quiet origin
+    git_checkout_pin "${MLX_EXAMPLES_DIR}" "${MLX_EXAMPLES_PIN}"
 
     if [[ ! -x "$MUSICGEN_PY" ]]; then
       echo "📦 Creating MusicGen venv at ${MUSICGEN_VENV}..."

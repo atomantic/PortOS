@@ -30,19 +30,11 @@ import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import BucketBoard from '../links/BucketBoard';
 import { LINK_DND_TYPE } from '../links/bucketColors';
 import { reorderLinksInBucket } from '../links/bucketReorder';
+import { normalizeUrl as normalizeUrlShared } from '../../../utils/urlNormalize';
 
 /** Normalize a user-entered URL the way the quick-add form does. */
 function normalizeUrl(raw) {
-  let url = raw.trim();
-  if (!url) return null;
-  if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git@')) {
-    if (url.includes('github.com') || url.includes('.')) {
-      url = 'https://' + url;
-    } else {
-      return null;
-    }
-  }
-  return url;
+  return normalizeUrlShared(raw, { allowGit: true, requireDot: true });
 }
 
 const LINK_TYPE_COLORS = {

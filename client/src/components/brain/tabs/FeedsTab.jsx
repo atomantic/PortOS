@@ -12,6 +12,7 @@ import {
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
+import { normalizeUrl } from '../../../utils/urlNormalize';
 
 export default function FeedsTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
@@ -46,10 +47,8 @@ export default function FeedsTab({ onRefresh }) {
     e.preventDefault();
     if (!inputUrl.trim() || adding) return;
 
-    let url = inputUrl.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://' + url;
-    }
+    // FeedsTab intentionally does NOT treat git@ as already-normalized.
+    const url = normalizeUrl(inputUrl, { allowGit: false });
 
     setAdding(true);
     const result = await api.addFeed(url).catch(() => null);
