@@ -282,6 +282,28 @@ describe('storyBuilder — refine delegation', () => {
     expect(series.arc.shape).toBe('man-in-hole');
     expect(out.changes).toEqual(['x']);
     expect(out.rationale).toBe('y');
+    // The conductor surfaces which provider/model ran so the runner's SSE
+    // `complete` event (and the UI toast) can attribute the refine.
+    expect(out.providerId).toBe('p');
+    expect(out.model).toBe('m');
+  });
+
+  it('refineStep(readerMap) persists the reader map and surfaces provider/model attribution', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum', readerMap: { hooks: [{ label: 'old' }] } } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { hooks: [{ label: 'new' }], payoffs: [], beats: [], cliffhangers: [], changes: ['c'], rationale: 'r' },
+      runId: 'run-x', providerId: 'prov-x', model: 'model-y',
+    }));
+    const out = await sb.refineStep(s.id, 'readerMap', { feedback: 'sharpen' });
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.arc.readerMap.hooks[0].label).toBe('new');
+    expect(out.changes).toEqual(['c']);
+    expect(out.rationale).toBe('r');
+    // Without this the runner reports an undefined provider/model on the SSE
+    // `complete` event for reader-map refines (the bug this guards against).
+    expect(out.providerId).toBe('prov-x');
+    expect(out.model).toBe('model-y');
   });
 
   it('refineStep(plotArc) leaves the season breakdown untouched (arc-only persist)', async () => {

@@ -689,7 +689,7 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
   if (stepId === 'plotArc') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
     emit('Refining the plot arc…', 'generate');
-    const { arc, changes, rationale, runId } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
+    const { arc, changes, rationale, runId, providerId: usedProviderId, model: usedModel } = await refineArc(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
     emit('Saving…', 'persist');
     // Persist arc-ONLY (never the season breakdown), so we deliberately do NOT
     // route through commitSeasonsWithRemap — passing a stale season snapshot as
@@ -707,16 +707,16 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
     }
     const mergedArc = mergeArcWithLocks(latest.arc, arc, latest.locked?.arcFields);
     const updated = await updateSeries(session.seriesId, { arc: mergedArc });
-    return { result: updated, changes, rationale, runId };
+    return { result: updated, changes, rationale, runId, providerId: usedProviderId, model: usedModel };
   }
   if (stepId === 'readerMap') {
     if (!session.seriesId) throw makeErr('No series linked', ERR_VALIDATION);
     emit('Refining the reader map…', 'generate');
-    const { readerMap, changes, rationale, runId } = await refineReaderMap(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
+    const { readerMap, changes, rationale, runId, providerId: usedProviderId, model: usedModel } = await refineReaderMap(session.seriesId, feedback, { providerId: reqProviderId, model: reqModel });
     emit('Saving…', 'persist');
     const series = await getSeries(session.seriesId);
     const updated = await updateSeries(session.seriesId, { arc: { ...(series.arc || {}), readerMap } });
-    return { result: updated, changes, rationale, runId };
+    return { result: updated, changes, rationale, runId, providerId: usedProviderId, model: usedModel };
   }
   if (stepId === 'characters') {
     if (!session.universeId) throw makeErr('No universe linked', ERR_VALIDATION);
