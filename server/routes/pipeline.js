@@ -60,7 +60,7 @@ import {
 import { extractCanonFromProse, summarizeCanonExtraction } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
-import { mergeSeries, ERR_CASCADE as MERGE_CASCADE_INCOMPLETE_CODE } from '../services/recordMerge.js';
+import { mergeSeries, buildCascadeContext } from '../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
@@ -143,10 +143,7 @@ const mapServiceError = (err) => {
   if (status) {
     // An incomplete merge cascade forwards the survivor/loser ids + which step
     // failed so the UI can tell the user exactly what didn't move.
-    const context = err?.code === MERGE_CASCADE_INCOMPLETE_CODE
-      ? { survivorId: err.survivorId, loserId: err.loserId, failed: err.failed }
-      : undefined;
-    return new ServerError(err.message, { status, code: err.code, context });
+    return new ServerError(err.message, { status, code: err.code, context: buildCascadeContext(err) });
   }
   return err;
 };

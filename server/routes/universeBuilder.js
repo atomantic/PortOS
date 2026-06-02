@@ -34,7 +34,7 @@ import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { findDuplicateUniverseGroups, findSameNameUniverses } from '../services/duplicateDetection.js';
-import { mergeUniverses, ERR_CASCADE as MERGE_CASCADE_INCOMPLETE_CODE } from '../services/recordMerge.js';
+import { mergeUniverses, buildCascadeContext } from '../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
@@ -63,12 +63,10 @@ const mapServiceError = (err) => {
   if (status) {
     // Propagate diagnostic context onto the response body via `context`: the
     // blocking-series list for a delete-guard 409, or the survivor/loser ids +
-    // which children re-pointed vs. failed for an incomplete merge cascade.
+    // which children failed to re-point for an incomplete merge cascade.
     const context = err?.blockingSeries
       ? { blockingSeries: err.blockingSeries }
-      : err?.code === MERGE_CASCADE_INCOMPLETE_CODE
-        ? { survivorId: err.survivorId, loserId: err.loserId, repointed: err.repointed, failed: err.failed }
-        : undefined;
+      : buildCascadeContext(err);
     return new ServerError(err.message, { status, code: err.code, context });
   }
   return err;

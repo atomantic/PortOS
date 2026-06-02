@@ -51,23 +51,29 @@ export const ERR_VALIDATION = 'MERGE_VALIDATION';
 // it converges cleanly because every step is idempotent: buildXUnion dedupes
 // its list unions, the child re-point / issue-reassign only touch records still
 // pointing at the loser, and the survivor write is a verbatim overwrite. Both
-// routers map it to 409 and forward its `{ survivorId, loserId, repointed,
-// failed }` context so the UI can name exactly which children are stuck.
+// routers map it to 409 and forward its `{ survivorId, loserId, failed }`
+// context (via `buildCascadeContext`) so the UI can name which children stuck.
 export const ERR_CASCADE = 'MERGE_CASCADE_INCOMPLETE';
 
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
-// Build the resumable cascade error. `failed` is `[{ id, name, error, step? }]`;
-// `repointed` (universes only) is the children that DID move on this pass.
-const cascadeError = (kind, survivorId, loserId, failed, repointed = []) =>
+// Build the resumable cascade error. `failed` is `[{ id, name, error, step? }]`.
+const cascadeError = (kind, survivorId, loserId, failed) =>
   Object.assign(
     new Error(
       `${kind} merge could not complete: ${failed.length} cascade step(s) failed ` +
       `(${failed.map((f) => f.name || f.id).join(', ')}). The survivor already holds the ` +
       `merged data and the loser was left intact — resolve the failure and re-run the merge to finish.`,
     ),
-    { code: ERR_CASCADE, survivorId, loserId, failed, repointed },
+    { code: ERR_CASCADE, survivorId, loserId, failed },
   );
+
+// Extract the response `context` both routers forward for a cascade 409, so the
+// shape stays identical across `universeBuilder.js` and `pipeline.js`.
+export const buildCascadeContext = (err) =>
+  err?.code === ERR_CASCADE
+    ? { survivorId: err.survivorId, loserId: err.loserId, failed: err.failed }
+    : undefined;
 
 // ---- pure union helpers (exported for unit tests) ----
 
@@ -379,15 +385,13 @@ export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { d
   //    surface a resumable cascade error (the survivor already holds the union;
   //    re-running re-points only the children still under the loser, then
   //    tombstones). Best-effort-tombstoning instead would orphan those children.
-  const repointed = [];
   const repointFailed = [];
   for (const s of childSeries) {
     await updateSeries(s.id, { universeId: survivorId })
-      .then(() => repointed.push({ id: s.id, name: s.name }))
       .catch((err) => repointFailed.push({ id: s.id, name: s.name, error: err?.message || String(err) }));
   }
   if (repointFailed.length > 0) {
-    throw cascadeError('Universe', survivorId, loserId, repointFailed, repointed);
+    throw cascadeError('Universe', survivorId, loserId, repointFailed);
   }
 
   // 3. Fold the loser's auto-collection into the survivor's. The deterministic
