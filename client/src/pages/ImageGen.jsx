@@ -494,6 +494,11 @@ export default function ImageGen() {
 
   const currentModel = models.find((m) => m.id === modelId);
   const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
+  // Edit-only models (Qwen-Image-Edit) require a source image — submitting
+  // text-only crashes the runner, so the server rejects it and we gate the
+  // submit button + show a hint rather than letting the user hit a failed job.
+  const isEditOnlyModel = currentModel?.editOnly === true;
+  const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   // mflux is the default runner for entries with no explicit `runner` field.
   // LoraPicker filters compatible weights itself; we just pass the family.
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
@@ -1004,7 +1009,10 @@ export default function ImageGen() {
           {isLocalMode && (
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">
-                Init image <span className="text-gray-500 font-normal">(image-to-image — Flux only)</span>
+                {isEditOnlyModel ? 'Source image' : 'Init image'}{' '}
+                <span className={`font-normal ${isEditOnlyModel ? 'text-port-warning' : 'text-gray-500'}`}>
+                  {isEditOnlyModel ? '(required — this model edits an existing image)' : '(image-to-image — Flux only)'}
+                </span>
               </label>
               {initImage.previewUrl ? (
                 <div className="flex items-start gap-3">
@@ -1127,12 +1135,16 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
-              disabled={!prompt.trim() || notConnected}
+              disabled={!prompt.trim() || notConnected || editImageMissing}
+              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : undefined}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
               {isAsyncMode && batchCount > 1 && <span className="text-xs opacity-80">× {batchCount}</span>}
             </button>
+            {editImageMissing && (
+              <span className="text-xs text-port-warning">Upload a source image to use this edit model</span>
+            )}
             {isAsyncMode && (
               <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
                 <span className="select-none">×</span>

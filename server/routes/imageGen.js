@@ -23,7 +23,7 @@ import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '..
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
-import { getImageModels, isFlux2, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../lib/sseDownload.js';
@@ -350,6 +350,17 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const selectedModel = allModels.find((m) => m.id === data.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
+    // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
+    // source image. Reject a text-only submission up-front rather than
+    // enqueueing a job that crashes deep inside diffusers. `data.initImagePath`
+    // is already populated above from either an uploaded `initImage` or a
+    // gallery `initImageFile`.
+    if (isEditOnly(selectedModel) && !data.initImagePath) {
+      throw new ServerError(
+        `${selectedModel.name || selectedModel.id} is an image-edit model — it requires a source image. Upload an init image to use it.`,
+        { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
+      );
+    }
     if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
       throw new ServerError(
         'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
