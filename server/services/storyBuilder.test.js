@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../lib/mockPathsDataRoot.js';
+import { hashUpstream } from '../lib/storyBuilderIntegrity.js';
 
 // In-memory file store shared by all collection stores (storyBuilder, universe,
 // series) — mirrors the arcPlanner.test.js fixture so create paths persist.
@@ -111,8 +112,19 @@ describe('storyBuilder — lock state machine + gating', () => {
     const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
     const locked = await sb.lockStep(s.id, 'idea');
     expect(locked.steps.idea.locked).toBe(true);
-    expect(locked.steps.idea.upstreamHash).toMatch(/^[0-9a-f]{64}$/);
     expect(locked.steps.idea.lockedAt).toBeTruthy();
+    // Shape AND derivation: the stamped hash must be the SAME value the
+    // integrity helper produces from the idea step's whitelisted upstream
+    // inputs — not just any 64-char hex digest. Asserting against the real
+    // `hashUpstream` with the inputs spelled out here means any future drift in
+    // the idea step's input set (e.g. a field added to / removed from
+    // `buildUpstreamInputs`) surfaces as a failure on this line instead of
+    // silently passing a shape-only regex. A buggy impl that always stamped
+    // `hashUpstream('idea', null)` would now fail.
+    const expectedHash = hashUpstream('idea', { intakeMode: 'seed', seedIdea: 'seed' });
+    expect(locked.steps.idea.upstreamHash).toBe(expectedHash);
+    // Sanity: the derived hash is still the documented 64-char hex shape.
+    expect(expectedHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('allows jumping to any step out of order (start-from-anywhere)', async () => {
