@@ -48,17 +48,21 @@ function extractConstArrayBlock(src, constName) {
   return block[1];
 }
 
-// The tab ids a `switch (<switchVar>) { case '…': }` render-dispatch serves, plus
-// the destructuring default (`{ <switchVar> = '<id>' }`) — the tab with no explicit
-// case. Assumes the file's `switch (<switchVar>)` is the only one (cases are read to
-// EOF); a second switch would loudly fold its cases in rather than fail silently.
+// The `case '…':` labels of a `switch (<switchVar>) { … }` block. Assumes the
+// file's `switch (<switchVar>)` is the only one (cases are read to EOF); a second
+// switch would loudly fold its cases in rather than fail silently.
+function extractSwitchCases(src, switchVar) {
+  const block = src.match(new RegExp(`switch\\s*\\(\\s*${switchVar}\\s*\\)\\s*\\{([\\s\\S]*)`));
+  if (!block) throw new Error(`No switch (${switchVar}) found`);
+  return [...block[1].matchAll(/case\s+['"]([^'"]+)['"]\s*:/g)].map((m) => m[1]);
+}
+
+// The tab ids a `switch (<switchVar>)` render-dispatch serves, plus the
+// destructuring default (`{ <switchVar> = '<id>' }`) — the tab with no explicit case.
 function extractSwitchTabs(src, switchVar) {
   const def = src.match(new RegExp(`\\b${switchVar}\\s*=\\s*['"]([^'"]+)['"]`));
   if (!def) throw new Error(`No destructuring default for "${switchVar}" found`);
-  const block = src.match(new RegExp(`switch\\s*\\(\\s*${switchVar}\\s*\\)\\s*\\{([\\s\\S]*)`));
-  if (!block) throw new Error(`No switch (${switchVar}) found`);
-  const cases = [...block[1].matchAll(/case\s+['"]([^'"]+)['"]\s*:/g)].map((m) => m[1]);
-  return [def[1], ...cases];
+  return [def[1], ...extractSwitchCases(src, switchVar)];
 }
 
 // The set of absolute tab paths a page serves under its own prefix.
@@ -192,6 +196,41 @@ describe('nav contract — tabbed pages match their tab constants', () => {
       });
     });
   }
+});
+
+// Settings is the one tabbed page whose tab bar (SettingsTabsHeader.jsx `TABS`,
+// the nav guard's source of truth for /settings) and render dispatch live in
+// separate files: `Settings.jsx`'s `switch (activeTab)`. They're hand-kept in
+// sync, so a tab added to the header (+ nav) but forgotten in the switch would
+// silently render the default `general` view, and a `case` with no header entry
+// is an orphan reachable only by URL. The nav↔header guard above can't see the
+// switch; this pins header↔switch parity. Cross-links (Prompts → /prompts,
+// Providers → /ai) point off /settings, so the `links` extractor already drops
+// them — the two filtered sets are therefore expected to match exactly.
+describe('nav contract — Settings tab bar header ↔ page switch parity', () => {
+  const SETTINGS_HEADER = 'client/src/components/settings/SettingsTabsHeader.jsx';
+  const SETTINGS_PAGE = 'client/src/pages/Settings.jsx';
+
+  // Header tab ids that live under /settings/<id> (cross-links already filtered).
+  const headerTabIds = () => extractTabPaths(path.join(REPO_ROOT, SETTINGS_HEADER), {
+    kind: 'links', constName: 'TABS', prefix: '/settings',
+  }).map((p) => p.slice('/settings/'.length));
+
+  const switchCaseIds = () => extractSwitchCases(
+    fs.readFileSync(path.join(REPO_ROOT, SETTINGS_PAGE), 'utf8'), 'activeTab',
+  );
+
+  it('every Settings header tab has a renderTabContent switch case', () => {
+    const cases = new Set(switchCaseIds());
+    const missing = headerTabIds().filter((id) => !cases.has(id));
+    expect(missing).toEqual([]);
+  });
+
+  it('every renderTabContent switch case has a Settings header tab', () => {
+    const headerIds = new Set(headerTabIds());
+    const orphans = switchCaseIds().filter((id) => !headerIds.has(id));
+    expect(orphans).toEqual([]);
+  });
 });
 
 describe('getNavAliasMap — voice-agent compatibility', () => {
