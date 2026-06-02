@@ -94,6 +94,7 @@
 - **[nav-route-manifest-coverage-guard]** Added a test that fails the build if a newly added page route isn't registered in the navigation manifest, so a page can no longer ship unreachable from the command palette and voice navigation (no user-facing change).
 - **[memory-mgmt-new-endpoint-tests]** Added test coverage for the five memory-management endpoints (model load/unload, whisper start/stop, TTS status/unload) so future regressions surface as test failures (test-only, no user-facing change).
 - **[llm-playground-shared-target-key]** The Local LLM compare-model key used by the Settings model picker and the Playground compare view now comes from one shared, tested helper instead of being hand-written in several places, so the two can't disagree on which models you selected (no user-facing change).
+- **[flux2-runner-sidecar-tests]** The image-generation metadata builder (the record saved alongside each rendered image) was factored into a separately tested helper and given coverage for its reference-image fields, so future changes to how render settings are recorded surface as test failures (test-only, no user-facing change).
 
 ## Fixed
 
