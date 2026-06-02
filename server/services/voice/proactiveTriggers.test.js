@@ -370,4 +370,34 @@ describe('wireProactiveTriggers', () => {
     const priorities = speak.mock.calls.map((c) => c[0].priority);
     expect(priorities).toEqual(['high', 'normal']);
   });
+
+  it('rolls back the once-guard when the line was suppressed (ok:false), so a re-update re-announces', async () => {
+    // First completion is suppressed downstream (quiet hours / voice off): the
+    // outcome must NOT be marked announced, so a later identical re-update can
+    // still speak it once the suppression clears.
+    speak = vi.fn(async () => ({ ok: false, reason: 'quiet-hours' }));
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+
+    speak.mockResolvedValue({ ok: true });
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(2);
+  });
+
+  it('rolls back the once-guard when announceOnComplete is off, so re-enabling re-announces', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: true, llm: { codeAgent: { announceOnComplete: false } } });
+    unwire = wireProactiveTriggers({ io: {}, speak });
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).not.toHaveBeenCalled();
+
+    // User re-enables completion announcements; a later re-update now speaks.
+    getVoiceConfig.mockResolvedValue({ enabled: true, llm: { codeAgent: { announceOnComplete: true } } });
+    cosEvents.emit('tasks:changed', taskUpdate('completed'));
+    await flush();
+    expect(speak).toHaveBeenCalledTimes(1);
+  });
 });
