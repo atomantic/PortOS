@@ -50,11 +50,13 @@ function extractConstArrayBlock(src, constName) {
 
 // The `case '…':` labels of a `switch (<switchVar>) { … }` block. Assumes the
 // file's `switch (<switchVar>)` is the only one (cases are read to EOF); a second
-// switch would loudly fold its cases in rather than fail silently.
+// switch would loudly fold its cases in rather than fail silently. The case regex
+// is line-anchored (`^\s*case`, multiline) so a `case '…':` inside a comment
+// (`// case 'x':`) or string can't be counted as a real renderer case.
 function extractSwitchCases(src, switchVar) {
   const block = src.match(new RegExp(`switch\\s*\\(\\s*${switchVar}\\s*\\)\\s*\\{([\\s\\S]*)`));
   if (!block) throw new Error(`No switch (${switchVar}) found`);
-  return [...block[1].matchAll(/case\s+['"]([^'"]+)['"]\s*:/g)].map((m) => m[1]);
+  return [...block[1].matchAll(/^\s*case\s+['"]([^'"]+)['"]\s*:/gm)].map((m) => m[1]);
 }
 
 // The tab ids a `switch (<switchVar>)` render-dispatch serves, plus the
@@ -212,9 +214,11 @@ describe('nav contract — Settings tab bar header ↔ page switch parity', () =
   const SETTINGS_PAGE = 'client/src/pages/Settings.jsx';
 
   // Header tab ids that live under /settings/<id> (cross-links already filtered).
+  // Require the trailing slash so a hypothetical bare `to: '/settings'` index entry
+  // can't slice to '' and surface as a cryptic missing/orphan '' rather than a tab.
   const headerTabIds = () => extractTabPaths(path.join(REPO_ROOT, SETTINGS_HEADER), {
     kind: 'links', constName: 'TABS', prefix: '/settings',
-  }).map((p) => p.slice('/settings/'.length));
+  }).filter((p) => p.startsWith('/settings/')).map((p) => p.slice('/settings/'.length));
 
   const switchCaseIds = () => extractSwitchCases(
     fs.readFileSync(path.join(REPO_ROOT, SETTINGS_PAGE), 'utf8'), 'activeTab',
