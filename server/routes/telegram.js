@@ -122,12 +122,14 @@ router.put('/config', asyncHandler(async (req, res) => {
 
   // Store token in secrets, chatId in telegram. Merge both sub-objects against
   // the freshest snapshot inside the write queue so a concurrent settings write
-  // can't be clobbered by the stale `settings` read above.
-  const nextChatId = chatId || settings.telegram?.chatId || '';
+  // isn't clobbered. The chatId fallback reads `current` (not the stale `settings`
+  // read above) so "keep the existing chatId when none is supplied" resolves
+  // against the freshest persisted value; `finalToken` is request-driven (the
+  // submitted token, else whatever was stored when we validated it).
   await updateSettingsWith((current) => ({
     ...current,
     secrets: { ...current.secrets, telegram: { token: finalToken } },
-    telegram: { ...current.telegram, chatId: nextChatId }
+    telegram: { ...current.telegram, chatId: chatId || current.telegram?.chatId || '' }
   }));
 
   // Initialize bot — send test message only if chatId is configured
