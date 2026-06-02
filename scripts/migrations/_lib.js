@@ -185,17 +185,18 @@ export function makeSplitMigration({
     for (const record of records) {
       if (!record || typeof record !== 'object') {
         invalid += 1;
+        console.warn(`⚠️ ${migrationLabel}: skipping non-object ${recordNoun} record (left in backup for manual recovery)`);
         continue;
       }
       const id = typeof record.id === 'string' ? record.id : null;
       if (!id || !idPattern.test(id)) {
         invalid += 1;
-        console.warn(`⚠️ ${migrationLabel}: skipping ${recordNoun} with invalid id "${id}"`);
+        console.warn(`⚠️ ${migrationLabel}: skipping ${recordNoun} with invalid id "${id}" (left in backup for manual recovery)`);
         continue;
       }
       if (extraValid && !extraValid(record)) {
         invalid += 1;
-        console.warn(`⚠️ ${migrationLabel}: skipping ${recordNoun} id "${id}" — failed validity check (left in backup)`);
+        console.warn(`⚠️ ${migrationLabel}: skipping ${recordNoun} id "${id}" — failed validity check (left in backup for manual recovery)`);
         continue;
       }
       if (existingIds.has(id)) {
