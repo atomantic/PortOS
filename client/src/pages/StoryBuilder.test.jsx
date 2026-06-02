@@ -175,6 +175,52 @@ describe('StoryBuilder — index', () => {
     ));
   });
 
+  it('import tab: a partial commit (issues rolled back) retries issues-only without re-sending arc/canon', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.analyzeImport.mockResolvedValue({
+      universe: { id: 'u9', name: 'Giant' }, series: { id: 's9' },
+      canonPreview: { characters: [{ name: 'Kessa' }], places: [], objects: [] },
+      arcPreview: { logline: 'A giant wakes.', summary: 'spine' },
+      seasonsPreview: [{ number: 1, title: 'Vol 1' }],
+      issueProposals: [{ title: 'Issue 1' }], issueSplitFailed: false,
+    });
+    // First commit fails after persisting universe/series/arc/canon; the server
+    // rolled the issues back and signals arcAlreadyPersisted.
+    const partial = Object.assign(new Error('issues rolled back'), {
+      code: 'IMPORTER_PARTIAL_COMMIT_ISSUES', context: { arcAlreadyPersisted: true },
+    });
+    api.commitImport.mockRejectedValueOnce(partial);
+    api.commitImport.mockResolvedValueOnce({ universe: { id: 'u9' }, series: { id: 's9' }, createdIssueIds: ['iss-1'] });
+    api.createStorySession.mockResolvedValue({ id: 'stb-import', currentStep: 'idea' });
+
+    renderAt('/story-builder');
+    fireEvent.click(await screen.findByText('Import a finished work'));
+    fireEvent.change(await screen.findByLabelText('Universe name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText('Series name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText(/Source text/), { target: { value: 'PAGE ONE...' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Analyze$/ }));
+    await waitFor(() => expect(screen.getByText(/Extracted/)).toBeTruthy());
+
+    // First click → partial-commit warning, button flips to the issues-only retry label.
+    fireEvent.click(screen.getByRole('button', { name: /Import & start building/ }));
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /Retry issues & start building/ })).toBeTruthy());
+    // No session created from the failed commit.
+    expect(api.createStorySession).not.toHaveBeenCalled();
+
+    // Second click → retry drops arc + seasons + canon, re-sends issues only.
+    fireEvent.click(screen.getByRole('button', { name: /Retry issues & start building/ }));
+    await waitFor(() => expect(api.createStorySession).toHaveBeenCalled());
+    expect(api.commitImport).toHaveBeenCalledTimes(2);
+    expect(api.commitImport).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        universeId: 'u9', seriesId: 's9', issues: [{ title: 'Issue 1' }],
+        arc: null, seasons: [], canonSelections: { characters: [], places: [], objects: [] },
+      }),
+      expect.objectContaining({ silent: true }),
+    );
+  });
+
   it('import tab: blocks "Import & build" when no issues were extracted, offers retry', async () => {
     const { fireEvent } = await import('@testing-library/react');
     api.analyzeImport.mockResolvedValue({
