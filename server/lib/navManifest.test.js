@@ -224,7 +224,10 @@ function scanRoutes(appSrc) {
     // (leaf). Anything else is a multi-line opener the scanner can't handle.
     if (!line.endsWith('>')) { malformed.push(line); continue; }
 
+    // A `path=` attribute that didn't parse (e.g. single-quoted) must not be
+    // silently mistaken for a pathless index route — flag it loudly instead.
     const pathMatch = line.match(/\bpath="([^"]*)"/);
+    if (!pathMatch && /\bpath=/.test(line)) { malformed.push(line); continue; }
     const routePath = pathMatch ? pathMatch[1] : null; // null = index route
 
     // A container is a layout wrapper: push its segment so children resolve to
