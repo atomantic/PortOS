@@ -9,7 +9,7 @@ import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
-import { getSettings, updateSettings } from '../services/settings.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 
 // Defaults are tuned for a real dev machine: memory routinely sits in the
 // 75-85% band on a host with a couple of LLMs loaded, and big SSDs commonly
@@ -277,8 +277,9 @@ router.put('/health/thresholds', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'diskWarn must be less than diskCritical' });
   }
 
-  const current = await getSettings().catch(() => ({}));
-  await updateSettings({ ...current, health: { ...(current.health || {}), ...next } });
+  // Merge the health thresholds against the freshest snapshot inside the write
+  // queue so a concurrent settings write isn't clobbered by a stale base.
+  await updateSettingsWith((current) => ({ ...current, health: { ...(current.health || {}), ...next } }));
   res.json(next);
 }));
 
