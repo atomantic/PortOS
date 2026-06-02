@@ -84,6 +84,15 @@ import {
   MUSIC_SOURCE,
   MUSIC_UPLOAD_MAX_BYTES,
 } from '../services/pipeline/musicLibrary.js';
+import {
+  generateMusic,
+  MUSICGEN_MODELS,
+  DEFAULT_MUSICGEN_MODEL_ID,
+  DEFAULT_DURATION_SEC,
+  MIN_DURATION_SEC,
+  MAX_DURATION_SEC,
+  isMusicGenReady,
+} from '../services/pipeline/musicGen.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
 import {
@@ -762,6 +771,9 @@ router.post('/issues/:id/stages/audio/extract-lines', asyncHandler(async (req, r
 const lineEditSchema = z.object({
   text: z.string().max(4000).optional(),
   voiceIdOverride: z.string().trim().max(200).nullable().optional(),
+  // Per-line VO start offset (seconds into the stitched episode). null clears
+  // the placement so the muxer skips the line. The sanitizer clamps the range.
+  offsetSec: z.number().min(0).max(7200).nullable().optional(),
 });
 router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
@@ -786,6 +798,7 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
       const next = { ...line };
       if ('text' in body) next.text = body.text;
       if ('voiceIdOverride' in body) next.voiceIdOverride = body.voiceIdOverride;
+      if ('offsetSec' in body) next.offsetSec = body.offsetSec;
       const nextLines = [...lines];
       nextLines[lineIdx] = next;
       return { status: 'edited', lines: nextLines };
@@ -876,6 +889,54 @@ const audioStatusAfterMusicChange = (stage) =>
 
 router.get('/audio/music-library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
+}));
+
+// Local-OSS music generators available to the audio stage (Phase 4c.2).
+// `ready` reflects whether the opt-in MusicGen venv is provisioned, so the UI
+// can show an install hint instead of letting the user type a prompt that 503s.
+router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
+  res.json({
+    models: MUSICGEN_MODELS.map(({ id, name }) => ({ id, name })),
+    defaultModelId: DEFAULT_MUSICGEN_MODEL_ID,
+    defaultDurationSec: DEFAULT_DURATION_SEC,
+    minDurationSec: MIN_DURATION_SEC,
+    maxDurationSec: MAX_DURATION_SEC,
+    ready: isMusicGenReady(),
+  });
+}));
+
+// Generate a background-music track with MusicGen (MLX) and attach it to the
+// issue as a `source: 'gen'` track. The generated WAV lands in the shared
+// music library, so it's reusable across issues exactly like an upload.
+const musicGenerateSchema = z.object({
+  prompt: z.string().trim().min(1).max(800),
+  durationSec: z.number().min(MIN_DURATION_SEC).max(MAX_DURATION_SEC).optional(),
+  modelId: z.enum(MUSICGEN_MODELS.map((m) => m.id)).optional(),
+  label: z.string().trim().max(200).nullable().optional(),
+});
+router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicGenerateSchema, req.body ?? {});
+  // Guard the (expensive) generation behind a 404 check first — generating a
+  // multi-second clip only to discover the issue is gone wastes GPU time and
+  // would orphan the WAV in the library.
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, 'audio');
+  const gen = await generateMusic({
+    prompt: body.prompt,
+    durationSec: body.durationSec ?? DEFAULT_DURATION_SEC,
+    modelId: body.modelId ?? DEFAULT_MUSICGEN_MODEL_ID,
+  }).catch((err) => { throw mapServiceError(err); });
+  const label = body.label?.trim() || gen.model;
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => ({
+      status: audioStatusAfterMusicChange(current),
+      music: { source: MUSIC_SOURCE.GEN, trackFilename: gen.filename, label },
+      errorMessage: '',
+    }),
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId });
 }));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {

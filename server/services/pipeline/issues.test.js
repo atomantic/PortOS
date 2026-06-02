@@ -1262,4 +1262,36 @@ describe('pipeline issues service', () => {
       expect(after.number).toBe(3);                        // renumber also applied
     });
   });
+
+  describe('sanitizeLineOffset (VO per-line offset)', () => {
+    it('keeps a valid non-negative number, distinguishing 0 from null', () => {
+      expect(svc.sanitizeLineOffset(0)).toBe(0);
+      expect(svc.sanitizeLineOffset(3.5)).toBe(3.5);
+    });
+    it('treats absent / cleared as null (un-placed), not 0', () => {
+      expect(svc.sanitizeLineOffset(null)).toBeNull();
+      expect(svc.sanitizeLineOffset(undefined)).toBeNull();
+    });
+    it('collapses negative / non-finite input to null', () => {
+      expect(svc.sanitizeLineOffset(-1)).toBeNull();
+      expect(svc.sanitizeLineOffset(NaN)).toBeNull();
+      expect(svc.sanitizeLineOffset('abc')).toBeNull();
+    });
+    it('clamps an absurd offset to the 2-hour ceiling', () => {
+      expect(svc.sanitizeLineOffset(999999)).toBe(7200);
+    });
+    it('round-trips through the audio stage sanitizer', async () => {
+      const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'E1' });
+      const { stage } = await svc.updateStage(issue.id, 'audio', {
+        lines: [
+          { id: 'line-001', text: 'Hello', offsetSec: 4.2 },
+          { id: 'line-002', text: 'World', offsetSec: -5 },   // invalid → null
+          { id: 'line-003', text: 'Quiet' },                  // absent → null
+        ],
+      });
+      expect(stage.lines[0].offsetSec).toBe(4.2);
+      expect(stage.lines[1].offsetSec).toBeNull();
+      expect(stage.lines[2].offsetSec).toBeNull();
+    });
+  });
 });

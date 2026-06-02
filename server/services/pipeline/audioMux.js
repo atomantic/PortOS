@@ -2,16 +2,26 @@
  * Pipeline audio mux — second-pass overlay of pipeline-stage audio onto the
  * already-stitched episode video.
  *
- * Phase 4d v1 covers **background-music bedding**: stripping the timeline's
- * silent track and laying the user-picked music file underneath the video at
- * a configurable gain. The music loops to fill the video length and is cut
- * to match the video duration. VO line muxing (4d.2) lands on top of this
- * same module — the helper signature already accepts `voLines` for that.
+ * Phase 4d v1 (`muxMusicBed`) covers **background-music bedding**: stripping
+ * the timeline's silent track and laying the user-picked music file underneath
+ * the video at a configurable gain, looped to fill + cut to the video length.
+ *
+ * Phase 4d.2 (`muxVoLines`) adds **voice-over muxing**: each rendered VO line
+ * is delayed to its per-line offset and mixed onto the episode, and — when a
+ * music bed is present — the music is **ducked** under the dialogue via
+ * sidechain compression so speech stays intelligible. `muxVoLines` supersedes
+ * `muxMusicBed` whenever the issue has placed VO lines; music-only issues still
+ * take the simpler `muxMusicBed` path.
  *
  * Failure handling: this is a value-add overlay, not a correctness gate. If
  * the mux pass throws (ffmpeg missing, malformed audio, etc.), callers
  * should log and leave the silent video in place — graceful degradation
  * beats blocking the whole stitch on an optional cosmetic step.
+ *
+ * Known limitation: like `muxMusicBed`, the VO pass *replaces* the stitched
+ * video's audio track rather than mixing under it. AI-gen clips are silent
+ * today, but LTX-2 audio-to-video can carry a clip soundtrack — preserving +
+ * ducking that under VO is tracked as a follow-up in PLAN.md.
  */
 
 import { join } from 'path';
@@ -25,6 +35,16 @@ import { statMusicTrack } from './musicLibrary.js';
 // 0.5 ≈ -6 dB — quiet enough to sit under dialogue once VO mixing lands
 // (4d.2), but not so quiet the user wonders if it's there.
 const DEFAULT_MUSIC_GAIN = 0.5;
+
+// Sidechain-ducking defaults — the music bed (sidechain input) is compressed
+// whenever the VO track (sidechain key) exceeds the threshold. ratio=8 +
+// a low threshold pulls the bed well down under speech; release=300ms lets the
+// music swell back smoothly in the gaps between lines.
+const DEFAULT_DUCK = Object.freeze({ threshold: 0.05, ratio: 8, attack: 20, release: 300 });
+
+// Shared aformat target so every chain mixes at one sample rate / layout —
+// sidechaincompress + amix both require their inputs to agree.
+const AFMT = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
 
 /**
  * Resolve a library music filename to its absolute path on disk, or null
@@ -82,4 +102,110 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
   return { ok: true };
 }
 
-export { DEFAULT_MUSIC_GAIN };
+/**
+ * Build the ffmpeg argv for a VO-line mux. Pure — unit-tested without spawning.
+ *
+ * Input order is fixed: video is input 0, each VO line is inputs 1..N (in the
+ * order given), and the optional looped music bed is input N+1. `voLines` MUST
+ * already be filtered to entries with an on-disk `path` and a finite, >= 0
+ * `offsetSec` (muxVoLines does this) — this builder trusts its input.
+ *
+ * Filter graph:
+ *   - each VO line: delayed to its offset, resampled to the shared format
+ *   - VO lines mixed into one track (`amix normalize=0` so speech stays at full
+ *     level rather than being attenuated by 1/N)
+ *   - with music: the VO track is split — one copy keys a `sidechaincompress`
+ *     that ducks the (gained) music bed, the other is mixed back over the
+ *     ducked bed
+ *   - the final audio is `apad`-ed to infinity and paired with `-shortest` so
+ *     the output always matches the VIDEO length (never truncates the episode
+ *     to the last VO line, never trails silence past the video)
+ */
+export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, outPath }) {
+  const args = ['-i', inputVideoPath];
+  for (const line of voLines) args.push('-i', line.path);
+  if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
+
+  const chains = [];
+  voLines.forEach((line, i) => {
+    const ms = Math.round(Number(line.offsetSec) * 1000);
+    // adelay `:all=1` delays every channel by `ms` regardless of layout, so a
+    // mono VO WAV doesn't need an explicit per-channel delay list.
+    chains.push(`[${i + 1}:a]adelay=${ms}:all=1,${AFMT}[vo${i}]`);
+  });
+
+  let voMixLabel;
+  if (voLines.length === 1) {
+    voMixLabel = '[vo0]';
+  } else {
+    const ins = voLines.map((_, i) => `[vo${i}]`).join('');
+    chains.push(`${ins}amix=inputs=${voLines.length}:normalize=0[vomix]`);
+    voMixLabel = '[vomix]';
+  }
+
+  if (musicPath) {
+    const musicIdx = voLines.length + 1;
+    const gain = Number(musicGain).toFixed(3);
+    chains.push(`${voMixLabel}asplit=2[vosc][vomain]`);
+    chains.push(`[${musicIdx}:a]volume=${gain},${AFMT}[bed]`);
+    chains.push(`[bed][vosc]sidechaincompress=threshold=${duck.threshold}:ratio=${duck.ratio}:attack=${duck.attack}:release=${duck.release}[ducked]`);
+    chains.push(`[ducked][vomain]amix=inputs=2:normalize=0,apad[aout]`);
+  } else {
+    chains.push(`${voMixLabel}apad[aout]`);
+  }
+
+  args.push(
+    '-filter_complex', chains.join(';'),
+    '-map', '0:v',
+    '-map', '[aout]',
+    '-c:v', 'copy',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-shortest',
+    '-movflags', '+faststart',
+    '-y',
+    outPath,
+  );
+  return args;
+}
+
+/**
+ * Mix the placed VO lines (and, when present, a ducked music bed) onto
+ * `inputVideoPath`, replacing the file in place. Returns `{ ok: true }` on
+ * success or `{ ok: false, reason }` on any failure (graceful degradation —
+ * the caller keeps the prior video).
+ *
+ * `voLines` is `[{ path, offsetSec }]`; entries without an on-disk file or a
+ * finite, >= 0 offset are dropped (un-placed lines stay silent rather than
+ * stacking at t=0). With no usable lines this returns ok:false so the caller
+ * can fall back to the music-only `muxMusicBed` path.
+ */
+export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, signal } = {}) {
+  if (!inputVideoPath || !existsSync(inputVideoPath)) {
+    return { ok: false, reason: 'input video missing' };
+  }
+  const placed = (Array.isArray(voLines) ? voLines : []).filter((l) => {
+    const off = Number(l?.offsetSec);
+    return l?.path && existsSync(l.path) && Number.isFinite(off) && off >= 0;
+  });
+  if (!placed.length) return { ok: false, reason: 'no placed VO lines' };
+  // A missing music file is not fatal — drop to a VO-only mux rather than
+  // failing, so a stale `music.trackFilename` pointer can't suppress dialogue.
+  const usableMusic = musicPath && existsSync(musicPath) ? musicPath : null;
+
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return { ok: false, reason: 'ffmpeg not on PATH' };
+
+  const tmpOut = `${inputVideoPath}.vomux.${randomUUID()}.mp4`;
+  const args = buildVoMuxArgs({ inputVideoPath, voLines: placed, musicPath: usableMusic, musicGain, duck, outPath: tmpOut });
+
+  const result = await runFfmpegProcess({ bin: ffmpeg, args, signal });
+  if (!result.ok) {
+    await unlink(tmpOut).catch(() => {});
+    return result;
+  }
+  await rename(tmpOut, inputVideoPath);
+  return { ok: true, lineCount: placed.length, ducked: !!usableMusic };
+}
+
+export { DEFAULT_MUSIC_GAIN, DEFAULT_DUCK };

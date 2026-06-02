@@ -24,7 +24,7 @@ import { addItem as addCollectionItem } from '../mediaCollections.js';
 import { buildTimelineClips } from './orchestrator.js';
 import { getProject, updateProject } from './local.js';
 import { getIssue } from '../pipeline/issues.js';
-import { muxMusicBed, resolveMusicTrackPath } from '../pipeline/audioMux.js';
+import { muxMusicBed, muxVoLines, resolveMusicTrackPath } from '../pipeline/audioMux.js';
 import { PATHS } from '../../lib/fileUtils.js';
 
 const FINAL_RENDER_POLL_MS = 3000;
@@ -142,9 +142,34 @@ async function maybeMuxPipelineAudio(project, finalEntry) {
   }
   const musicFilename = issue.stages?.audio?.music?.trackFilename;
   const musicPath = await resolveMusicTrackPath(musicFilename);
-  if (!musicPath) return;
+
+  // Collect placed VO lines — rendered (have an audioFilename) AND positioned
+  // (have a numeric offsetSec). Un-placed lines stay silent rather than
+  // stacking at t=0. When any exist, the VO pass (which also ducks the music
+  // bed under dialogue) supersedes the music-only bed.
+  const lines = Array.isArray(issue.stages?.audio?.lines) ? issue.stages.audio.lines : [];
+  const voLines = lines
+    .filter((l) => l?.audioFilename && Number.isFinite(Number(l?.offsetSec)) && Number(l.offsetSec) >= 0)
+    .map((l) => ({ path: join(PATHS.audio, l.audioFilename), offsetSec: Number(l.offsetSec) }));
+
+  // Nothing to overlay — no placed VO and no music. Leave the stitch as-is.
+  if (!voLines.length && !musicPath) return;
 
   const videoPath = join(PATHS.videos, finalEntry.filename);
+
+  if (voLines.length) {
+    console.log(`🎙️ CD stitch mux: overlaying ${voLines.length} VO line(s)${musicPath ? ' + ducked music bed' : ''} onto ${finalEntry.filename}`);
+    const result = await muxVoLines(videoPath, { voLines, musicPath });
+    if (result.ok) {
+      console.log(`✅ CD stitch mux: VO mux applied to ${finalEntry.filename} (${result.lineCount} line(s)${result.ducked ? ', music ducked' : ''})`);
+      return;
+    }
+    // VO mux failed — fall through to a plain music bed if we have one, so a
+    // graph error doesn't strip the music too.
+    console.log(`⚠️ CD stitch mux: VO mux skipped (${result.reason})${musicPath ? ' — falling back to music bed' : ''}`);
+  }
+
+  if (!musicPath) return;
   console.log(`🎵 CD stitch mux: overlaying ${musicFilename} onto ${finalEntry.filename}`);
   const result = await muxMusicBed(videoPath, { musicPath });
   if (result.ok) {

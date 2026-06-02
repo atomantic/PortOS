@@ -24,6 +24,8 @@ import {
   attachPipelineMusicTrack,
   detachPipelineMusicTrack,
   deletePipelineMusicTrack,
+  listPipelineMusicGenerators,
+  generatePipelineMusic,
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
@@ -71,6 +73,55 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // only one row shows the confirm at a time.
   const [pendingLibraryDelete, setPendingLibraryDelete] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Local-OSS music generation (Phase 4c.2). The generators list is fetched
+  // lazily when the user opens the Generate panel; `ready` gates the prompt box
+  // behind an install hint so a 503 never surprises them mid-prompt.
+  const [genPanelOpen, setGenPanelOpen] = useState(false);
+  const [generators, setGenerators] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [genPrompt, setGenPrompt] = useState('');
+  const [genDuration, setGenDuration] = useState(12);
+  const [genModelId, setGenModelId] = useState('');
+
+  // Per-line VO start-offset drafts (seconds into the stitched episode). Kept
+  // separate from text drafts; committed on blur via the same patch queue.
+  const [offsetDrafts, setOffsetDrafts] = useState({});
+
+  const openGenPanel = async () => {
+    setGenPanelOpen(true);
+    if (generators === null) {
+      const result = await listPipelineMusicGenerators().catch((err) => {
+        toast.error(err.message || 'Failed to load generators');
+        return null;
+      });
+      if (result) {
+        setGenerators(result);
+        setGenModelId((prev) => prev || result.defaultModelId || result.models?.[0]?.id || '');
+        if (Number.isFinite(result.defaultDurationSec)) setGenDuration(result.defaultDurationSec);
+      }
+    }
+  };
+
+  const handleGenerateMusic = async () => {
+    const prompt = genPrompt.trim();
+    if (!prompt) { toast.error('Describe the music you want first'); return; }
+    setGenerating(true);
+    // Owns its own error toast → silent so the helper doesn't double-toast.
+    const result = await generatePipelineMusic(
+      issue.id,
+      { prompt, durationSec: genDuration, modelId: genModelId || undefined },
+      { silent: true },
+    ).catch((err) => {
+      toast.error(err.message || 'Music generation failed');
+      return null;
+    });
+    setGenerating(false);
+    if (!result) return;
+    onStageUpdate?.('audio', result.stage, result.issue);
+    setGenPanelOpen(false);
+    toast.success(`Generated ${result.durationSec ?? genDuration}s track (${result.modelId})`);
+  };
 
   const loadMusicLibrary = async () => {
     setMusicLibraryLoading(true);
@@ -168,6 +219,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
     if (!result) return;
     onStageUpdate?.('audio', result.stage, result.issue);
     setDrafts({});
+    setOffsetDrafts({});
     const preserved = result.preservedCount || 0;
     if (preserved > 0) {
       toast.success(`Extracted ${result.lineCount} line${result.lineCount === 1 ? '' : 's'} · preserved ${preserved} rendered`);
@@ -214,6 +266,22 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // falls back to the canon character voice (or project default).
   const handleVoiceOverride = (lineIdx, voiceId) => {
     void saveLinePatch(lineIdx, { voiceIdOverride: voiceId });
+  };
+
+  // Commit a per-line start-offset edit. Empty input clears the placement
+  // (null → muxer skips the line); a valid non-negative number positions it.
+  // Invalid input is dropped silently so the field reverts to server state.
+  const handleOffsetBlur = (lineIdx) => {
+    const draft = offsetDrafts[lineIdx];
+    if (draft === undefined) return;
+    const dropDraft = () => setOffsetDrafts((prev) => { const next = { ...prev }; delete next[lineIdx]; return next; });
+    const current = Number.isFinite(lines[lineIdx]?.offsetSec) ? lines[lineIdx].offsetSec : null;
+    const trimmed = String(draft).trim();
+    const parsed = trimmed === '' ? null : Number(trimmed);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) { dropDraft(); return; }
+    if (parsed === current) { dropDraft(); return; }
+    void saveLinePatch(lineIdx, { offsetSec: parsed });
+    dropDraft();
   };
 
   const handleRender = async (lineIdx) => {
@@ -357,6 +425,24 @@ export default function AudioStage({ issue, onStageUpdate }) {
                       {isRendering ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                       {line.audioFilename ? 'Re-render' : 'Render'}
                     </button>
+                    {/* Per-line start offset (seconds into the episode). Drives
+                        VO muxing in the final cut; blank = not placed yet. */}
+                    <label htmlFor={`vo-offset-${i}`} className="text-[10px] text-gray-500 mt-0.5">Start (s)</label>
+                    <input
+                      id={`vo-offset-${i}`}
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      inputMode="decimal"
+                      value={offsetDrafts[i] !== undefined
+                        ? offsetDrafts[i]
+                        : (Number.isFinite(line.offsetSec) ? line.offsetSec : '')}
+                      onChange={(e) => setOffsetDrafts((prev) => ({ ...prev, [i]: e.target.value }))}
+                      onBlur={() => handleOffsetBlur(i)}
+                      placeholder="—"
+                      title="When this line plays in the stitched episode (seconds). Blank = not placed."
+                      className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                    />
                   </div>
                 </div>
               </li>
@@ -372,12 +458,12 @@ export default function AudioStage({ issue, onStageUpdate }) {
             <div>
               <h3 className="text-base font-semibold text-white">Background Music</h3>
               <p className="text-xs text-gray-500 mt-0.5">
-                Optional track played under the rendered episode. Upload from disk now;
-                {' '}<span className="text-gray-600">local OSS generation (MusicGen) coming next.</span>
+                Optional track played under the rendered episode — ducked beneath dialogue in the final cut.
+                {' '}<span className="text-gray-600">Upload, pick from the library, or generate locally with MusicGen.</span>
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <input
               ref={fileInputRef}
               type="file"
@@ -406,8 +492,87 @@ export default function AudioStage({ issue, onStageUpdate }) {
               <Music size={14} />
               {musicPickerOpen ? 'Close library' : 'Pick from library'}
             </button>
+            <button
+              type="button"
+              onClick={() => (genPanelOpen ? setGenPanelOpen(false) : openGenPanel())}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50"
+            >
+              <Wand2 size={14} />
+              {genPanelOpen ? 'Close generator' : 'Generate (MusicGen)'}
+            </button>
           </div>
         </div>
+
+        {genPanelOpen ? (
+          <div className="mb-3 p-3 bg-port-bg border border-port-border rounded-lg">
+            {generators === null ? (
+              <p className="text-xs text-gray-500">Loading generators…</p>
+            ) : !generators.ready ? (
+              <p className="text-xs text-gray-400">
+                Local music generation isn't installed yet. Run{' '}
+                <code className="text-gray-300">INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh</code>{' '}
+                to bootstrap the MusicGen (MLX) runtime, then reopen this panel.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label htmlFor="musicgen-prompt" className="block text-xs text-gray-400 mb-1">Describe the music</label>
+                  <textarea
+                    id="musicgen-prompt"
+                    value={genPrompt}
+                    onChange={(e) => setGenPrompt(e.target.value)}
+                    rows={2}
+                    maxLength={800}
+                    placeholder="e.g. tense cinematic synth pad, slow build, minor key"
+                    className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
+                  />
+                </div>
+                <div className="flex items-end gap-3 flex-wrap">
+                  <div>
+                    <label htmlFor="musicgen-model" className="block text-xs text-gray-400 mb-1">Model</label>
+                    <select
+                      id="musicgen-model"
+                      value={genModelId}
+                      onChange={(e) => setGenModelId(e.target.value)}
+                      className="px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
+                    >
+                      {(generators.models || []).map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="musicgen-duration" className="block text-xs text-gray-400 mb-1">
+                      Length (s)
+                    </label>
+                    <input
+                      id="musicgen-duration"
+                      type="number"
+                      min={generators.minDurationSec ?? 1}
+                      max={generators.maxDurationSec ?? 30}
+                      step="1"
+                      value={genDuration}
+                      onChange={(e) => setGenDuration(Number(e.target.value))}
+                      className="w-24 px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGenerateMusic}
+                    disabled={generating || !genPrompt.trim()}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
+                  >
+                    {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {generating ? 'Generating…' : 'Generate'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-600">
+                  Runs on-device via MLX — a {generators.maxDurationSec ?? 30}s clip takes ~tens of seconds. The track lands in your music library and is attached to this issue.
+                </p>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {music ? (
           <div className="p-3 bg-port-card border border-port-border rounded-lg">
