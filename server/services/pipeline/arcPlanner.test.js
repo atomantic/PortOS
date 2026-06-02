@@ -1600,6 +1600,18 @@ describe('arcPlanner — refineArc', () => {
     expect(out.arc.protagonistArc).toBe('keep arc');
   });
 
+  it('preserves existing themes when the LLM returns a non-empty but all-blank themes array', async () => {
+    // `['  ', null]` is non-empty so a naive length check would accept it, then
+    // sanitizeArc cleans it to [] and wipes the user's themes. Must fall back.
+    const s = await setupSeries({ arc: { logline: 'L', summary: 'S', themes: ['betrayal', 'hope'] } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'L2', summary: 'S2', themes: ['   ', null], changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak');
+    expect(out.arc.themes).toEqual(['betrayal', 'hope']);
+  });
+
   it('throws when the arc is locked', async () => {
     const s = await setupSeries({ arc: { logline: 'x', summary: 'y' }, locked: { arc: true } });
     await expect(planner.refineArc(s.id, 'x')).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });

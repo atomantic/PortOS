@@ -29,6 +29,7 @@ import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEven
 import { getSeason } from './seasons.js';
 import {
   sanitizeArc,
+  cleanThemes,
   sanitizeSeasonList,
   sanitizeSeason,
   buildSeason,
@@ -983,8 +984,13 @@ export async function refineArc(seriesId, feedback, options = {}) {
     const trimmed = typeof next === 'string' ? next.trim() : '';
     return trimmed || current || '';
   };
-  const refinedThemes = Array.isArray(content.themes) && content.themes.length > 0
-    ? content.themes
+  // Clean the candidate themes BEFORE deciding to keep them: an LLM array of
+  // only blanks/nulls (`['  ']`, `[null]`) is non-empty but sanitizes to [],
+  // which would wipe the existing themes. Fall back to current when the cleaned
+  // candidate is empty (preserve, per the absent-vs-empty rule).
+  const cleanedCandidateThemes = cleanThemes(content.themes);
+  const refinedThemes = cleanedCandidateThemes.length > 0
+    ? cleanedCandidateThemes
     : (arc.themes || []);
   const refinedArc = sanitizeArc({
     logline: refinedStr(content.logline, arc.logline),
@@ -1001,9 +1007,7 @@ export async function refineArc(seriesId, feedback, options = {}) {
   if (!refinedArc) {
     throw makeErr('LLM returned an empty arc and there is none to preserve', ERR_VALIDATION);
   }
-  // Return the freshly-read series so the caller can persist without a second
-  // getSeries round-trip (it needs series.seasons for commitSeasonsWithRemap).
-  return { arc: refinedArc, changes: trimChanges(content.changes), rationale, runId, providerId, model, series };
+  return { arc: refinedArc, changes: trimChanges(content.changes), rationale, runId, providerId, model };
 }
 
 /**

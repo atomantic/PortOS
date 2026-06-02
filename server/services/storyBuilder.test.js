@@ -261,6 +261,25 @@ describe('storyBuilder — refine delegation', () => {
     expect(out.rationale).toBe('y');
   });
 
+  it('refineStep(plotArc) leaves the season breakdown untouched (arc-only persist)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'old', summary: 'old summary' },
+      seasons: [{ number: 1, title: 'Volume One', episodeCountTarget: 6 }],
+    });
+    const before = await seriesSvc.getSeries(s.seriesId);
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'refined', summary: 'refined summary', changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    await sb.refineStep(s.id, 'plotArc', { feedback: 'sharpen' });
+    const after = await seriesSvc.getSeries(s.seriesId);
+    expect(after.arc.logline).toBe('refined');
+    // Seasons are byte-for-byte unchanged — refine never routes through the
+    // season remap, so no id churn or issue reassignment.
+    expect(after.seasons).toEqual(before.seasons);
+  });
+
   it('refineStep(plotArc) refuses when the arc is locked', async () => {
     const s = await sb.createStorySession({ title: 'X' });
     await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
