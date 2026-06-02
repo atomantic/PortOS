@@ -2,6 +2,10 @@ import { useState, useRef, useCallback } from 'react';
 import { generateImage } from '../services/api';
 import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
 
+// Stable key for single-target callers (the base-style probe) so `jobId` and
+// the dedupe set don't need a caller-supplied key.
+const SINGLE_KEY = '__single__';
+
 /**
  * Drive the queue-one-render / wait-for-completion lifecycle shared by the
  * single-image render slots (the Story Builder characters step, the universe
@@ -81,7 +85,3 @@ export default function useSingleImageRender({ buildPrompt, onComplete, onError 
 
   return { jobId: renderingJobs[SINGLE_KEY] || null, renderingJobs, render, handleComplete };
 }
-
-// Stable key for single-target callers (the base-style probe) so `jobId` and
-// the dedupe set don't need a caller-supplied key.
-const SINGLE_KEY = '__single__';
