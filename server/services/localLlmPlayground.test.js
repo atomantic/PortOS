@@ -165,4 +165,38 @@ describe('runLocalLlmTest timeout/abort contract', () => {
     expect(result.text).toBe('Done.');
     expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ output: 'Done.', success: true, exitCode: 0 }));
   });
+
+  it('forwards a client cancel onto the upstream fetch so the reader tears down early', async () => {
+    let capturedSignal = null;
+    global.fetch = vi.fn().mockImplementation((_url, init) => {
+      capturedSignal = init.signal;
+      return Promise.resolve({ ok: true, status: 200, body: { getReader: () => makeReader([sse({ content: 'partial' })], { abort: true }) } });
+    });
+
+    // A client that hung up before the run even started is the worst case — the
+    // upstream signal must already be aborted, not run on to the 5s timeout.
+    const clientController = new AbortController();
+    clientController.abort();
+
+    const result = await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000, signal: clientController.signal });
+
+    expect(capturedSignal.aborted).toBe(true);
+    // The cancel surfaces as the same partial-output-on-abort contract.
+    expect(result.text).toBe('partial');
+  });
+
+  it('aborts the upstream fetch when the client signal fires mid-run', async () => {
+    let capturedSignal = null;
+    global.fetch = vi.fn().mockImplementation((_url, init) => {
+      capturedSignal = init.signal;
+      return Promise.resolve({ ok: true, status: 200, body: { getReader: () => makeReader([sse({ content: 'partial' })], { abort: true }) } });
+    });
+
+    const clientController = new AbortController();
+    const promise = runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000, signal: clientController.signal });
+    clientController.abort();
+    await promise;
+
+    expect(capturedSignal.aborted).toBe(true);
+  });
 });

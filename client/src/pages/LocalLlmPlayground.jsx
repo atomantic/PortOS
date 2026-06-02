@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRightLeft, Check, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Check, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
@@ -135,7 +135,16 @@ export default function LocalLlmPlayground() {
   const [compareResult, setCompareResult] = useState(null);
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Holds the AbortController for the in-flight run so the Cancel button can
+  // abort the client fetch (which closes the server-side stream early). Cleared
+  // in each run's .finally(). Abort the live request on unmount too.
+  const runControllerRef = useRef(null);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    runControllerRef.current?.abort();
+  }, []);
+
+  const cancelRun = () => runControllerRef.current?.abort();
 
   const loadStatus = useCallback(() => {
     setLoadingStatus(true);
@@ -189,20 +198,29 @@ export default function LocalLlmPlayground() {
 
   const runChat = () => {
     if (!canRunChat) return;
+    const controller = new AbortController();
+    runControllerRef.current = controller;
     setBusy(true);
     const target = primaryTarget;
-    testLocalLlmModel({ ...target, prompt: prompt.trim(), ...options() }, { silent: true })
+    testLocalLlmModel({ ...target, prompt: prompt.trim(), ...options() }, { silent: true, signal: controller.signal })
       .then((result) => {
         if (!mountedRef.current) return;
         setChatResults((prev) => [result, ...prev]);
         if (result.error) toast.error(result.error);
       })
-      .catch((err) => { if (mountedRef.current) toast.error(err?.message || 'Model test failed'); })
-      .finally(() => { if (mountedRef.current) setBusy(false); });
+      // A user-initiated cancel rejects the fetch with AbortError — don't surface
+      // it as a failure; the request was stopped on purpose.
+      .catch((err) => { if (mountedRef.current && !controller.signal.aborted) toast.error(err?.message || 'Model test failed'); })
+      .finally(() => {
+        if (runControllerRef.current === controller) runControllerRef.current = null;
+        if (mountedRef.current) setBusy(false);
+      });
   };
 
   const runCompare = () => {
     if (!canCompare) return;
+    const controller = new AbortController();
+    runControllerRef.current = controller;
     setBusy(true);
     setCompareResult(null);
     compareLocalLlmModels({
@@ -210,14 +228,17 @@ export default function LocalLlmPlayground() {
       prompt: prompt.trim(),
       targets: selectedTargets,
       options: options(),
-    }, { silent: true })
+    }, { silent: true, signal: controller.signal })
       .then((result) => {
         if (!mountedRef.current) return;
         setCompareResult(result);
         if ((result.results || []).some((r) => r.error)) toast.error('Some model runs failed');
       })
-      .catch((err) => { if (mountedRef.current) toast.error(err?.message || 'Comparison failed'); })
-      .finally(() => { if (mountedRef.current) setBusy(false); });
+      .catch((err) => { if (mountedRef.current && !controller.signal.aborted) toast.error(err?.message || 'Comparison failed'); })
+      .finally(() => {
+        if (runControllerRef.current === controller) runControllerRef.current = null;
+        if (mountedRef.current) setBusy(false);
+      });
   };
 
   return (
@@ -344,14 +365,24 @@ export default function LocalLlmPlayground() {
                       </select>
                     </>
                   )}
-                  <button
-                    onClick={activeMode === 'chat' ? runChat : runCompare}
-                    disabled={busy || (activeMode === 'chat' ? !canRunChat : !canCompare)}
-                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-sm font-medium rounded-lg disabled:opacity-50"
-                  >
-                    {busy ? <BrailleSpinner /> : activeMode === 'chat' ? <Send size={15} /> : <Play size={15} />}
-                    {activeMode === 'chat' ? 'Run chat' : 'Run comparison'}
-                  </button>
+                  {busy ? (
+                    <button
+                      onClick={cancelRun}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-error/15 hover:bg-port-error/25 text-port-error text-sm font-medium rounded-lg"
+                    >
+                      <X size={15} />
+                      Cancel
+                    </button>
+                  ) : (
+                    <button
+                      onClick={activeMode === 'chat' ? runChat : runCompare}
+                      disabled={activeMode === 'chat' ? !canRunChat : !canCompare}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-sm font-medium rounded-lg disabled:opacity-50"
+                    >
+                      {activeMode === 'chat' ? <Send size={15} /> : <Play size={15} />}
+                      {activeMode === 'chat' ? 'Run chat' : 'Run comparison'}
+                    </button>
+                  )}
                 </div>
               </div>
             </section>

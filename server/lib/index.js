@@ -107,6 +107,7 @@ export * from './pythonSetup.js';
 
 // === Networking ===
 export * from './fetchWithTimeout.js';
+export * from './requestAbort.js';
 export * from './httpClient.js';
 export * from './httpsState.js';
 export * from './networkExposure.js';

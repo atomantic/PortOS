@@ -5,6 +5,7 @@ import { getProviderById } from './providers.js';
 import { markProviderAvailable } from './providerStatus.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
+import { anyAbortSignal } from '../lib/requestAbort.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
 
@@ -187,6 +188,7 @@ export async function runLocalLlmTest({
   temperature = 0.3,
   maxTokens = 1000,
   timeoutMs = 300000,
+  signal: clientSignal,
 }) {
   const provider = await resolveLocalProvider(backend);
   const fullPrompt = buildPrompt({ systemPrompt, prompt });
@@ -207,8 +209,14 @@ export async function runLocalLlmTest({
       throw new Error(`Local LLM playground refused fallback provider for ${provider.id}`);
     }
 
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+    // The timeout controller aborts the upstream read (its plain AbortError keeps
+    // the "Timed out after Xms" mapping below). A client disconnect — the user hit
+    // Cancel, closing the browser fetch — aborts `clientSignal`; `anyAbortSignal`
+    // composes both so whichever fires first tears down the upstream reader instead
+    // of running on to the full timeout with no one listening.
+    const timeoutController = new AbortController();
+    const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const signal = anyAbortSignal([clientSignal, timeoutController.signal]);
     const text = await streamChatCompletion({
       provider,
       backend,
@@ -217,7 +225,7 @@ export async function runLocalLlmTest({
       systemPrompt,
       temperature,
       maxTokens,
-      signal: controller.signal,
+      signal,
       onChunk: (chunk) => {
         if (!firstChunkAt && chunk) firstChunkAt = Date.now();
       },
@@ -266,8 +274,8 @@ export async function runLocalLlmTest({
   }
 }
 
-export async function compareLocalLlmModels({ targets, prompt, mode = 'round-robin', options = {} }) {
-  const runOne = (target) => runLocalLlmTest({ ...options, ...target, prompt });
+export async function compareLocalLlmModels({ targets, prompt, mode = 'round-robin', options = {}, signal }) {
+  const runOne = (target) => runLocalLlmTest({ ...options, ...target, prompt, signal });
   const results = [];
 
   if (mode === 'parallel') {
@@ -279,6 +287,10 @@ export async function compareLocalLlmModels({ targets, prompt, mode = 'round-rob
   }
 
   for (const target of targets) {
+    // `runLocalLlmTest` swallows aborts into a result object rather than throwing,
+    // so without this guard a cancel mid-sequence would still kick off every
+    // remaining model. Stop the round-robin once the client has hung up.
+    if (signal?.aborted) break;
     results.push(await runOne(target));
   }
   return { mode: 'round-robin', prompt, results };
