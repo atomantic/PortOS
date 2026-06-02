@@ -73,6 +73,7 @@
 - **[create-issue-preload-series-for-batch]** Seeding a whole season's episodes into issues now reads the series record once for the batch instead of once per episode (no user-facing change).
 - **[prune-orphan-subscriptions-for-deleted-records] Deleting a synced record no longer leaves a dead sharing subscription behind.** Once a deleted universe, series, or collection is finally cleaned up, its leftover per-peer sharing subscriptions are swept away with it — so the sync logs stop reporting phantom "pending pushes" for records that no longer exist. Internal housekeeping with no change to what you share.
 - **[shared-optional-provider-picker]** The Importer and Universe Builder now render the same shared provider/model picker as the rest of the app instead of each hand-rolling their own inline copy. Same controls and behavior; the two selectors pick up the app's standard dropdown styling, so they look consistent with every other provider picker.
+- **[health-test-updatesettingswith-mock]** Restored the system-health route test suite after a settings-helper migration left its mock incomplete (test-only fix, no user-facing change).
 
 ## Fixed
 
