@@ -192,13 +192,7 @@ const REDIRECT_ELEMENT = /element=\{<\s*(Navigate|RedirectWithSearch|CanonRedire
 // Flatten a stack of (possibly multi-segment, possibly "/") route path pieces
 // into a single absolute path: ['/', 'media', 'image'] → '/media/image'.
 function joinRoutePath(segments) {
-  const parts = [];
-  for (const seg of segments) {
-    for (const piece of seg.split('/')) {
-      if (piece) parts.push(piece);
-    }
-  }
-  return `/${parts.join('/')}`;
+  return `/${segments.flatMap((s) => s.split('/')).filter(Boolean).join('/')}`;
 }
 
 // Walk App.jsx line-by-line, tracking the stack of currently-open <Route>
@@ -240,17 +234,15 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   // Query string / hash on a manifest path (e.g. /media/image?settings=1) is a
   // deep-link variant of a real route; compare on the bare path.
   const navPaths = new Set(NAV_COMMANDS.map((c) => c.path.split(/[?#]/)[0]));
+  const routePaths = new Set(extractNavigableRoutePaths(fs.readFileSync(APP_JSX, 'utf8')));
 
   it('each concrete leaf <Route> resolves to a NAV_COMMANDS path (or an opt-out)', () => {
-    const appSrc = fs.readFileSync(APP_JSX, 'utf8');
-    const uncovered = extractNavigableRoutePaths(appSrc)
+    const uncovered = [...routePaths]
       .filter((p) => !navPaths.has(p) && !NAV_COVERAGE_OPT_OUT.has(p));
     expect(uncovered).toEqual([]);
   });
 
   it('opt-out list has no stale entries', () => {
-    const appSrc = fs.readFileSync(APP_JSX, 'utf8');
-    const routePaths = new Set(extractNavigableRoutePaths(appSrc));
     // A stale opt-out is one whose route no longer exists, or that has since
     // gained a manifest entry (so it should just be removed from the allow-list).
     const stale = [...NAV_COVERAGE_OPT_OUT.keys()]
