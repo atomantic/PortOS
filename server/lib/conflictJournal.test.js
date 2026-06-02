@@ -6,8 +6,25 @@ import { makePathsProxy } from './mockPathsDataRoot.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'conflict-journal-test-'));
 
-vi.mock('./fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
+// Shared counter for base-hash file writes (delegating spy below). Hoisted so
+// the vi.mock factory can reference it. The flush-batch tests assert N stamps
+// collapse to ONE sync_base_hashes.json rewrite.
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
+
+vi.mock('./fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return makePathsProxy(actual, {
+    dataRoot: TEST_DATA_ROOT,
+    overrides: {
+      // Count base-hash rewrites, then delegate to the real writer so on-disk
+      // state stays correct for every other assertion in this suite.
+      atomicWrite: async (path, data) => {
+        if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+        return actual.atomicWrite(path, data);
+      },
+    },
+  });
+});
 
 const cj = await import('./conflictJournal.js');
 
@@ -320,5 +337,70 @@ describe('conflictJournal — mediaCollection scalar-subset hashing', () => {
     expect(entries[0].diffSummary.some((d) => d.field === 'name')).toBe(true);
     // diffSummary only offers restorable content fields, never items/updatedAt.
     expect(entries[0].diffSummary.some((d) => d.field === 'items' || d.field === 'updatedAt')).toBe(false);
+  });
+});
+
+describe('conflictJournal — withBaseHashFlushBatch coalescing', () => {
+  beforeEach(() => {
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    mkdirSync(TEST_DATA_ROOT, { recursive: true });
+    cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
+  });
+
+  it('collapses N await-separated stamp+flush cycles into ONE file write', async () => {
+    // Simulate the peer:online convergence loop: stamp record i, flush (deferred
+    // by the batch), then "await the network" before the next record.
+    await cj.withBaseHashFlushBatch(async () => {
+      for (let i = 0; i < 10; i++) {
+        await cj.setSyncBaseHash('universe', `u-${i}`, cj.contentHashForRecord('universe', uni({ id: `u-${i}`, starterPrompt: `p-${i}` })));
+        await cj.flushBaseHashes(); // no-op inside the batch
+        await Promise.resolve();    // yield, as an inter-push await would
+      }
+    });
+    // Exactly one terminal write for all 10 stamps.
+    expect(writeCounter.baseHash).toBe(1);
+    // …and every stamp persisted.
+    for (let i = 0; i < 10; i++) {
+      expect(await cj.getSyncBaseHash('universe', `u-${i}`)).toBe(cj.contentHashForRecord('universe', uni({ id: `u-${i}`, starterPrompt: `p-${i}` })));
+    }
+  });
+
+  it('without a batch, the same loop writes once per stamp', async () => {
+    for (let i = 0; i < 5; i++) {
+      await cj.setSyncBaseHash('universe', `u-${i}`, cj.contentHashForRecord('universe', uni({ id: `u-${i}`, starterPrompt: `p-${i}` })));
+      await cj.flushBaseHashes();
+    }
+    expect(writeCounter.baseHash).toBe(5);
+  });
+
+  it('nested batches collapse to the outermost (one write)', async () => {
+    await cj.withBaseHashFlushBatch(async () => {
+      await cj.setSyncBaseHash('universe', 'u-a', cj.contentHashForRecord('universe', uni({ id: 'u-a' })));
+      await cj.withBaseHashFlushBatch(async () => {
+        await cj.setSyncBaseHash('universe', 'u-b', cj.contentHashForRecord('universe', uni({ id: 'u-b' })));
+        await cj.flushBaseHashes();
+      });
+      // Inner scope closed but depth is still >0 → no write yet.
+      expect(writeCounter.baseHash).toBe(0);
+    });
+    expect(writeCounter.baseHash).toBe(1);
+  });
+
+  it('flushes whatever stamps landed even when the batch body throws', async () => {
+    await expect(cj.withBaseHashFlushBatch(async () => {
+      await cj.setSyncBaseHash('universe', 'u-x', cj.contentHashForRecord('universe', uni({ id: 'u-x' })));
+      throw new Error('push blew up mid-loop');
+    })).rejects.toThrow('push blew up mid-loop');
+    // The terminal flush ran in `finally`, so the pre-throw stamp persisted.
+    expect(writeCounter.baseHash).toBe(1);
+    expect(await cj.getSyncBaseHash('universe', 'u-x')).toBe(cj.contentHashForRecord('universe', uni({ id: 'u-x' })));
+  });
+
+  it('no write when no stamp landed inside the batch', async () => {
+    await cj.withBaseHashFlushBatch(async () => {
+      await Promise.resolve(); // did nothing dirty
+    });
+    expect(writeCounter.baseHash).toBe(0);
   });
 });
