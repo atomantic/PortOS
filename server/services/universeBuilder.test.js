@@ -277,6 +277,24 @@ describe("universeBuilder service", () => {
     expect(patched.influences.avoid).toEqual(w.influences.avoid);
   });
 
+  it("updateUniverse with { replaceCategories } swaps the whole categories map (drops live-only categories)", async () => {
+    const w = await seedWorld(); // seeds `landscapes` (2 vars) + custom `outfits` (1 var)
+    expect(w.categories.outfits).toBeTruthy();
+    // Default PATCH unions per-key — the live-only `outfits` survives.
+    const unioned = await svc.updateUniverse(w.id, {
+      categories: { landscapes: { variations: [{ label: "New", prompt: "p" }] } },
+    });
+    expect(unioned.categories.outfits).toBeTruthy();
+    // With replaceCategories the patch's map replaces wholesale — `outfits` is dropped.
+    const replaced = await svc.updateUniverse(
+      w.id,
+      { categories: { landscapes: { variations: [{ label: "New2", prompt: "p2" }] } } },
+      { replaceCategories: true },
+    );
+    expect(replaced.categories.outfits).toBeUndefined();
+    expect(replaced.categories.landscapes.variations).toHaveLength(1);
+  });
+
   it("bumps updatedAt on a canon entry whose content changed, leaves an untouched entry's timestamp", async () => {
     // Two canon characters; edit only the first's content. The edited entry's
     // updatedAt must advance (so the canon→catalog projection's LWW clock is

@@ -235,7 +235,7 @@ function ensureSeasonId(raw) {
   return `${SEASON_ID_PREFIX}${randomUUID()}`;
 }
 
-function cleanThemes(raw) {
+export function cleanThemes(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [];
   for (const v of raw) {

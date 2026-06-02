@@ -169,8 +169,46 @@ function parseMetadataLine(line) {
 export function parseTasksMarkdown(content) {
   const lines = content.split('\n');
   const tasks = [];
+  const seenIds = new Set();
   let currentTask = null;
   let currentSection = null;
+
+  // Pre-scan every task line's normalized id so suffix assignment below can
+  // avoid colliding with any *stable, user-authored* id present in the file —
+  // not just ids we've parsed so far. Without this a duplicate could grab
+  // `task-001-dup2` only for a real later `task-001-dup2` to be bumped to
+  // `task-001-dup2-dup2`, needlessly mutating an id the user chose. We rename
+  // the duplicate, never the unique original.
+  const rawIds = new Set();
+  for (const line of lines) {
+    if (line.startsWith('- [')) {
+      const parsed = parseTaskLine(line);
+      if (parsed) rawIds.add(parsed.id);
+    }
+  }
+
+  // Push a fully-parsed task, guaranteeing its id is unique across the file.
+  // Duplicate ids corrupt downstream consumers that key on id — most notably
+  // reorderTasks' `new Map(tasks.map(t => [t.id, t]))`, which silently collapses
+  // collisions so only the last duplicate survives the reorder write-back. We
+  // warn and suffix the colliding id (`-dup2`, `-dup3`, …) rather than throw:
+  // throwing would make a single hand-edited or corrupted TASKS.md crash every
+  // read of the CoS task system, whereas suffixing keeps every task alive with a
+  // distinct id. Called once per task, after its metadata lines are attached.
+  const pushTask = (task) => {
+    if (!task) return;
+    if (seenIds.has(task.id)) {
+      const originalId = task.id;
+      let suffix = 2;
+      // Skip suffixes already taken AND any raw id in the file, so we never
+      // rename a distinct task that happens to look like a generated suffix.
+      while (seenIds.has(`${originalId}-dup${suffix}`) || rawIds.has(`${originalId}-dup${suffix}`)) suffix++;
+      task.id = `${originalId}-dup${suffix}`;
+      console.warn(`⚠️ Duplicate task id "${originalId}" in tasks markdown — renamed to "${task.id}"`);
+    }
+    seenIds.add(task.id);
+    tasks.push(task);
+  };
 
   for (const line of lines) {
     // Section headers
@@ -186,9 +224,7 @@ export function parseTasksMarkdown(content) {
 
     // Task line
     if (line.startsWith('- [')) {
-      if (currentTask) {
-        tasks.push(currentTask);
-      }
+      pushTask(currentTask);
       currentTask = parseTaskLine(line);
       if (currentTask) {
         currentTask.section = currentSection;
@@ -206,9 +242,7 @@ export function parseTasksMarkdown(content) {
   }
 
   // Don't forget last task
-  if (currentTask) {
-    tasks.push(currentTask);
-  }
+  pushTask(currentTask);
 
   return tasks;
 }

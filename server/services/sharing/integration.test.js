@@ -61,6 +61,7 @@ const importer = await import('./importer.js');
 const series = await import('../pipeline/series.js');
 const issues = await import('../pipeline/issues.js');
 const universeSvc = await import('../universeBuilder.js');
+const manuscriptReview = await import('../pipeline/manuscriptReview.js');
 
 // Rewrite a manifest's senderInstanceId on disk so the importer sees it as
 // coming from a remote peer. The mocked `getInstanceId` returns the same
@@ -200,6 +201,171 @@ describe('sharing round-trip', () => {
 
     const afterOverride = await series.getSeries(s.id);
     expect(afterOverride.name).toBe('Test Series (renamed)');
+  });
+
+  it('round-trips the manuscript review (Finish-the-draft comments) with a series export/import', async () => {
+    const bucket = await buckets.createBucket({ name: 'ReviewBucket', path: tempBucket, mode: 'auto-merge' });
+
+    const s = await series.createSeries({ name: 'Review Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    // Author a review comment (the "Finish the draft" pass output).
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the long road', issueNumber: 1 },
+    ]);
+    const before = await manuscriptReview.getReview(s.id);
+    expect(before.comments).toHaveLength(1);
+
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    // The review rides under records/reviews/<seriesId>.json, NOT in recordIds.
+    expect(existsSync(join(tempBucket, 'records', 'reviews', `${s.id}.json`))).toBe(true);
+
+    // Drop the local series (removes its folder + review file), then import.
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const restored = await manuscriptReview.getReview(s.id);
+    expect(restored.comments).toHaveLength(1);
+    expect(restored.comments[0].problem).toBe('Act II sags');
+  });
+
+  it('skips writing a review file when the series has no review comments', async () => {
+    const bucket = await buckets.createBucket({ name: 'NoReviewBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Empty Review Series', logline: 'A' });
+    await exporter.exportSeries(s.id, bucket.id);
+    expect(existsSync(join(tempBucket, 'records', 'reviews', `${s.id}.json`))).toBe(false);
+  });
+
+  it('keeps a manifest pending when a declared review file has not synced yet (out-of-order delivery)', async () => {
+    const bucket = await buckets.createBucket({ name: 'ReviewLagBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Review Lag Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the road', issueNumber: 1 },
+    ]);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const reviewFile = join(tempBucket, 'records', 'reviews', `${s.id}.json`);
+    expect(existsSync(reviewFile)).toBe(true);
+
+    // Simulate the manifest + series arriving before the review file (cloud
+    // relay delivers files out of order): stash the review file aside.
+    const stashed = readFileSync(reviewFile, 'utf-8');
+    rmSync(reviewFile);
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+
+    const r1 = await importer.processManifest(bucket.id, exp.filename);
+    // The manifest declared the review (reviewRefs), so the importer must wait
+    // — NOT markProcessed and drop it.
+    expect(r1.pending).toBe(true);
+    expect(r1.outcome.pendingReviews).toContain(s.id);
+
+    // The review file lands → reprocess → it merges.
+    writeFileSync(reviewFile, stashed);
+    const r2 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r2.pending).toBeFalsy();
+    const restored = await manuscriptReview.getReview(s.id);
+    expect(restored.comments).toHaveLength(1);
+  });
+
+  it('ignores a stale review file the manifest did not declare (no resurrection of cleared comments)', async () => {
+    const bucket = await buckets.createBucket({ name: 'StaleReviewBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Stale Review Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    // Export with NO review → manifest declares reviewRefs: [] and writes no file.
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    // Simulate a lingering stale review file from an earlier export (the
+    // exporter writes but never deletes review files).
+    mkdirSync(join(tempBucket, 'records', 'reviews'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'reviews', `${s.id}.json`),
+      JSON.stringify({ schemaVersion: 1, comments: [{ id: 'mrc-stale', problem: 'old note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] }),
+    );
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename);
+    // The manifest declared no review, so the lingering file must NOT be merged.
+    const after = await manuscriptReview.getReview(s.id);
+    expect(after.comments).toHaveLength(0);
+  });
+
+  it('keeps a manifest pending when a declared review file is present but unparseable', async () => {
+    const bucket = await buckets.createBucket({ name: 'CorruptReviewBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Corrupt Review Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the road', issueNumber: 1 },
+    ]);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const reviewFile = join(tempBucket, 'records', 'reviews', `${s.id}.json`);
+    const good = readFileSync(reviewFile, 'utf-8');
+    // Simulate a half-synced (truncated) file: present on disk but not valid JSON.
+    writeFileSync(reviewFile, good.slice(0, Math.floor(good.length / 2)));
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+
+    const r1 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r1.pending).toBe(true);
+    expect(r1.outcome.pendingReviews).toContain(s.id);
+
+    // The full file finishes syncing → reprocess → it merges.
+    writeFileSync(reviewFile, good);
+    const r2 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r2.pending).toBeFalsy();
+    expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
+  });
+
+  it('promoteInboxItem keeps the inbox row when the bundled review merge fails', async () => {
+    const bucket = await buckets.createBucket({ name: 'PromoteFailBucket', path: tempBucket, mode: 'inbox' });
+    const s = await series.createSeries({ name: 'Promote Fail Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the road', issueNumber: 1 },
+    ]);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename); // queues to inbox
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Force a transient review-merge failure during the manual promote.
+    const spy = vi.spyOn(manuscriptReview, 'mergeReviewFromSync').mockRejectedValueOnce(new Error('disk full'));
+    await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).rejects.toMatchObject({
+      code: 'SHARING_REVIEW_MERGE_FAILED',
+    });
+    spy.mockRestore();
+    // Inbox row preserved so the user can re-promote.
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Re-promote now succeeds and the review lands.
+    await importer.promoteInboxItem(bucket.id, exp.manifestId);
+    expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
+  });
+
+  it('keeps a manifest retryable when the bundled review merge fails (no silent drop)', async () => {
+    const bucket = await buckets.createBucket({ name: 'ReviewFailBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Review Fail Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    await manuscriptReview.seedReviewFromFindings(s.id, [
+      { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the road', issueNumber: 1 },
+    ]);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    await series.deleteSeries(s.id);
+
+    // Force a transient review-merge failure on the FIRST import attempt.
+    const spy = vi.spyOn(manuscriptReview, 'mergeReviewFromSync').mockRejectedValueOnce(new Error('disk full'));
+    simulateRemoteSender(tempBucket, exp.filename);
+    const r1 = await importer.processManifest(bucket.id, exp.filename);
+    // Manifest stays pending (cursor un-advanced) so the watcher retries —
+    // the review is NOT silently dropped.
+    expect(r1.pending).toBe(true);
+    expect(r1.outcome.pendingReviewMergeFailures).toContain(s.id);
+    spy.mockRestore();
+
+    // Re-process (manifest was kept retryable) — now the review lands.
+    const r2 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r2.pending).toBeFalsy();
+    const restored = await manuscriptReview.getReview(s.id);
+    expect(restored.comments).toHaveLength(1);
   });
 
   it('a remote orphan series (universeId null) preserves the local universe link instead of aborting the import', async () => {

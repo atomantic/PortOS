@@ -191,7 +191,8 @@
       "repo": "Qwen/Qwen-Image-Edit",
       "pipelineClass": "QwenImageEditPipeline",
       "steps": 30,
-      "guidance": 4
+      "guidance": 4,
+      "editOnly": true
     },
     {
       "id": "z-image-turbo-bf16",

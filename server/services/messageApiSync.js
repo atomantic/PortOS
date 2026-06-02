@@ -7,6 +7,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 import { getToken, clearTokenCache } from './messageTokenExtractor.js';
 
 const GRAPH_API_TIMEOUT_MS = 30000;
@@ -71,8 +72,17 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
       return { messages: [], status: 'api-error' };
     }
 
-    const data = await response.json();
-    const items = data.value || [];
+    // Sentinel fallback: a non-JSON/blank 200 body must NOT masquerade as a
+    // successful empty sync. A truthy `{ messages, status: 'success' }` result
+    // suppresses the Playwright fallback in messageSync.js (and mid-pagination
+    // a partial result would prune still-valid cached messages), so a malformed
+    // body returns null to preserve the pre-helper throw→fallback behavior.
+    const data = await readResponseJson(response, { fallback: null, emptyValue: null });
+    if (!data || !Array.isArray(data.value)) {
+      console.log(`📧 API sync: non-JSON or malformed body on page ${page} — falling back to Playwright`);
+      return null;
+    }
+    const items = data.value;
 
     for (const m of items) {
       const extId = makeExternalId('ol', m.Id);

@@ -16,6 +16,7 @@ import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, formatBytes, dirSize } from '../lib/fileUtils.js';
 import { loadMediaModels } from '../lib/mediaModels.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 
 const router = Router();
 const HF_DEFAULT_HUB = join(homedir(), '.cache', 'huggingface', 'hub');
@@ -45,22 +46,6 @@ const buildAppModels = () => {
   return out;
 };
 const APP_MODELS = buildAppModels();
-
-// Bound concurrent dirSize calls — each one spawns a `du` (or PowerShell)
-// child, and a hub with 50+ models would otherwise create a process storm
-// that stalls the API.
-async function mapWithConcurrency(items, concurrency, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      results[i] = await fn(items[i], i);
-    }
-  }));
-  return results;
-}
 
 router.get('/', asyncHandler(async (_req, res) => {
   const hubDir = HF_HUB_DIR();

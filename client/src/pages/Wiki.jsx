@@ -11,7 +11,8 @@ import WikiSearchTab from '../components/wiki/tabs/SearchTab';
 import WikiGraphTab from '../components/wiki/tabs/GraphTab';
 import WikiLogTab from '../components/wiki/tabs/LogTab';
 
-const TABS = [
+// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
+export const TABS = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'browse', label: 'Browse', icon: FileText },
   { id: 'search', label: 'Search', icon: Search },

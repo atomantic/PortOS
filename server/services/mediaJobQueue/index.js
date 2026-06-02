@@ -64,6 +64,7 @@ const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 
 // default trips false positives. 20 minutes covers a slow generation +
 // queueing delay, and is env-overridable when batch limits change.
 const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20 * 60 * 1000);
+const PROGRESS_PERSIST_DEBOUNCE_MS = 250;
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
 // safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
@@ -228,8 +229,8 @@ async function persistImpl() {
     ...archive,
   ];
   // Strip non-serializable bits.
-  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position }) =>
-    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position }),
+  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg }) =>
+    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg }),
   );
   await atomicWrite(JOBS_FILE, { jobs: serializable });
 }
@@ -344,6 +345,8 @@ function startLaneJob(job, { isCodex }) {
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.position = 1;
+  job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
+  job.statusMsg = job.statusMsg || 'Starting';
   if (isCodex) {
     codexRunning.push(job);
   } else {
@@ -542,22 +545,69 @@ function makeGenDispatcher(emitter, job, handlers) {
 
 async function runJob(job) {
   const sseEntry = ensureSseEntry(job.id);
+  let progressPersistDirty = false;
+  let progressPersistTimer = null;
+  let progressPersisting = null;
+
+  const flushProgressPersist = async () => {
+    if (progressPersistTimer) {
+      clearTimeout(progressPersistTimer);
+      progressPersistTimer = null;
+    }
+    if (!progressPersistDirty) return;
+    progressPersistDirty = false;
+    await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on progress failed: ${e.message}`));
+  };
+
+  const drainProgressPersist = async () => {
+    if (progressPersisting) await progressPersisting.catch(() => {});
+    await flushProgressPersist();
+  };
+
+  const scheduleProgressPersist = () => {
+    progressPersistDirty = true;
+    if (progressPersistTimer || progressPersisting) return;
+    progressPersistTimer = setTimeout(() => {
+      progressPersistTimer = null;
+      progressPersisting = flushProgressPersist().finally(() => {
+        progressPersisting = null;
+        if (progressPersistDirty) scheduleProgressPersist();
+      });
+    }, PROGRESS_PERSIST_DEBOUNCE_MS);
+    progressPersistTimer.unref?.();
+  };
 
   // Single idempotent terminal sink. All terminal paths (completed, failed,
   // canceled, watchdog) funnel through here. The status check at the top
   // ensures only the first caller wins; any subsequent call (e.g. watchdog
   // fired and then the gen emits 'completed') is a no-op.
+  //
+  // `job.terminating` (not a closure-local) is the guard so cancelJob — a
+  // module-level function — can also see that a terminal transition has begun.
+  // It's set synchronously before the async drain below, during which
+  // job.status is still 'running'; a cancel arriving in that window must not
+  // fire a redundant provider cancel. It's a transient in-memory flag
+  // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
-  function terminate(state, apply) {
-    if (job.status !== 'running') return;
+  async function terminate(state, apply) {
+    if (job.terminating || job.status !== 'running') return;
+    job.terminating = true;
     // setInterval now (was setTimeout) — using clearInterval to match the new
     // API. (Node accepts either clearTimeout or clearInterval on the same
     // Timeout handle, so this is purely stylistic.)
     clearInterval(watchdogTimer);
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
+    await drainProgressPersist();
     apply(job);
     job.status = state;
+    if (state === 'completed') {
+      job.progress = 1;
+      job.statusMsg = 'Completed';
+    }
+    // failed/canceled intentionally retain the last mid-render progress/statusMsg
+    // (how far it got) — consumers gate the progress UI on status === 'running',
+    // so the residual values are not displayed for terminal jobs.
     job.completedAt = new Date().toISOString();
     const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
     const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
@@ -573,10 +623,22 @@ async function runJob(job) {
 
   const handlers = {
     progress: (payload) => {
+      if (job.terminating || job.status !== 'running') return;
+      let didUpdatePersistedProgress = false;
+      if (payload.type === 'progress' && typeof payload.progress === 'number' && Number.isFinite(payload.progress)) {
+        job.progress = Math.max(0, Math.min(1, payload.progress));
+        didUpdatePersistedProgress = true;
+      }
+      if (typeof payload.message === 'string' && payload.message.length > 0) {
+        job.statusMsg = payload.message;
+        didUpdatePersistedProgress = true;
+      }
+      if (didUpdatePersistedProgress) scheduleProgressPersist();
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
-      terminate('completed', (j) => { j.result = payload; });
+      terminate('completed', (j) => { j.result = payload; })
+        .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`));
     },
     failed: (payload) => {
       // If cancelJob() flagged this job before the underlying gen reported
@@ -588,10 +650,11 @@ async function runJob(job) {
           // is cleaned up still gets a meaningful terminal frame from the
           // archived state, rather than the generic "Canceled" fallback.
           j.error = 'Canceled while running';
-        });
+        }).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`));
         return;
       }
-      terminate('failed', (j) => { j.error = payload.error || 'unknown error'; });
+      terminate('failed', (j) => { j.error = payload.error || 'unknown error'; })
+        .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`));
     },
   };
 
@@ -657,7 +720,10 @@ async function runJob(job) {
   let watchdogInFlight = false;
   watchdogTimer = setInterval(async () => {
     if (watchdogInFlight) return;
-    if (job.status !== 'running') return;
+    // job.terminating closes the window terminate() opens: it now awaits a
+    // disk drain before flipping job.status, so a tick that only checked
+    // status could fire mod.cancel on a job that is already terminating.
+    if (job.terminating || job.status !== 'running') return;
     const idleFor = Date.now() - lastActivityAt;
     if (idleFor < idleTimeoutMs) return;
     watchdogInFlight = true;
@@ -670,7 +736,9 @@ async function runJob(job) {
     // queue still settles, and reset inFlight in finally.
     try {
       const mod = await getGenModuleForJob(job);
-      if (job.status !== 'running') return;
+      // Re-check after the await — terminate() may have started (and is
+      // draining to disk with job.status still 'running') during the import.
+      if (job.terminating || job.status !== 'running') return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
       if (mod?.cancel) mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
@@ -815,6 +883,13 @@ export async function cancelJob(jobId) {
     ?? codexRunning.find((j) => j.id === jobId)
     ?? null;
   if (runningJob) {
+    // A terminal transition already started (completed/failed/watchdog): its
+    // async progress-drain leaves job.status === 'running' for a beat, but the
+    // outcome is decided. Don't fire a redundant provider cancel or report
+    // 'canceling' — treat it like an already-terminal job (route maps to 409).
+    if (runningJob.terminating) {
+      return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
+    }
     // cancelRequested flips the dispatcher's `failed` handler into the
     // `canceled` branch instead of marking it failed.
     runningJob.cancelRequested = true;

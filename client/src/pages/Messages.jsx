@@ -10,7 +10,8 @@ import ConfigTab from '../components/messages/ConfigTab';
 import DraftsTab from '../components/messages/DraftsTab';
 import SyncTab from '../components/messages/SyncTab';
 
-const TABS = [
+// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
+export const TABS = [
   { id: 'inbox', label: 'Inbox', icon: Mail },
   { id: 'drafts', label: 'Drafts', icon: Mail },
   { id: 'sync', label: 'Sync', icon: RefreshCw },

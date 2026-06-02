@@ -9,7 +9,8 @@ import TabPills from '../ui/TabPills';
 //
 // Pass `activeTab` matching one of the TABS ids below. Internal Settings
 // pages use the `<tab>` slug; the standalone pages use `providers` / `prompts`.
-const TABS = [
+export const TABS = [
+  { id: 'ai-assignments', label: 'AI Assignments', to: '/settings/ai-assignments' },
   { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
   { id: 'catalog', label: 'Catalog', to: '/settings/catalog' },
@@ -39,6 +40,7 @@ export default function SettingsTabsHeader({ activeTab }) {
       activeTab={activeTab}
       onChange={handleChange}
       ariaLabel="Settings sections"
+      className="w-full min-w-0 shrink-0"
     />
   );
 }

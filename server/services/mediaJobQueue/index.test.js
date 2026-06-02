@@ -6,9 +6,17 @@ import { join } from 'path';
 // The queue persists to data/media-jobs.json. Steer it at a temp dir so each
 // test gets a clean slate without scribbling over the real data dir.
 let tempDataDir;
+// Counting wrapper around the real atomicWrite. persist() funnels every disk
+// write through atomicWrite, so spying on it lets tests assert *how many*
+// times state was flushed — used to pin the progress-persist debounce (it must
+// coalesce a burst of progress events into one write, not write per-event).
+let atomicWriteSpy;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
+  // Still performs the real write (so file-reading assertions work) — just
+  // counted. Reassigned per factory eval; tests mockClear() before measuring.
+  atomicWriteSpy = vi.fn((...args) => actual.atomicWrite(...args));
   return {
     ...actual,
     // Override PATHS so JOBS_FILE lands in the temp dir. We can't read the
@@ -20,6 +28,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
         return actual.PATHS[key];
       },
     }),
+    atomicWrite: (...args) => atomicWriteSpy(...args),
   };
 });
 
@@ -216,6 +225,155 @@ describe('mediaJobQueue', () => {
     expect(finished.status).toBe('completed');
     expect(finished.completedAt).toBeTruthy();
     expect(finished.result?.path).toBe(`/data/videos/${job.jobId}.mp4`);
+  });
+
+  it('progress/status events update the live job record for non-SSE readers', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'progress please' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    videoGenEvents.emit('status', { generationId: job.jobId, message: 'Loading pipeline' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.statusMsg === 'Loading pipeline');
+    expect(mediaJobQueue.getJob(job.jobId).progress).toBe(0);
+
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId,
+      progress: 0.42,
+      step: 21,
+      totalSteps: 50,
+      message: 'Rendering step 21/50',
+    });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.progress === 0.42);
+    const running = mediaJobQueue.getJob(job.jobId);
+    expect(running.status).toBe('running');
+    expect(running.statusMsg).toBe('Rendering step 21/50');
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => {
+      const data = JSON.parse(readFileSync(file, 'utf-8'));
+      const persisted = data.jobs.find((j) => j.id === job.jobId);
+      return persisted?.status === 'completed';
+    });
+    const persisted = JSON.parse(readFileSync(file, 'utf-8')).jobs.find((j) => j.id === job.jobId);
+    expect(persisted.progress).toBe(1);
+    expect(persisted.statusMsg).toBe('Completed');
+  });
+
+  it('debounce-persists live progress before a terminal transition', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Use a message synthesizeMessage() could NOT produce (it would emit
+    // "Rendering step 37/100" from step/totalSteps) so this pins the
+    // explicit-message passthrough, not the synthesized fallback.
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId,
+      progress: 0.37,
+      step: 37,
+      totalSteps: 100,
+      message: 'Rendering step 37/100 (upscaling)',
+    });
+
+    await waitFor(() => {
+      const data = JSON.parse(readFileSync(file, 'utf-8'));
+      const persisted = data.jobs.find((j) => j.id === job.jobId);
+      return persisted?.status === 'running'
+        && persisted.progress === 0.37
+        && persisted.statusMsg === 'Rendering step 37/100 (upscaling)';
+    }, { timeoutMs: 2000 });
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('debounce coalesces a burst of progress events into a single persist write', async () => {
+    // Companion to the snapshot test above: that one proves the *value*
+    // reaches disk; this one proves the debounce, by counting writes. Without
+    // it the test above would still pass if scheduleProgressPersist regressed
+    // to a naive per-event persist() — the high-frequency-write antipattern
+    // CLAUDE.md forbids. We pin the coalescing by counting atomicWrite calls
+    // under a burst of N progress events (must be ≪ N within one window).
+    const file = join(tempDataDir, 'media-jobs.json');
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'burst' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Let the enqueue + 'running'-transition writes land first, then zero the
+    // counter so we measure only the progress burst. Waiting on the persisted
+    // 'running' status guarantees both prior writes have flushed.
+    await waitFor(() => {
+      if (!existsSync(file)) return false;
+      const persisted = JSON.parse(readFileSync(file, 'utf-8')).jobs.find((j) => j.id === job.jobId);
+      return persisted?.status === 'running';
+    });
+    atomicWriteSpy.mockClear();
+
+    // Fire a tight synchronous burst. emit() is synchronous, so all N handlers
+    // run in one tick: the first arms the 250ms debounce timer, the rest only
+    // mark the buffer dirty. A regression to per-event persist() would turn
+    // this into N atomicWrite calls instead of one debounced flush.
+    const BURST = 12;
+    for (let i = 1; i <= BURST; i++) {
+      videoGenEvents.emit('progress', {
+        generationId: job.jobId,
+        progress: i / BURST,
+        message: `Rendering step ${i}/${BURST}`,
+      });
+    }
+
+    // Wait for the debounce flush to land the LAST burst value — proves at
+    // least one progress write happened (so the bound below is non-vacuous).
+    await waitFor(() => {
+      const persisted = JSON.parse(readFileSync(file, 'utf-8')).jobs.find((j) => j.id === job.jobId);
+      return persisted?.statusMsg === `Rendering step ${BURST}/${BURST}`;
+    }, { timeoutMs: 2000 });
+
+    // The "value landed" wait above is NOT a safe count checkpoint on its own:
+    // job.statusMsg is mutated to the final "12/12" synchronously during the
+    // burst, so a naive per-event persist() regression would write the final
+    // value on its FIRST chained flush while the other 11 are still draining —
+    // counting here could read 1 and pass vacuously. So settle first: hold
+    // until the write count stops climbing across a quiet window. The single
+    // debounced flush stabilizes at 1; a per-event regression keeps climbing
+    // to ≈ BURST and only then stabilizes, so the bound below catches it.
+    let prevCount = -1;
+    await waitFor(() => {
+      const c = atomicWriteSpy.mock.calls.length;
+      const settled = c > 0 && c === prevCount;
+      prevCount = c;
+      return settled;
+    }, { intervalMs: 60, timeoutMs: 2000 });
+
+    // One debounce window ⇒ one flush (allow tiny slack for a trailing
+    // reschedule). The naive-per-event regression would settle at ≈ BURST (12).
+    expect(atomicWriteSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(atomicWriteSpy.mock.calls.length).toBeLessThanOrEqual(2);
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('cancel during the terminal drain window is refused, not "canceling"', async () => {
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'finishing race' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Dirty the debounce so terminate() must actually drain (the widened
+    // async window this guards). emit() is synchronous: the 'completed'
+    // handler runs terminate(), which sets job.terminating synchronously and
+    // then parks on the async drain with job.status still 'running'.
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.9, message: 'Almost done' });
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+
+    // A cancel landing in that window must be refused (the outcome is already
+    // decided) rather than reported as 'canceling', and must not fire a
+    // redundant provider cancel. cancelJob's guard returns synchronously
+    // before any await, so no microtask flips the status first.
+    const result = await mediaJobQueue.cancelJob(job.jobId);
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('ALREADY_TERMINAL');
+    expect(stubs.cancelVideo).not.toHaveBeenCalled();
+
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
   it('boot recovery: persisted "running" jobs are reclassified as failed', async () => {

@@ -431,6 +431,18 @@ export const bucketReorderSchema = z.object({
   ids: z.array(z.string().uuid()).min(1)
 });
 
+// Batch link reorder (POST /api/brain/links/reorder) — applies a dense
+// bucketOrder renumbering for one drag gesture in a single atomic write, so a
+// multi-chip reorder can't lose-update the shared links store the way N
+// concurrent single-record PUTs can.
+export const linkReorderSchema = z.object({
+  updates: z.array(z.object({
+    id: z.string().uuid(),
+    bucketId: z.string().uuid().nullable(),
+    bucketOrder: z.number().int()
+  })).min(1)
+});
+
 // =============================================================================
 // SYNC SCHEMAS
 // =============================================================================

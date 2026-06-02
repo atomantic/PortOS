@@ -37,6 +37,12 @@ const ALIGNMENTS = {
 export default function Banner({
   tone = 'warning',
   icon: Icon,
+  // Banner icons are decorative by default — the tone color and body text
+  // already convey the meaning, so screen readers should skip the icon. Pass
+  // `iconAriaHidden={false}` for the rare case where the icon carries meaning
+  // the text doesn't; the icon then renders as a bare exposed <svg>, so the
+  // caller is responsible for labeling it (e.g. an aria-label) at the call site.
+  iconAriaHidden = true,
   size = 'sm',
   align = 'start',
   title,
@@ -60,7 +66,11 @@ export default function Banner({
       {...rest}
     >
       {Icon ? (
-        <Icon size={s.iconSize} className={`shrink-0 ${iconNudge} ${t.iconColor}`.trim()} />
+        <Icon
+          size={s.iconSize}
+          className={`shrink-0 ${iconNudge} ${t.iconColor}`.trim()}
+          aria-hidden={iconAriaHidden ? 'true' : undefined}
+        />
       ) : null}
       <div className="flex-1 min-w-0">
         {title ? <div className="font-medium">{title}</div> : null}

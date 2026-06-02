@@ -74,7 +74,10 @@ export async function findDuplicateUniverseGroups() {
   const collectionItemsByUniverse = new Map();
   for (const c of collections) {
     if (c.deleted || !c.universeId) continue;
-    collectionItemsByUniverse.set(c.universeId, (c.items || []).length);
+    collectionItemsByUniverse.set(
+      c.universeId,
+      (collectionItemsByUniverse.get(c.universeId) || 0) + (c.items || []).length,
+    );
   }
 
   const groups = groupDuplicates(live, (u) => normName(u.name));

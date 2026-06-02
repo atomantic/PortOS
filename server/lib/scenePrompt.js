@@ -107,6 +107,20 @@ export function matchObjectsInText(text, allObjects) {
   return matchEntriesByCandidates(text, allObjects, (o) => [o.name, ...(o.aliases || [])]);
 }
 
+// Append a user-selected wardrobe description AFTER the character's physical
+// description without clobbering it — wardrobe is a deliberate per-scene
+// overlay, never a substitute for the canonical body fields. The "Wearing: …"
+// label matches the existing "Palette: …" / "Era: …" fragment vocabulary, and
+// the sentence separator keeps the two clauses from running together once the
+// budget-truncation join collapses fragments with a single space.
+function appendWardrobe(base, wardrobeDesc) {
+  if (!wardrobeDesc) return base;
+  const wearing = `Wearing: ${wardrobeDesc}`;
+  if (!base) return wearing;
+  const sep = /[.!?]$/.test(base) ? ' ' : '. ';
+  return `${base}${sep}${wearing}`;
+}
+
 /**
  * Compose the final image-gen prompt with priority order (diffusion models
  * weight earlier tokens heaviest):
@@ -158,11 +172,29 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     ...baselineFrags,
   ].filter(Boolean) : [];
 
+  // Per-scene wardrobe picks: `scene.characterAppearances` is
+  // [{ characterId, wardrobeId? }]. When a matched character has a selected
+  // wardrobe, its description is appended after physicalDescription. The user
+  // picks these explicitly (no extractor guess); an absent or empty list
+  // leaves every character on their canonical body description.
+  const appearanceByCharId = new Map(
+    (Array.isArray(scene?.characterAppearances) ? scene.characterAppearances : [])
+      .filter((a) => a && a.characterId)
+      .map((a) => [a.characterId, a]),
+  );
+
   // Accept either `physicalDescription` (writers-room shape) or
   // `description` (pipeline shape) — the composer doesn't care which
   // field carries the visual descriptor.
   const featuringFragments = (matchedCharacters || [])
-    .map((c) => ({ name: c.name, desc: (c.physicalDescription || c.description || '').trim() }))
+    .map((c) => {
+      const base = (c.physicalDescription || c.description || '').trim();
+      const appearance = appearanceByCharId.get(c.id);
+      const wardrobe = appearance?.wardrobeId
+        ? (c.wardrobes || []).find((w) => w && w.id === appearance.wardrobeId)
+        : null;
+      return { name: c.name, desc: appendWardrobe(base, (wardrobe?.description || '').trim()) };
+    })
     .filter((c) => c.desc)
     .map((c) => `${c.name}: ${c.desc}`);
 

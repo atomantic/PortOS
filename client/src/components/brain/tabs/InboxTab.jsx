@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 
 import {
   DESTINATIONS,
@@ -384,23 +385,13 @@ export default function InboxTab({ onRefresh, settings }) {
                   )}
 
                   {confirmingDeleteId === entry.id ? (
-                    <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded">
-                      <span className="text-xs text-white flex-1">Delete this entry? This cannot be undone.</span>
-                      <button
-                        onClick={() => handleDelete(entry.id)}
-                        className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-                        title="Confirm delete"
-                      >
-                        Delete
-                      </button>
-                      <button
-                        onClick={() => setConfirmingDeleteId(null)}
-                        className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                        title="Cancel delete"
-                      >
-                        Cancel
-                      </button>
-                    </div>
+                    <InlineConfirmRow
+                      question="Delete this entry? This cannot be undone."
+                      confirmTitle="Confirm delete"
+                      cancelTitle="Cancel delete"
+                      onConfirm={() => handleDelete(entry.id)}
+                      onCancel={() => setConfirmingDeleteId(null)}
+                    />
                   ) : editingId !== entry.id && (
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs text-gray-500">Route to:</span>
@@ -509,23 +500,13 @@ export default function InboxTab({ onRefresh, settings }) {
                 </div>
                 <p className="text-xs text-port-error mb-2">{entry.error?.message || 'Unknown error'}</p>
                 {confirmingDeleteId === entry.id ? (
-                  <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded">
-                    <span className="text-xs text-white flex-1">Delete this entry? This cannot be undone.</span>
-                    <button
-                      onClick={() => handleDelete(entry.id)}
-                      className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-                      title="Confirm delete"
-                    >
-                      Delete
-                    </button>
-                    <button
-                      onClick={() => setConfirmingDeleteId(null)}
-                      className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                      title="Cancel delete"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                  <InlineConfirmRow
+                    question="Delete this entry? This cannot be undone."
+                    confirmTitle="Confirm delete"
+                    cancelTitle="Cancel delete"
+                    onConfirm={() => handleDelete(entry.id)}
+                    onCancel={() => setConfirmingDeleteId(null)}
+                  />
                 ) : editingId !== entry.id && (
                   <button
                     onClick={() => handleRetry(entry.id)}
@@ -603,23 +584,14 @@ export default function InboxTab({ onRefresh, settings }) {
                   </div>
 
                   {confirmingDeleteId === entry.id && (
-                    <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded mb-2">
-                      <span className="text-xs text-white flex-1">Delete this entry? This cannot be undone.</span>
-                      <button
-                        onClick={() => handleDelete(entry.id)}
-                        className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-                        title="Confirm delete"
-                      >
-                        Delete
-                      </button>
-                      <button
-                        onClick={() => setConfirmingDeleteId(null)}
-                        className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                        title="Cancel delete"
-                      >
-                        Cancel
-                      </button>
-                    </div>
+                    <InlineConfirmRow
+                      question="Delete this entry? This cannot be undone."
+                      className="mb-2"
+                      confirmTitle="Confirm delete"
+                      cancelTitle="Cancel delete"
+                      onConfirm={() => handleDelete(entry.id)}
+                      onCancel={() => setConfirmingDeleteId(null)}
+                    />
                   )}
 
                   <div className="flex items-center gap-2 flex-wrap">
@@ -762,23 +734,14 @@ export default function InboxTab({ onRefresh, settings }) {
                     </div>
 
                     {confirmingDeleteId === entry.id && (
-                      <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded mb-2">
-                        <span className="text-xs text-white flex-1">Delete this entry? This cannot be undone.</span>
-                        <button
-                          onClick={() => handleDelete(entry.id)}
-                          className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-                          title="Confirm delete"
-                        >
-                          Delete
-                        </button>
-                        <button
-                          onClick={() => setConfirmingDeleteId(null)}
-                          className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                          title="Cancel delete"
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                      <InlineConfirmRow
+                        question="Delete this entry? This cannot be undone."
+                        className="mb-2"
+                        confirmTitle="Confirm delete"
+                        cancelTitle="Cancel delete"
+                        onConfirm={() => handleDelete(entry.id)}
+                        onCancel={() => setConfirmingDeleteId(null)}
+                      />
                     )}
 
                     <div className="flex items-center gap-2">

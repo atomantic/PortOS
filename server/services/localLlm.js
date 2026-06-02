@@ -165,15 +165,27 @@ export async function ensureBackendProvider(backend) {
   const id = PROVIDER_ID[backend]
   if (!id) return
   const provider = await getProviderById(id).catch(() => null)
-  if (provider && !provider.enabled) {
-    const enabled = await updateProvider(id, { enabled: true })
-      .then(() => true)
-      .catch((err) => {
-        console.error(`⚠️ Failed to enable ${id} provider: ${err.message}`)
-        return false
-      })
-    if (enabled) console.log(`🔌 Enabled ${id} provider for active local LLM backend`)
+  if (!provider) return
+
+  const patch = {}
+  if (!provider.enabled) patch.enabled = true
+  // Ollama's OpenAI-compatible endpoint silently truncates to a ~4K context
+  // window unless a per-request num_ctx is sent. Editorial passes feed the
+  // whole manuscript (tens of thousands of tokens), so default a generous
+  // window (override with OLLAMA_NUM_CTX). LM Studio sets context at model
+  // load, so this only applies to Ollama.
+  if (backend === 'ollama' && !(Number(provider.numCtx) > 0)) {
+    patch.numCtx = Number(process.env.OLLAMA_NUM_CTX) || 32768
   }
+  if (Object.keys(patch).length === 0) return
+
+  const ok = await updateProvider(id, patch)
+    .then(() => true)
+    .catch((err) => {
+      console.error(`⚠️ Failed to configure ${id} provider: ${err.message}`)
+      return false
+    })
+  if (ok) console.log(`🔌 Configured ${id} provider for local LLM backend (${Object.keys(patch).join(', ')})`)
 }
 
 // ---- backend capability probes ----------------------------------------------

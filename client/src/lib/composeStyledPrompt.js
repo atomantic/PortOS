@@ -4,6 +4,8 @@
 // Preset negative appends to user negative so user-specified avoids stay
 // first-class.
 
+import { universeStylePreset } from './universeStylePreset';
+
 export function composeStyledPrompt(userPrompt, userNegative, preset) {
   const prompt = (userPrompt || '').trim();
   const negative = (userNegative || '').trim();
@@ -18,4 +20,20 @@ export function composeStyledPrompt(userPrompt, userNegative, preset) {
     prompt: composedPrompt,
     negativePrompt: [negative, styleNeg].filter(Boolean).join(', '),
   };
+}
+
+// Build the styled `{ prompt, negativePrompt }` for a single named canon subject
+// (character / place / object) layered on the universe's style preset. This is
+// the routine the Universe Builder's canon section and the Story Builder's
+// characters step both render through — `"<name>: <description>"` as the user
+// prompt, the base render's negative as the user negative, and the universe's
+// style preset on top. Centralizing it keeps the two call sites from drifting
+// (e.g. a change to how the name/description join, or which negative seeds the
+// compose). `baseNegative` is typically `renderOpts.negativePrompt`.
+export function composeCanonStyledPrompt({ name, description, universe, baseNegative = '' }) {
+  return composeStyledPrompt(
+    `${name}: ${description}`,
+    baseNegative || '',
+    universe ? universeStylePreset(universe) : null,
+  );
 }

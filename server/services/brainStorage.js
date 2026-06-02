@@ -237,6 +237,46 @@ export async function update(type, id, updates) {
 }
 
 /**
+ * Apply many record updates to one store in a single load-modify-save.
+ *
+ * A batch like a chip reorder must NOT fan out into N concurrent single-record
+ * `update()` calls: `update()` is a read-modify-save over the whole shared JSON
+ * file, so concurrent calls on a cold cache read overlapping baselines and the
+ * last save wins — silently dropping the other records' changes. Collapsing the
+ * batch into one load-modify-save (one file write) makes the whole reorder
+ * atomic. `updates` is an array of { id, ...fields }; unknown ids are skipped.
+ * Returns the updated records.
+ */
+export async function updateMany(type, updates) {
+  const data = await loadJsonStore(type);
+  const applied = [];
+  for (const { id, ...fields } of updates) {
+    const existing = data.records[id];
+    if (!existing) continue;
+    const record = {
+      ...existing,
+      ...fields,
+      // Preserve immutable fields, exactly as update() does.
+      originInstanceId: existing.originInstanceId,
+      createdAt: existing.createdAt,
+      updatedAt: now()
+    };
+    data.records[id] = record;
+    applied.push({ id, record });
+  }
+  if (applied.length === 0) return [];
+
+  await saveJsonStore(type, data);
+  for (const { id, record } of applied) {
+    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
+      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+  }
+  console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
+  return applied.map(({ id, record }) => ({ id, ...record }));
+}
+
+/**
  * Delete a record
  */
 export async function remove(type, id) {
@@ -562,6 +602,9 @@ export const getLinks = (filters) => filters ? query('links', filters) : getAll(
 export const getLinkById = (id) => getById('links', id);
 export const createLink = (data) => create('links', data);
 export const updateLink = (id, data) => update('links', id, data);
+// Batch reorder: one atomic load-modify-save so a multi-chip drag can't
+// lose-update the shared links store the way N concurrent updateLink calls can.
+export const reorderLinks = (updates) => updateMany('links', updates);
 export const deleteLink = (id) => remove('links', id);
 
 /**

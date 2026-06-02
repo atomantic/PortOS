@@ -19,15 +19,17 @@
  * committing it (Phase 4's confirm-before-seeding pattern).
  */
 
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { planManuscriptPass, estimateTokens } from '../../lib/contextBudget.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
 import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS, MANUSCRIPT_TYPES } from './series.js';
-import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStage, updateStageWithLatest, assertStageUnlocked } from './issues.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStage, updateStageWithLatest, assertStageUnlocked, createIssue } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
   sanitizeArc,
+  cleanThemes,
   sanitizeSeasonList,
   sanitizeSeason,
   buildSeason,
@@ -38,7 +40,7 @@ import {
   renderArcShapeGuidance,
   renderArcShapePositionSummary,
 } from '../../lib/storyArc.js';
-import { runPromptRefineRaw } from './refineHelpers.js';
+import { runPromptRefineRaw, trimChanges } from './refineHelpers.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -220,16 +222,19 @@ export async function collectManuscriptSections(seriesId, { stageOrder = MANUSCR
 // Header for one manuscript section. The corpus join below derives from
 // `collectManuscriptSections` so the text the LLM sees stays byte-identical to
 // the per-section text the editor renders — anchorQuote/find matching depends
-// on that invariant.
-const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
+// on that invariant. Exported so manuscriptFix.js shares the exact same shape.
+export const manuscriptSectionHeader = (s) => `# Issue ${s.number}${s.title ? ` — ${s.title}` : ''} (${s.stageId})`;
+
+// Join sections into one manuscript corpus. The single source of truth for
+// "render sections as a manuscript" — reused by collectIssueSourceText, the
+// completeness pass, and manuscriptFix so the LLM-visible text never drifts.
+export const sectionsCorpus = (sections) =>
+  sections.map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content || ''}`).join('\n\n---\n\n');
 
 export async function collectIssueSourceText(seriesId, { stageOrder = SOURCE_STAGE_ORDER } = {}) {
   if (!seriesId) return '';
   const sections = await collectManuscriptSections(seriesId, { stageOrder });
-  return sections
-    .map((s) => `${manuscriptSectionHeader(s)}\n\n${s.content}`)
-    .join('\n\n---\n\n')
-    .slice(0, BACKFILL_SOURCE_MAX);
+  return sectionsCorpus(sections).slice(0, BACKFILL_SOURCE_MAX);
 }
 
 // Lightweight version list for a stage — `{ runId, createdAt }` per retained
@@ -712,37 +717,116 @@ async function buildCompletenessContext(series, manuscript, preloadedWorld) {
   };
 }
 
+const COMPLETENESS_STAGE = 'pipeline-manuscript-completeness';
+// Output room for the findings list; comic-structure suggestions are full page
+// rewrites, so reserve generously.
+const COMPLETENESS_OUTPUT_RESERVE_TOKENS = 6_000;
+// Earlier-chapter findings summarized into the rolling digest fed to later
+// chunks, and the char cap on that digest (kept small so it fits the margin).
+const COMPLETENESS_PRIOR_DIGEST_MAX = 40;
+const COMPLETENESS_PRIOR_DIGEST_CHARS = 2_000;
+
+// One-line digest of prior-chunk findings so later chunks keep cross-chapter
+// continuity in view. Rides INSIDE the manuscript field, so the prompt template
+// is unchanged (no migration).
+function priorFindingsDigest(findings) {
+  if (!findings.length) return '';
+  const lines = findings.slice(0, COMPLETENESS_PRIOR_DIGEST_MAX).map((f) => {
+    const where = Number.isInteger(f.issueNumber) ? `Issue ${f.issueNumber}` : (f.location || 'general');
+    return `- [${where}] ${f.category}: ${f.problem}`;
+  });
+  const more = findings.length > COMPLETENESS_PRIOR_DIGEST_MAX
+    ? `\n(+${findings.length - COMPLETENESS_PRIOR_DIGEST_MAX} more earlier findings)` : '';
+  const body = `${lines.join('\n')}${more}`.slice(0, COMPLETENESS_PRIOR_DIGEST_CHARS);
+  return `# Editorial findings already recorded for EARLIER chapters\n`
+    + `Do not repeat these. Flag only NEW gaps in the chapters below, plus any cross-chapter `
+    + `continuity problems these earlier findings reveal.\n\n${body}\n\n---\n\n`;
+}
+
+// First-wins dedupe key across chunks — a finding identical on (issue,
+// category, anchor, problem) is recorded once even if two chunks surface it.
+const findingKey = (f) => [
+  f.issueNumber ?? '',
+  f.category,
+  (f.anchorQuote || '').trim().toLowerCase().slice(0, 120),
+  (f.problem || '').trim().toLowerCase().slice(0, 120),
+].join('|');
+
 /**
  * Editor pass over the drafted manuscript itself: returns categorized
  * suggestions for rounding out and finishing a near-complete draft — missing
  * pages/beats, arc holes, and character-development gaps. Read-only; advisory
  * (no auto-resolve). Complements verifyArc/verifyVolume, which stay at synopsis
  * depth and never see the script.
+ *
+ * Context-window-aware: when the whole manuscript + canon context fits the
+ * target model's window it runs in one call (frontier models hold the entire
+ * book); otherwise it chunks by issue, feeds each chunk a digest of prior-chunk
+ * findings for continuity, and merges with first-wins dedupe.
  */
 export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
   const series = await getSeries(seriesId);
   // Manuscript-only: exclude `idea` so an outline/synopsis seed can't pass the
   // guard below and get graded as if it were a drafted manuscript.
-  const manuscript = await collectIssueSourceText(seriesId, { stageOrder: MANUSCRIPT_STAGES });
-  if (!manuscript) {
+  const sections = await collectManuscriptSections(seriesId, { stageOrder: MANUSCRIPT_STAGES });
+  if (!sections.length) {
     throw makeErr(
       'No manuscript to analyze — write a comic script, prose, or teleplay on at least one issue first',
       ERR_VALIDATION,
     );
   }
-  const ctx = await buildCompletenessContext(series, manuscript, options.preloadedWorld);
-  const { content, runId, providerId, model } = await runStagedLLM(
-    'pipeline-manuscript-completeness',
-    ctx,
-    {
-      providerOverride: options.providerOverride,
-      modelOverride: options.modelOverride,
-      returnsJson: true,
-      source: 'pipeline-manuscript-completeness',
-    },
-  );
-  const issues = shapeCompletenessFindings(content?.issues);
-  return { issues, raw: content, runId, providerId, model };
+
+  // Base (non-manuscript) context is fixed overhead present in every call.
+  const baseCtx = await buildCompletenessContext(series, '', options.preloadedWorld);
+  const overheadTokens = estimateTokens(JSON.stringify(baseCtx)) + 2_000; // + template/instructions
+  const { contextWindow } = await resolveStageContext(COMPLETENESS_STAGE, {
+    providerOverride: options.providerOverride,
+    modelOverride: options.modelOverride,
+  });
+  const plan = planManuscriptPass({
+    contextWindow,
+    sections: sections.map((s) => ({ ...s, text: `${manuscriptSectionHeader(s)}\n\n${s.content}` })),
+    overheadTokens,
+    outputReserveTokens: COMPLETENESS_OUTPUT_RESERVE_TOKENS,
+  });
+
+  const runOne = (manuscript) => runStagedLLM(COMPLETENESS_STAGE, { ...baseCtx, manuscript }, {
+    providerOverride: options.providerOverride,
+    modelOverride: options.modelOverride,
+    returnsJson: true,
+    source: 'pipeline-manuscript-completeness',
+  });
+
+  if (plan.mode === 'whole') {
+    const { content, runId, providerId, model } = await runOne(sectionsCorpus(sections).slice(0, plan.usableChars));
+    return { issues: shapeCompletenessFindings(content?.issues), raw: content, runId, providerId, model, chunked: false, chunkCount: 1 };
+  }
+
+  console.log(`📚 completeness: chunked review series=${String(seriesId).slice(0, 12)} chunks=${plan.chunks.length} window=${contextWindow ?? 'floor'}`);
+  // Accumulate findings into one first-wins map so the per-chunk digest is O(1)
+  // to derive (no re-merging every prior chunk).
+  const merged = new Map();
+  let first = null;
+  for (const chunk of plan.chunks) {
+    const digest = priorFindingsDigest([...merged.values()]);
+    const corpus = sectionsCorpus(chunk.sections).slice(0, plan.usableChars);
+    const result = await runOne(`${digest}${corpus}`);
+    if (!first) first = result;
+    for (const f of shapeCompletenessFindings(result.content?.issues)) {
+      const k = findingKey(f);
+      if (!merged.has(k)) merged.set(k, f);
+    }
+  }
+  const issues = [...merged.values()];
+  return {
+    issues,
+    raw: { issues },
+    runId: first?.runId,
+    providerId: first?.providerId,
+    model: first?.model,
+    chunked: true,
+    chunkCount: plan.chunks.length,
+  };
 }
 
 // Reader-map context: the protagonist arc + the Vonnegut shape backbone + the
@@ -853,10 +937,89 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
   if (!safeReaderMap) {
     throw makeErr('LLM returned an empty reader map and there is none to preserve', ERR_VALIDATION);
   }
-  const changes = Array.isArray(content.changes)
-    ? content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 12)
-    : [];
-  return { readerMap: safeReaderMap, changes, rationale, runId, providerId, model };
+  // When the refine produced nothing usable and we fell back to the existing
+  // map, the LLM's `changes`/`rationale` describe an attempt that was DISCARDED
+  // — surfacing them would tell the user we applied edits we threw away. Only
+  // report changes/rationale when the refined map is the one we're returning.
+  const usedRefinedMap = readerMap != null;
+  return {
+    readerMap: safeReaderMap,
+    changes: usedRefinedMap ? trimChanges(content.changes) : [],
+    rationale: usedRefinedMap ? rationale : '',
+    runId,
+    providerId,
+    model,
+  };
+}
+
+/**
+ * Refine an existing plot arc's NARRATIVE fields (logline / summary /
+ * protagonist arc / themes) against free-text feedback — the AI-feedback
+ * affordance the arc step lacked (it only had full regenerate). Deliberately
+ * does NOT re-plan seasons or change the Vonnegut shape: the refine prompt
+ * authors only the narrative fields, and `shape`/`readerMap` are carried over
+ * from the current arc. Returns the merged arc plus `changes` + `rationale`.
+ *
+ * Honors the absent-vs-intentionally-empty rule: a field the LLM omits or
+ * returns empty falls back to the current value (refine PRESERVES; it must
+ * never null out an arc the user already has). The same `locked.arc` guard the
+ * arc-overview regenerator uses applies.
+ */
+export async function refineArc(seriesId, feedback, options = {}) {
+  const series = await getSeries(seriesId);
+  if (series.locked?.arc === true) {
+    throw makeErr('Arc is locked — unlock it on the Arc Canvas before refining', ERR_VALIDATION);
+  }
+  const arc = series.arc || {};
+  const { content, rationale, runId, providerId, model } = await runPromptRefineRaw({
+    templateName: 'story-builder-arc-refine',
+    variables: {
+      currentLogline: arc.logline || '',
+      currentSummary: arc.summary || '',
+      currentProtagonistArc: arc.protagonistArc || '',
+      currentThemesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
+      shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+      series: { name: series.name, premise: series.premise },
+      feedback: typeof feedback === 'string' ? feedback.trim().slice(0, 4000) : '',
+    },
+    options,
+    source: 'story-builder-arc-refine',
+    logTag: `Story Builder arc refine series=${seriesId.slice(0, 8)}`,
+  });
+  // Merge the refined narrative fields over the current arc, preserving any the
+  // LLM omitted (absent) or returned empty (a refine should never blank a field
+  // the user already had). `shape`, `readerMap`, and status pass through from
+  // the current arc — this pass is narrative-only. sanitizeArc trims/cleans the
+  // fields (incl. themes) on the way in, so pass raw values and only choose
+  // between the refined value and the current one here.
+  const refinedStr = (next, current) => {
+    const trimmed = typeof next === 'string' ? next.trim() : '';
+    return trimmed || current || '';
+  };
+  // Clean the candidate themes BEFORE deciding to keep them: an LLM array of
+  // only blanks/nulls (`['  ']`, `[null]`) is non-empty but sanitizes to [],
+  // which would wipe the existing themes. Fall back to current when the cleaned
+  // candidate is empty (preserve, per the absent-vs-empty rule).
+  const cleanedCandidateThemes = cleanThemes(content.themes);
+  const refinedThemes = cleanedCandidateThemes.length > 0
+    ? cleanedCandidateThemes
+    : (arc.themes || []);
+  const refinedArc = sanitizeArc({
+    logline: refinedStr(content.logline, arc.logline),
+    summary: refinedStr(content.summary, arc.summary),
+    protagonistArc: refinedStr(content.protagonistArc, arc.protagonistArc),
+    themes: refinedThemes,
+    shape: arc.shape ?? null,
+    readerMap: arc.readerMap ?? null,
+    status: 'draft',
+  });
+  // sanitizeArc returns null only when every identifying field is empty — which,
+  // because every field above falls back to the current arc, means the current
+  // arc was ALSO empty and the LLM added nothing. Nothing to preserve, so error.
+  if (!refinedArc) {
+    throw makeErr('LLM returned an empty arc and there is none to preserve', ERR_VALIDATION);
+  }
+  return { arc: refinedArc, changes: trimChanges(content.changes), rationale, runId, providerId, model };
 }
 
 /**
@@ -1015,6 +1178,49 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
     providerId,
     model,
   };
+}
+
+/**
+ * Persist a season's generated episodes as issue records — one issue per
+ * episode, with the season pointer + arcPosition + arcRole + length profile
+ * forwarded so the downstream auto-run-text chain has a seed to expand
+ * against. Shared by the pipeline season-episodes route and the Story
+ * Builder's "generate issues from arc" action so both mint byte-identical
+ * issue shapes. The episode's logline + synopsis land in `stages.idea.input`.
+ */
+export async function commitEpisodesToIssues(seriesId, seasonId, episodes = [], { preloadedSeries = null } = {}) {
+  // Fetch the series once for the whole batch (unless the caller already holds
+  // it) and thread it into each createIssue's renumber pass. The series record
+  // doesn't change as issues are appended, so an N-episode season otherwise
+  // pays N redundant getSeries reads of an unchanging record.
+  const series = preloadedSeries || await getSeries(seriesId).catch(() => null);
+  const created = [];
+  for (const ep of episodes) {
+    const issue = await createIssue({
+      seriesId,
+      title: ep.title,
+      // Issue `number` is derived from (volume order, arcPosition) by
+      // `createIssue`'s renumber pass — a new episode falls into its volume's
+      // slot and later volumes' numbers shift to make room.
+      seasonId,
+      arcPosition: ep.number,
+      // `arcRole` carries the LLM's pilot / complication / midpoint / etc.
+      // classification forward so the idea-expansion prompt can size beats to
+      // the role (a finale needs a different cadence than a complication).
+      arcRole: ep.arcRole,
+      // Episode-level length sizing from the season-episodes LLM pass.
+      // Defaults to 'standard' inside the issue sanitizer when missing.
+      lengthProfile: ep.lengthProfile,
+      stages: {
+        idea: {
+          status: ep.synopsis ? 'edited' : 'empty',
+          input: [ep.logline, ep.synopsis].filter(Boolean).join('\n\n'),
+        },
+      },
+    }, { preloadedSeries: series });
+    created.push(issue);
+  }
+  return created;
 }
 
 /**

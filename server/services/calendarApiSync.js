@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 import { getToken, clearTokenCache } from './messageTokenExtractor.js';
 
 const GRAPH_API_TIMEOUT_MS = 30000;
@@ -93,8 +94,17 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
       return { events: [], status: 'api-error' };
     }
 
-    const data = await response.json();
-    const items = data.value || [];
+    // Sentinel fallback: a non-JSON/blank 200 body must NOT masquerade as a
+    // successful empty page. `success` here drives a destructive reconcile in
+    // calendarSync.js (it prunes every cached event absent from this fetch), so
+    // a malformed body has to surface as an api-error instead of silently
+    // wiping the cache (or, mid-pagination, dropping later pages' events).
+    const data = await readResponseJson(response, { fallback: null, emptyValue: null });
+    if (!data || !Array.isArray(data.value)) {
+      console.log(`📅 Calendar API sync: non-JSON or malformed body on page ${page} — treating as api-error`);
+      return { events: [], status: 'api-error' };
+    }
+    const items = data.value;
 
     for (const item of items) {
       const extId = makeExternalId(item.Id);

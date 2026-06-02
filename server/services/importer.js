@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'crypto';
 import { runStagedLLM } from '../lib/stageRunner.js';
-import { importerEvents } from './importerEvents.js';
+import { importerEvents, emitImporterProgress } from './importerEvents.js';
 // Re-export so consumers reach the analyze-phase progress bus through the
 // importer's public surface (the socket bridge imports it from the source
 // module directly; tests + future callers use this).
@@ -94,11 +94,14 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
 // Which text stage an issue's verbatim excerpt seeds at commit. A content type
 // that is ALREADY in a script form seeds that script stage (ready) so the
 // pipeline renders the user's verbatim text instead of regenerating it; prose
-// types seed `stages.prose`. One table row per new structured type — e.g.
-// screenplay → 'teleplay' is the queued follow-up (PLAN.md
-// [importer-screenplay-teleplay-seed]).
+// types seed `stages.prose`. One table row per structured type. The scene
+// extractor (`extractScenes`) already adapts a verbatim teleplay into
+// storyboards via the `pipeline-extract-scenes` prompt, so a screenplay needs
+// no parser work — unlike the comic path, which had to teach `parseComicScript`
+// the bare PAGE/PANEL form.
 const CONTENT_TYPE_SEED_STAGE = Object.freeze({
   'comic-script': 'comicScript',
+  'screenplay': 'teleplay',
 });
 const DEFAULT_SEED_STAGE = 'prose';
 const seedStageFor = (contentType) => CONTENT_TYPE_SEED_STAGE[contentType] || DEFAULT_SEED_STAGE;
@@ -696,10 +699,13 @@ export async function analyzeImport({
   // Live stage progress (see ANALYZE_STAGES). `runId` lets the client ignore
   // stragglers from a prior run. Emitting is best-effort UI sugar — never let
   // a listener throw abort the extraction, so swallow + log at this boundary.
+  // `emitImporterProgress` records each frame into the live snapshot before
+  // broadcasting so a socket that (re)connects mid-analyze can be replayed the
+  // checklist (see importerEvents.js / socket.js).
   const runId = randomUUID();
   const emitProgress = (frame) => {
     try {
-      importerEvents.emit('progress', { runId, ...frame });
+      emitImporterProgress({ runId, ...frame });
     } catch (err) {
       console.error(`❌ importer progress emit failed: ${err.message}`);
     }
@@ -823,6 +829,14 @@ export async function analyzeImport({
   }
 
   const arcPreview = buildArcPreview(arcRun.content);
+
+  // Terminal frame: clears the live snapshot so a tab that opens after this
+  // run finishes isn't replayed a stale (all-done) checklist. A throw before
+  // here (an LLM timeout on canon/arc, a series-create failure) leaves the
+  // snapshot in place; that's benign — the client only renders the checklist
+  // while its own analyze request is in flight, and the next run's `start`
+  // frame overwrites the snapshot.
+  emitProgress({ type: 'done' });
 
   return {
     universe,
@@ -1292,9 +1306,10 @@ export async function commitImport({
       const stages = {};
       if (proposal.proseExcerpt) {
         // Route the verbatim excerpt to the stage that matches the source form
-        // (see CONTENT_TYPE_SEED_STAGE): a comic-script seeds stages.comicScript
-        // (ready) so the pipeline renders the user's verbatim script instead of
-        // regenerating it; everything else seeds stages.prose.
+        // (see CONTENT_TYPE_SEED_STAGE): a script-form type seeds its script
+        // stage ready (comic-script → comicScript, screenplay → teleplay) so the
+        // pipeline renders the user's verbatim script instead of regenerating
+        // it; prose-like types seed stages.prose.
         stages[seedStageFor(contentType)] = { status: 'ready', output: proposal.proseExcerpt };
       }
       const ideaSeed = [

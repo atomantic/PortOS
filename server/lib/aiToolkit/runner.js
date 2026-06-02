@@ -101,6 +101,10 @@ export function createRunnerService(config = {}) {
 
       let effectiveProviderId = providerId;
       let usedFallback = false;
+      // Model hint to run on the fallback provider when we proactively swap
+      // below. Stays null on the non-fallback path so the requested `model`
+      // wins as before.
+      let fallbackModelHint = null;
 
       if (providerStatusService && !providerStatusService.isAvailable(providerId)) {
         const allProviders = await providerService.getAllProviders();
@@ -118,6 +122,7 @@ export function createRunnerService(config = {}) {
         if (fallback) {
           effectiveProviderId = fallback.provider.id;
           usedFallback = true;
+          fallbackModelHint = fallback.model || null;
           console.log(`⚡ Using fallback provider: ${fallback.provider.name} (source: ${fallback.source})`);
         } else {
           const timeUntilRecovery = providerStatusService.getTimeUntilRecovery(providerId);
@@ -143,6 +148,14 @@ export function createRunnerService(config = {}) {
       const runDir = join(RUNS_PATH, runId);
       await mkdir(runDir);
 
+      // On fallback, the requested `model` was resolved against the PRIMARY
+      // provider and almost never exists on the fallback — use the configured
+      // fallback model (or the fallback provider's own default) instead of
+      // leaking the primary's model id onto the fallback's record + log line.
+      const recordModel = usedFallback
+        ? (fallbackModelHint || provider.defaultModel || null)
+        : (model || provider.defaultModel || null);
+
       const metadata = {
         id: runId,
         type: 'ai',
@@ -150,7 +163,7 @@ export function createRunnerService(config = {}) {
         providerName: provider.name,
         originalProviderId: usedFallback ? providerId : null,
         usedFallback,
-        model: model || provider.defaultModel,
+        model: recordModel,
         workspacePath,
         workspaceName,
         source,
@@ -175,7 +188,10 @@ export function createRunnerService(config = {}) {
 
       const effectiveTimeout = timeout || provider.timeout;
 
-      return { runId, runDir, provider, metadata, timeout: effectiveTimeout };
+      // Surface `fallbackModel` so callers that re-resolve the model against
+      // the fallback provider (e.g. stageRunner's args-baked-model logic) use
+      // the configured fallback model instead of the primary's leaked one.
+      return { runId, runDir, provider, metadata, timeout: effectiveTimeout, usedFallback, fallbackModel: fallbackModelHint };
     },
 
     async executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
@@ -319,7 +335,12 @@ export function createRunnerService(config = {}) {
             body: JSON.stringify({
               model: model || provider.defaultModel,
               messages: [{ role: 'user', content: messageContent }],
-              stream: true
+              stream: true,
+              // Ollama's OpenAI-compatible endpoint defaults to a ~4K context
+              // window and silently truncates longer prompts. A top-level
+              // num_ctx lifts it (honored by Ollama, ignored by other
+              // OpenAI-style endpoints). Only sent when the provider opts in.
+              ...(Number(provider.numCtx) > 0 ? { num_ctx: Number(provider.numCtx) } : {})
             })
           }).catch(err => ({ ok: false, error: err.message, status: 0 }))
         : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };

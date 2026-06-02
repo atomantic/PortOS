@@ -24,23 +24,17 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { timeAgo } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import BucketBoard from '../links/BucketBoard';
 import { LINK_DND_TYPE } from '../links/bucketColors';
+import { reorderLinksInBucket } from '../links/bucketReorder';
+import { normalizeUrl as normalizeUrlShared } from '../../../utils/urlNormalize';
 
 /** Normalize a user-entered URL the way the quick-add form does. */
 function normalizeUrl(raw) {
-  let url = raw.trim();
-  if (!url) return null;
-  if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git@')) {
-    if (url.includes('github.com') || url.includes('.')) {
-      url = 'https://' + url;
-    } else {
-      return null;
-    }
-  }
-  return url;
+  return normalizeUrlShared(raw, { allowGit: true, requireDot: true });
 }
 
 const LINK_TYPE_COLORS = {
@@ -172,13 +166,34 @@ export default function LinksTab({ onRefresh }) {
       : { bucketId: null };
     // Optimistic update so chips move instantly.
     setLinks(prev => prev.map(l => (l.id === link.id ? { ...l, ...patch } : l)));
-    const updated = await api.updateBrainLink(link.id, patch).catch(err => {
+    const updated = await api.updateBrainLink(link.id, patch, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update link');
       return null;
     });
     if (updated) {
       setLinks(prev => prev.map(l => (l.id === updated.id ? updated : l)));
     } else {
+      fetchLinks(); // revert optimistic change on failure
+    }
+  };
+
+  // Reposition a chip within (or into) a bucket at a specific index — the
+  // intra-bucket reorder the bucket board's "append on assign" path can't do.
+  // Renumbers the destination bucket densely and persists the whole batch in
+  // one atomic call: N concurrent single-link PUTs would race the shared links
+  // store and silently lose-update some chips' bucketOrder.
+  const handleMoveLinkToIndex = async (link, bucketId, targetIndex) => {
+    const { renumbered, changed } = reorderLinksInBucket(links, link, bucketId, targetIndex);
+    if (changed.length === 0) return;
+    // Optimistic reorder so the chips settle instantly.
+    const byId = new Map(renumbered.map(r => [r.id, r]));
+    setLinks(prev => prev.map(l => {
+      const r = byId.get(l.id);
+      return r ? { ...l, bucketId: r.bucketId, bucketOrder: r.bucketOrder } : l;
+    }));
+    const ok = await api.reorderBrainLinks(changed, { silent: true }).catch(() => null);
+    if (!ok) {
+      toast.error('Failed to reorder links');
       fetchLinks(); // revert optimistic change on failure
     }
   };
@@ -596,21 +611,12 @@ export default function LinksTab({ onRefresh }) {
 
             {/* Delete confirmation */}
             {confirmingDeleteId === link.id && (
-              <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded mb-2">
-                <span className="text-xs text-white flex-1">Delete this link? This cannot be undone.</span>
-                <button
-                  onClick={() => handleDelete(link.id)}
-                  className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-                >
-                  Delete
-                </button>
-                <button
-                  onClick={() => setConfirmingDeleteId(null)}
-                  className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
+              <InlineConfirmRow
+                question="Delete this link? This cannot be undone."
+                className="mb-2"
+                onConfirm={() => handleDelete(link.id)}
+                onCancel={() => setConfirmingDeleteId(null)}
+              />
             )}
 
             {/* Footer row */}
@@ -791,6 +797,7 @@ export default function LinksTab({ onRefresh }) {
             setBuckets={setBuckets}
             onAssignLink={handleAssignLink}
             onAddLinkToBucket={handleAddLinkToBucket}
+            onMoveLinkToIndex={handleMoveLinkToIndex}
             onBucketDeleted={(bucketId) => setLinks(prev => prev.map(l => (l.bucketId === bucketId ? { ...l, bucketId: null } : l)))}
           />
         </aside>

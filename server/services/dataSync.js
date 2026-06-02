@@ -42,7 +42,10 @@ const PIPELINE_ISSUES_DIR = join(PATHS.data, 'pipeline-issues');
 // (listUniverses, below) and for fingerprint-based checksum caching — the
 // fingerprint walker descends into the dir so per-record edits invalidate.
 const UNIVERSE_BUILDER_DIR = join(PATHS.data, 'universes');
-const MEDIA_COLLECTIONS_FILE = join(PATHS.data, 'media-collections.json');
+// Migration 059 split the monolithic media-collections.json into per-record
+// `data/media-collections/<id>/index.json`. The fingerprint walker descends
+// into the dir so per-record edits invalidate the snapshot checksum cache.
+const MEDIA_COLLECTIONS_DIR = join(PATHS.data, 'media-collections');
 // Outbound peer subscriptions drive the per-peer snapshot exclude-set (see
 // getSnapshot's `forPeerId` scoping). A subscribe/unsubscribe changes which
 // records ride the scoped snapshot, so it must invalidate the per-peer
@@ -399,7 +402,7 @@ async function getUniverseSnapshot({ exclude } = {}) {
   return { data, checksum: computeChecksum(data) };
 }
 
-async function applyUniverseRemote(remoteData) {
+async function applyUniverseRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
   // Routes through `mergeUniversesFromSync` so the read-modify-write runs
   // INSIDE `queueUniverseWrite` (serialized against every other writer:
@@ -407,7 +410,7 @@ async function applyUniverseRemote(remoteData) {
   // remote record passes through `sanitizeTemplate` for schema-version
   // backfill — older peers landing pre-v4 records get them migrated on the
   // way in instead of polluting disk with un-backfilled state.
-  const result = await mergeUniversesFromSync(remoteData.universes || []);
+  const result = await mergeUniversesFromSync(remoteData.universes || [], { source });
   if (result.applied) {
     console.log(`🔄 Universe sync: merged ${result.count} universe(s)`);
   }
@@ -443,13 +446,13 @@ async function getPipelineSnapshot({ exclude } = {}) {
   return { data, checksum: computeChecksum(data) };
 }
 
-async function applyPipelineRemote(remoteData) {
+async function applyPipelineRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
   // Routes through the service merge entry points so each incoming record
   // passes through the same sanitizer and LWW contract as local writes.
   const [seriesResult, issuesResult] = await Promise.all([
-    mergeSeriesFromSync(remoteData.series || []),
-    mergeIssuesFromSync(remoteData.issues || []),
+    mergeSeriesFromSync(remoteData.series || [], { source }),
+    mergeIssuesFromSync(remoteData.issues || [], { source }),
   ]);
 
   const seriesChanged = seriesResult.count;
@@ -537,7 +540,7 @@ async function getMediaCollectionsSnapshot({ exclude } = {}) {
   return { data, checksum: computeChecksum(data) };
 }
 
-async function applyMediaCollectionsRemote(remoteData) {
+async function applyMediaCollectionsRemote(remoteData, source) {
   if (!remoteData) return { applied: false, count: 0 };
   // Symmetric receiver-side guard. The sender filters collections linked
   // to local-ephemeral parents in getMediaCollectionsSnapshot, but a
@@ -569,7 +572,7 @@ async function applyMediaCollectionsRemote(remoteData) {
   // runs INSIDE `serializeFileWrite` (same tail as addItem / removeItem /
   // bulkUpdateCollectionItems) — a sync-driven write can't interleave with a
   // concurrent local mutation on the same JSON file.
-  const result = await mergeMediaCollectionsFromSync(filtered);
+  const result = await mergeMediaCollectionsFromSync(filtered, { source });
   if (result.applied) {
     console.log(`🔄 MediaCollections sync: merged ${result.count} collection(s)`);
   }
@@ -699,12 +702,12 @@ const CHECKSUM_PATHS = {
   // content (and checksum) can change even when no record file moved.
   universe: [UNIVERSE_BUILDER_DIR, PEER_SUBSCRIPTIONS_FILE],
   pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR, PEER_SUBSCRIPTIONS_FILE],
-  // mediaCollections invalidates on its own file AND on the parent record
-  // files — `getMediaCollectionsSnapshot` filters collections whose linked
-  // universe/series is ephemeral, so a "mark ephemeral" PATCH on a universe
-  // must re-checksum the collections snapshot even though
-  // media-collections.json itself didn't move. Same goes for un-ephemeral.
-  mediaCollections: [MEDIA_COLLECTIONS_FILE, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
+  // mediaCollections invalidates on its own record dir AND on the parent
+  // record files — `getMediaCollectionsSnapshot` filters collections whose
+  // linked universe/series is ephemeral, so a "mark ephemeral" PATCH on a
+  // universe must re-checksum the collections snapshot even though no
+  // media-collections record file moved. Same goes for un-ephemeral.
+  mediaCollections: [MEDIA_COLLECTIONS_DIR, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
   // videoHistory is a flat history file with no parent-record dependency —
   // its checksum invalidates only when video-history.json itself moves.
   videoHistory: [VIDEO_HISTORY_FILE],
@@ -939,6 +942,12 @@ export async function getSnapshot(category, { forPeerId } = {}) {
 export async function applyRemote(category, remoteData, options = {}) {
   const cat = CATEGORIES[category];
   if (!cat) return { applied: false, count: 0 };
+  // Attribute any conflict the category's merge journals to the snapshot
+  // transport + the peer it came from. `options.peerId` is the source peer's
+  // instanceId (the snapshot orchestrator passes it; the manual REST apply
+  // route has none → null). Category appliers that don't journal ignore the
+  // extra arg.
+  const source = { via: 'snapshot', peerId: typeof options.peerId === 'string' && options.peerId ? options.peerId : null };
   const portosMeta = isPlainObject(options.portosMeta) ? options.portosMeta : null;
   const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
   const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
@@ -963,5 +972,5 @@ export async function applyRemote(category, remoteData, options = {}) {
       },
     };
   }
-  return cat.applyRemote(remoteData);
+  return cat.applyRemote(remoteData, source);
 }

@@ -178,6 +178,58 @@ describe('Task Parser', () => {
       const tasks = parseTasksMarkdown(markdown);
       expect(tasks[0].id).toBe('sys-001');
     });
+
+    it('should preserve every task when ids collide, suffixing duplicates', () => {
+      const markdown = `# Tasks
+
+## Pending
+- [ ] #task-001 | HIGH | First task
+- [ ] #task-001 | LOW | Second task with same id
+- [ ] #task-001 | MEDIUM | Third task with same id`;
+
+      const tasks = parseTasksMarkdown(markdown);
+
+      // All three survive (the bug being fixed silently lost 2 of 3 on reorder)
+      expect(tasks).toHaveLength(3);
+      expect(tasks.map(t => t.id)).toEqual(['task-001', 'task-001-dup2', 'task-001-dup3']);
+      // Descriptions stay paired with their suffixed ids — no data loss
+      expect(tasks[1].description).toBe('Second task with same id');
+      expect(tasks[2].description).toBe('Third task with same id');
+    });
+
+    it('should produce ids unique enough for a keyed Map (the reorderTasks contract)', () => {
+      const markdown = `# Tasks
+
+## Pending
+- [ ] #task-001 | HIGH | A
+- [ ] #task-001 | LOW | B
+- [ ] #task-002 | MEDIUM | C`;
+
+      const tasks = parseTasksMarkdown(markdown);
+      const byId = new Map(tasks.map(t => [t.id, t]));
+
+      // Map size must equal task count — no silent collapse
+      expect(byId.size).toBe(tasks.length);
+      expect(byId.size).toBe(3);
+    });
+
+    it('should rename the duplicate, never a distinct task that looks like a suffix', () => {
+      const markdown = `# Tasks
+
+## Pending
+- [ ] #task-001 | HIGH | A
+- [ ] #task-001 | LOW | B
+- [ ] #task-001-dup2 | MEDIUM | C already named like a suffix`;
+
+      const tasks = parseTasksMarkdown(markdown);
+
+      // The duplicate of task-001 skips `-dup2` (a real id elsewhere in the file)
+      // and takes `-dup3`; the user-authored `task-001-dup2` keeps its stable id.
+      expect(tasks.map(t => t.id)).toEqual(['task-001', 'task-001-dup3', 'task-001-dup2']);
+      expect(tasks.map(t => t.description)).toEqual(['A', 'B', 'C already named like a suffix']);
+      // Still no re-collision.
+      expect(new Set(tasks.map(t => t.id)).size).toBe(tasks.length);
+    });
   });
 
   describe('groupTasksByStatus', () => {

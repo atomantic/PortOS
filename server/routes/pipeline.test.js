@@ -1946,6 +1946,89 @@ describe('pipeline routes', () => {
     expect(issues.body.map((i) => i.title)).toEqual(['Ep 1', 'Ep 2']);
   });
 
+  it('episodes/generate continuity extract inherits the series LLM when no override is passed', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const extractSpy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u-test', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: 'u-test', llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({
+      title: 'Pilot', synopsis: 'season synopsis',
+    });
+    seasonEpisodesSpy = vi.fn(async () => ({
+      season: sea.body,
+      episodes: [{ number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot' }],
+      runId: 'run-llm', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/episodes/generate`)
+      .send({ commit: true });
+    expect(r.status).toBe(200);
+    // Continuity extract falls back to the series-pinned provider + model.
+    expect(extractSpy.mock.calls[0][1].providerOverride).toBe('codex');
+    expect(extractSpy.mock.calls[0][1].modelOverride).toBe('gpt-5-codex');
+    extractSpy.mockRestore();
+  });
+
+  it('episodes/generate continuity extract does NOT pair a new providerOverride with the stale series model', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const extractSpy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u-test', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: 'u-test', llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({
+      title: 'Pilot', synopsis: 'season synopsis',
+    });
+    seasonEpisodesSpy = vi.fn(async () => ({
+      season: sea.body,
+      episodes: [{ number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot' }],
+      runId: 'run-llm', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/episodes/generate`)
+      .send({ commit: true, providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    // Provider switched, but the series' codex model must NOT ride along.
+    expect(extractSpy.mock.calls[0][1].providerOverride).toBe('anthropic');
+    expect(extractSpy.mock.calls[0][1].modelOverride).toBeUndefined();
+    extractSpy.mockRestore();
+  });
+
+  it('episodes/generate continuity extract forwards an explicit provider + model override', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const extractSpy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u-test', characters: [], places: [], objects: [] },
+      results: { characters: { extracted: [] }, places: { extracted: [] }, objects: { extracted: [] } },
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series')
+      .send({ name: 'S', universeId: 'u-test', llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({
+      title: 'Pilot', synopsis: 'season synopsis',
+    });
+    seasonEpisodesSpy = vi.fn(async () => ({
+      season: sea.body,
+      episodes: [{ number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot' }],
+      runId: 'run-llm', providerId: 'p', model: 'm',
+    }));
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/episodes/generate`)
+      .send({ commit: true, providerOverride: 'anthropic', modelOverride: 'claude-x' });
+    expect(r.status).toBe(200);
+    expect(extractSpy.mock.calls[0][1].providerOverride).toBe('anthropic');
+    expect(extractSpy.mock.calls[0][1].modelOverride).toBe('claude-x');
+    extractSpy.mockRestore();
+  });
+
   it('POST /series/:id/arc/verify forwards to the planner and returns issues', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
@@ -2108,6 +2191,11 @@ describe('pipeline routes', () => {
         .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
         .send({ replace: 'x' }); // missing required `find`
       expect(accept.status).toBe(400);
+
+      const acceptMissingReplace = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
+        .send({ find: 'x' }); // legacy accept must still include `replace`
+      expect(acceptMissingReplace.status).toBe(400);
     });
   });
 

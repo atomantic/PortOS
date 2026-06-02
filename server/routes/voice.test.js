@@ -28,6 +28,13 @@ vi.mock('../services/voice/tts.js', () => ({
   listVoices: vi.fn(),
   VALID_ENGINES: new Set(['kokoro', 'piper']),
 }));
+// GET /api/voice/tts/status + POST /api/voice/tts/unload destructure these at
+// module load — mock them so the route resolves without spinning up Kokoro.
+vi.mock('../services/voice/tts-kokoro.js', () => ({
+  readyState: vi.fn(() => 'lazy'),
+  unloadKokoro: vi.fn(() => ({ unloaded: false })),
+  loadedModelKey: vi.fn(() => null),
+}));
 vi.mock('../services/voice/piper-voices.js', () => ({
   findPiperVoice: vi.fn(),
 }));
@@ -46,6 +53,7 @@ import * as tts from '../services/voice/tts.js';
 import { ServerError } from '../lib/errorHandler.js';
 import * as piperVoices from '../services/voice/piper-voices.js';
 import * as proactiveSpeech from '../services/voice/proactiveSpeech.js';
+import * as kokoro from '../services/voice/tts-kokoro.js';
 import voiceRoutes from './voice.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
@@ -310,6 +318,56 @@ describe('Voice Routes', () => {
       expect(proactiveSpeech.speakProactive).toHaveBeenCalledTimes(1);
       const [args] = proactiveSpeech.speakProactive.mock.calls[0];
       expect(args.source).toBeUndefined();
+    });
+  });
+
+  describe('GET /api/voice/tts/status', () => {
+    it('returns the Kokoro residency snapshot', async () => {
+      kokoro.readyState.mockReturnValue('loaded');
+      kokoro.loadedModelKey.mockReturnValue('kokoro-v1:af_heart');
+      const res = await request(buildApp()).get('/api/voice/tts/status');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ kokoro: { state: 'loaded', loadedKey: 'kokoro-v1:af_heart' } });
+    });
+  });
+
+  describe('POST /api/voice/tts/unload', () => {
+    it('drops the cached Kokoro instance and echoes its result', async () => {
+      kokoro.unloadKokoro.mockReturnValue({ unloaded: true });
+      const res = await request(buildApp()).post('/api/voice/tts/unload');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ unloaded: true });
+      expect(kokoro.unloadKokoro).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('POST /api/voice/whisper', () => {
+    it('stops whisper and invalidates the health cache', async () => {
+      const res = await request(buildApp()).post('/api/voice/whisper').send({ action: 'stop' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, action: 'stop' });
+      expect(bootstrap.stopWhisper).toHaveBeenCalledTimes(1);
+      expect(bootstrap.startWhisper).not.toHaveBeenCalled();
+      expect(health.invalidateHealthCache).toHaveBeenCalled();
+    });
+
+    it('starts whisper from the current config and returns the bootstrap result', async () => {
+      bootstrap.startWhisper.mockResolvedValue({ restarted: true });
+      const res = await request(buildApp()).post('/api/voice/whisper').send({ action: 'start' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, action: 'start', restarted: true });
+      expect(config.getVoiceConfig).toHaveBeenCalled();
+      expect(bootstrap.startWhisper).toHaveBeenCalledWith(DEFAULT_CFG);
+      expect(bootstrap.stopWhisper).not.toHaveBeenCalled();
+      expect(health.invalidateHealthCache).toHaveBeenCalled();
+    });
+
+    it('rejects an invalid action with 400 without touching whisper', async () => {
+      const res = await request(buildApp()).post('/api/voice/whisper').send({ action: 'restart' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(bootstrap.startWhisper).not.toHaveBeenCalled();
+      expect(bootstrap.stopWhisper).not.toHaveBeenCalled();
     });
   });
 });

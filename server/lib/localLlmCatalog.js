@@ -82,6 +82,80 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'qwen3.6:35b',
     lmstudio: 'unsloth/Qwen3.6-35B-A3B-GGUF'
   },
+  // ── Large narrative / long-context tier (workstation-class: 64–128GB unified memory) ──
+  // Best suited for whole-manuscript editorial review, where prose quality and a
+  // long context window matter most. To actually fit the manuscript, raise Ollama's
+  // context window (OLLAMA_CONTEXT_LENGTH) — the default 4K window silently truncates.
+  {
+    key: 'mistral-large',
+    name: 'Mistral Large 2 123B',
+    category: 'chat',
+    params: '123B',
+    size: '73 GB',
+    family: 'mistral',
+    description: 'Top-tier open-weight prose model with a 128K context window — best local pick for long-form narrative and editorial review. Needs ~96GB+ unified memory.',
+    capabilities: ['chat', 'tools'],
+    ollama: 'mistral-large:123b'
+  },
+  {
+    key: 'command-r-plus',
+    name: 'Command R+ 104B',
+    category: 'chat',
+    params: '104B',
+    size: '59 GB',
+    family: 'command-r',
+    description: 'Cohere long-context model (128K) tuned for RAG and clean character-voice dialogue — strong for whole-manuscript continuity passes. Needs ~80GB+ unified memory.',
+    capabilities: ['chat', 'tools', 'multilingual'],
+    ollama: 'command-r-plus:104b'
+  },
+  {
+    key: 'llama3.3',
+    name: 'Llama 3.3 70B',
+    category: 'chat',
+    params: '70B',
+    size: '43 GB',
+    family: 'llama',
+    description: "Meta's 70B instruct model with a 128K context — excellent narrative quality with memory headroom to spare for a large context window. Runs on 64GB+.",
+    capabilities: ['chat', 'tools'],
+    ollama: 'llama3.3:70b',
+    lmstudio: 'lmstudio-community/Llama-3.3-70B-Instruct-GGUF'
+  },
+  {
+    key: 'qwen3-30b-a3b',
+    name: 'Qwen3 30B-A3B',
+    category: 'chat',
+    params: '30B / 3B active',
+    size: '19 GB',
+    family: 'qwen',
+    description: 'Fast MoE with a native 256K context — the long-context workhorse for one-shot whole-manuscript review when you want maximum context with memory to spare.',
+    capabilities: ['chat', 'tools', 'multilingual'],
+    ollama: 'qwen3:30b',
+    lmstudio: 'lmstudio-community/Qwen3-30B-A3B-GGUF'
+  },
+  {
+    key: 'gemma4-31b',
+    name: 'Gemma 4 31B',
+    category: 'chat',
+    params: '31B',
+    size: '20 GB',
+    family: 'gemma',
+    description: "Google's dense 31B with a 256K context window and vision — a strong long-context narrative editor that fits comfortably on 64GB+. MLX build on Apple Silicon: gemma4:31b-mlx.",
+    capabilities: ['chat', 'vision'],
+    ollama: 'gemma4:31b',
+    lmstudio: 'lmstudio-community/gemma-4-31B-it-GGUF'
+  },
+  {
+    key: 'gemma4-26b-a4b',
+    name: 'Gemma 4 26B-A4B',
+    category: 'chat',
+    params: '26B / 4B active',
+    size: '18 GB',
+    family: 'gemma',
+    description: "Google's MoE (4B active) with a 256K context window and vision — a fast long-context option for one-shot whole-manuscript review. MLX build on Apple Silicon: gemma4:26b-mlx.",
+    capabilities: ['chat', 'vision'],
+    ollama: 'gemma4:26b',
+    lmstudio: 'lmstudio-community/gemma-4-26B-A4B-it-GGUF'
+  },
   {
     key: 'mistral',
     name: 'Mistral 7B',

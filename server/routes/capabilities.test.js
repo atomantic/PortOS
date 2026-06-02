@@ -18,9 +18,8 @@ vi.mock('../services/calendarAccounts.js', () => ({
 vi.mock('../services/messageAccounts.js', () => ({
   listAccounts: vi.fn(async () => [{ enabled: true, lastSyncStatus: 'success' }]),
 }));
-vi.mock('../services/memory.js', () => ({
-  // The real getMemories returns { total, memories } — NOT an array.
-  getMemories: vi.fn(async () => ({ total: 7, memories: [] })),
+vi.mock('../services/memoryBackend.js', () => ({
+  countMemories: vi.fn(async () => 7),
 }));
 vi.mock('../services/cos.js', () => ({
   getConfig: vi.fn(async () => ({ embeddingProviderId: 'lmstudio' })),
@@ -47,7 +46,7 @@ vi.mock('../services/apps.js', () => ({
   getAppStatusSummary: vi.fn(async () => ({ total: 2, online: 2, stopped: 0, notStarted: 0, unmanaged: 0 })),
 }));
 
-const { getMemories } = await import('../services/memory.js');
+const { countMemories } = await import('../services/memoryBackend.js');
 const { getGenomeSummary } = await import('../services/genome.js');
 const { default: capabilitiesRoutes } = await import('./capabilities.js');
 
@@ -76,14 +75,13 @@ describe('GET /api/capabilities', () => {
     }
   });
 
-  it('reads the memory COUNT from getMemories().total, not the wrapper object', async () => {
-    // Regression guard: getMemories returns { total, memories }; an Array.isArray
-    // check would report 0 here. The brain row must reflect the real count.
+  it('reads the active memory count from the lightweight count helper', async () => {
     const res = await request(makeApp()).get('/api/capabilities');
     const brain = byId(res.body, 'brain');
     expect(brain.detail.memoryCount).toBe(7);
     expect(brain.summary).toContain('7 memories');
     expect(brain.status).toBe('ok');
+    expect(countMemories).toHaveBeenCalledWith({ status: 'active' });
   });
 
   it('degrades to fail-soft (200) when a single source throws', async () => {
@@ -96,8 +94,8 @@ describe('GET /api/capabilities', () => {
     expect(byId(res.body, 'providers').configured).toBe(true);
   });
 
-  it('handles getMemories rejecting (memory count 0, page still renders)', async () => {
-    getMemories.mockRejectedValueOnce(new Error('boom'));
+  it('handles countMemories rejecting (memory count 0, page still renders)', async () => {
+    countMemories.mockRejectedValueOnce(new Error('boom'));
     const res = await request(makeApp()).get('/api/capabilities');
     expect(res.status).toBe(200);
     expect(byId(res.body, 'brain').detail.memoryCount).toBe(0);

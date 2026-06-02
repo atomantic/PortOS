@@ -191,6 +191,11 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
   const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX;
   const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
+  // Number.isFinite (not typeof === 'number') so a NaN from a hand-edited
+  // media-jobs.json can't render as `NaN%` / `width: NaN%`.
+  const progressPct = Number.isFinite(job.progress)
+    ? Math.max(0, Math.min(100, Math.round(job.progress * 100)))
+    : 0;
   // Inline edit form for retry-with-overrides.
   const [editing, setEditing] = useState(false);
   const canEdit = canRetry;
@@ -276,6 +281,17 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
       </div>
       {job.status === 'failed' && job.error && (
         <div className="text-xs text-port-error mt-2 truncate" title={job.error}>{job.error}</div>
+      )}
+      {job.status === 'running' && (
+        <div className="mt-2 space-y-1">
+          <div className="flex items-center justify-between gap-2 text-xs text-port-text-muted">
+            <span className="truncate" title={job.statusMsg || undefined}>{job.statusMsg || 'Running'}</span>
+            <span className="font-mono shrink-0">{progressPct}%</span>
+          </div>
+          <div className="h-1.5 bg-port-border rounded overflow-hidden">
+            <div className="h-full bg-port-accent transition-all" style={{ width: `${progressPct}%` }} />
+          </div>
+        </div>
       )}
       <div className="text-xs text-port-text-muted mt-1">
         {job.queuedAt && `queued ${new Date(job.queuedAt).toLocaleTimeString()}`}

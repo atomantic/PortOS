@@ -27,6 +27,7 @@ import {
   linkRecordSchema,
   linkInputSchema,
   linkUpdateInputSchema,
+  linkReorderSchema,
   linksQuerySchema,
   bucketInputSchema,
   bucketUpdateInputSchema,
@@ -611,6 +612,46 @@ describe('brainValidation.js', () => {
 
     it('should reject non-uuid entries', () => {
       expect(bucketReorderSchema.safeParse({ ids: ['nope'] }).success).toBe(false);
+    });
+  });
+
+  describe('linkReorderSchema', () => {
+    const idA = '11111111-1111-4111-8111-111111111111';
+    const idB = '22222222-2222-4222-8222-222222222222';
+    const bucket = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+    it('should accept a batch of { id, bucketId, bucketOrder }', () => {
+      const result = linkReorderSchema.safeParse({
+        updates: [
+          { id: idA, bucketId: bucket, bucketOrder: 0 },
+          { id: idB, bucketId: bucket, bucketOrder: 1 }
+        ]
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept a null bucketId (ungrouped landing)', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ id: idA, bucketId: null, bucketOrder: 0 }] }).success).toBe(true);
+    });
+
+    it('should reject an empty batch', () => {
+      expect(linkReorderSchema.safeParse({ updates: [] }).success).toBe(false);
+    });
+
+    it('should reject a non-integer bucketOrder', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ id: idA, bucketId: bucket, bucketOrder: 1.5 }] }).success).toBe(false);
+    });
+
+    it('should reject a non-uuid id (parity with the link update schema)', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ id: 'l1', bucketId: bucket, bucketOrder: 0 }] }).success).toBe(false);
+    });
+
+    it('should reject a non-uuid bucketId', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ id: idA, bucketId: 'b1', bucketOrder: 0 }] }).success).toBe(false);
+    });
+
+    it('should reject an entry missing its id', () => {
+      expect(linkReorderSchema.safeParse({ updates: [{ bucketId: bucket, bucketOrder: 0 }] }).success).toBe(false);
     });
   });
 

@@ -141,6 +141,37 @@ export const findFfprobe = async () => {
   return cachedFfprobePath;
 };
 
+// Run ffprobe with the given args and return its trimmed stdout, or '' when
+// ffprobe is unavailable or the call fails. Collapses the shared discover →
+// spawn → catch-default → trim boilerplate behind the three ffprobe-based
+// probes below (duration, frame count, audio-stream presence) so they can't
+// drift on the env/timeout/error-handling contract.
+const runFfprobe = async (args, timeout = 5000) => {
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return '';
+  const { stdout } = await execFileAsync(ffprobe, args, { env: safeChildProcessEnv(), timeout }).catch(() => ({ stdout: '' }));
+  return (stdout || '').trim();
+};
+
+// Probe whether a media file carries at least one audio stream. Referencing
+// `[0:a]` in a filter_complex graph against a silent video (AI-gen clips are
+// silent today) aborts the whole ffmpeg run, so callers that want to preserve
+// a clip's own soundtrack (e.g. LTX-2 audio-to-video) must gate the `[0:a]`
+// input on this probe. Returns false when ffprobe is unavailable so callers
+// default to the safe "no clip audio" path rather than emitting a graph that
+// can't build.
+export const hasAudioStream = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return false;
+  const stdout = await runFfprobe([
+    '-v', 'error',
+    '-select_streams', 'a',
+    '-show_entries', 'stream=index',
+    '-of', 'default=nokey=1:noprint_wrappers=1',
+    videoPath,
+  ]);
+  return stdout.length > 0;
+};
+
 // Single-video thumbnail extraction. Seeks to mid-clip rather than frame 0
 // because LTX-2 renders fade IN from black: the first ~0.5s is near-zero
 // brightness, so a frame-0 thumbnail looks like a "broken black" tile
@@ -157,16 +188,13 @@ export const findFfprobe = async () => {
 // callers should treat null as "no thumbnail" rather than aborting the
 // parent operation.
 const probeDurationSeconds = async (videoPath) => {
-  const ffprobe = await findFfprobe();
-  if (!ffprobe) return null;
-  const args = [
+  const stdout = await runFfprobe([
     '-v', 'error',
     '-show_entries', 'format=duration',
     '-of', 'default=nokey=1:noprint_wrappers=1',
     videoPath,
-  ];
-  const { stdout } = await execFileAsync(ffprobe, args, { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
-  const n = parseFloat((stdout || '').trim());
+  ]);
+  const n = parseFloat(stdout);
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
@@ -199,19 +227,16 @@ export const generateThumbnail = async (videoPath, jobId) => {
 // nb_frames in their header. Returns null when both paths fail or the
 // reported count is unusable.
 const probeFrameCount = async (videoPath) => {
-  const ffprobe = await findFfprobe();
-  if (!ffprobe) return null;
   const run = async (countFrames) => {
-    const args = [
+    const stdout = await runFfprobe([
       '-v', 'error',
       ...(countFrames ? ['-count_frames'] : []),
       '-select_streams', 'v:0',
       '-show_entries', `stream=${countFrames ? 'nb_read_frames' : 'nb_frames'}`,
       '-of', 'default=nokey=1:noprint_wrappers=1',
       videoPath,
-    ];
-    const { stdout } = await execFileAsync(ffprobe, args, { env: safeChildProcessEnv(), timeout: 15000 }).catch(() => ({ stdout: '' }));
-    const n = parseInt((stdout || '').trim(), 10);
+    ], 15000);
+    const n = parseInt(stdout, 10);
     return Number.isFinite(n) && n > 0 ? n : null;
   };
   return (await run(false)) ?? (await run(true));

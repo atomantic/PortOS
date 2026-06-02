@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { telegramConfigSchema, telegramTestSchema, telegramMethodSchema } from '../lib/telegramValidation.js';
-import { getSettings, updateSettings } from '../services/settings.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 import * as telegram from '../services/telegram.js';
 import * as telegramBridge from '../services/telegramBridge.js';
 
@@ -55,13 +55,13 @@ router.put('/method', asyncHandler(async (req, res) => {
   const { method } = result.data;
   const settings = await getSettings();
 
-  // Save method preference
-  await updateSettings({
-    telegram: {
-      ...settings.telegram,
-      method
-    }
-  });
+  // Save method preference. Merge `telegram` against the FRESHEST snapshot inside
+  // the write queue (not the `settings` read above, which can go stale before the
+  // queued write lands) so a concurrent settings write isn't clobbered.
+  await updateSettingsWith((current) => ({
+    ...current,
+    telegram: { ...current.telegram, method }
+  }));
 
   // Switch services
   if (method === 'mcp-bridge') {
@@ -120,20 +120,22 @@ router.put('/config', asyncHandler(async (req, res) => {
     });
   }
 
-  // Store token in secrets, chatId in telegram
-  await updateSettings({
-    secrets: {
-      ...settings.secrets,
-      telegram: { token: finalToken }
-    },
-    telegram: {
-      ...settings.telegram,
-      chatId: chatId || settings.telegram?.chatId || ''
-    }
-  });
+  // Store token in secrets, chatId in telegram. Merge both sub-objects against
+  // the freshest snapshot inside the write queue so a concurrent settings write
+  // isn't clobbered. The chatId fallback reads `current` (not the stale `settings`
+  // read above) so "keep the existing chatId when none is supplied" resolves
+  // against the freshest persisted value; `finalToken` is request-driven (the
+  // submitted token, else whatever was stored when we validated it).
+  const saved = await updateSettingsWith((current) => ({
+    ...current,
+    secrets: { ...current.secrets, telegram: { token: finalToken } },
+    telegram: { ...current.telegram, chatId: chatId || current.telegram?.chatId || '' }
+  }));
 
-  // Initialize bot — send test message only if chatId is configured
-  const hasChatId = !!(chatId || settings.telegram?.chatId);
+  // Initialize bot — send test message only if chatId is configured. Derive from
+  // the PERSISTED result (not the pre-write `settings` read) so the init decision
+  // and response match exactly what was saved, even if another write landed first.
+  const hasChatId = !!saved.telegram?.chatId;
   await telegram.init(hasChatId);
   const status = telegram.getStatus();
 
@@ -155,10 +157,11 @@ router.delete('/config', asyncHandler(async (req, res) => {
     await telegram.cleanup();
   }
 
-  await updateSettings({
+  await updateSettingsWith((current) => ({
+    ...current,
     telegram: null,
-    secrets: { ...settings.secrets, telegram: undefined }
-  });
+    secrets: { ...current.secrets, telegram: undefined }
+  }));
 
   res.json({ success: true });
 }));
@@ -198,13 +201,10 @@ router.put('/forward-types', asyncHandler(async (req, res) => {
     });
   }
 
-  const settings = await getSettings();
-  await updateSettings({
-    telegram: {
-      ...settings.telegram,
-      forwardTypes
-    }
-  });
+  await updateSettingsWith((current) => ({
+    ...current,
+    telegram: { ...current.telegram, forwardTypes }
+  }));
 
   // Update cache on both services (only the active one matters)
   telegram.updateCachedForwardTypes(forwardTypes);

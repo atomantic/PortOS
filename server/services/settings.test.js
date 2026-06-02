@@ -1,32 +1,44 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock fs/promises before importing the module
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(),
-  writeFile: vi.fn()
-}));
+// settings.js persists via the shared atomicWrite helper and reads via
+// tryReadFile (both from server/lib/fileUtils.js). Mock just those two and
+// keep the rest of fileUtils real (PATHS, safeJSONParse). The createFileWriteQueue
+// serializer is exercised for real — writes are sequential in these tests anyway.
+vi.mock('../lib/fileUtils.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    ...actual,
+    atomicWrite: vi.fn(),
+    tryReadFile: vi.fn()
+  };
+});
 
-import { readFile, writeFile } from 'fs/promises';
-import { getSettings, updateSettings } from './settings.js';
+import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
+import { getSettings, updateSettings, updateSettingsWith } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Sensible defaults: empty file on disk, writes succeed. Individual tests
+    // override as needed.
+    tryReadFile.mockResolvedValue('{}');
+    atomicWrite.mockResolvedValue();
   });
 
   describe('getSettings', () => {
     it('should return parsed settings from file', async () => {
       const mockSettings = { theme: 'dark', notifications: true };
-      readFile.mockResolvedValue(JSON.stringify(mockSettings));
+      tryReadFile.mockResolvedValue(JSON.stringify(mockSettings));
 
       const result = await getSettings();
 
       expect(result).toEqual(mockSettings);
-      expect(readFile).toHaveBeenCalledTimes(1);
+      expect(tryReadFile).toHaveBeenCalledTimes(1);
     });
 
     it('should return empty object when file does not exist', async () => {
-      readFile.mockRejectedValue(new Error('ENOENT'));
+      // tryReadFile returns null when the file is missing/unreadable.
+      tryReadFile.mockResolvedValue(null);
 
       const result = await getSettings();
 
@@ -35,7 +47,7 @@ describe('settings.js', () => {
 
     it('should return empty object for empty file content', async () => {
       // safeJSONParse returns the default {} for empty/invalid input
-      readFile.mockResolvedValue('');
+      tryReadFile.mockResolvedValue('');
 
       const result = await getSettings();
       expect(result).toEqual({});
@@ -50,7 +62,7 @@ describe('settings.js', () => {
         features: ['notifications', 'autoSave'],
         version: 2
       };
-      readFile.mockResolvedValue(JSON.stringify(mockSettings));
+      tryReadFile.mockResolvedValue(JSON.stringify(mockSettings));
 
       const result = await getSettings();
 
@@ -61,8 +73,7 @@ describe('settings.js', () => {
   describe('updateSettings', () => {
     it('should merge patch with existing settings', async () => {
       const existingSettings = { theme: 'light', notifications: true };
-      readFile.mockResolvedValue(JSON.stringify(existingSettings));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existingSettings));
 
       const result = await updateSettings({ theme: 'dark' });
 
@@ -71,8 +82,7 @@ describe('settings.js', () => {
 
     it('should add new keys when patching', async () => {
       const existingSettings = { theme: 'light' };
-      readFile.mockResolvedValue(JSON.stringify(existingSettings));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existingSettings));
 
       const result = await updateSettings({ newSetting: 'value' });
 
@@ -80,20 +90,18 @@ describe('settings.js', () => {
     });
 
     it('should write formatted JSON to file', async () => {
-      readFile.mockResolvedValue('{}');
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue('{}');
 
       await updateSettings({ test: true });
 
-      expect(writeFile).toHaveBeenCalledTimes(1);
-      const [, content] = writeFile.mock.calls[0];
+      expect(atomicWrite).toHaveBeenCalledTimes(1);
+      const [, content] = atomicWrite.mock.calls[0];
       // Should be formatted with 2-space indent and trailing newline
       expect(content).toBe('{\n  "test": true\n}\n');
     });
 
     it('should create settings from empty when file does not exist', async () => {
-      readFile.mockRejectedValue(new Error('ENOENT'));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(null);
 
       const result = await updateSettings({ firstSetting: 'value' });
 
@@ -104,8 +112,7 @@ describe('settings.js', () => {
       const existingSettings = {
         display: { theme: 'light', fontSize: 12 }
       };
-      readFile.mockResolvedValue(JSON.stringify(existingSettings));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existingSettings));
 
       // Shallow merge replaces the entire display object
       const result = await updateSettings({ display: { theme: 'dark' } });
@@ -120,8 +127,7 @@ describe('settings.js', () => {
         b: 2,
         c: 3
       };
-      readFile.mockResolvedValue(JSON.stringify(existingSettings));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existingSettings));
 
       const result = await updateSettings({ b: 20 });
 
@@ -130,8 +136,7 @@ describe('settings.js', () => {
 
     it('should handle null values in patch', async () => {
       const existingSettings = { feature: true };
-      readFile.mockResolvedValue(JSON.stringify(existingSettings));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existingSettings));
 
       const result = await updateSettings({ feature: null });
 
@@ -140,12 +145,108 @@ describe('settings.js', () => {
 
     it('should handle empty patch object', async () => {
       const existingSettings = { theme: 'dark' };
-      readFile.mockResolvedValue(JSON.stringify(existingSettings));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existingSettings));
 
       const result = await updateSettings({});
 
       expect(result).toEqual({ theme: 'dark' });
+    });
+  });
+
+  describe('write serialization', () => {
+    it('serializes concurrent updateSettings so neither patch is clobbered', async () => {
+      // Simulate a slow disk: each write reflects onto the next read so the
+      // queued read-merge-write can observe the prior write's result.
+      let current = { base: true };
+      tryReadFile.mockImplementation(async () => JSON.stringify(current));
+      atomicWrite.mockImplementation(async (_path, content) => {
+        current = JSON.parse(content);
+      });
+
+      // Fire both without awaiting the first — the queue must serialize them.
+      const [a, b] = await Promise.all([
+        updateSettings({ first: 1 }),
+        updateSettings({ second: 2 })
+      ]);
+
+      // Both writes happened, in order, and the final state carries both patches.
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
+      expect(current).toEqual({ base: true, first: 1, second: 2 });
+      // The last resolved value is the fully-merged record; the first sees only
+      // its own patch applied to the base.
+      expect(b).toEqual({ base: true, first: 1, second: 2 });
+      expect(a).toEqual({ base: true, first: 1 });
+    });
+  });
+
+  describe('updateSettingsWith', () => {
+    it('hands the mutator the current stripped settings and persists its return', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ civitai: { apiKey: 'old', other: 'keep' } }));
+      let seen;
+      const result = await updateSettingsWith((current) => {
+        seen = current;
+        return { ...current, civitai: { ...current.civitai, apiKey: 'new' } };
+      });
+      expect(seen).toEqual({ civitai: { apiKey: 'old', other: 'keep' } });
+      expect(result).toEqual({ civitai: { apiKey: 'new', other: 'keep' } });
+      expect(JSON.parse(atomicWrite.mock.calls[0][1])).toEqual({ civitai: { apiKey: 'new', other: 'keep' } });
+    });
+
+    it('supports building the next object by deleting a sub-key (no stale spread)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ imageGen: { hfToken: 'tok', model: 'flux' }, theme: 'dark' }));
+      const result = await updateSettingsWith((current) => {
+        const { hfToken: _drop, ...rest } = current.imageGen || {};
+        return { ...current, imageGen: rest };
+      });
+      expect(result).toEqual({ imageGen: { model: 'flux' }, theme: 'dark' });
+    });
+
+    it('runs the read-modify-write in one queued turn — a racing updateSettings is not clobbered', async () => {
+      // Slow disk: each write reflects onto the next read. If updateSettingsWith
+      // read OUTSIDE the queue (the old getSettings→saveSettings bug), it would
+      // overwrite the interleaved updateSettings patch with its stale base.
+      let current = { base: true };
+      tryReadFile.mockImplementation(async () => JSON.stringify(current));
+      atomicWrite.mockImplementation(async (_path, content) => { current = JSON.parse(content); });
+
+      const [withResult, plainResult] = await Promise.all([
+        updateSettingsWith((c) => ({ ...c, deep: { a: 1 } })),
+        updateSettings({ second: 2 }),
+      ]);
+
+      // Both landed; neither clobbered the other.
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
+      expect(current).toEqual({ base: true, deep: { a: 1 }, second: 2 });
+      // First-queued sees only the base; second-queued sees the first's result.
+      expect(withResult).toEqual({ base: true, deep: { a: 1 } });
+      expect(plainResult).toEqual({ base: true, deep: { a: 1 }, second: 2 });
+    });
+
+    it('strips MortalLoom store keys from the snapshot handed to the mutator', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ goals: [1, 2], theme: 'dark' }));
+      let seen;
+      await updateSettingsWith((current) => { seen = current; return current; });
+      // `goals` is a MortalLoom store key — getSettings strips it, so the mutator
+      // must not see it (matching the getSettings() the old callers read).
+      expect(seen).toEqual({ theme: 'dark' });
+    });
+
+    it('awaits an async mutator', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ a: 1 }));
+      const result = await updateSettingsWith(async (current) => {
+        await Promise.resolve();
+        return { ...current, b: 2 };
+      });
+      expect(result).toEqual({ a: 1, b: 2 });
+    });
+
+    it('throws and writes nothing when the mutator returns a non-object (missing return, array, primitive)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ a: 1 }));
+      for (const bad of [undefined, null, 'str', 42, [1, 2]]) {
+        await expect(updateSettingsWith(() => bad)).rejects.toThrow(/must return a plain settings object/);
+      }
+      // No invalid content (e.g. "undefined") was ever persisted.
+      expect(atomicWrite).not.toHaveBeenCalled();
     });
   });
 
@@ -162,7 +263,7 @@ describe('settings.js', () => {
         profile: { name: 'X' },
         mortalloom: { enabled: true }
       };
-      readFile.mockResolvedValue(JSON.stringify(polluted));
+      tryReadFile.mockResolvedValue(JSON.stringify(polluted));
 
       const result = await getSettings();
 
@@ -178,13 +279,12 @@ describe('settings.js', () => {
 
     it('strips MortalLoom-store keys before writing', async () => {
       const existing = { theme: 'dark' };
-      readFile.mockResolvedValue(JSON.stringify(existing));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(existing));
 
       // Caller accidentally passes a payload with store keys.
       await updateSettings({ alcoholDrinks: [], goals: [], voice: { enabled: true } });
 
-      const [, content] = writeFile.mock.calls[0];
+      const [, content] = atomicWrite.mock.calls[0];
       const written = JSON.parse(content);
       expect(written).toEqual({ theme: 'dark', voice: { enabled: true } });
       expect(written.alcoholDrinks).toBeUndefined();
@@ -199,24 +299,22 @@ describe('settings.js', () => {
         bloodTests: [{ id: 'B' }],
         habits: [{ id: 'H' }]
       };
-      readFile.mockResolvedValue(JSON.stringify(polluted));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(polluted));
 
       // Any save (even unrelated) cleans up the file.
       await updateSettings({ timezone: 'UTC' });
 
-      const [, content] = writeFile.mock.calls[0];
+      const [, content] = atomicWrite.mock.calls[0];
       const written = JSON.parse(content);
       expect(written).toEqual({ theme: 'dark', timezone: 'UTC' });
     });
 
     it('preserves legitimate mortalloom config key (not in store-key list)', async () => {
-      readFile.mockResolvedValue('{}');
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue('{}');
 
       await updateSettings({ mortalloom: { enabled: true, path: '/foo' } });
 
-      const [, content] = writeFile.mock.calls[0];
+      const [, content] = atomicWrite.mock.calls[0];
       const written = JSON.parse(content);
       expect(written.mortalloom).toEqual({ enabled: true, path: '/foo' });
     });
@@ -227,8 +325,7 @@ describe('settings.js', () => {
         theme: 'dark',
         alcoholDrinks: [{ id: 'A' }]
       };
-      readFile.mockResolvedValue(JSON.stringify(polluted));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(polluted));
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -246,9 +343,9 @@ describe('settings.js', () => {
       warnSpy.mockRestore();
     });
 
-    it('does not warn when writeFile throws (no misleading log for a write that did not happen)', async () => {
-      readFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
-      writeFile.mockRejectedValue(new Error('EROFS'));
+    it('does not warn when the write throws (no misleading log for a write that did not happen)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
+      atomicWrite.mockRejectedValue(new Error('EROFS'));
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -260,8 +357,7 @@ describe('settings.js', () => {
 
     it('emits exactly one warning per updateSettings even when both disk AND patch are polluted', async () => {
       // Disk pollution: alcoholDrinks. Patch pollution: goals. Spec: one log line.
-      readFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'dark', alcoholDrinks: [{}] }));
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -280,8 +376,7 @@ describe('settings.js', () => {
       // `{"__proto__":{"polluted":true}}`. Without the guard, the cleaned-object
       // rebuild would invoke the __proto__ setter.
       const malicious = JSON.parse('{"theme":"dark","__proto__":{"polluted":true},"constructor":{"polluted":true}}');
-      readFile.mockResolvedValue(JSON.stringify(malicious));
-      writeFile.mockResolvedValue();
+      tryReadFile.mockResolvedValue(JSON.stringify(malicious));
 
       const result = await getSettings();
 

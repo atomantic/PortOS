@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { updateAgent, completeAgent, appendAgentOutput, appendAgentOutputLines } from './cosAgents.js';
+import { updateAgent, completeAgent, createAgentOutputBatcher } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
@@ -415,6 +415,22 @@ export async function spawnDirectly({
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
 
+  // Debounced state-write batcher for streamed output. stdout/stderr `data`
+  // events fire per chunk (and stream-json yields many lines per chunk), so a
+  // per-line/per-chunk appendAgentOutput would round-trip a full state
+  // load+save each time. The batcher coalesces a ~250ms window; the close/error
+  // handlers `await outputBatcher.flush()` so the final lines persist before
+  // the agent is finalized. (output.txt is written separately below.)
+  const outputBatcher = createAgentOutputBatcher(agentId);
+
+  // Expose a drain hook on the activeAgents entry so the user-terminate/kill
+  // paths (agentManagement.js) can flush pending batched output before they
+  // mark the agent complete — otherwise up to one debounce window of
+  // stdout/stderr could land after the terminal record. (The close handler
+  // still drains too; flush() is idempotent.)
+  const cliAgentEntry = activeAgents.get(agentId);
+  if (cliAgentEntry) cliAgentEntry.flushOutput = () => outputBatcher.flush();
+
   const stopForImmediateFallbackSignal = (text) => {
     if (immediateFallbackAnalysis || claudeProcess.killed) return;
     const analysis = detectImmediateFallbackSignal(text);
@@ -457,13 +473,13 @@ export async function spawnDirectly({
         }
         const lines = streamParser.processChunk(text);
         for (const line of lines) outputBuffer += line + '\n';
-        await appendAgentOutputLines(agentId, lines);
+        outputBatcher.push(lines);
         await writeFile(outputFile, outputBuffer).catch(() => {});
       } else {
         // Non-stream providers: emit raw stdout as before
         outputBuffer += text;
         await writeFile(outputFile, outputBuffer).catch(() => {});
-        await appendAgentOutput(agentId, text);
+        outputBatcher.push(text);
       }
     } catch (err) {
       console.error(`❌ agentCli stdout handler failed: ${err.message}`);
@@ -478,13 +494,13 @@ export async function spawnDirectly({
       if (codexStderrFormatter) {
         const lines = codexStderrFormatter.processChunk(text);
         for (const line of lines) outputBuffer += line + '\n';
-        await appendAgentOutputLines(agentId, lines);
+        outputBatcher.push(lines);
         await writeFile(outputFile, outputBuffer).catch(() => {});
         return;
       }
       outputBuffer += `[stderr] ${text}`;
       await writeFile(outputFile, outputBuffer).catch(() => {});
-      await appendAgentOutput(agentId, `[stderr] ${text}`);
+      outputBatcher.push(`[stderr] ${text}`);
     } catch (err) {
       console.error(`❌ agentCli stderr handler failed: ${err.message}`);
     }
@@ -512,6 +528,7 @@ export async function spawnDirectly({
     }
 
     cosEvents.emit('agent:error', { agentId, error: err.message });
+    await outputBatcher.flush();
     await completeAgent(agentId, { success: false, error: err.message });
     await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
     unregisterSpawnedAgent(claudeProcess.pid);
@@ -551,7 +568,7 @@ export async function spawnDirectly({
       const remaining = streamParser.flush();
       for (const line of remaining) {
         outputBuffer += line + '\n';
-        await appendAgentOutput(agentId, line);
+        outputBatcher.push(line);
       }
       // Use the parsed final result for the output file if available
       const finalResult = streamParser.getFinalResult();
@@ -562,9 +579,14 @@ export async function spawnDirectly({
     if (codexStderrFormatter) {
       for (const line of codexStderrFormatter.flush()) {
         outputBuffer += line + '\n';
-        await appendAgentOutput(agentId, line);
+        outputBatcher.push(line);
       }
     }
+
+    // Drain pending output to state before finalize so the transcript tail
+    // lands before the agent's terminal record (covers the paused early-return
+    // below too, since output.txt is written next).
+    await outputBatcher.flush();
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 

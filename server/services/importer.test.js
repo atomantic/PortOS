@@ -895,6 +895,26 @@ describe('commitImport', () => {
     expect(issue.stages.prose?.output).toBeFalsy();
   });
 
+  it('seeds stages.teleplay (not prose) for a screenplay import', async () => {
+    // A screenplay source is already script-form, so its verbatim excerpt
+    // must land in teleplay (ready) — seeding prose would make the pipeline
+    // regenerate it. Downstream scene extraction already consumes teleplay.
+    const { uni, ser } = await setupForCommit();
+    const script = 'INT. VAULT - NIGHT\n\nARIA\nWho left this here?\n\nFADE OUT.';
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      contentType: 'screenplay',
+      canonSelections: { characters: [], places: [], objects: [] },
+      issues: [{ title: 'Issue 1', arcPosition: 1, proseExcerpt: script }],
+    });
+    const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
+    expect(issue.stages.teleplay.output).toBe(script);
+    expect(issue.stages.teleplay.status).toBe('ready');
+    // prose is NOT seeded — the script never round-trips through it.
+    expect(issue.stages.prose?.output).toBeFalsy();
+  });
+
   it('still seeds stages.prose when contentType is absent (older clients)', async () => {
     const { uni, ser } = await setupForCommit();
     const result = await importerSvc.commitImport({
@@ -906,6 +926,7 @@ describe('commitImport', () => {
     const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
     expect(issue.stages.prose.output).toBe('Plain prose.');
     expect(issue.stages.comicScript?.output).toBeFalsy();
+    expect(issue.stages.teleplay?.output).toBeFalsy();
   });
 
   it('replace mode overwrites the bible, clearing stale fields when the new arc lacks them', async () => {

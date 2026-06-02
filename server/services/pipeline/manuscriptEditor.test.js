@@ -24,6 +24,8 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../../lib/stageRunner.js', () => ({
   runStagedLLM: vi.fn((...args) => stageRunnerSpy(...args)),
   extractJson: (raw) => JSON.parse(raw),
+  // Large window so manuscript-fix runs as a single call (mode: 'whole').
+  resolveStageContext: vi.fn(async () => ({ provider: { id: 'p' }, model: 'm', contextWindow: 1_000_000 })),
 }));
 
 const seriesSvc = await import('./series.js');
@@ -152,6 +154,18 @@ describe('manuscriptFix', () => {
     expect(after.stages.prose.output).toBe('The hero walked in. She left, but paused.');
   });
 
+  it('acceptManuscriptFix rejects legacy find-only accepts instead of deleting text', async () => {
+    const { s, issue } = await setupSeriesWithDraft();
+    const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
+
+    await expect(
+      fixer.acceptManuscriptFix(s.id, { commentId: seeded.comments[0].id, find: 'She left.' }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.stages.prose.output).toBe('The hero walked in. She left.');
+  });
+
   it('acceptManuscriptFix targets the occurrence nearest the anchorQuote when find is ambiguous', async () => {
     // "the door" appears twice; the comment anchors the SECOND one.
     const { s, issue } = await setupSeriesWithDraft('She opened the door. Later, she slammed the door shut.');
@@ -161,6 +175,142 @@ describe('manuscriptFix', () => {
     expect(result.section.content).toBe('She opened the door. Later, she slammed the oak door shut.');
     const after = await issuesSvc.getIssue(issue.id);
     expect(after.stages.prose.output).toBe('She opened the door. Later, she slammed the oak door shut.');
+  });
+
+  it('generates and accepts multiple edits for broad unanchored manuscript feedback', async () => {
+    const { s, issue } = await setupSeriesWithDraft('Page 17: Sara laughs. Jack runs away.');
+    const issue2 = await issuesSvc.createIssue({
+      seriesId: s.id, number: 2, title: 'Two', arcPosition: 2,
+      stages: { prose: { output: 'Page 40: Jack shows Sara the coins.', status: 'ready' } },
+    });
+    const seeded = await review.seedReviewFromFindings(s.id, [finding({
+      issueNumber: null,
+      anchorQuote: '',
+      problem: 'Sara needs private concern beats on pages 17 and 40',
+      suggestion: 'Add small private beats at both moments.',
+    })]);
+
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      expect(template).toBe('pipeline-manuscript-fix');
+      expect(ctx.scope).toBe('Full manuscript');
+      expect(ctx.sections).toHaveLength(2);
+      return {
+        runId: 'rf-multi',
+        content: {
+          edits: [
+            {
+              issueNumber: 1,
+              find: 'Page 17: Sara laughs. Jack runs away.',
+              replace: 'Page 17: Sara laughs. Jack runs away.\n\nSara watches him go, her smile gone.',
+            },
+            {
+              issueNumber: 2,
+              find: 'Page 40: Jack shows Sara the coins.',
+              replace: 'Page 40: Sara looks afraid for Jack. Jack shows Sara the coins.',
+            },
+          ],
+        },
+      };
+    });
+
+    const generated = await fixer.generateManuscriptFix(s.id, { commentId: seeded.comments[0].id });
+    expect(generated.fix.edits).toHaveLength(2);
+    expect(generated.comment.fix.edits[1]).toMatchObject({ issueId: issue2.id, stageId: 'prose' });
+
+    const accepted = await fixer.acceptManuscriptFix(s.id, {
+      commentId: seeded.comments[0].id,
+      edits: generated.fix.edits,
+    });
+    expect(accepted.comment.status).toBe('accepted');
+    expect(accepted.sections).toHaveLength(2);
+    const after1 = await issuesSvc.getIssue(issue.id);
+    const after2 = await issuesSvc.getIssue(issue2.id);
+    expect(after1.stages.prose.output).toContain('smile gone');
+    expect(after2.stages.prose.output).toContain('looks afraid');
+  });
+
+  it('rejects explicit edit targets outside the comment manuscript scope', async () => {
+    const { s } = await setupSeriesWithDraft();
+    const other = await setupSeriesWithDraft('Other series text.');
+    const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
+
+    await expect(
+      fixer.acceptManuscriptFix(s.id, {
+        commentId: seeded.comments[0].id,
+        edits: [{
+          issueId: other.issue.id,
+          stageId: 'prose',
+          find: 'Other series text.',
+          replace: 'Tampered text.',
+        }],
+      }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+
+    const afterOther = await issuesSvc.getIssue(other.issue.id);
+    expect(afterOther.stages.prose.output).toBe('Other series text.');
+  });
+
+  it('does not broaden a stale issue-numbered comment to the full manuscript', async () => {
+    const { s, issue } = await setupSeriesWithDraft();
+    const issue2 = await issuesSvc.createIssue({
+      seriesId: s.id, number: 2, title: 'Two', arcPosition: 2,
+      stages: { prose: { output: 'Issue two text.', status: 'ready' } },
+    });
+    const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
+    await issuesSvc.updateIssue(issue.id, { stages: { prose: { output: '', status: 'empty' } } });
+
+    await expect(
+      fixer.acceptManuscriptFix(s.id, {
+        commentId: seeded.comments[0].id,
+        find: 'Issue two text.',
+        replace: 'Wrongly changed.',
+      }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+
+    const after2 = await issuesSvc.getIssue(issue2.id);
+    expect(after2.stages.prose.output).toBe('Issue two text.');
+  });
+
+  it('validates every multi-section anchor before writing any section', async () => {
+    const { s, issue } = await setupSeriesWithDraft('First anchor.');
+    const issue2 = await issuesSvc.createIssue({
+      seriesId: s.id, number: 2, title: 'Two', arcPosition: 2,
+      stages: { prose: { output: 'Second anchor.', status: 'ready' } },
+    });
+    const seeded = await review.seedReviewFromFindings(s.id, [finding({ issueNumber: null, anchorQuote: '' })]);
+
+    await expect(
+      fixer.acceptManuscriptFix(s.id, {
+        commentId: seeded.comments[0].id,
+        edits: [
+          { issueId: issue.id, stageId: 'prose', find: 'First anchor.', replace: 'First changed.' },
+          { issueId: issue2.id, stageId: 'prose', find: 'Missing second anchor.', replace: 'Second changed.' },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'PIPELINE_MANUSCRIPT_FIX_VALIDATION' });
+
+    const after1 = await issuesSvc.getIssue(issue.id);
+    const after2 = await issuesSvc.getIssue(issue2.id);
+    expect(after1.stages.prose.output).toBe('First anchor.');
+    expect(after2.stages.prose.output).toBe('Second anchor.');
+  });
+
+  it('anchors multiple same-section edits against the original text', async () => {
+    const { s, issue } = await setupSeriesWithDraft('One. Two. Three.');
+    const seeded = await review.seedReviewFromFindings(s.id, [finding()]);
+
+    const result = await fixer.acceptManuscriptFix(s.id, {
+      commentId: seeded.comments[0].id,
+      edits: [
+        { issueId: issue.id, stageId: 'prose', find: 'One.', replace: 'One. Two.' },
+        { issueId: issue.id, stageId: 'prose', find: 'Two.', replace: 'Two changed.' },
+      ],
+    });
+
+    expect(result.comment.status).toBe('accepted');
+    expect(result.section.content).toBe('One. Two. Two changed. Three.');
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.stages.prose.output).toBe('One. Two. Two changed. Three.');
   });
 
   it('acceptManuscriptFix throws when the anchor text is gone', async () => {

@@ -91,6 +91,8 @@ function sanitizeJob(job) {
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     position: job.position,
+    progress: job.progress,
+    statusMsg: job.statusMsg,
     error: job.error,
     result: job.result,
     params: safeParams,

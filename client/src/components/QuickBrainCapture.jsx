@@ -3,20 +3,14 @@ import { Link } from 'react-router-dom';
 import { Send } from 'lucide-react';
 import toast from './ui/Toast';
 import * as api from '../services/api';
-
-const URL_PATTERN = /^(https?:\/\/|git@)/i;
-const DOMAIN_PATTERN = /^\S+\.\S+$/;
+import { isUrl as isUrlShared, normalizeUrl } from '../utils/urlNormalize';
 
 export default function QuickBrainCapture() {
   const [input, setInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
-  const isUrl = useMemo(() => {
-    const trimmed = input.trim();
-    if (!trimmed) return false;
-    return URL_PATTERN.test(trimmed) || DOMAIN_PATTERN.test(trimmed);
-  }, [input]);
+  const isUrl = useMemo(() => isUrlShared(input), [input]);
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
@@ -30,10 +24,7 @@ export default function QuickBrainCapture() {
     setInput('');
 
     if (isUrl) {
-      let url = text;
-      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git@')) {
-        url = 'https://' + url;
-      }
+      const url = normalizeUrl(text, { allowGit: true });
       const result = await api.createBrainLink({ url }).catch(err => {
         if (err.message?.includes('already exists')) {
           toast.error('This URL is already saved');

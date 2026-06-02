@@ -174,6 +174,42 @@ export function invalidateFlux2Health() {
   cachedFlux2Healthy = null;
 }
 
+// MusicGen (Pipeline Audio Phase 4c.2) runs in its own venv at
+// ~/.portos/venv-musicgen — mlx + numpy + transformers, kept apart from the
+// FLUX.2 torch pile. The MLX MusicGen implementation isn't a pip package, so
+// `INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh` also clones
+// ml-explore/mlx-examples to ~/.portos/mlx-examples; the sidecar imports
+// `MusicGen` from its `musicgen/` directory (see MUSICGEN_RUNTIME_DIR).
+const MUSICGEN_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-musicgen', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-musicgen', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-musicgen', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-musicgen', 'bin', 'python3'),
+    ];
+
+export const MUSICGEN_VENV_DEFAULT = MUSICGEN_VENV_CANDIDATES[0];
+
+// The mlx-examples clone's musicgen package directory — passed to the sidecar
+// as --runtime-dir so it can `from musicgen import MusicGen`. The default
+// mirrors the setup script's clone target.
+export const MUSICGEN_RUNTIME_DIR = join(HOME, '.portos', 'mlx-examples', 'musicgen');
+
+let cachedMusicgenPython = null;
+export function resolveMusicgenPython() {
+  if (cachedMusicgenPython && existsSync(cachedMusicgenPython)) return cachedMusicgenPython;
+  for (const p of MUSICGEN_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedMusicgenPython = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateMusicgenPython() {
+  cachedMusicgenPython = null;
+}
+
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
 // before exec. Single-user / Tailnet model means we trust the operator, but
 // "you can shell out to anything" is still too sharp — restrict to actual

@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { Plus, Edit2, Trash2, Save, X, Check, GripVertical } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import LinkChip from './LinkChip';
 import { bucketColor, BUCKET_COLORS, BUCKET_COLOR_KEYS, LINK_DND_TYPE, BUCKET_DND_TYPE } from './bucketColors';
+import { chipInsertIndex } from './bucketReorder';
 
 /**
  * A single bucket (bookmark group): colored header with inline edit/delete,
@@ -18,7 +20,8 @@ export default function BucketCard({
   onAddLink,
   onRemoveLink,
   onDropLink,
-  onReorderBucket
+  onReorderBucket,
+  onMoveLink
 }) {
   const formFromBucket = () => ({ name: bucket.name, color: bucket.color, icon: bucket.icon || '' });
   const [editing, setEditing] = useState(false);
@@ -27,8 +30,37 @@ export default function BucketCard({
   const [addUrl, setAddUrl] = useState('');
   const [adding, setAdding] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  // The chip index where a dragged link would be inserted (null = no chip-level
+  // drop in progress); renders a vertical insertion bar at that position.
+  const [dropIndex, setDropIndex] = useState(null);
 
   const colors = bucketColor(bucket.color);
+
+  // Insert a chip before or after the chip at index `i` based on which half of
+  // it the pointer is over (chips flow left-to-right within a wrapping row).
+  const dropIndexFor = (e, i) => chipInsertIndex(e.currentTarget.getBoundingClientRect(), e.clientX, i);
+
+  // While dragging a link over a chip: show a precise insertion bar instead of
+  // the whole-card drop ring. Bucket-reorder drags (no link payload) fall
+  // through so they bubble to the card's drop handler.
+  const handleChipDragOver = (e, i) => {
+    if (!e.dataTransfer.types.includes(LINK_DND_TYPE)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropActive(false);
+    setDropIndex(dropIndexFor(e, i));
+  };
+
+  const handleChipDrop = (e, i) => {
+    const linkId = e.dataTransfer.getData(LINK_DND_TYPE);
+    if (!linkId) return; // not a chip drag — let the card handle bucket reorder
+    e.preventDefault();
+    e.stopPropagation();
+    const targetIndex = dropIndexFor(e, i);
+    setDropIndex(null);
+    setDropActive(false);
+    onMoveLink?.(linkId, targetIndex);
+  };
 
   const startEdit = () => {
     setForm(formFromBucket());
@@ -57,13 +89,26 @@ export default function BucketCard({
       className={`flex flex-col bg-port-card border rounded-lg overflow-hidden transition-colors ${
         dropActive ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'
       }`}
-      onDragOver={(e) => { e.preventDefault(); setDropActive(true); }}
+      onDragOver={(e) => { e.preventDefault(); if (dropIndex === null) setDropActive(true); }}
+      // Don't clear dropIndex here: native dragleave bubbles, so a chip→gap
+      // crossing would fire this and wipe the armed marker before a gap/bar
+      // release — defeating the guarded clear on the chips row below. The chips
+      // row's own dragleave (with a relatedTarget guard) owns clearing.
       onDragLeave={() => setDropActive(false)}
       onDrop={(e) => {
         e.preventDefault();
+        const insertAt = dropIndex; // capture the visible insertion point before clearing
         setDropActive(false);
+        setDropIndex(null);
         const linkId = e.dataTransfer.getData(LINK_DND_TYPE);
-        if (linkId) { onDropLink?.(linkId); return; }
+        if (linkId) {
+          // Releasing in a chip gap / on the insertion bar bubbles here rather
+          // than to a chip's own handler — honor the marker that was showing
+          // (land at that index) instead of silently appending.
+          if (insertAt !== null) onMoveLink?.(linkId, insertAt);
+          else onDropLink?.(linkId);
+          return;
+        }
         const draggedBucketId = e.dataTransfer.getData(BUCKET_DND_TYPE);
         if (draggedBucketId) onReorderBucket?.(draggedBucketId);
       }}
@@ -155,36 +200,35 @@ export default function BucketCard({
 
       {/* Delete confirm */}
       {confirmDelete && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-port-error/10 border-b border-port-error/30">
-          <span className="text-xs text-white flex-1">Delete bucket? Its links stay (ungrouped).</span>
-          <button
-            onClick={() => { onDelete(bucket.id); setConfirmDelete(false); }}
-            className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
-          >
-            Delete
-          </button>
-          <button
-            onClick={() => setConfirmDelete(false)}
-            className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
+        <InlineConfirmRow
+          variant="separator"
+          question="Delete bucket? Its links stay (ungrouped)."
+          onConfirm={() => { onDelete(bucket.id); setConfirmDelete(false); }}
+          onCancel={() => setConfirmDelete(false)}
+        />
       )}
 
       {/* Chips */}
-      <div className="flex flex-wrap gap-2 p-3 min-h-[2.5rem]">
-        {links.length === 0 && (
+      <div
+        className="flex flex-wrap gap-2 p-3 min-h-[2.5rem]"
+        onDragLeave={(e) => {
+          // Only clear when the pointer truly left the chips area — crossing
+          // between chips fires its own dragleave we don't want to react to.
+          if (!e.currentTarget.contains(e.relatedTarget)) setDropIndex(null);
+        }}
+      >
+        {links.length === 0 && dropIndex === null && (
           <span className="text-xs text-gray-600 italic">Drop links here or add a URL below.</span>
         )}
-        {links.map(link => (
-          <LinkChip
-            key={link.id}
-            link={link}
-            onRemove={onRemoveLink}
-            draggable
-          />
+        {links.map((link, i) => (
+          <Fragment key={link.id}>
+            {dropIndex === i && <ChipInsertionBar />}
+            <div className="max-w-full min-w-0" onDragOver={(e) => handleChipDragOver(e, i)} onDrop={(e) => handleChipDrop(e, i)}>
+              <LinkChip link={link} onRemove={onRemoveLink} draggable />
+            </div>
+          </Fragment>
         ))}
+        {dropIndex === links.length && links.length > 0 && <ChipInsertionBar />}
       </div>
 
       {/* Add URL */}
@@ -210,4 +254,11 @@ export default function BucketCard({
       </form>
     </div>
   );
+}
+
+/** A thin vertical accent bar marking where a dragged chip will land. */
+function ChipInsertionBar() {
+  // pointer-events-none so the bar isn't itself a drag target — a release on it
+  // passes through to the chips row (and bubbles to the card drop handler).
+  return <div className="w-0.5 self-stretch min-h-[1.75rem] rounded-full bg-port-accent pointer-events-none" aria-hidden="true" />;
 }

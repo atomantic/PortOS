@@ -96,6 +96,11 @@ export async function getMemories(options) {
   return b.getMemories(options);
 }
 
+export async function countMemories(options) {
+  const b = await getBackend();
+  return b.countMemories(options);
+}
+
 export async function updateMemory(id, updates) {
   const b = await getBackend();
   return b.updateMemory(id, updates);
@@ -199,4 +204,3 @@ export async function flushBM25Index() {
   const b = await getBackend();
   return b.flushBM25Index();
 }
-

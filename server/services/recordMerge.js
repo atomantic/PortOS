@@ -29,10 +29,10 @@ import {
   normalizeLabelKey,
   VARIATIONS_PER_CATEGORY_MAX, COMPOSITE_SHEETS_MAX, INFLUENCES_PER_LIST_MAX, IMAGE_REFS_PER_ENTRY_MAX,
 } from './universeBuilder.js';
-import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
+import { mergeExtractedBible, BIBLE_KIND, isStr } from '../lib/storyBible.js';
 import { canonicalStringify, isEmptyScalar } from '../lib/objects.js';
 import { getSeries, updateSeries, deleteSeries, listSeries } from './pipeline/series.js';
-import { reassignIssuesToSeries, listIssues } from './pipeline/issues.js';
+import { reassignIssuesToSeries, recomputeIssueNumbersForSeries, listIssues } from './pipeline/issues.js';
 import {
   findCollectionByUniverseId, findOrCreateUniverseCollection,
   findCollectionBySeriesId, findOrCreateSeriesCollection,
@@ -43,7 +43,37 @@ import {
 // 400). get*() NOT_FOUND errors propagate with their own per-record codes,
 // which each router already maps to 404.
 export const ERR_VALIDATION = 'MERGE_VALIDATION';
+
+// Raised when the cascade (re-point children → tombstone loser) partially
+// completes: the survivor is already merged but one or more child re-points (or
+// the issue reassign) failed, so the loser is intentionally left LIVE rather
+// than tombstoned over un-moved children. The merge is resumable — re-running
+// it converges cleanly because every step is idempotent: buildXUnion dedupes
+// its list unions, the child re-point / issue-reassign only touch records still
+// pointing at the loser, and the survivor write is a verbatim overwrite. Both
+// routers map it to 409 and forward its `{ survivorId, loserId, failed }`
+// context (via `buildCascadeContext`) so the UI can name which children stuck.
+export const ERR_CASCADE = 'MERGE_CASCADE_INCOMPLETE';
+
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
+
+// Build the resumable cascade error. `failed` is `[{ id, name, error, step? }]`.
+const cascadeError = (kind, survivorId, loserId, failed) =>
+  Object.assign(
+    new Error(
+      `${kind} merge could not complete: ${failed.length} cascade step(s) failed ` +
+      `(${failed.map((f) => f.name || f.id).join(', ')}). The survivor already holds the ` +
+      `merged data and the loser was left intact — resolve the failure and re-run the merge to finish.`,
+    ),
+    { code: ERR_CASCADE, survivorId, loserId, failed },
+  );
+
+// Extract the response `context` both routers forward for a cascade 409, so the
+// shape stays identical across `universeBuilder.js` and `pipeline.js`.
+export const buildCascadeContext = (err) =>
+  err?.code === ERR_CASCADE
+    ? { survivorId: err.survivorId, loserId: err.loserId, failed: err.failed }
+    : undefined;
 
 // ---- pure union helpers (exported for unit tests) ----
 
@@ -347,8 +377,21 @@ export async function mergeUniverses(survivorId, loserId, fieldChoices = {}, { d
 
   // 2. Re-point child series to the survivor BEFORE tombstoning the loser, so
   //    the block-until-empty delete guard doesn't trip and nothing is orphaned.
+  //    The cascade has no transaction, so a single child's failure must not
+  //    strand the whole merge mid-loop with no cleanup: collect per-child
+  //    failures and keep going so every child that CAN move, moves. If any
+  //    failed, abort BEFORE the tombstone — the loser still has live children,
+  //    so deleting it would trip the block-until-empty guard anyway — and
+  //    surface a resumable cascade error (the survivor already holds the union;
+  //    re-running re-points only the children still under the loser, then
+  //    tombstones). Best-effort-tombstoning instead would orphan those children.
+  const repointFailed = [];
   for (const s of childSeries) {
-    await updateSeries(s.id, { universeId: survivorId });
+    await updateSeries(s.id, { universeId: survivorId })
+      .catch((err) => repointFailed.push({ id: s.id, name: s.name, error: err?.message || String(err) }));
+  }
+  if (repointFailed.length > 0) {
+    throw cascadeError('Universe', survivorId, loserId, repointFailed);
   }
 
   // 3. Fold the loser's auto-collection into the survivor's. The deterministic
@@ -402,7 +445,9 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
   const { record, conflicts, autoResolved, unionSummary } = buildSeriesUnion(survivor, loser, fieldChoices, fieldOverrides);
 
   const loserCollection = await findCollectionBySeriesId(loserId);
-  // Issues are reassigned to the survivor un-grouped; count for the preview.
+  // Issues are reassigned to the survivor, keeping their season grouping where
+  // the loser's season maps to a survivor season of the same number; count for
+  // the preview.
   const loserIssues = await listIssues({ seriesId: loserId });
   const cascade = {
     issuesToRepoint: loserIssues.length,
@@ -414,13 +459,53 @@ export async function mergeSeries(survivorId, loserId, fieldChoices = {}, { dryR
   }
   requireResolved(conflicts);
 
-  // 1. Write the unioned survivor.
-  await updateSeries(survivorId, record);
+  // 1. Write the unioned survivor. Capture the PERSISTED record — `updateSeries`
+  //    runs `sanitizeSeasonList` (which caps at SEASONS_PER_SERIES_MAX), so the
+  //    saved seasons can differ from the in-memory union; the season map below
+  //    must pair against what actually landed on disk.
+  const persistedSurvivor = await updateSeries(survivorId, record);
 
-  // 2. Re-point the loser's issues to the survivor (un-grouped) before tombstone.
+  // 2. Re-point the loser's issues to the survivor before tombstone, preserving
+  //    season grouping. The persisted survivor carries a season for every loser
+  //    season number that survived the union (a number collision gap-fills the
+  //    survivor's same-number season; a non-colliding loser season is appended
+  //    verbatim), so pair each loser season to the survivor season sharing its
+  //    number. An issue whose loser season has no number, or maps to a season
+  //    that didn't persist (e.g. dropped at the season cap), lands un-grouped —
+  //    the map only ever holds ids that exist on the saved survivor.
   if (loserIssues.length > 0) {
-    await reassignIssuesToSeries(loserId, survivorId);
+    const survivorSeasonIdByNumber = new Map(
+      (persistedSurvivor.seasons || [])
+        .filter((s) => Number.isFinite(s?.number) && isStr(s?.id))
+        .map((s) => [s.number, s.id]),
+    );
+    const seasonIdMap = {};
+    for (const ls of loser.seasons || []) {
+      if (!isStr(ls?.id) || !Number.isFinite(ls?.number)) continue;
+      const survivorSeasonId = survivorSeasonIdByNumber.get(ls.number);
+      if (survivorSeasonId) seasonIdMap[ls.id] = survivorSeasonId;
+    }
+    // The reassign moves the loser's issues onto the survivor and renumbers the
+    // combined set. Its per-issue saves are NOT atomic, so a failure can leave
+    // some issues already moved (and the survivor's numbering half-applied).
+    // Abort BEFORE the tombstone — deleting the loser now would orphan any
+    // un-moved issues — and surface a resumable cascade error: re-running moves
+    // whatever issues are still under the loser. Step 2.5 below repairs the
+    // survivor's numbering even when the partial move left zero issues to re-run.
+    await reassignIssuesToSeries(loserId, survivorId, { seasonIdMap }).catch((err) => {
+      throw cascadeError('Series', survivorId, loserId,
+        [{ id: loserId, name: loser.name, error: err?.message || String(err), step: 'reassign-issues' }]);
+    });
   }
+
+  // 2.5. Repair the survivor's issue numbering before tombstoning. This is a
+  //      no-op on the happy path (the reassign already renumbered), but a prior
+  //      cascade that failed AFTER moving issues but BEFORE finishing the
+  //      survivor renumber leaves zero loser issues to re-run — so the renumber
+  //      above never fires on retry. Running it unconditionally here is
+  //      idempotent (it skips the write when numbering is already contiguous)
+  //      and closes that resumability gap.
+  await recomputeIssueNumbersForSeries(survivorId);
 
   // 3. Fold the loser's series-collection into the survivor's, then tombstone it.
   if (loserCollection && (loserCollection.items || []).length > 0) {

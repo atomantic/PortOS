@@ -49,6 +49,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `scenePrompt.js` | Scene-prompt composer + bible matchers (chars/places/objects in text). |
 | `sceneExtractor.js` | Split prose or teleplay into scene list via LLM. |
 | `seasonStructure.js` | Season/episode structure recommendation. |
+| `seriesLlmOverride.js` | Pure `resolveSeriesLlmOverride(series, { overrideProvider, overrideModel })` → `{ provider, model, providerMatchesSeries }` — shared fallback so Pipeline LLM actions honor the series' configured provider/model, only inheriting the series model when the effective provider still matches. |
 | `bibleExtractor.js` | LLM bible-extraction stage + sanitization. |
 | `catalogBulkParsers.js` | Dependency-free markdown/CSV/JSON parsers for `POST /api/catalog/bulk-import` and YAML/markdown serializers for `GET /api/catalog/export`. |
 | `catalogChunking.js` | Pure lossless scrap-text chunker (`chunkRawText`, `CATALOG_CHUNK_MAX_CHARS`) — splits a long paste into ≤maxChars chunks on paragraph/newline/sentence/whitespace boundaries so the catalog extractor processes each child and unions results. |
@@ -83,6 +84,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `runners.js` | Image-runner family constants. |
 | `codexAssistantExtract.js` | Strip Codex CLI banner + echoed metadata from session transcript. |
 | `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |
+| `contextBudget.js` | Context-window budgeter for editorial passes. `estimateTokens` (chars/4), `usableInputTokens`, `planManuscriptPass({ contextWindow, sections })` → `{ mode: 'whole' \| 'chunked', chunks }`. Decides whole-manuscript vs chunked given a model's window. |
 | `ansiStrip.js` | Streaming ANSI / control-byte stripper. |
 | `hfToken.js` | HuggingFace token resolution (settings > env > CLI). |
 | `hfCache.js` | HuggingFace Hub cache inspection (`inspectModelCache(repoId)` → `{cached,sizeBytes,snapshotPath}`, `isModelCached`, `getHfCacheRoot`). Drives the inline "Available / Download" badge on the image + video gen forms. |
@@ -94,7 +96,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `collectionStore.js` | Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type, schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` / `loadAll` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` / `verifySchemaVersion`. Per-id write queue means writes to different records don't serialize; `saveOneNow` is for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store, ...])` logs schema-version mismatches. |
-| `conflictJournal.js` | Non-blocking edit-conflict journal for cross-install LWW merges. `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite) archives the losing local version when a true 3-way divergence is detected (`detectConflict` via per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash; `flushBaseHashes()` persists the batched base-hash side store. `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned (called from `pruneTombstonedUniverses`/`pruneTombstonedSeries`) so the side store doesn't grow without bound. `conflictJournalStore()` is the `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no `dismissed` status). Local-only — never crosses the wire. |
+| `conflictJournal.js` | Non-blocking edit-conflict journal for cross-install LWW merges. `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite) archives the losing local version when a true 3-way divergence is detected (`detectConflict` via per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash; `flushBaseHashes()` persists the batched base-hash side store; `withBaseHashFlushBatch(fn)` defers every interior flush so an await-separated multi-record push loop (peer:online convergence) collapses N `sync_base_hashes.json` rewrites into one terminal write (re-entrant; flushes in `finally`). `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned (called from every `pruneTombstoned*` path — universe/series/issue/collection) so the side store doesn't grow without bound; `pruneOrphanedBaseHashes(resolves)` is the backstop sweep (`resolves(kind,id) => bool`; unknown kinds kept) that drops keys whose record no longer resolves, wired into the tombstone GC sweep. `conflictJournalStore()` is the `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no `dismissed` status). Local-only — never crosses the wire. |
 | `schemaVersions.js` | Cross-instance sync version contract. `PORTOS_SCHEMA_VERSIONS` (frozen map of `{ category: layoutVersion }`), `RECORD_KIND_SCHEMA_CATEGORIES` (frozen map of federated record kind → the schema categories it writes), `buildPortosMeta()` (envelope for every outbound sync payload), `compareSchemaVersions(sender, receiver)` returning `{ ahead, behind, compatible }`, `scopeVersionDiff(diff, categories)` (restrict that diff to the categories a specific transfer touches), and `formatVersionGap()` for UI/log lines. Receivers gate `applyIncomingPush` / share-bucket import / snapshot apply per-category on the scoped comparator result so an upgraded sender can't corrupt a downstream peer — and a bump to one category doesn't sever sync of the others. |
 | `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, `expandHome` (`~/foo` → absolute), JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
@@ -121,6 +123,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
+| `requestAbort.js` | `abortSignalFromResponse(res)` — AbortSignal that fires only when an Express client disconnects *before the response finishes* (keyed off `res` close + `writableEnded`). Plus `anyAbortSignal(signals)` — combine several signals into one (native `AbortSignal.any` with a Node-18 fallback). |
+| `readResponseJson.js` | Read a `Response` body as JSON, tolerating a non-JSON/HTML error page (no `Unexpected token <` crash). Object callers need no opts; pass `{ fallback, emptyValue }` for arrays or to surface the raw error text. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
@@ -186,7 +190,9 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
+| `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |
+| `singleFlight.js` | `createSingleFlight()` → `run(key, fn)` — keyed in-flight coalescer: concurrent calls for the same key share one `fn()` execution and result; the slot auto-clears on settle. Minimal by design (no TTL/result cache layered on top, doesn't reject concurrent callers). Used by `promptRunner.js`'s fallback mark-and-pick. |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
 | `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
 
@@ -195,4 +201,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `mockPathsDataRoot.js` | Shared Vitest helpers for `PATHS.data → temp dir` and no-peer record creation guards. |
-| `testHelper.js` | Test HTTP request helper. |
+| `testHelper.js` | Test helpers: `request()` (supertest-style HTTP) + `mockJsonResponse`/`mockTextResponse` (fetch `Response` mocks read via `.text()`). |

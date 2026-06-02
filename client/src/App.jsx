@@ -60,6 +60,7 @@ const DigitalTwin = lazyWithReload(() => import('./pages/DigitalTwin'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
+const LocalLlmPlayground = lazyWithReload(() => import('./pages/LocalLlmPlayground'));
 const Shell = lazyWithReload(() => import('./pages/Shell'));
 const BrowserPage = lazyWithReload(() => import('./pages/Browser'));
 const Jira = lazyWithReload(() => import('./pages/Jira'));
@@ -195,6 +196,7 @@ export default function App() {
           <Route path="security" element={<Security />} />
           <Route path="settings" element={<Navigate to="/settings/backup" replace />} />
           <Route path="settings/:tab" element={<Settings />} />
+          <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
           <Route path="shell/:sessionId" element={<Shell />} />

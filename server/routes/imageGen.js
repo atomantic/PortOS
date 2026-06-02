@@ -21,9 +21,9 @@ import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
-import { getSettings, saveSettings } from '../services/settings.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
-import { getImageModels, isFlux2, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../lib/sseDownload.js';
@@ -350,6 +350,17 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const selectedModel = allModels.find((m) => m.id === data.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
+    // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
+    // source image. Reject a text-only submission up-front rather than
+    // enqueueing a job that crashes deep inside diffusers. `data.initImagePath`
+    // is already populated above from either an uploaded `initImage` or a
+    // gallery `initImageFile`.
+    if (isEditOnly(selectedModel) && !data.initImagePath) {
+      throw new ServerError(
+        `${selectedModel.name || selectedModel.id} is an image-edit model — it requires a source image. Upload an init image to use it.`,
+        { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
+      );
+    }
     if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
       throw new ServerError(
         'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
@@ -720,20 +731,20 @@ const hfTokenSchema = z.object({
 });
 router.post('/setup/hf-token', asyncHandler(async (req, res) => {
   const { token } = validateRequest(hfTokenSchema, req.body || {});
-  const settings = await getSettings();
-  await saveSettings({
+  await updateSettingsWith((settings) => ({
     ...settings,
     imageGen: { ...(settings.imageGen || {}), hfToken: token.trim() },
-  });
+  }));
   res.json({ ok: true, hfTokenPresent: true, source: 'stored' });
 }));
 
 // Clear the stored HF token. Falls back to env / CLI tokens if present —
 // callers should re-fetch /setup/hf-token-status to see the post-clear state.
 router.delete('/setup/hf-token', asyncHandler(async (_req, res) => {
-  const settings = await getSettings();
-  const { hfToken: _drop, ...restImageGen } = settings.imageGen || {};
-  await saveSettings({ ...settings, imageGen: restImageGen });
+  await updateSettingsWith((settings) => {
+    const { hfToken: _drop, ...restImageGen } = settings.imageGen || {};
+    return { ...settings, imageGen: restImageGen };
+  });
   const { token, source } = await getHfTokenInfo();
   res.json({ ok: true, hfTokenPresent: !!token, source });
 }));

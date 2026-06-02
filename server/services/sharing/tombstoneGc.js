@@ -26,13 +26,64 @@
  * cohort for issue tombstones is "peers subscribed to series".
  */
 
-import { pruneTombstonedUniverses } from '../universeBuilder.js';
-import { pruneTombstonedSeries } from '../pipeline/series.js';
-import { pruneTombstonedIssues } from '../pipeline/issues.js';
-import { pruneTombstonedCollections } from '../mediaCollections.js';
-import { listPeerSubscriptions } from './peerSync.js';
+import { pruneTombstonedUniverses, listUniverses } from '../universeBuilder.js';
+import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
+import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
+import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
+import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
+import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
 import { getPeers } from '../instances.js';
+
+// Each kind's UNCAPPED live-id source (default args exclude tombstoned/deleted).
+// Used to build the orphan-sweep resolver's per-kind id-sets. A kind absent
+// from this map is unknown → the resolver keeps its keys (never strips).
+// `listIssueIds` (not `listIssues`) because the latter caps at 1000 — a capped
+// source would report a live record beyond the cap as missing and the sweep
+// would strip its base hash, silently disabling conflict detection for it.
+const LIVE_ID_LISTERS = Object.freeze({
+  universe: async () => (await listUniverses()).map((r) => r.id),
+  series: async () => (await listSeries()).map((r) => r.id),
+  issue: () => listIssueIds(),
+  mediaCollection: async () => (await listCollections()).map((r) => r.id),
+});
+
+// Each peer-subscribable kind's UNCAPPED id source INCLUDING tombstones —
+// used by the orphan peer-subscription sweep. A tombstoned record still owns
+// its subscription (the sub pushes the delete to peers), so the sweep must
+// treat a tombstone as "still resolves" and strip a sub only once the record
+// directory is actually gone (hard-deleted by the tombstone prune above).
+// Issues are absent — they're never directly subscribed (issue tombstones
+// ride their parent series's push, so PEER_SUBSCRIBABLE_KINDS has no 'issue').
+const ALL_ID_LISTERS = Object.freeze({
+  universe: async () => (await listUniverses({ includeDeleted: true })).map((r) => r.id),
+  series: async () => (await listSeries({ includeDeleted: true })).map((r) => r.id),
+  mediaCollection: async () => (await listCollections({ includeDeleted: true })).map((r) => r.id),
+});
+
+// Build a kind-aware id-membership resolver for ONE sweep: lazily list each
+// kind's id Set on first use (a sweep that never probes a kind never lists it)
+// and check membership in memory — at most one listing per kind per sweep,
+// collapsing what would otherwise be one record read per probed key. Unknown
+// kinds resolve to `true` so a sweep can never strip something it can't
+// authoritatively check (a key for a future kind, or a shape this version
+// doesn't recognize); a listing that throws also keeps the kind (both
+// `pruneOrphanedBaseHashes` and `pruneOrphanedPeerSubscriptions` treat a
+// resolver rejection as "still resolves"). The base-hash sweep passes
+// LIVE_ID_LISTERS (a record stops protecting its base hash once tombstoned);
+// the subscription sweep passes ALL_ID_LISTERS (a tombstone still owns its
+// sub until the record dir is hard-deleted).
+function makeRecordIdResolver(listers) {
+  const idSets = new Map(); // kind → Set<id>
+  return async (kind, id) => {
+    const lister = listers[kind];
+    if (!lister) return true; // unknown kind → never strip
+    if (!idSets.has(kind)) {
+      idSets.set(kind, new Set(await lister()));
+    }
+    return idSets.get(kind).has(id);
+  };
+}
 
 const GRACE_MS = 24 * 60 * 60 * 1000;
 
@@ -175,7 +226,10 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
 }
 
 /**
- * One sweep cycle. Returns `{ universes, series, issues, collections, refused }`.
+ * One sweep cycle. Returns `{ universes, series, issues, collections,
+ * orphanBaseHashes, orphanSubscriptions, refused }` — the four per-kind
+ * tombstone-prune counts, the two post-prune orphan-sweep counts, and the
+ * list of kinds whose cutoff was refused.
  *
  * `graceMs` defaults to 24h so the orchestrator path is unchanged; the
  * manual-trigger UI / CLI passes 0 to skip the post-delete buffer. The
@@ -196,11 +250,27 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
     collectionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCollections(collectionCutoff),
   ]);
+  // Backstop AFTER the tombstone prunes: the prune paths already evict a freshly
+  // hard-deleted record's base hash, so this sweep mops up only keys that
+  // escaped (records deleted outside the prune path, pre-existing accumulation
+  // on long-lived installs, or a future kind without per-record eviction). Runs
+  // every kind regardless of which were refused — orphan keys aren't gated on
+  // snapshot coverage.
+  const orphan = await pruneOrphanedBaseHashes(makeRecordIdResolver(LIVE_ID_LISTERS));
+  // Orphan peer-subscription sweep — same backstop logic as the base-hash
+  // sweep, AFTER the tombstone prunes so a record whose dir was just rm'd
+  // (no longer resolves even with includeDeleted) gets its dead subscription
+  // rows dropped. Runs every kind regardless of refusals: an orphaned sub
+  // points at a record that no longer exists, so it's safe to strip no matter
+  // what the snapshot-coverage gate decided for live tombstones.
+  const orphanSubs = await pruneOrphanedPeerSubscriptions(makeRecordIdResolver(ALL_ID_LISTERS));
   return {
     universes: u.pruned,
     series: s.pruned,
     issues: i.pruned,
     collections: c.pruned,
+    orphanBaseHashes: orphan.pruned,
+    orphanSubscriptions: orphanSubs.pruned,
     refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff),
   };
 }

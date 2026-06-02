@@ -124,6 +124,38 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeCliRun).not.toHaveBeenCalled();
   });
 
+  it('runs the fallbackModel (not the primary model) when createRun proactively swaps to a fallback', async () => {
+    // Primary is benched at call time, so the toolkit createRun swaps to an
+    // API fallback and surfaces the configured fallbackModel. The run must
+    // execute that model on the fallback — NOT the primary's resolved model
+    // (the leak that sent `codex-configured-default` to LM Studio). This is
+    // the common caller path (no pre-created runId), distinct from the
+    // runtime-retry path covered below.
+    const fallback = apiProvider({ id: 'fb-api', defaultModel: 'fb-default' });
+    runner.createRun.mockResolvedValue({
+      runId: 'run-fb',
+      provider: fallback,
+      fallbackModel: 'pinned-fb',
+    });
+    let ranModel;
+    runner.executeApiRun.mockImplementation(async (id, _p, model, _pr, _cwd, _ctx, onData, onComplete) => {
+      ranModel = model;
+      onData('ok');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: cliProvider({ defaultModel: 'codex-configured-default' }),
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    expect(ranModel).toBe('pinned-fb');
+    expect(out.model).toBe('pinned-fb');
+  });
+
   it('forwards the provider id + model + source to createRun', async () => {
     runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
       onData('ok');
@@ -652,6 +684,39 @@ describe('promptRunner — retry-with-fallback', () => {
     });
   });
 
+  it('runs the configured fallbackModel on the fallback (never the primary model) when one is pinned', async () => {
+    const status = mockToolkitWithFallback();
+    // Provider-level fallback that pins a specific model to run on the fallback.
+    status.getFallbackProvider.mockReturnValue({
+      provider: fallbackApi,
+      source: 'provider',
+      model: 'pinned-fb-model',
+    });
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'Process exited with code 1' });
+    });
+    let ranModel;
+    runner.executeApiRun.mockImplementation(async (id, _p, model, _pr, _cwd, _ctx, onData, onComplete) => {
+      ranModel = model;
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(out.usedFallback).toBe(true);
+    // The pinned fallbackModel must reach the fallback run — NOT the primary's
+    // 'primary-model' (the leak this fix closes), and NOT the fallback's own
+    // 'fb-model' default (the pin must win).
+    expect(ranModel).toBe('pinned-fb-model');
+    expect(out.model).toBe('pinned-fb-model');
+  });
+
   it('retries with fallback when primary API fails', async () => {
     mockToolkitWithFallback();
 
@@ -957,6 +1022,63 @@ describe('promptRunner — retry-with-fallback', () => {
       waitTime: expect.any(String),
     }));
     expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('coalesces a 10-concurrent-failure storm into one provider-map read + one mark-unavailable', async () => {
+    // Acceptance for [coalesce-fallback-provider-failure-storm]: when a
+    // stuck provider has N simultaneous in-flight calls, the per-provider
+    // mark-and-pick (getAllProviders + markUnavailable) must run ONCE for
+    // the whole storm — not once per failing call — while every call still
+    // recovers via its own fallback run.
+    const status = mockToolkitWithFallback();
+    // clearAllMocks() resets call history but NOT mockImplementation, so a
+    // throwing noteFallbackHandled impl set by an earlier test would leak in
+    // here as best-effort-suppressed stderr. Reset it to a clean no-op.
+    autoFixer.noteFallbackHandled.mockImplementation(() => {});
+
+    // Gate the provider-map read so the first failure's mark-and-pick stays
+    // in-flight long enough for all 10 failures to pile onto it. Without
+    // this hold the first could settle before later calls reach their catch,
+    // defeating the coalescing the test means to assert.
+    let releaseGetAll;
+    const getAllGate = new Promise((resolve) => { releaseGetAll = resolve; });
+    providers.getAllProviders.mockReturnValue(
+      getAllGate.then(() => ({ activeProvider: null, providers: [primaryCli, primaryApi, fallbackApi] }))
+    );
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'storm boom' });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    const calls = Array.from({ length: 10 }, () => runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    }));
+
+    // Let every call fail its primary run and register on the shared
+    // in-flight mark-and-pick, THEN release the gated read.
+    await new Promise((r) => setTimeout(r, 0));
+    releaseGetAll();
+
+    const results = await Promise.all(calls);
+
+    // Every call recovered through its own fallback run.
+    expect(results).toHaveLength(10);
+    for (const out of results) {
+      expect(out.text).toBe('fallback content');
+      expect(out.usedFallback).toBe(true);
+    }
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(10);
+
+    // ...but the storm read the provider map and benched the provider once.
+    expect(providers.getAllProviders).toHaveBeenCalledTimes(1);
+    expect(status.getFallbackProvider).toHaveBeenCalledTimes(1);
+    expect(status.markUnavailable).toHaveBeenCalledTimes(1);
   });
 });
 

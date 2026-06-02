@@ -38,6 +38,12 @@ export const updateSettings = (data, options) => request('/settings', {
   body: JSON.stringify(data),
   ...options
 });
+export const getAiAssignments = (options) => request('/settings/ai-assignments', options);
+export const updateAiAssignment = (id, data, options) => request(`/settings/ai-assignments/${encodeURIComponent(id)}`, {
+  method: 'PUT',
+  body: JSON.stringify(data),
+  ...options
+});
 
 const isPlainObject = (v) =>
   v != null && typeof v === 'object' && !Array.isArray(v);

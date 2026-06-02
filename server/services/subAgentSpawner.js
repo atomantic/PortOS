@@ -2,15 +2,19 @@
  * Sub-Agent Spawner Service
  *
  * Orchestrator module: imports from focused sub-modules and re-exports
- * everything for backward compatibility. Keeps module-level initialization
- * (initSpawner, event wiring) and shared state references.
+ * everything for backward compatibility. Owns the explicit `initSpawner()`
+ * entry point (event wiring + orphan cleanup) and shared state references.
+ *
+ * NOTE: importing this module is side-effect-free — `initSpawner()` must be
+ * called explicitly (see `server/index.js`). This keeps test imports from
+ * re-arming the event listeners and timers on every suite.
  */
 
 import { join } from 'path';
 import { readFile, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { emitLog, cosEvents } from './cosEvents.js';
-import { appendAgentOutput, updateAgent, completeAgent } from './cosAgents.js';
+import { createAgentOutputBatcher, updateAgent, completeAgent } from './cosAgents.js';
 import { initProviderStatus } from './providerStatus.js';
 import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable } from './cosRunnerClient.js';
 import { ensureDir, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
@@ -32,6 +36,33 @@ export { processAgentCompletion } from './agentCompletion.js';
 const ROOT_DIR = PATHS.root;
 const RUNS_DIR = PATHS.runs;
 
+// Per-agent debounced output batchers for the CoS Runner stream path. The
+// runner emits `agent:output` per parsed line (see cos-runner/index.js), so a
+// chatty agent would otherwise trigger a full state load+save per line. Each
+// batcher coalesces a ~250ms window; we drain + drop it when the agent
+// completes/errors so the final lines persist before the completion event.
+const runnerOutputBatchers = new Map();
+
+function getRunnerOutputBatcher(agentId) {
+  let batcher = runnerOutputBatchers.get(agentId);
+  if (!batcher) {
+    batcher = createAgentOutputBatcher(agentId);
+    runnerOutputBatchers.set(agentId, batcher);
+  }
+  return batcher;
+}
+
+export async function flushRunnerOutputBatcher(agentId) {
+  const batcher = runnerOutputBatchers.get(agentId);
+  if (!batcher) return;
+  // Flush BEFORE deleting: the agent is still in `runnerAgents` at this point
+  // (handleAgentCompletion removes it afterwards), so a line racing in during
+  // the awaited flush lands in this same batcher instead of orphaning a new
+  // one. The `agent:output` guard below drops any truly post-completion stray.
+  await batcher.flush();
+  runnerOutputBatchers.delete(agentId);
+}
+
 
 /**
  * Load a slashdo command from the bundled submodule, resolving !`cat` lib includes inline.
@@ -42,10 +73,30 @@ export async function loadSlashdoCommand(commandName) {
   return content;
 }
 
+// Memoized init promise. Module import is side-effect-free now, so init is an
+// explicit call (server/index.js). Returning a shared promise makes the call
+// idempotent AND safe under a concurrent second caller: both await the same
+// in-flight init and only observe "ready" once the `task:ready` listener +
+// orphan timer are actually wired — a plain boolean-at-entry guard would let a
+// concurrent caller return early before that. Reset to null on failure so a
+// later call can retry instead of being stuck on a half-initialized spawner.
+let spawnerInitPromise = null;
+
 /**
- * Initialize the spawner — listen for task:ready events.
+ * Initialize the spawner — listen for task:ready events. Idempotent: repeated
+ * calls return the same promise (and re-run only after a failed attempt).
  */
-export async function initSpawner() {
+export function initSpawner() {
+  if (!spawnerInitPromise) {
+    spawnerInitPromise = runInitSpawner().catch(err => {
+      spawnerInitPromise = null;
+      throw err;
+    });
+  }
+  return spawnerInitPromise;
+}
+
+async function runInitSpawner() {
   // Initialize provider status tracking
   await initProviderStatus().catch(err => {
     console.error(`⚠️ Failed to initialize provider status: ${err.message}`);
@@ -73,10 +124,8 @@ export async function initSpawner() {
   setUseRunner(runnerAvailable);
 
   // Lazy-import lifecycle functions (avoids circular dep at module init time)
-  const { syncRunnerAgents, handleAgentCompletion, cleanupAgentWorktree } = await import('./agentLifecycle.js');
-  const { cleanupOrphanedAgents, handleOrphanedTask } = await import('./agentManagement.js');
-  const { spawnAgentForTask } = await import('./agentLifecycle.js');
-  const { terminateAgent } = await import('./agentManagement.js');
+  const { syncRunnerAgents, handleAgentCompletion, spawnAgentForTask } = await import('./agentLifecycle.js');
+  const { cleanupOrphanedAgents, terminateAgent } = await import('./agentManagement.js');
   const { completeAgentRun } = await import('./agentRunTracking.js');
 
   if (runnerAvailable) {
@@ -95,7 +144,13 @@ export async function initSpawner() {
     // Set up event handlers for runner events
     onCosRunnerEvent('agent:output', async (data) => {
       const { agentId, text } = data;
-      await appendAgentOutput(agentId, text);
+      // Drop output for an agent that's already finalized/removed. The runner
+      // registers the agent in `runnerAgents` before it spawns the process
+      // (agentLifecycle spawnViaRunner), so this never drops legitimate early
+      // output — it only ignores a stray event arriving after completion, which
+      // would otherwise lazily create a never-drained batcher (Map leak).
+      if (!runnerAgents.has(agentId)) return;
+      getRunnerOutputBatcher(agentId).push(text);
 
       // Update phase on first output
       const agent = runnerAgents.get(agentId);
@@ -113,6 +168,9 @@ export async function initSpawner() {
       if (agent) {
         clearTimeout(agent.initializationTimeout);
       }
+      // Drain pending output before completion so the final lines land in
+      // state before handleAgentCompletion writes the terminal record.
+      await flushRunnerOutputBatcher(agentId);
       await handleAgentCompletion(agentId, exitCode, success, duration);
     });
 
@@ -125,6 +183,7 @@ export async function initSpawner() {
         if (agent) {
           clearTimeout(agent.initializationTimeout);
         }
+        await flushRunnerOutputBatcher(orphan.agentId);
         await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0);
       }
     });
@@ -133,6 +192,7 @@ export async function initSpawner() {
       const { agentId, error } = data;
       console.error(`❌ Agent ${agentId} error from runner: ${error}`);
       cosEvents.emit('agent:error', { agentId, error });
+      await flushRunnerOutputBatcher(agentId);
       const agent = runnerAgents.get(agentId);
       if (agent) {
         clearTimeout(agent.initializationTimeout);
@@ -160,23 +220,12 @@ export async function initSpawner() {
   cosEvents.on('agent:terminate', async (agentId) => {
     await terminateAgent(agentId);
   });
+
+  // Clean up orphaned agents after a short delay (let other services finish init).
+  // setTimeout runs outside the request lifecycle, so guard the async callback.
+  setTimeout(() => {
+    cleanupOrphanedAgents().catch(err => {
+      console.error(`❌ Failed to clean up orphaned agents: ${err.message}`);
+    });
+  }, 2000);
 }
-
-// Initialize spawner when module loads (async)
-initSpawner().catch(err => {
-  console.error(`❌ Failed to initialize spawner: ${err.message}`);
-});
-
-// Initialize task learning system
-import('./taskLearning.js').then(taskLearning => {
-  taskLearning.initTaskLearning();
-}).catch(err => {
-  console.error(`❌ Failed to initialize task learning: ${err.message}`);
-});
-
-// Clean up orphaned agents after a short delay (let other services init first)
-import('./agentManagement.js').then(({ cleanupOrphanedAgents }) => {
-  setTimeout(cleanupOrphanedAgents, 2000);
-}).catch(err => {
-  console.error(`❌ Failed to schedule orphan cleanup: ${err.message}`);
-});

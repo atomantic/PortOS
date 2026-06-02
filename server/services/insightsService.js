@@ -22,6 +22,7 @@ import { getActiveProvider, getProviderById } from './providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
 import { stripCodeFences, parseLLMJSON } from '../lib/aiProvider.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
 const DEFAULT_AI_TIMEOUT_MS = 300000;
@@ -165,8 +166,11 @@ function getLatestBloodValues(tests) {
 /**
  * Replicate callProviderAISimple pattern from taste-questionnaire.js.
  * API-type providers only. Returns { text } on success, { error } on failure.
+ * Exported for unit testing of the non-JSON-body guard — the public entries that
+ * reach it (refreshCrossDomainNarrative / generateThemeAnalysis) need the full
+ * genome/taste/health context mocked, so the guard is exercised directly.
  */
-async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
+export async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
   const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
 
   if (provider.type === 'api') {
@@ -194,7 +198,16 @@ async function callProviderAISimple(provider, model, prompt, { temperature = 0.3
       return { error: `Provider returned ${response.status}: ${errorText}` };
     }
 
-    const data = await response.json();
+    // Sentinel fallback: a non-JSON/blank 200 body must surface as an error, not
+    // an empty `{ text: '' }` success — both callers persist the result
+    // (refreshCrossDomainNarrative → narrative.json, generateThemeAnalysis →
+    // themes.json), so a masqueraded-empty success would overwrite the cached
+    // narrative/themes with nothing. A valid body (even one with empty content)
+    // still flows through unchanged.
+    const data = await readResponseJson(response, { fallback: null, emptyValue: null });
+    if (!data) {
+      return { error: `Provider returned a non-JSON response (${response.status})` };
+    }
     return { text: data.choices?.[0]?.message?.content || '' };
   }
 

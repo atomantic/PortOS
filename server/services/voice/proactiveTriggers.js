@@ -136,6 +136,21 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   // isolated state and a rewire starts fresh.
   const lastSpokenAt = new Map();
 
+  // Terminal outcomes already announced, keyed `${taskId}:${status}`. A task's
+  // completion line is solicited and fires once at its terminal status, but
+  // `updateTask` on an already-terminal voice-dispatched task re-emits
+  // `tasks:changed action:'updated'` with the same status — without this guard
+  // the spoken line would re-fire on every such re-update. Keying on id+status
+  // (not id alone) keeps a DISTINCT outcome announceable: a blocked task later
+  // re-dispatched to completed still speaks its success line. The key is
+  // RESERVED synchronously (so a same-tick / in-flight duplicate dedups) but
+  // rolled BACK if no line actually went out — config-disabled, quiet-hours,
+  // voice-disabled, or a TTS failure — mirroring `dispatch`'s rate-limit slot,
+  // so a later legitimate re-update can still announce. Grows only with distinct
+  // voice-dispatched task outcomes (human-paced, rare), so no eviction is
+  // needed; cleared on unwire.
+  const announcedOutcomes = new Set();
+
   // Speak one line, advancing the source's rate-limit bucket. The slot is
   // reserved BEFORE awaiting `speak`: synthesis is async, so a same-tick burst
   // of same-source events (an error storm) would otherwise all read the stale
@@ -144,11 +159,12 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
   // that goes out; on suppression/failure/throw we roll it back (unless a later
   // event already claimed the slot) so the budget isn't spent on a non-line.
   // try/finally only — a synthesis rejection still propagates to the caller's
-  // catch.
+  // catch. Returns whether a line actually went out, so callers with their own
+  // once-guards (task-complete) can roll those back on suppression too.
   const dispatch = async (source, text, priority, { solicited = false } = {}) => {
-    if (!text) return;
+    if (!text) return false;
     const now = Date.now();
-    if (!allowBySource(source, lastSpokenAt.get(source), now, limits)) return;
+    if (!allowBySource(source, lastSpokenAt.get(source), now, limits)) return false;
     const previous = lastSpokenAt.get(source) ?? null;
     lastSpokenAt.set(source, now);
     let ok = false;
@@ -158,6 +174,7 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     } finally {
       if (!ok && lastSpokenAt.get(source) === now) lastSpokenAt.set(source, previous);
     }
+    return ok;
   };
 
   // EventEmitter doesn't await async listeners, so a rejected dispatch would
@@ -197,11 +214,27 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     if (status !== 'completed' && status !== 'blocked') return;
     if (!isMetaTrue(task.metadata?.voiceDispatch)) return;
     if (status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') return;
+    // Reserve this terminal outcome synchronously (before queueing onto the
+    // async tail) so a same-tick / in-flight duplicate dedups to one line. The
+    // reservation is rolled back inside the tail if no line went out (config
+    // off, quiet hours, voice off, TTS failure) so a later legitimate re-update
+    // can still announce. A task without an id (shouldn't happen for real tasks)
+    // fails open — better to re-announce than to silently swallow.
+    const outcomeKey = task?.id != null ? `${task.id}:${status}` : null;
+    if (outcomeKey) {
+      if (announcedOutcomes.has(outcomeKey)) return;
+      announcedOutcomes.add(outcomeKey);
+    }
     taskCompleteTail = taskCompleteTail.then(async () => {
-      const cfg = await getVoiceConfig();
-      if (cfg?.llm?.codeAgent?.announceOnComplete === false) return;
-      const priority = status === 'completed' ? 'normal' : 'high';
-      await dispatch('task-complete', formatTaskCompletionLine(task), priority, { solicited: true });
+      let spoke = false;
+      try {
+        const cfg = await getVoiceConfig();
+        if (cfg?.llm?.codeAgent?.announceOnComplete === false) return;
+        const priority = status === 'completed' ? 'normal' : 'high';
+        spoke = await dispatch('task-complete', formatTaskCompletionLine(task), priority, { solicited: true });
+      } finally {
+        if (!spoke && outcomeKey) announcedOutcomes.delete(outcomeKey);
+      }
     }).catch((err) =>
       console.error(`🔕 voice: proactive task-complete trigger failed: ${err?.message || err}`),
     );
@@ -219,5 +252,6 @@ export const wireProactiveTriggers = ({ io, speak = defaultSpeak, limits = RATE_
     cosEvents.off('task:ready', onTaskReady);
     cosEvents.off('tasks:changed', onTaskUpdated);
     notificationEvents.off('added', onNotification);
+    announcedOutcomes.clear();
   };
 };

@@ -29,7 +29,19 @@ vi.mock('../lib/db.js', () => ({
 
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn().mockResolvedValue({}),
-  updateSettings: vi.fn().mockResolvedValue({})
+  updateSettings: vi.fn().mockResolvedValue({}),
+  // PUT /health/thresholds was migrated to updateSettingsWith (a read-modify-write
+  // that hands the mutator the current settings and returns its result). Mirror
+  // that contract faithfully — including the real helper's plain-object guard —
+  // so a future route mutator that forgets to `return` (or returns a non-object)
+  // fails this test instead of silently passing while it would throw in prod.
+  updateSettingsWith: vi.fn(async (mutate) => {
+    const next = await mutate({});
+    if (!next || typeof next !== 'object' || Array.isArray(next)) {
+      throw new TypeError('updateSettingsWith: mutate() must return a plain settings object');
+    }
+    return next;
+  })
 }));
 
 describe('System Health Routes', () => {

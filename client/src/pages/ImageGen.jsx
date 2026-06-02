@@ -39,13 +39,13 @@ import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
+import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
   getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
   buildFormData, listMediaJobs,
 } from '../services/api';
-import { safeParseJSON } from '../lib/genUtils';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
 // uploaded File + a 0..1 strength weight. Slots are positional so the
@@ -187,7 +187,7 @@ export default function ImageGen() {
   const [stage, setStage] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const eventSourceRef = useRef(null);
+  const { attach: attachJobEvents, eventSourceRef } = useMediaJobSse('image');
 
   // External-mode socket-driven progress (kept for backward compat with
   // existing AUTOMATIC1111 wiring; the local mode also feeds the same hook
@@ -313,19 +313,20 @@ export default function ImageGen() {
       setGenerating(true);
       setStatusMsg('Resuming…');
       resumeGenerate(activeJob);
-      // Re-attach the per-job SSE so raw status text resumes too.
-      const es = new EventSource(`/api/image-gen/${activeJob.generationId}/events`);
-      eventSourceRef.current = es;
-      es.onmessage = (e) => {
-        const msg = safeParseJSON(e.data);
-        if (!msg) return;
-        if (msg.type === 'status') setStatusMsg(msg.message);
-        if (msg.type === 'progress') setLocalProgress({ progress: msg.progress });
-        if (msg.type === 'complete' || msg.type === 'error' || msg.type === 'canceled') {
-          setGenerating(false);
-          es.close();
-        }
-      };
+      // Re-attach the per-job SSE so raw status text resumes too. Every
+      // terminal outcome (complete/error/canceled) and a lost connection just
+      // flips the generating flag off; the reject on the error/canceled/
+      // connection-loss paths is expected, so swallow it. onConnectionError is
+      // required so a connection blip can't leave the resumed render parked at
+      // "Resuming…" with generating stuck true.
+      attachJobEvents(activeJob.generationId, {
+        onStatus: (msg) => setStatusMsg(msg.message),
+        onProgress: (msg) => setLocalProgress({ progress: msg.progress }),
+        onComplete: () => setGenerating(false),
+        onError: () => setGenerating(false),
+        onCanceled: () => setGenerating(false),
+        onConnectionError: () => setGenerating(false),
+      }).catch(() => {});
     }).catch(() => {});
     return () => eventSourceRef.current?.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -493,6 +494,11 @@ export default function ImageGen() {
 
   const currentModel = models.find((m) => m.id === modelId);
   const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
+  // Edit-only models (Qwen-Image-Edit) require a source image — submitting
+  // text-only crashes the runner, so the server rejects it and we gate the
+  // submit button + show a hint rather than letting the user hit a failed job.
+  const isEditOnlyModel = currentModel?.editOnly === true;
+  const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   // mflux is the default runner for entries with no explicit `runner` field.
   // LoraPicker filters compatible weights itself; we just pass the family.
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
@@ -650,61 +656,44 @@ export default function ImageGen() {
   const startLocalGeneration = async () => {
     setLocalProgress({ progress: 0 });
     const { payload, data } = await submitGenerationPayload();
-    return new Promise((resolve, reject) => {
-      const jobId = data.jobId || data.generationId;
-      const es = new EventSource(`/api/image-gen/${jobId}/events`);
-      eventSourceRef.current = es;
-
-      es.onmessage = (ev) => {
-        const msg = safeParseJSON(ev.data);
-        if (!msg) return;
-        if (msg.type === 'stage') setStage({ name: msg.stage, detail: msg.detail });
-        if (msg.type === 'status') setStatusMsg(msg.message);
-        if (msg.type === 'progress') {
-          setLocalProgress({ progress: msg.progress, phase: msg.phase });
-          setStatusMsg(msg.message);
-        }
-        if (msg.type === 'complete') {
-          // Codex's built-in image_gen tool decides steps/guidance/seed
-          // internally and ignores whatever we pass — so don't backfill
-          // local-mode model defaults onto a codex render's metadata.
-          // The gallery / sidecar would otherwise show steps=20,
-          // guidance=3.5 (Flux 1 Dev defaults) on every codex image,
-          // misleading the user about what actually produced it.
-          const localOnlyMeta = isCodexMode ? {} : {
-            steps: payload.steps ?? currentModel?.steps,
-            guidance: payload.guidance ?? currentModel?.guidance,
-          };
-          setResult({
-            ...data,
-            ...msg.result,
-            prompt: payload.prompt,
-            negativePrompt: payload.negativePrompt,
-            width, height,
-            ...localOnlyMeta,
-          });
-          es.close();
-          resolve(msg.result);
-        }
-        if (msg.type === 'error') {
-          es.close();
-          // The server may attach `kind` (e.g. 'gated_repo', 'hf_unauthorized')
-          // and `repo` for the UI to deep-link to the HF access page. Carry
-          // them on the Error so handleGenerate's catch can render guidance.
-          const err = new Error(msg.error);
-          if (msg.kind) err.kind = msg.kind;
-          if (msg.repo) err.repo = msg.repo;
-          reject(err);
-        }
-        if (msg.type === 'canceled') {
-          es.close();
-          reject(new Error(msg.reason || 'Canceled'));
-        }
-      };
-      es.onerror = () => {
-        es.close();
-        reject(new Error('Lost connection to server'));
-      };
+    const jobId = data.jobId || data.generationId;
+    return attachJobEvents(jobId, {
+      onStage: (msg) => setStage({ name: msg.stage, detail: msg.detail }),
+      onStatus: (msg) => setStatusMsg(msg.message),
+      onProgress: (msg) => {
+        setLocalProgress({ progress: msg.progress, phase: msg.phase });
+        setStatusMsg(msg.message);
+      },
+      onComplete: (msg) => {
+        // Codex's built-in image_gen tool decides steps/guidance/seed
+        // internally and ignores whatever we pass — so don't backfill
+        // local-mode model defaults onto a codex render's metadata.
+        // The gallery / sidecar would otherwise show steps=20,
+        // guidance=3.5 (Flux 1 Dev defaults) on every codex image,
+        // misleading the user about what actually produced it.
+        const localOnlyMeta = isCodexMode ? {} : {
+          steps: payload.steps ?? currentModel?.steps,
+          guidance: payload.guidance ?? currentModel?.guidance,
+        };
+        setResult({
+          ...data,
+          ...msg.result,
+          prompt: payload.prompt,
+          negativePrompt: payload.negativePrompt,
+          width, height,
+          ...localOnlyMeta,
+        });
+        return msg.result;
+      },
+      onError: (msg) => {
+        // The server may attach `kind` (e.g. 'gated_repo', 'hf_unauthorized')
+        // and `repo` for the UI to deep-link to the HF access page. Carry
+        // them on the Error so handleGenerate's catch can render guidance.
+        const err = new Error(msg.error);
+        if (msg.kind) err.kind = msg.kind;
+        if (msg.repo) err.repo = msg.repo;
+        return err;
+      },
     });
   };
 
@@ -730,6 +719,10 @@ export default function ImageGen() {
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
     if (!prompt.trim()) return;
+    // The disabled submit button blocks clicks, but an Enter keypress in a
+    // number input still fires onSubmit — gate here too so an edit-only model
+    // without a source image hits the inline hint, not a server 400 toast.
+    if (editImageMissing) return;
     const batchN = isAsyncMode ? Math.max(1, batchCount) : 1;
     if (generating) return queueAdditional(batchN);
     setGenerating(true);
@@ -1020,7 +1013,10 @@ export default function ImageGen() {
           {isLocalMode && (
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">
-                Init image <span className="text-gray-500 font-normal">(image-to-image — Flux only)</span>
+                {isEditOnlyModel ? 'Source image' : 'Init image'}{' '}
+                <span className={`font-normal ${isEditOnlyModel ? 'text-port-warning' : 'text-gray-500'}`}>
+                  {isEditOnlyModel ? '(required — this model edits an existing image)' : '(image-to-image — Flux only)'}
+                </span>
               </label>
               {initImage.previewUrl ? (
                 <div className="flex items-start gap-3">
@@ -1143,12 +1139,16 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
-              disabled={!prompt.trim() || notConnected}
+              disabled={!prompt.trim() || notConnected || editImageMissing}
+              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : undefined}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
               {isAsyncMode && batchCount > 1 && <span className="text-xs opacity-80">× {batchCount}</span>}
             </button>
+            {editImageMissing && (
+              <span className="text-xs text-port-warning">Upload a source image to use this edit model</span>
+            )}
             {isAsyncMode && (
               <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
                 <span className="select-none">×</span>

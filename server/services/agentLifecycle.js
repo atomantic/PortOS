@@ -10,7 +10,7 @@ import { readFile, unlink, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { execGit } from '../lib/execGit.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { registerAgent, updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
+import { registerAgent, updateAgent, completeAgent } from './cosAgents.js';
 import { getConfig, updateTask, addTask, getTaskById, checkStagePrecondition } from './cos.js';
 import { spawnAgentViaRunner, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
@@ -187,6 +187,10 @@ export async function spawnAgentForTask(task) {
     }
 
     // Check provider availability (usage limits, rate limits, etc.)
+    // Set when we fall back below to a provider with a configured "Fallback
+    // Model" pin — it overrides the usual per-task model selection so the
+    // user's chosen fallback provider+model pair is honored on agent runs.
+    let fallbackModelPin = null;
     const providerAvailable = isProviderAvailable(provider.id);
     if (!providerAvailable) {
       const status = getProviderStatus(provider.id);
@@ -202,7 +206,8 @@ export async function spawnAgentForTask(task) {
       const { providers: providerList = [] } = await getAllProviders();
       const providersMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
       const taskFallbackId = task.metadata?.fallbackProvider;
-      const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId);
+      const taskFallbackModel = task.metadata?.fallbackModel;
+      const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId, taskFallbackModel);
 
       if (fallbackResult) {
         emitLog('info', `Using fallback provider: ${fallbackResult.provider.id} (source: ${fallbackResult.source})`, {
@@ -212,6 +217,7 @@ export async function spawnAgentForTask(task) {
           fallbackSource: fallbackResult.source
         });
         provider = fallbackResult.provider;
+        fallbackModelPin = fallbackResult.model || null;
       } else {
         const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
         cleanupOnError(errorMsg);
@@ -232,6 +238,10 @@ export async function spawnAgentForTask(task) {
       if (userProvider) {
         emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
         provider = userProvider;
+        // The fallback pin belonged to the fallback provider we just replaced —
+        // it must not carry onto the user's explicitly chosen provider, which
+        // gets its own normal model selection.
+        fallbackModelPin = null;
       } else {
         emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
       }
@@ -240,6 +250,12 @@ export async function spawnAgentForTask(task) {
     // Select optimal model for this task (async to allow learning-based suggestions)
     const modelSelection = await selectModelForTask(task, provider);
     let selectedModel = modelSelection.model;
+
+    // A configured "Fallback Model" pin (from the provider- or task-level
+    // fallback we took above) wins over the usual selection — the user
+    // explicitly chose this model to run on the fallback. The compatibility
+    // check below still guards it against the fallback provider's model list.
+    if (fallbackModelPin) selectedModel = fallbackModelPin;
 
     // Validate model is compatible with provider
     if (selectedModel && provider.models && provider.models.length > 0) {

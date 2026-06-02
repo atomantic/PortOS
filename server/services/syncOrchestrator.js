@@ -410,6 +410,9 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // can't sync universes" and the user knows what to do.
   const result = await dataSync.applyRemote(category, snapshot.data, {
     portosMeta: snapshot.portosMeta,
+    // Attribute any journaled conflict to the peer this snapshot came from so
+    // the Conflicts tab shows `via: snapshot (<peerId>)` instead of peerId:null.
+    peerId,
   });
   if (result.blockedBySchema) {
     await recordPeerSchemaGap(peerId, category, result.blockedBySchema)
@@ -786,6 +789,12 @@ async function runTombstoneSweep() {
     const issues = `${result.issues} issue${result.issues === 1 ? '' : 's'}`;
     const collections = `${result.collections} collection${result.collections === 1 ? '' : 's'}`;
     console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}, ${collections}`);
+  }
+  if (result && result.orphanBaseHashes > 0) {
+    console.log(`🧹 Tombstone GC: swept ${result.orphanBaseHashes} orphaned base-hash entr${result.orphanBaseHashes === 1 ? 'y' : 'ies'}`);
+  }
+  if (result && result.orphanSubscriptions > 0) {
+    console.log(`🧹 Tombstone GC: swept ${result.orphanSubscriptions} orphaned peer subscription${result.orphanSubscriptions === 1 ? '' : 's'}`);
   }
 }
 

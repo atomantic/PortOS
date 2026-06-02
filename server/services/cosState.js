@@ -7,7 +7,7 @@
 import { readFile, writeFile, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
-import { createMutex } from '../lib/asyncMutex.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
@@ -16,8 +16,16 @@ export const REPORTS_DIR = PATHS.reports;
 export const SCRIPTS_DIR = PATHS.scripts;
 export const ROOT_DIR = PATHS.root;
 
-// Mutex lock for state operations to prevent race conditions
-export const withStateLock = createMutex();
+// Serialize every state.json read-merge-write on a single tail so two
+// concurrent loadState→modify→saveState cycles can't interleave and clobber
+// each other. Standardized on `createFileWriteQueue` — the documented
+// single-JSON-file write-serialization convention (CLAUDE.md; same mechanism
+// settings.js and the issues/series/mediaCollections stores use) — instead of a
+// bespoke async mutex. Identical `(fn) => Promise` contract, so the ~34 existing
+// `withStateLock(...)` call sites are unchanged; the name is kept for that
+// reason. The queue additionally silences its tail so one rejected write can't
+// poison subsequent waiters (a strict improvement over the prior mutex).
+export const withStateLock = createFileWriteQueue();
 
 export const DEFAULT_CONFIG = {
   userTasksFile: 'data/TASKS.md',

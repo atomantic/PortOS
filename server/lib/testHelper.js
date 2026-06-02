@@ -98,3 +98,32 @@ export function request(app) {
     patch: (path) => new RequestBuilder(app, 'PATCH', path),
   };
 }
+
+/**
+ * Mock a fetch `Response` whose body is read via `.text()` — the read path used
+ * by `readResponseJson` and every fetch-based client. Use this for the common
+ * case of a JSON body: pass the value, it's serialized into `text()`.
+ *
+ *   fetchWithTimeout.mockResolvedValue(mockJsonResponse({ value: [] }));
+ *
+ * @param {*} body - serialized into the response body via JSON.stringify
+ * @param {{ ok?: boolean, status?: number }} [opts]
+ */
+export function mockJsonResponse(body, { ok = true, status = 200 } = {}) {
+  const text = JSON.stringify(body);
+  return { ok, status, text: async () => text };
+}
+
+/**
+ * Mock a fetch `Response` with a raw-string body read via `.text()` — for
+ * non-JSON / HTML / blank bodies (the masquerade cases) and error text.
+ *
+ *   fetchWithTimeout.mockResolvedValue(mockTextResponse('<html>502</html>'));
+ *   fetchWithTimeout.mockResolvedValue(mockTextResponse('boom', { ok: false, status: 500 }));
+ *
+ * @param {string} [body] - returned verbatim by `text()`
+ * @param {{ ok?: boolean, status?: number }} [opts]
+ */
+export function mockTextResponse(body = '', { ok = true, status = 200 } = {}) {
+  return { ok, status, text: async () => body };
+}

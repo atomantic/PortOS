@@ -234,6 +234,141 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   return { bin, args };
 };
 
+// Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
+// corrupt sidecar value like Number('bad') would slip through and end up
+// serialized into metadata / the CLI flag. `null` here means "no strength
+// sent" (init-image), which the args builder already gates on; for refs
+// we fall back to 1.0 (full influence).
+const clampStrength01 = (raw, fallback) => {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1, n));
+};
+
+/**
+ * Build the resolved/validated render parameters + sidecar `meta` object for a
+ * generation job. Factored out of `generateImage` so the resolution rules
+ * (seed/steps/guidance defaults, LoRA prefix-check, init/reference path
+ * re-anchoring, strength clamping) are unit-testable without spawning Python
+ * or touching the gallery filesystem.
+ *
+ * Filesystem touch-points are injected so the function stays pure:
+ * - `resolveInputPath(rawPath)` — re-anchors an init/reference path against the
+ *   approved image roots; returns the validated absolute path or `null`
+ *   (production passes `resolveImageInputPath`).
+ * - `loraExists(absPath)` — whether a prefix-checked LoRA path exists on disk
+ *   (production passes `existsSync`).
+ *
+ * `meta` is the exact object `generateImage` persists as the `<jobId>.metadata.json`
+ * sidecar AND spreads into the in-memory job + activeJob snapshots, so the
+ * shape returned here is the contract the gallery/Remix flow reads back.
+ */
+export function buildSidecarMeta({
+  jobId,
+  model,
+  prompt,
+  negativePrompt = '',
+  modelId,
+  width,
+  height,
+  steps,
+  guidance,
+  seed,
+  quantize,
+  loraFilenames = [],
+  loraPaths = [],
+  loraScales = [],
+  initImagePath = null,
+  initImageStrength = null,
+  referenceImagePaths = [],
+  referenceImageStrengths = [],
+  resolveInputPath,
+  loraExists,
+  now = () => new Date().toISOString(),
+}) {
+  const filename = `${jobId}.png`;
+  const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
+  const actualSteps = steps ? Number(steps) : model.steps;
+  // Step-wise distilled models (Schnell / FLUX.2 Klein / Z-Image-Turbo) ignore
+  // any guidance scale > 1.0 internally; passing a real value just produces a
+  // "Guidance scale X is ignored for step-wise distilled models." warning on
+  // every render. Clamp to ≤1.0 (rather than hard-pin to 1.0) so registry
+  // entries that intentionally use 0.0 — e.g. Flux.1 Schnell, where the mflux
+  // runner historically *omits* --guidance entirely on 0 — keep their existing
+  // behavior. The clamp keeps FLUX.2 / Z-Image / ERNIE quiet while leaving
+  // sub-1.0 values (including 0.0) untouched.
+  const requestedGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
+  const actualGuidance = model.cfgDisabled
+    ? Math.min(1.0, Number.isFinite(requestedGuidance) ? requestedGuidance : 1.0)
+    : requestedGuidance;
+  // The new client-side surface sends `loraFilenames` (basenames only); the
+  // server resolves them against PATHS.loras. `loraPaths` is kept as a
+  // back-compat input for old gallery sidecars that stored absolute paths
+  // pre-refactor — both go through the same resolve+prefix-check.
+  const lorasRoot = resolvePath(PATHS.loras) + PATH_SEP;
+  const candidates = [
+    ...loraFilenames.map((f) => (typeof f === 'string' ? join(PATHS.loras, basename(f)) : null)),
+    ...loraPaths,
+  ];
+  const validLoras = candidates.filter((p) => {
+    if (!p || typeof p !== 'string') return false;
+    const resolved = resolvePath(p);
+    if (!resolved.startsWith(lorasRoot)) return false;
+    return loraExists(resolved);
+  });
+
+  // Store loraFilenames (basenames) in the sidecar going forward — that's
+  // what the new client API uses for remix. Keep `loraPaths` populated too
+  // so older code paths reading the sidecar don't break.
+  const validLoraFilenames = validLoras.map((p) => basename(p));
+  // i2i: defense in depth — the route already validated a fresh request,
+  // but an old sidecar replay can carry a stale absolute path outside the
+  // approved image roots. resolveInputPath accepts gallery + image-refs
+  // + visual templates — the latter so the universe-builder reference-sheet
+  // renderer can use a shipped layout template as the init-image anchor.
+  const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
+    ? resolveInputPath(initImagePath)
+    : null;
+  const validInitImageStrength = validInitImagePath && initImageStrength != null
+    ? clampStrength01(initImageStrength, null)
+    : null;
+  // Multi-reference: re-anchor each path through resolveInputPath so a
+  // sidecar replay can't sneak a path outside the approved image roots into
+  // the runner. Accepts gallery + image-refs + visual templates — the gallery
+  // path lets a canon portrait (e.g. character.primaryImageRef) flow in as a
+  // multi-ref input. Pair each path with its strength BEFORE filtering so a
+  // rejected entry doesn't shift the strength array — otherwise the surviving
+  // path would inherit the wrong slot's strength.
+  const rawRefPaths = Array.isArray(referenceImagePaths) ? referenceImagePaths : [];
+  const validReferences = rawRefPaths
+    .map((p, i) => {
+      const resolved = typeof p === 'string' ? resolveInputPath(p) : null;
+      if (!resolved) return null;
+      const rawStrength = referenceImageStrengths?.[i];
+      const strength = rawStrength != null ? clampStrength01(rawStrength, 1.0) : 1.0;
+      return { path: resolved, strength };
+    })
+    .filter(Boolean);
+  const validReferenceImagePaths = validReferences.map((r) => r.path);
+  const validReferenceImageStrengths = validReferences.map((r) => r.strength);
+  // `referenceImageStrengths` is honored end-to-end: the FLUX.2 runner installs
+  // a Flux2KVLayerCache.store + _flux2_kv_causal_attention patch that scales
+  // each reference's V slice by the corresponding strength (1.0 = upstream
+  // baseline, 0.0 = ignored). Mirrors the Python sidecar's `referenceStrengths`.
+  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, createdAt: now() };
+  return {
+    meta,
+    actualSeed,
+    actualSteps,
+    actualGuidance,
+    validLoras,
+    validInitImagePath,
+    validInitImageStrength,
+    validReferenceImagePaths,
+    validReferenceImageStrengths,
+  };
+}
+
 export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false }) {
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
@@ -266,85 +401,38 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
-  const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
-  const actualSteps = steps ? Number(steps) : model.steps;
-  // Step-wise distilled models (Schnell / FLUX.2 Klein / Z-Image-Turbo) ignore
-  // any guidance scale > 1.0 internally; passing a real value just produces a
-  // "Guidance scale X is ignored for step-wise distilled models." warning on
-  // every render. Clamp to ≤1.0 (rather than hard-pin to 1.0) so registry
-  // entries that intentionally use 0.0 — e.g. Flux.1 Schnell, where the mflux
-  // runner historically *omits* --guidance entirely on 0 — keep their existing
-  // behavior. The clamp keeps FLUX.2 / Z-Image / ERNIE quiet while leaving
-  // sub-1.0 values (including 0.0) untouched.
-  const requestedGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
-  const actualGuidance = model.cfgDisabled
-    ? Math.min(1.0, Number.isFinite(requestedGuidance) ? requestedGuidance : 1.0)
-    : requestedGuidance;
-  // The new client-side surface sends `loraFilenames` (basenames only); the
-  // server resolves them against PATHS.loras. `loraPaths` is kept as a
-  // back-compat input for old gallery sidecars that stored absolute paths
-  // pre-refactor — both go through the same resolve+prefix-check.
-  const lorasRoot = resolvePath(PATHS.loras) + PATH_SEP;
-  const candidates = [
-    ...loraFilenames.map((f) => (typeof f === 'string' ? join(PATHS.loras, basename(f)) : null)),
-    ...loraPaths,
-  ];
-  const validLoras = candidates.filter((p) => {
-    if (!p || typeof p !== 'string') return false;
-    const resolved = resolvePath(p);
-    if (!resolved.startsWith(lorasRoot)) return false;
-    return existsSync(resolved);
+  const {
+    meta,
+    actualSeed,
+    actualSteps,
+    actualGuidance,
+    validLoras,
+    validInitImagePath,
+    validInitImageStrength,
+    validReferenceImagePaths,
+    validReferenceImageStrengths,
+  } = buildSidecarMeta({
+    jobId,
+    model,
+    prompt,
+    negativePrompt,
+    modelId,
+    width,
+    height,
+    steps,
+    guidance,
+    seed,
+    quantize,
+    loraFilenames,
+    loraPaths,
+    loraScales,
+    initImagePath,
+    initImageStrength,
+    referenceImagePaths,
+    referenceImageStrengths,
+    resolveInputPath: resolveImageInputPath,
+    loraExists: existsSync,
   });
-
-  // Store loraFilenames (basenames) in the sidecar going forward — that's
-  // what the new client API uses for remix. Keep `loraPaths` populated too
-  // so older code paths reading the sidecar don't break.
-  const validLoraFilenames = validLoras.map((p) => basename(p));
-  // i2i: defense in depth — the route already validated a fresh request,
-  // but an old sidecar replay can carry a stale absolute path outside the
-  // approved image roots. resolveImageInputPath accepts gallery + image-refs
-  // + visual templates — the latter so the universe-builder reference-sheet
-  // renderer can use a shipped layout template as the init-image anchor.
-  const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
-    ? resolveImageInputPath(initImagePath)
-    : null;
-  // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
-  // corrupt sidecar value like Number('bad') would slip through and end up
-  // serialized into metadata / the CLI flag. `null` here means "no strength
-  // sent" (init-image), which the args builder already gates on; for refs
-  // (below) we fall back to 1.0 (full influence).
-  const clampStrength01 = (raw, fallback) => {
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.max(0, Math.min(1, n));
-  };
-  const validInitImageStrength = validInitImagePath && initImageStrength != null
-    ? clampStrength01(initImageStrength, null)
-    : null;
-  // Multi-reference: re-anchor each path through resolveImageInputPath so a
-  // sidecar replay can't sneak a path outside the approved image roots into
-  // the runner. Accepts gallery + image-refs + visual templates — the gallery
-  // path lets a canon portrait (e.g. character.primaryImageRef) flow in as a
-  // multi-ref input. Pair each path with its strength BEFORE filtering so a
-  // rejected entry doesn't shift the strength array — otherwise the surviving
-  // path would inherit the wrong slot's strength.
-  const rawRefPaths = Array.isArray(referenceImagePaths) ? referenceImagePaths : [];
-  const validReferences = rawRefPaths
-    .map((p, i) => {
-      const resolved = typeof p === 'string' ? resolveImageInputPath(p) : null;
-      if (!resolved) return null;
-      const rawStrength = referenceImageStrengths?.[i];
-      const strength = rawStrength != null ? clampStrength01(rawStrength, 1.0) : 1.0;
-      return { path: resolved, strength };
-    })
-    .filter(Boolean);
-  const validReferenceImagePaths = validReferences.map((r) => r.path);
-  const validReferenceImageStrengths = validReferences.map((r) => r.strength);
-  // `referenceImageStrengths` is honored end-to-end: the FLUX.2 runner installs
-  // a Flux2KVLayerCache.store + _flux2_kv_causal_attention patch that scales
-  // each reference's V slice by the corresponding strength (1.0 = upstream
-  // baseline, 0.0 = ignored). Mirrors the Python sidecar's `referenceStrengths`.
-  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, createdAt: new Date().toISOString() };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 

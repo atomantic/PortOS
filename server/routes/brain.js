@@ -29,6 +29,7 @@ import {
   settingsUpdateInputSchema,
   linkInputSchema,
   linkUpdateInputSchema,
+  linkReorderSchema,
   linksQuerySchema,
   bucketInputSchema,
   bucketUpdateInputSchema,
@@ -528,6 +529,31 @@ router.get('/links', asyncHandler(async (req, res) => {
   links = links.slice(offset, offset + limit);
 
   res.json({ links, total, limit, offset });
+}));
+
+/**
+ * POST /api/brain/links/reorder
+ * Apply a batch of { id, bucketId, bucketOrder } updates for one drag gesture
+ * in a single atomic write — N concurrent single-link PUTs against the shared
+ * links store can lose-update each other. Mirrors POST /buckets/reorder.
+ * (Registered before /links/:id so "reorder" isn't captured as an :id.)
+ */
+router.post('/links/reorder', asyncHandler(async (req, res) => {
+  const { updates } = validateRequest(linkReorderSchema, req.body);
+  // All-or-nothing: reject before any write if a batch references a link that
+  // no longer exists, so the response can't report success after a partial
+  // apply (mirrors the single-link PUT's 404 on an unknown id).
+  const known = new Set((await brainService.getLinks()).map(l => l.id));
+  const missing = updates.filter(u => !known.has(u.id)).map(u => u.id);
+  if (missing.length) {
+    throw new ServerError('Unknown link id in reorder batch', {
+      status: 404,
+      code: 'NOT_FOUND',
+      context: { missing }
+    });
+  }
+  const links = await brainService.reorderLinks(updates);
+  res.json({ links });
 }));
 
 /**

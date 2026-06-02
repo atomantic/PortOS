@@ -239,11 +239,18 @@ export function createProviderStatusService(config = {}) {
       return statusCache.providers[providerId];
     },
 
-    getFallbackProvider(primaryProviderId, providers, taskFallbackId = null) {
+    // Returns `{ provider, source, model }` (or null). `model` is the model
+    // hint the caller should run on the fallback provider — the configured
+    // `fallbackModel` for a provider-level fallback, the task's fallback model
+    // for a task-level one, or null ("let the fallback resolve its own
+    // default"). It is NEVER the primary's model: a model id resolved against
+    // the primary almost never exists on the fallback, and carrying it over is
+    // exactly the leak that sent `codex-configured-default` to LM Studio.
+    getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null) {
       if (taskFallbackId && taskFallbackId !== primaryProviderId) {
         const taskFallback = providers[taskFallbackId];
         if (taskFallback?.enabled && this.isAvailable(taskFallback.id)) {
-          return { provider: taskFallback, source: 'task' };
+          return { provider: taskFallback, source: 'task', model: taskFallbackModelId || null };
         }
       }
 
@@ -255,7 +262,7 @@ export function createProviderStatusService(config = {}) {
       if (primaryProvider?.fallbackProvider && primaryProvider.fallbackProvider !== primaryProviderId) {
         const configuredFallback = providers[primaryProvider.fallbackProvider];
         if (configuredFallback?.enabled && this.isAvailable(configuredFallback.id)) {
-          return { provider: configuredFallback, source: 'provider' };
+          return { provider: configuredFallback, source: 'provider', model: primaryProvider.fallbackModel || null };
         }
       }
 
@@ -264,7 +271,7 @@ export function createProviderStatusService(config = {}) {
 
         const provider = providers[providerId];
         if (provider?.enabled && this.isAvailable(providerId)) {
-          return { provider, source: 'system' };
+          return { provider, source: 'system', model: null };
         }
       }
 

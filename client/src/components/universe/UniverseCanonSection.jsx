@@ -30,7 +30,7 @@ import {
   expandUniverseCharacter,
 } from '../../services/apiUniverseBuilder';
 import { generateImage } from '../../services/apiSystem';
-import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
+import { composeStyledPrompt, composeCanonStyledPrompt } from '../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../lib/cleanPlatePrompt';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
@@ -396,11 +396,12 @@ export default function UniverseCanonSection({
       return;
     }
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
-    const styled = composeStyledPrompt(
-      `${entry.name}: ${description}`,
-      baseOpts.negativePrompt || '',
-      universe ? universeStylePreset(universe) : null,
-    );
+    const styled = composeCanonStyledPrompt({
+      name: entry.name,
+      description,
+      universe,
+      baseNegative: baseOpts.negativePrompt,
+    });
     const queued = await generateImage({
       ...baseOpts,
       prompt: styled.prompt,

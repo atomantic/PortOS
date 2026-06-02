@@ -34,7 +34,7 @@ import { join } from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from './fileUtils.js';
 import { createCollectionStore } from './collectionStore.js';
-import { canonicalStringify } from './objects.js';
+import { canonicalStringify, isPlainObject } from './objects.js';
 import { sanitizeRecordForWire } from './syncWire.js';
 
 const JOURNAL_TYPE_SCHEMA_VERSION = 1;
@@ -56,17 +56,67 @@ export const conflictJournalStore = () => store();
 
 // ---- content hashing (matches the sender/receiver wire convention) ----
 
+// mediaCollection divergence is detected over a SCALAR SUBSET, not the whole
+// wire record. The merge (`mergeMediaCollectionsFromSync`) union-merges `items`
+// — neither side ever loses a render it knows about — and bumps `updatedAt` on
+// every `addItem`. So hashing the full record would false-positive whenever two
+// peers independently added different items to the same collection (items +
+// updatedAt differ, yet NOTHING was overwritten). The journal only cares about
+// the LWW-overwritten scalars; we hash exactly those so an item-only divergence
+// is invisible to detection while a real name/description/cover/link overwrite
+// still trips it. `updatedAt` is the LWW *key*, not content, so it's excluded
+// too. Soft-delete fields stay in (a remote delete that erases a diverged local
+// edit is a real conflict — mirrors the universe/series delete-vs-edit case).
+const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'coverKey', 'universeId', 'seriesId']);
+
+// Fields dropped from the conflict-detection hash, per kind. These are
+// server-managed values that mutate WITHOUT a user edit (and without bumping
+// `updatedAt`), so leaving them in the hash would read as a false divergence
+// and journal a spurious conflict. Issue `number` is renumber-managed:
+// `applyVolumeOrderedNumbers` shifts it in place when a *sibling* issue is
+// added/removed, so a local sibling-delete would otherwise make this issue's
+// `localHash !== base` even though no restorable content changed (the resulting
+// conflict card would have an empty diffSummary, since `number` isn't
+// restorable). Excluding it keeps the hash aligned with the restorable-field
+// set the UI actually shows. (mediaCollection narrows via its own scalar
+// projection below; universe/series exclude nothing, so their already-seeded
+// base hashes stay valid across upgrade.)
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'] });
+
 /**
- * sha256 of the canonical wire projection. Reuses sanitizeRecordForWire +
+ * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
  * canonicalStringify so the sender hashing what it pushes and the receiver
- * hashing its local copy agree byte-for-byte. Returns null when the record has
+ * hashing its local copy agree byte-for-byte. For mediaCollection the wire form
+ * is further narrowed to its overwritable scalars (see
+ * MEDIA_COLLECTION_SCALAR_FIELDS); for issue the renumber-managed `number` is
+ * dropped (see HASH_EXCLUDED_FIELDS) — both sides apply the same narrowing, so
+ * the base hash stays consistent across peers. Returns null when the record has
  * no wire form (ephemeral non-tombstone, or invalid) — callers treat a null
  * hash as "cannot compare".
  */
 export function contentHashForRecord(kind, record) {
   const wire = sanitizeRecordForWire(kind, record);
   if (!wire) return null;
-  return createHash('sha256').update(canonicalStringify(wire)).digest('hex');
+  let hashInput = wire;
+  if (kind === 'mediaCollection') {
+    hashInput = projectCollectionScalars(wire);
+  } else if (HASH_EXCLUDED_FIELDS[kind]) {
+    const excluded = HASH_EXCLUDED_FIELDS[kind];
+    hashInput = Object.fromEntries(Object.entries(wire).filter(([k]) => !excluded.includes(k)));
+  }
+  return createHash('sha256').update(canonicalStringify(hashInput)).digest('hex');
+}
+
+// Narrow a wire-form collection to the scalars whose overwrite the journal
+// tracks, plus the (already-normalized) soft-delete pair. `items`/`updatedAt`/
+// `id` and all other fields are dropped. canonicalStringify sorts keys, so the
+// insertion order here is irrelevant to the resulting hash.
+function projectCollectionScalars(wire) {
+  const out = {};
+  for (const f of MEDIA_COLLECTION_SCALAR_FIELDS) if (f in wire) out[f] = wire[f];
+  out.deleted = wire.deleted === true;
+  out.deletedAt = out.deleted ? (wire.deletedAt ?? null) : null;
+  return out;
 }
 
 // ---- base-hash side store (in-memory cache, batched write-through) ----
@@ -75,6 +125,10 @@ let _baseHashes = null;       // Map<`${kind}:${id}`, sha256>
 let _loadPromise = null;
 let _baseDirty = false;
 let _flushTail = Promise.resolve();
+// >0 while a `withBaseHashFlushBatch` scope is active. Defers the disk write so
+// an await-separated multi-record push loop (peer:online convergence) collapses
+// N `sync_base_hashes.json` rewrites into one at the batch's terminal flush.
+let _flushBatchDepth = 0;
 
 const baseKey = (kind, id) => `${kind}:${id}`;
 
@@ -118,10 +172,57 @@ export async function deleteSyncBaseHash(kind, id) {
   await flushBaseHashes();
 }
 
+/**
+ * Sweep base-hash entries whose record no longer resolves to a live record.
+ *
+ * The per-record prune paths (`pruneTombstonedUniverses` / `…Series` / `…Issues`
+ * / `…Collections`) already evict a record's base hash when they hard-delete its
+ * tombstone. This is the BACKSTOP for keys that escaped those paths: a record
+ * hand-deleted on disk, a key left behind by an older version before the prune
+ * paths evicted, or any future kind that seeds a base hash without a matching
+ * eviction. Without it the side store accumulates dead keys forever on a
+ * long-lived federated install.
+ *
+ * `resolves` is an async predicate `(kind, id) => boolean` — return true if the
+ * key still maps to a record we want to keep a base hash for. Keys whose kind
+ * the caller doesn't recognize are LEFT ALONE (the predicate should return true
+ * for unknown kinds) so a partial resolver can never strip live entries it
+ * simply didn't know how to check. Coalesces into one disk write via the dirty
+ * flag + a single trailing flush.
+ *
+ * Returns `{ pruned }`.
+ */
+export async function pruneOrphanedBaseHashes(resolves) {
+  if (typeof resolves !== 'function') return { pruned: 0 };
+  const map = await ensureBaseLoaded();
+  let pruned = 0;
+  for (const key of [...map.keys()]) {
+    const sep = key.indexOf(':');
+    if (sep < 0) continue; // malformed key — leave it, never guess
+    const kind = key.slice(0, sep);
+    const id = key.slice(sep + 1);
+    const keep = await resolves(kind, id).catch(() => true); // resolver error → conservative keep
+    if (keep) continue;
+    map.delete(key);
+    _baseDirty = true;
+    pruned += 1;
+  }
+  if (pruned > 0) await flushBaseHashes();
+  return { pruned };
+}
+
 /** Persist the base-hash map if dirty. Serialized so concurrent flushes can't
- *  interleave file writes. Call once after a merge's write loop. */
+ *  interleave file writes. Call once after a merge's write loop.
+ *
+ *  Inside a `withBaseHashFlushBatch` scope the write is deferred: the in-memory
+ *  stamps stay coalesced (`_baseDirty`) and the single disk write fires when the
+ *  outermost batch closes. Callers still get a thenable (`_flushTail`) so any
+ *  `await flushBaseHashes()` resolves immediately rather than blocking inside
+ *  the batch. */
 export function flushBaseHashes() {
-  if (!_baseDirty) return _flushTail;
+  // Defer while inside a batch, and no-op when nothing is dirty — either way the
+  // outstanding `_flushTail` thenable is the right thing to await.
+  if (_flushBatchDepth > 0 || !_baseDirty) return _flushTail;
   _flushTail = _flushTail.then(async () => {
     if (!_baseDirty) return;
     _baseDirty = false;
@@ -133,6 +234,40 @@ export function flushBaseHashes() {
     console.error(`❌ conflictJournal: base-hash flush failed: ${err?.message || err}`);
   });
   return _flushTail;
+}
+
+/**
+ * Run `fn` with base-hash disk writes coalesced into ONE flush at the end.
+ *
+ * The base-hash map already coalesces SYNCHRONOUS bursts (the `_baseDirty` flag
+ * means a run of `setSyncBaseHash` calls before a single `flushBaseHashes` pays
+ * one write). What it can't collapse on its own is an AWAIT-SEPARATED loop that
+ * stamps + flushes per iteration: each flush lands on the previous one's settled
+ * `_flushTail`, so an N-iteration loop rewrites `sync_base_hashes.json` N times.
+ * Wrapping the loop in this scope defers every interior flush; the single
+ * terminal write captures all N stamps. (Caller in the tree today: the
+ * `peer:online` convergence walk `retryPendingPushesForPeer`, which pushes —
+ * and stamps — every subscribed record in sequence.)
+ *
+ * Re-entrant (depth-counted) so nested scopes collapse to the outermost batch,
+ * and the terminal flush runs in `finally` so a thrown/rejected `fn` still
+ * persists whatever stamps landed before it failed. Unlike a `setTimeout`
+ * debounce (tried and reverted — the unref'd timer leaked into `peerSync.test.js`'s
+ * settle-waits and made the suite flaky), this is deterministic: the flush is
+ * tied to the scope boundary, not a wall-clock timer, so tests just `await` it.
+ *
+ * Contract note: stamps performed inside the scope must have settled (the
+ * in-memory `setSyncBaseHash` awaited) before `fn` returns, or the terminal
+ * flush won't see `_baseDirty` for them. The current caller awaits its stamps.
+ */
+export async function withBaseHashFlushBatch(fn) {
+  _flushBatchDepth += 1;
+  try {
+    return await fn();
+  } finally {
+    _flushBatchDepth -= 1;
+    if (_flushBatchDepth === 0) await flushBaseHashes();
+  }
 }
 
 // ---- conflict detection + journaling ----
@@ -158,11 +293,106 @@ export async function detectConflict({ kind, id, local, remote }) {
 export const RESTORABLE_FIELDS = Object.freeze({
   universe: ['name', 'starterPrompt', 'logline', 'premise', 'styleNotes', 'categories', 'compositeSheets', 'influences', 'characters', 'places', 'objects'],
   series: ['name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'targetFormat', 'issueCountTarget', 'arc', 'seasons'],
+  // mediaCollection restores only the user-authored content scalars. `items`
+  // are union-merged (never lost, nothing to restore); `universeId`/`seriesId`
+  // are structural links managed by the link/unlink helpers, not `updateCollection`
+  // patches — so they're hashed for DETECTION but not offered for restore.
+  mediaCollection: ['name', 'description', 'coverKey'],
+  // Issue: the user-authored content the merge can restore. `stages` carries
+  // the bulk of the work (prose, comic pages, render metadata). Server-owned /
+  // structural fields are excluded deliberately — `number` is renumber-managed,
+  // `seriesId` is the immutable parent link, `origin` is share provenance —
+  // and `mergeIssuePatch` accepts every field listed here.
+  issue: ['title', 'status', 'seasonId', 'arcPosition', 'arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget', 'stages'],
 });
 
-// Top-level shallow diff over the kind's restorable content fields — enough for
-// the UI to render "Name, Premise differ" with InlineDiff and offer each as a
-// selectable merge-field. Deep field diffing is a follow-up.
+const present = (v) => v !== undefined;
+const changedFlag = (lv, rv) => (present(lv) && present(rv) ? 'both' : (present(rv) ? 'remote-only' : 'local-only'));
+
+// First non-empty string among `fields`, in order — used both to pick a stable
+// PAIR key for an array element and to pick a human display LABEL for it.
+const firstStringField = (el, fields) => {
+  for (const k of fields) {
+    if (typeof el?.[k] === 'string' && el[k].trim()) return el[k];
+  }
+  return null;
+};
+// Stable key used to PAIR two array elements across the local/remote sides
+// (prefer an explicit id so a reorder/insert doesn't cascade). Null ⇒ the
+// element carries no identity and the array isn't deep-diffable by identity.
+const entryMatchKey = (el) => firstStringField(el, ['id', 'key', 'slug', 'name']);
+// Human-friendly LABEL for a changed sub-entry (a uuid id is a poor label, so a
+// name/title is preferred for display even when the match used the id).
+const entryLabel = (el, fallback) => firstStringField(el, ['name', 'title', 'label', 'key', 'slug', 'id']) ?? fallback;
+
+// Diff two key→value maps: one part per key whose value differs. Each part
+// carries a STABLE, unique `path` (the map key — used as the React render key)
+// and a human `label(key, lv, rv)` for display; for an object map the two are
+// the same, but for an identity-paired array the path is the (unique) match key
+// while the label is a friendly name that may collide. Returns the parts array,
+// or null when nothing differs.
+const diffEntryMaps = (lMap, rMap, label) => {
+  const parts = [];
+  for (const key of new Set([...lMap.keys(), ...rMap.keys()])) {
+    const lv = lMap.get(key);
+    const rv = rMap.get(key);
+    if (canonicalStringify(lv) === canonicalStringify(rv)) continue;
+    parts.push({ path: key, label: label(key, lv, rv), localValue: lv, remoteValue: rv, changed: changedFlag(lv, rv) });
+  }
+  return parts.length ? parts : null;
+};
+
+// Build a Map keyed by each element's stable match key. Returns null — so the
+// caller falls back to the whole-field diff — when ANY element is identity-less
+// (null key) OR two elements share a key (a duplicate id, or two entries that
+// both fall back to the same name): identity pairing isn't reliable, and a
+// last-wins Map would silently drop the collided element from the diff.
+const buildKeyedMap = (arr) => {
+  const map = new Map();
+  for (const el of arr) {
+    const key = entryMatchKey(el);
+    if (key === null || map.has(key)) return null;
+    map.set(key, el);
+  }
+  return map;
+};
+
+/**
+ * One-level structural diff of a single restorable field, used to render the
+ * Conflicts tab as "which sub-entry changed" instead of one giant JSON blob.
+ * Returns an array of changed sub-entries `[{ path, label, localValue,
+ * remoteValue, changed }]`, or `null` when the field isn't deepenable — a
+ * scalar, an array of scalars, an array of objects without unique stable
+ * identities, or a shape-mismatch (object vs array) — in which case the caller
+ * keeps the whole-field diff. Only entries that actually differ are emitted.
+ *
+ * - Object map / structured object (`categories`, `stages`, `arc`): one part
+ *   per key whose value differs (path = label = key).
+ * - Array of identity-bearing objects (`characters`, `places`, `seasons`):
+ *   paired by `entryMatchKey`; one part per identity that differs (a side
+ *   missing ⇒ added/removed). The `path` is the unique match key; the `label`
+ *   is a human name.
+ */
+export function deepFieldDiff(localVal, remoteVal) {
+  if (isPlainObject(localVal) && isPlainObject(remoteVal)) {
+    return diffEntryMaps(new Map(Object.entries(localVal)), new Map(Object.entries(remoteVal)), (key) => key);
+  }
+  if (Array.isArray(localVal) && Array.isArray(remoteVal)) {
+    if (localVal.length === 0 && remoteVal.length === 0) return null;
+    const lMap = buildKeyedMap(localVal);
+    const rMap = buildKeyedMap(remoteVal);
+    if (!lMap || !rMap) return null; // identity-less or duplicate keys → whole-field diff
+    return diffEntryMaps(lMap, rMap, (key, lv, rv) => entryLabel(lv ?? rv, key));
+  }
+  return null;
+}
+
+// Per-field diff over the kind's restorable content fields. A scalar field
+// carries its whole-field `localValue`/`remoteValue` for InlineDiff; an
+// object-map or array-of-objects field instead carries `parts` (the changed
+// sub-entries) so the UI renders one focused diff per entry rather than a
+// single giant JSON blob. The merge-fields selection stays at FIELD granularity
+// (the resolver applies whole snapshot fields) — `parts` is display-only.
 const diffSummary = (kind, local, remote) => {
   const fields = RESTORABLE_FIELDS[kind] || [];
   const out = [];
@@ -170,13 +400,10 @@ const diffSummary = (kind, local, remote) => {
     const lv = local?.[field];
     const rv = remote?.[field];
     if (canonicalStringify(lv) === canonicalStringify(rv)) continue;
-    const present = (v) => v !== undefined;
-    out.push({
-      field,
-      localValue: lv,
-      remoteValue: rv,
-      changed: present(lv) && present(rv) ? 'both' : (present(rv) ? 'remote-only' : 'local-only'),
-    });
+    const changed = changedFlag(lv, rv);
+    const parts = deepFieldDiff(lv, rv);
+    if (parts) out.push({ field, changed, parts });
+    else out.push({ field, localValue: lv, remoteValue: rv, changed });
   }
   return out;
 };
@@ -241,5 +468,6 @@ export function __resetBaseHashCacheForTests() {
   _loadPromise = null;
   _baseDirty = false;
   _flushTail = Promise.resolve();
+  _flushBatchDepth = 0;
   _store = null;
 }

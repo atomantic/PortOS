@@ -13,11 +13,12 @@
  * reload and shows in both the Universe Builder and the Story Builder
  * aesthetic step.
  */
-import { useState, useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { Sparkles } from 'lucide-react';
-import { generateImage, getSettings, updateUniverse } from '../../services/api';
+import { updateUniverse } from '../../services/api';
 import { universeStylePreset } from '../../lib/universeStylePreset';
-import { pipelineImageCfgToRenderOpts, readPipelineImageSettings, PIPELINE_IMAGE_DEFAULTS } from '../../lib/pipelineImageDefaults';
+import useImageRenderSettings from '../../hooks/useImageRenderSettings';
+import useSingleImageRender from '../../hooks/useSingleImageRender';
 import EntryThumbSlot from './EntryThumbSlot';
 import toast from '../ui/Toast';
 
@@ -35,38 +36,52 @@ export function hasStyleForProbe(universe) {
   return Boolean(prompt.trim());
 }
 
-export default function StyleProbeImage({ universe, onUniverseChange, canRender = true, onPreview = null, onRenderComplete = null }) {
-  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
-  const [jobId, setJobId] = useState(null);
-  // MediaJobThumb's onFilename effect can fire more than once — process each
-  // completed filename's persist exactly once.
-  const processedRef = useRef(new Set());
+// Stable key for the influences a probe was actually built from. The render job
+// is async — between queuing it and its completion the user can edit *and save*
+// influences, which re-points the saved record. Capturing this key when the
+// probe is queued lets the completion handler skip persisting if the live style
+// has since drifted, so a stale image can't be pinned to a record built from
+// different influences.
+export const probeStyleKey = (universe) => JSON.stringify(buildStyleProbePrompt(universe));
 
-  useEffect(() => {
-    getSettings({ silent: true })
-      .then((s) => setImageCfg(readPipelineImageSettings(s)))
-      .catch(() => {});
-  }, []);
+// Decide whether a completed probe may be persisted onto the saved record. The
+// render-time gate ensures a probe only STARTS while the style is clean, but the
+// job is async — so the completion handler must re-confirm two things hold:
+//   1. the draft still equals the saved record (`!styleDirty`) — otherwise the
+//      image would pin to a record whose influences differ from the draft (e.g.
+//      the user saved a different style, or reverted the draft without saving);
+//   2. the live style still matches what the probe was queued against — so a
+//      save-to-a-different-style mid-render can't pin a stale image either.
+// Conservative by design: it would rather drop a still-valid image (asking for a
+// harmless re-run) than ever pin one built from different influences.
+export const shouldPersistProbe = ({ styleDirty, capturedKey, currentKey }) =>
+  !styleDirty && capturedKey !== null && currentKey === capturedKey;
+
+export default function StyleProbeImage({ universe, onUniverseChange, canRender = true, styleDirty = false, onPreview = null, onRenderComplete = null }) {
+  const { imageCfg } = useImageRenderSettings();
+  // The style key the in-flight probe was queued against, captured at render
+  // time so the async completion can detect mid-render style drift.
+  const probeStyleKeyRef = useRef(null);
 
   const styleReady = hasStyleForProbe(universe);
-
-  const render = async () => {
-    if (!styleReady) { toast.error('Add embrace influences before probing the base style'); return; }
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
-    const probe = buildStyleProbePrompt(universe);
-    const queued = await generateImage(
-      { ...baseOpts, prompt: probe.prompt, negativePrompt: probe.negativePrompt || undefined },
-      { silent: true },
-    ).catch((err) => { toast.error(err?.message || 'Style render failed'); return null; });
-    if (!queued?.jobId) return;
-    setJobId(queued.jobId);
-  };
+  // The probe prompt is built from the in-memory `influences`, but `onComplete`
+  // persists only the resulting `styleImageRefs` to the SERVER's saved record.
+  // When the draft's influences have unsaved edits, that record's influences are
+  // still the prior values — so persisting the probe would pin it to style the
+  // record never had (and it would survive even after the user discards the
+  // draft). Block rendering until the style is saved.
+  const canProbe = canRender && !styleDirty;
 
   const onComplete = async (filename) => {
-    setJobId(null);
-    if (!filename || !universe?.id) return;
-    if (processedRef.current.has(filename)) return; // multi-fire guard
-    processedRef.current.add(filename);
+    if (!universe?.id) return;
+    // The probe job is async; only persist when the draft still equals the saved
+    // record AND the live style matches what the probe was queued against — else
+    // the image would pin to a record built from different influences (the very
+    // mismatch the render-time gate exists to prevent).
+    if (!shouldPersistProbe({ styleDirty, capturedKey: probeStyleKeyRef.current, currentKey: probeStyleKey(universe) })) {
+      toast.error('Style changed while the base style rendered — re-run the probe');
+      return;
+    }
     const existing = Array.isArray(universe.styleImageRefs) ? universe.styleImageRefs : [];
     if (existing.includes(filename)) return;
     const next = [...existing, filename];
@@ -83,8 +98,24 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     }
   };
 
+  const { jobId, render: queueRender, handleComplete } = useSingleImageRender({
+    buildPrompt: () => buildStyleProbePrompt(universe),
+    onComplete,
+    onError: (err) => toast.error(err?.message || 'Style render failed'),
+  });
+
+  const render = async () => {
+    if (styleDirty) { toast.error('Save your style changes before probing the base style'); return; }
+    if (!styleReady) { toast.error('Add embrace influences before probing the base style'); return; }
+    // Capture the style key the moment the job is queued so the async completion
+    // can detect mid-render style drift.
+    const probe = buildStyleProbePrompt(universe);
+    const queuedJobId = await queueRender(imageCfg);
+    if (queuedJobId) probeStyleKeyRef.current = JSON.stringify(probe);
+  };
+
   const hasExistingImage = Array.isArray(universe?.styleImageRefs) && universe.styleImageRefs.length > 0;
-  const regenerateEnabled = canRender && Boolean(universe?.id) && styleReady && !jobId;
+  const regenerateEnabled = canProbe && Boolean(universe?.id) && styleReady && !jobId;
 
   return (
     <div className="flex items-start gap-3">
@@ -92,9 +123,9 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
         imageRefs={universe?.styleImageRefs}
         inFlightJobId={jobId}
         onRender={render}
-        onComplete={onComplete}
+        onComplete={handleComplete}
         onPreview={onPreview}
-        canRender={canRender && Boolean(universe?.id) && styleReady}
+        canRender={canProbe && Boolean(universe?.id) && styleReady}
         alt="Base style"
         size="xl"
       />
@@ -103,13 +134,16 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
         Rendered from the positive/negative influences with no subject — a quick read on the world's base visual
         emphasis. Style notes are excluded so this matches what downstream image prompts will actually use.
         {!styleReady && <span className="text-port-warning"> Add embrace influences first.</span>}
+        {styleReady && styleDirty && (
+          <span className="text-port-warning"> Save your style changes first — the probe renders from your current influences but pins to the saved universe.</span>
+        )}
         {hasExistingImage ? (
           <div className="mt-2">
             <button
               type="button"
               onClick={render}
               disabled={!regenerateEnabled}
-              title={regenerateEnabled ? 'Render a new base style image' : 'Add embrace influences or save the universe first'}
+              title={regenerateEnabled ? 'Render a new base style image' : (styleDirty ? 'Save your style changes first' : 'Add embrace influences or save the universe first')}
               className="inline-flex items-center gap-1 px-2 py-1 rounded border border-port-border bg-port-bg/40 text-gray-300 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-300 disabled:hover:bg-port-bg/40 transition-colors"
             >
               <Sparkles size={12} />

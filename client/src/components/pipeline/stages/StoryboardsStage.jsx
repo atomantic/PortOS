@@ -16,8 +16,8 @@
  * extractor against the corresponding text stage and replace the list.
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineVisualImage,
@@ -27,6 +27,8 @@ import {
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
 } from '../../../services/api';
+import useUniverse from '../../../hooks/useUniverse';
+import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
 
@@ -50,6 +52,15 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   useEffect(() => () => {
     if (armTimerRef.current) clearTimeout(armTimerRef.current);
   }, []);
+
+  // Canon characters (with wardrobes) live on the linked universe — load it
+  // and derive the pickable set so each scene can offer a per-character
+  // wardrobe picker. Only characters that own at least one wardrobe are pickable.
+  const [universe] = useUniverse(series?.universeId);
+  const wardrobeChars = useMemo(() => {
+    const chars = Array.isArray(universe?.characters) ? universe.characters : [];
+    return chars.filter((c) => Array.isArray(c?.wardrobes) && c.wardrobes.length > 0);
+  }, [universe]);
 
   const teleplayReady = !!(issue.stages?.teleplay?.output || '').trim();
   const proseReady = !!(issue.stages?.prose?.output || '').trim();
@@ -75,6 +86,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     const next = scenes.map((s, j) => j === i ? { ...s, ...patch } : s);
     setScenes(next);
   };
+
+  // Wardrobe picks are discrete selections (no blur), so persist immediately.
+  const setSceneAppearances = (i, nextAppearances) =>
+    persist(scenes.map((s, j) => j === i ? { ...s, characterAppearances: nextAppearances } : s));
 
   // Shot id stable enough for React keys + filename-hook correlation. Local
   // generation (vs server-assigned) is fine — every later persist round-trips
@@ -186,6 +201,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     const result = await generatePipelineVisualImage(issue.id, 'storyboards', {
       description: scene.description,
       slugline: scene.slugline || '',
+      // The generic visual route has no scene index, so the scene's wardrobe
+      // picks ride along in the request body (video/shot paths read them
+      // server-side from the persisted scene).
+      characterAppearances: scene.characterAppearances,
       ...genConfigToImageOptions(genConfig),
     }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
@@ -374,6 +393,13 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                   ) : null}
                 </div>
               </div>
+              {wardrobeChars.length > 0 ? (
+                <WardrobePicker
+                  characters={wardrobeChars}
+                  scene={scene}
+                  onChange={(next) => setSceneAppearances(i, next)}
+                />
+              ) : null}
               <ShotList
                 sceneIdx={i}
                 shots={Array.isArray(scene.shots) ? scene.shots : []}
@@ -464,6 +490,64 @@ function ShotList({
               </li>
             );
           })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// Per-scene wardrobe picker. Mirrors the server's character matching — a
+// wardrobe only takes effect for characters whose name/alias appears in the
+// scene description (+slugline), which is exactly the set the prompt builder
+// features — so we only offer a dropdown for those. The user picks each
+// outfit explicitly (no extractor guess); selecting "default" clears the pick.
+function WardrobePicker({ characters, scene, onChange }) {
+  const [open, setOpen] = useState(false);
+  const matched = matchCharactersInText(
+    `${scene.description || ''} ${scene.slugline || ''}`,
+    characters,
+  );
+  const appearances = Array.isArray(scene.characterAppearances) ? scene.characterAppearances : [];
+  const wardrobeFor = (charId) =>
+    appearances.find((a) => a && a.characterId === charId)?.wardrobeId || '';
+  const pickCount = matched.filter((c) => wardrobeFor(c.id)).length;
+
+  const setWardrobe = (charId, wardrobeId) => {
+    const rest = appearances.filter((a) => a && a.characterId !== charId);
+    onChange(wardrobeId ? [...rest, { characterId: charId, wardrobeId }] : rest);
+  };
+
+  if (matched.length === 0) return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-port-border/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500 hover:text-gray-300"
+      >
+        <Shirt size={12} />
+        Wardrobe{pickCount > 0 ? ` (${pickCount})` : ''}
+        <span className="text-gray-600">{open ? '▾' : '▸'}</span>
+      </button>
+      {open ? (
+        <ul className="mt-2 space-y-1.5">
+          {matched.map((char) => (
+            <li key={char.id} className="flex items-center gap-2">
+              <span className="text-xs text-gray-300 w-28 shrink-0 truncate" title={char.name}>{char.name}</span>
+              <select
+                value={wardrobeFor(char.id)}
+                onChange={(e) => setWardrobe(char.id, e.target.value)}
+                aria-label={`Wardrobe for ${char.name}`}
+                className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+              >
+                <option value="">— default outfit —</option>
+                {char.wardrobes.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name || 'Unnamed outfit'}</option>
+                ))}
+              </select>
+            </li>
+          ))}
         </ul>
       ) : null}
     </div>

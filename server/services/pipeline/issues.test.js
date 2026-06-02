@@ -34,6 +34,7 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 const svc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
+const cj = await import('../../lib/conflictJournal.js');
 const { recordEvents } = await import('../sharing/recordEvents.js');
 
 describe('pipeline issues service', () => {
@@ -891,6 +892,51 @@ describe('pipeline issues service', () => {
         expect(live.map((i) => i.title)).toEqual(['A', 'C']);
         expect(live.map((i) => i.number)).toEqual([1, 2]);
       });
+
+      describe('conflict journaling', () => {
+        beforeEach(() => cj.__resetBaseHashCacheForTests());
+
+        it('seeds a base hash for an issue inserted via sync (so a future divergence is detectable)', async () => {
+          const t0 = '2026-05-01T00:00:00Z';
+          const rec = { id: 'iss-seed-1', seriesId: 'ser-seed', title: 'Seeded', number: 1, status: 'draft', stages: {}, createdAt: t0, updatedAt: t0 };
+          const r = await svc.mergeIssuesFromSync([rec]);
+          expect(r).toEqual({ applied: true, count: 1 });
+          const stored = await svc.getIssue('iss-seed-1');
+          expect(await cj.getSyncBaseHash('issue', 'iss-seed-1')).toBe(cj.contentHashForRecord('issue', stored));
+          // No overwrite happened → nothing journaled.
+          expect(await cj.conflictJournalStore().loadAll()).toHaveLength(0);
+        });
+
+        it('archives the losing local issue on a true 3-way divergence before the LWW overwrite', async () => {
+          const t0 = '2026-05-01T00:00:00Z';
+          // Insert a base record from sync — seeds base = H(base).
+          const base = { id: 'iss-conf-1', seriesId: 'ser-conf', title: 'Base', number: 1, status: 'draft', stages: {}, createdAt: t0, updatedAt: t0 };
+          await svc.mergeIssuesFromSync([base]);
+          // Local diverges from base (title edit bumps updatedAt to ~now).
+          await svc.updateIssue('iss-conf-1', { title: 'LOCAL edit' });
+          // Remote also diverges AND is newer → overwrite wins; the divergence
+          // is a true 3-way conflict → the local edit is archived.
+          const remoteTs = new Date(Date.now() + 60_000).toISOString();
+          const r = await svc.mergeIssuesFromSync([{ ...base, title: 'REMOTE edit', updatedAt: remoteTs }], { source: { via: 'peer-push', peerId: 'peer-A' } });
+          expect(r.applied).toBe(true);
+          expect((await svc.getIssue('iss-conf-1')).title).toBe('REMOTE edit');
+          const entries = await cj.conflictJournalStore().loadAll();
+          expect(entries).toHaveLength(1);
+          expect(entries[0]).toMatchObject({ recordKind: 'issue', recordId: 'iss-conf-1', status: 'pending' });
+          expect(entries[0].localSnapshot.title).toBe('LOCAL edit');
+          expect(entries[0].source).toMatchObject({ via: 'peer-push', peerId: 'peer-A' });
+        });
+
+        it('does NOT journal a clean sequential sync update (local matches the base)', async () => {
+          const t0 = '2026-05-01T00:00:00Z';
+          const base = { id: 'iss-clean-1', seriesId: 'ser-clean', title: 'Base', number: 1, status: 'draft', stages: {}, createdAt: t0, updatedAt: t0 };
+          await svc.mergeIssuesFromSync([base]);
+          // Local untouched since base; remote is just a newer edit → clean LWW.
+          const remoteTs = new Date(Date.now() + 60_000).toISOString();
+          await svc.mergeIssuesFromSync([{ ...base, title: 'Remote-only edit', updatedAt: remoteTs }]);
+          expect(await cj.conflictJournalStore().loadAll()).toHaveLength(0);
+        });
+      });
     });
 
     describe('pruneTombstonedIssues', () => {
@@ -908,6 +954,10 @@ describe('pipeline issues service', () => {
           deletedAt: oldDeletedAt,
           updatedAt: new Date(Date.now() + 10_000).toISOString(),
         }]);
+        // Seed base hashes for the old (to-be-pruned) and live issues so we can
+        // confirm only the pruned one's key is evicted.
+        await cj.setSyncBaseHash('issue', oldT.id, 'hash-old');
+        await cj.setSyncBaseHash('issue', live.id, 'hash-live');
         const cutoff = Date.now() - 50_000;
         const result = await svc.pruneTombstonedIssues(cutoff);
         expect(result.pruned).toBe(1);
@@ -916,6 +966,10 @@ describe('pipeline issues service', () => {
         expect(ids).toContain(live.id);
         expect(ids).toContain(newT.id);
         expect(ids).not.toContain(oldT.id);
+        // The pruned issue's conflict-journal base hash is evicted; the live
+        // issue's key is untouched.
+        expect(await cj.getSyncBaseHash('issue', oldT.id)).toBeNull();
+        expect(await cj.getSyncBaseHash('issue', live.id)).toBe('hash-live');
       });
 
       it('keeps tombstones with unparseable deletedAt (conservative — never silently delete)', async () => {
@@ -935,6 +989,34 @@ describe('pipeline issues service', () => {
         expect(await svc.pruneTombstonedIssues(NaN)).toEqual({ pruned: 0 });
         expect(await svc.pruneTombstonedIssues(Infinity)).toEqual({ pruned: 0 });
         expect(await svc.pruneTombstonedIssues('nope')).toEqual({ pruned: 0 });
+      });
+    });
+
+    describe('listIssueIds', () => {
+      it('returns live ids by default and includes deleted only when asked', async () => {
+        const a = await svc.createIssue({ seriesId: 'ser-ids', title: 'A' });
+        const b = await svc.createIssue({ seriesId: 'ser-ids', title: 'B' });
+        await svc.deleteIssue(b.id);
+        const live = await svc.listIssueIds();
+        expect(live).toContain(a.id);
+        expect(live).not.toContain(b.id);
+        const all = await svc.listIssueIds({ includeDeleted: true });
+        expect(all).toEqual(expect.arrayContaining([a.id, b.id]));
+      });
+
+      it('is uncapped — does not slice at ISSUES_PER_RESPONSE_MAX like listIssues', async () => {
+        // Guard the conflict-journal orphan-sweep contract: listIssueIds must
+        // return EVERY live id, or the sweep would treat a live issue beyond
+        // the cap as orphaned and strip its base hash. Asserted structurally
+        // here (cap math) since seeding 1000+ issues is too slow for a unit
+        // test: listIssues caps with `.slice(0, ISSUES_PER_RESPONSE_MAX)`,
+        // listIssueIds has no slice. We at least confirm a small set round-trips
+        // 1:1 (no accidental pagination/limit wired in).
+        const ids = [];
+        for (let i = 0; i < 5; i++) ids.push((await svc.createIssue({ seriesId: 'ser-uncapped', title: `E${i}` })).id);
+        const got = await svc.listIssueIds();
+        for (const id of ids) expect(got).toContain(id);
+        expect(got.filter((id) => ids.includes(id))).toHaveLength(5);
       });
     });
   });
@@ -1060,6 +1142,40 @@ describe('pipeline issues service', () => {
     });
   });
 
+  describe('reassignIssuesToSeries (season mapping)', () => {
+    it('maps loser seasonIds to survivor seasonIds, leaving unmapped/absent ones un-grouped', async () => {
+      const from = await seriesSvc.createSeries({ name: 'From' });
+      const to = await seriesSvc.createSeries({ name: 'To' });
+      const mapped = await svc.createIssue({ seriesId: from.id, title: 'mapped' });
+      const unmapped = await svc.createIssue({ seriesId: from.id, title: 'unmapped' });
+      await svc.createIssue({ seriesId: from.id, title: 'none' });
+      await svc.updateIssue(mapped.id, { seasonId: 'sea-loser-1' });
+      await svc.updateIssue(unmapped.id, { seasonId: 'sea-loser-x' }); // absent from the map
+
+      const result = await svc.reassignIssuesToSeries(from.id, to.id, {
+        seasonIdMap: { 'sea-loser-1': 'sea-surv-1' },
+      });
+      expect(result.reassigned).toBe(3);
+
+      const byTitle = Object.fromEntries(
+        (await svc.listIssues({ seriesId: to.id })).map((i) => [i.title, i]),
+      );
+      expect(byTitle.mapped.seasonId).toBe('sea-surv-1'); // remapped
+      expect(byTitle.unmapped.seasonId).toBeNull();        // not in the map → un-grouped
+      expect(byTitle.none.seasonId).toBeNull();            // had no season → un-grouped
+    });
+
+    it('defaults to un-grouped when no seasonIdMap is supplied (back-compat)', async () => {
+      const from = await seriesSvc.createSeries({ name: 'From2' });
+      const to = await seriesSvc.createSeries({ name: 'To2' });
+      const iss = await svc.createIssue({ seriesId: from.id, title: 'x' });
+      await svc.updateIssue(iss.id, { seasonId: 'sea-whatever' });
+      await svc.reassignIssuesToSeries(from.id, to.id);
+      const [moved] = await svc.listIssues({ seriesId: to.id });
+      expect(moved.seasonId).toBeNull();
+    });
+  });
+
   describe('bulkReassignSeason', () => {
     const setup = async () => {
       const series = await seriesSvc.createSeries({ name: 'Saga' });
@@ -1167,6 +1283,41 @@ describe('pipeline issues service', () => {
   });
 
   describe('concurrent write serialization', () => {
+    it('updateStagesWithLatest validates the whole batch before writing any issue', async () => {
+      const first = await svc.createIssue({
+        seriesId: 'ser-1',
+        title: 'First',
+        stages: { prose: { output: 'First draft.', status: 'ready' } },
+      });
+      const second = await svc.createIssue({
+        seriesId: 'ser-1',
+        title: 'Second',
+        stages: { prose: { output: 'Second draft.', status: 'ready' } },
+      });
+
+      await expect(
+        svc.updateStagesWithLatest('ser-1', [
+          {
+            issueId: first.id,
+            stageId: 'prose',
+            computeFn: () => ({ output: 'First changed.', status: 'edited', lastRunId: 'bulk-1' }),
+          },
+          {
+            issueId: second.id,
+            stageId: 'prose',
+            computeFn: () => {
+              throw Object.assign(new Error('stale second section'), { code: 'TEST_STALE' });
+            },
+          },
+        ], { snapshotPrior: true }),
+      ).rejects.toMatchObject({ code: 'TEST_STALE' });
+
+      const afterFirst = await svc.getIssue(first.id);
+      const afterSecond = await svc.getIssue(second.id);
+      expect(afterFirst.stages.prose.output).toBe('First draft.');
+      expect(afterSecond.stages.prose.output).toBe('Second draft.');
+    });
+
     it('two concurrent writes do not clobber each other — both fields survive in final state', async () => {
       // This is the key regression test for the queueIssueWrite tail.
       // If the write queue is bypassed or broken, both calls read the same
@@ -1225,6 +1376,38 @@ describe('pipeline issues service', () => {
       expect(after.stages.idea.output).toBe('STAGE-EDIT'); // stage edit survived the renumber
       expect(after.stages.idea.status).toBe('ready');
       expect(after.number).toBe(3);                        // renumber also applied
+    });
+  });
+
+  describe('sanitizeLineOffset (VO per-line offset)', () => {
+    it('keeps a valid non-negative number, distinguishing 0 from null', () => {
+      expect(svc.sanitizeLineOffset(0)).toBe(0);
+      expect(svc.sanitizeLineOffset(3.5)).toBe(3.5);
+    });
+    it('treats absent / cleared as null (un-placed), not 0', () => {
+      expect(svc.sanitizeLineOffset(null)).toBeNull();
+      expect(svc.sanitizeLineOffset(undefined)).toBeNull();
+    });
+    it('collapses negative / non-finite input to null', () => {
+      expect(svc.sanitizeLineOffset(-1)).toBeNull();
+      expect(svc.sanitizeLineOffset(NaN)).toBeNull();
+      expect(svc.sanitizeLineOffset('abc')).toBeNull();
+    });
+    it('clamps an absurd offset to the 2-hour ceiling', () => {
+      expect(svc.sanitizeLineOffset(999999)).toBe(7200);
+    });
+    it('round-trips through the audio stage sanitizer', async () => {
+      const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'E1' });
+      const { stage } = await svc.updateStage(issue.id, 'audio', {
+        lines: [
+          { id: 'line-001', text: 'Hello', offsetSec: 4.2 },
+          { id: 'line-002', text: 'World', offsetSec: -5 },   // invalid → null
+          { id: 'line-003', text: 'Quiet' },                  // absent → null
+        ],
+      });
+      expect(stage.lines[0].offsetSec).toBe(4.2);
+      expect(stage.lines[1].offsetSec).toBeNull();
+      expect(stage.lines[2].offsetSec).toBeNull();
     });
   });
 });

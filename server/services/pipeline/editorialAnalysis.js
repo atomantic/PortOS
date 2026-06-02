@@ -18,7 +18,8 @@
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
 import { getIssue, listIssues } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
@@ -40,8 +41,12 @@ const NOTE_MAX = 500;
 // malformed response that extractJson rejects (it throws "Invalid JSON in AI
 // response", surfacing as an analysis error rather than a silent empty
 // snapshot). ~48K chars (~12K tokens) leaves ample room for the prompt + a
-// heavy-tier reply.
+// heavy-tier reply. This is a FLOOR — the real cap scales up to the target
+// model's context window (see analyzeIssue), so a big-context model isn't
+// needlessly truncated to 48K.
 const CONTENT_MAX = 48_000;
+// Output reserve for the analysis JSON (sections + character arcs).
+const ANALYSIS_OUTPUT_RESERVE_TOKENS = 4_000;
 
 const nowIso = () => new Date().toISOString();
 
@@ -188,6 +193,20 @@ export async function analyzeIssue(issueId, { providerId, model, force = false }
   const characterNames = (canon.characters || []).map((c) => c?.name).filter(Boolean).slice(0, 40);
   const arc = series?.arc || null;
 
+  // Scale the content cap to the target model's context window — never below
+  // CONTENT_MAX (so we never truncate more than before), but a big-context
+  // model gets the whole issue instead of a 48K slice.
+  const { contextWindow } = await resolveStageContext(STAGE, { providerOverride: providerId, modelOverride: model });
+  const overheadTokens = 1_500 + estimateTokens(
+    [characterNames.join(', '), arc?.protagonistArc || '', (arc?.themes || []).join(', ')].join(' '),
+  );
+  const budgetChars = usableInputTokens({
+    contextWindow,
+    overheadTokens,
+    outputReserveTokens: ANALYSIS_OUTPUT_RESERVE_TOKENS,
+  }) * CHARS_PER_TOKEN;
+  const contentMax = Math.max(CONTENT_MAX, budgetChars);
+
   const ctx = {
     series: { name: series?.name || 'Untitled series', logline: series?.logline || '' },
     issue: { number: issue.number, title: issue.title, arcRole: issue.arcRole || '' },
@@ -201,8 +220,8 @@ export async function analyzeIssue(issueId, { providerId, model, force = false }
     knownCharacters: characterNames.join(', '),
     format: picked.sourceStage === 'comicScript' ? 'comic script'
       : picked.sourceStage === 'teleplay' ? 'teleplay' : 'prose',
-    content: picked.text.length > CONTENT_MAX
-      ? `${picked.text.slice(0, CONTENT_MAX)}\n\n[content truncated for analysis — ${picked.text.length} chars total]`
+    content: picked.text.length > contentMax
+      ? `${picked.text.slice(0, contentMax)}\n\n[content truncated for analysis — ${picked.text.length} chars total]`
       : picked.text,
   };
 

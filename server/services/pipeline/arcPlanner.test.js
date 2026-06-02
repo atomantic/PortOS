@@ -3,6 +3,7 @@ import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 let stageRunnerSpy;
+let stageContextSpy;
 
 vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
@@ -26,6 +27,11 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../../lib/stageRunner.js', () => ({
   runStagedLLM: vi.fn((...args) => stageRunnerSpy(...args)),
   extractJson: (raw) => JSON.parse(raw),
+  // Large window by default so completeness runs as a single call (mode:
+  // 'whole'); a test can set `stageContextSpy` to force a small window.
+  resolveStageContext: vi.fn((...args) => (stageContextSpy
+    ? stageContextSpy(...args)
+    : Promise.resolve({ provider: { id: 'p' }, model: 'm', contextWindow: 1_000_000 }))),
 }));
 
 const seriesSvc = await import('./series.js');
@@ -366,6 +372,58 @@ describe('arcPlanner — generateSeasonEpisodes', () => {
     expect(byTitle.Finale.lengthProfile).toBe('finale');
     expect(byTitle.Midpoint.lengthProfile).toBe('standard');
     expect(byTitle.Extra.lengthProfile).toBe('extended');
+  });
+});
+
+describe('arcPlanner — commitEpisodesToIssues', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+  });
+
+  it('mints one issue per episode with arc pointers + idea seed', async () => {
+    const s = await setupSeries();
+    const episodes = [
+      { number: 1, title: 'Pilot', arcRole: 'pilot', logline: 'L1', synopsis: 'S1', lengthProfile: 'standard' },
+      { number: 2, title: 'Rising', arcRole: 'complication', logline: 'L2', synopsis: '', lengthProfile: 'short' },
+    ];
+    const created = await planner.commitEpisodesToIssues(s.id, null, episodes);
+    expect(created).toHaveLength(2);
+    expect(created[0].title).toBe('Pilot');
+    expect(created[0].arcPosition).toBe(1);
+    expect(created[0].arcRole).toBe('pilot');
+    expect(created[0].stages.idea.input).toBe('L1\n\nS1');
+    expect(created[0].stages.idea.status).toBe('edited');
+    // No synopsis ⇒ idea seed is the bare logline and the stage stays 'empty'.
+    expect(created[1].stages.idea.input).toBe('L2');
+    expect(created[1].stages.idea.status).toBe('empty');
+  });
+
+  it('reads the series once for the whole batch instead of once per episode', async () => {
+    const s = await setupSeries();
+    const episodes = [1, 2, 3, 4].map((n) => ({
+      number: n, title: `E${n}`, arcRole: 'beat', logline: `L${n}`, synopsis: `S${n}`,
+    }));
+    const spy = vi.spyOn(seriesSvc, 'getSeries');
+    const created = await planner.commitEpisodesToIssues(s.id, null, episodes);
+    const callCount = spy.mock.calls.length;
+    spy.mockRestore();
+    expect(created).toHaveLength(4);
+    // The preload fetches once; each createIssue's renumber pass reuses it —
+    // the pre-fix shape was one getSeries per episode (4 reads).
+    expect(callCount).toBe(1);
+  });
+
+  it('honors a caller-supplied preloadedSeries with zero getSeries reads', async () => {
+    const s = await setupSeries();
+    const series = await seriesSvc.getSeries(s.id);
+    const episodes = [{ number: 1, title: 'Solo', arcRole: 'pilot', logline: 'L', synopsis: 'S' }];
+    const spy = vi.spyOn(seriesSvc, 'getSeries');
+    const created = await planner.commitEpisodesToIssues(s.id, null, episodes, { preloadedSeries: series });
+    const callCount = spy.mock.calls.length;
+    spy.mockRestore();
+    expect(created).toHaveLength(1);
+    expect(callCount).toBe(0);
   });
 });
 
@@ -1468,6 +1526,28 @@ describe('arcPlanner — refineReaderMap', () => {
     expect(out.readerMap.hooks[0].label).toBe('keep me');
   });
 
+  it('clears changes/rationale when falling back to the existing map (discarded refine)', async () => {
+    const s = await setupSeries({
+      arc: { logline: 'rise', summary: 'spine', readerMap: { hooks: [{ label: 'keep me' }] } },
+    });
+    // The LLM authored a change list + rationale but produced an empty map, so
+    // the refine is DISCARDED in favor of the existing map. Those changes/
+    // rationale describe edits that were never applied and must be cleared —
+    // otherwise the UI claims edits it threw away.
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        hooks: [], payoffs: [], beats: [], cliffhangers: [],
+        changes: ['rewrote the opening hook', 'added a midpoint payoff'],
+        rationale: 'tightened the front',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineReaderMap(s.id, 'tweak');
+    expect(out.readerMap.hooks[0].label).toBe('keep me');
+    expect(out.changes).toEqual([]);
+    expect(out.rationale).toBe('');
+  });
+
   it('throws (rather than returns null) when generateReaderMap yields an empty map', async () => {
     const s = await setupSeries({ arc: { logline: 'x', summary: 'y' } });
     stageRunnerSpy = vi.fn(async () => ({
@@ -1478,11 +1558,94 @@ describe('arcPlanner — refineReaderMap', () => {
   });
 });
 
+describe('arcPlanner — refineArc', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    stageRunnerSpy = undefined;
+  });
+
+  it('returns the revised arc narrative fields plus changes and rationale', async () => {
+    const s = await setupSeries({
+      arc: { logline: 'old logline', summary: 'old summary', protagonistArc: 'old arc', themes: ['loss'], shape: 'man-in-hole' },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        logline: 'sharper logline',
+        summary: 'sharper summary',
+        protagonistArc: 'sharper protagonist arc',
+        themes: ['loss', 'redemption'],
+        changes: ['sharpened the logline'],
+        rationale: 'tightened the spine',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.refineArc(s.id, 'make the logline sharper');
+    expect(stageRunnerSpy).toHaveBeenCalledWith('story-builder-arc-refine', expect.any(Object), expect.objectContaining({ returnsJson: true }));
+    expect(out.arc.logline).toBe('sharper logline');
+    expect(out.arc.summary).toBe('sharper summary');
+    expect(out.arc.themes).toEqual(['loss', 'redemption']);
+    // shape is narrative-only refine → carried over unchanged.
+    expect(out.arc.shape).toBe('man-in-hole');
+    expect(out.changes).toEqual(['sharpened the logline']);
+    expect(out.rationale).toBe('tightened the spine');
+  });
+
+  it('preserves the picked Vonnegut shape and any reader map (narrative-only refine)', async () => {
+    const s = await setupSeries({
+      arc: {
+        logline: 'L', summary: 'S', shape: 'man-in-hole',
+        readerMap: { hooks: [{ label: 'keep me' }], payoffs: [], beats: [], cliffhangers: [], status: 'draft' },
+      },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'L2', summary: 'S2', changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak');
+    expect(out.arc.shape).toBe('man-in-hole');
+    expect(out.arc.readerMap?.hooks?.[0]?.label).toBe('keep me');
+  });
+
+  it('preserves a field the LLM returns empty (refine never blanks existing content)', async () => {
+    const s = await setupSeries({ arc: { logline: 'keep logline', summary: 'keep summary', protagonistArc: 'keep arc' } });
+    // LLM rewrites the summary but blanks logline + omits protagonistArc — both
+    // must fall back to the current values (absent-vs-intentionally-empty rule).
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: '', summary: 'new summary', changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak the summary');
+    expect(out.arc.logline).toBe('keep logline');
+    expect(out.arc.summary).toBe('new summary');
+    expect(out.arc.protagonistArc).toBe('keep arc');
+  });
+
+  it('preserves existing themes when the LLM returns a non-empty but all-blank themes array', async () => {
+    // `['  ', null]` is non-empty so a naive length check would accept it, then
+    // sanitizeArc cleans it to [] and wipes the user's themes. Must fall back.
+    const s = await setupSeries({ arc: { logline: 'L', summary: 'S', themes: ['betrayal', 'hope'] } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'L2', summary: 'S2', themes: ['   ', null], changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.refineArc(s.id, 'tweak');
+    expect(out.arc.themes).toEqual(['betrayal', 'hope']);
+  });
+
+  it('throws when the arc is locked', async () => {
+    const s = await setupSeries({ arc: { logline: 'x', summary: 'y' }, locked: { arc: true } });
+    await expect(planner.refineArc(s.id, 'x')).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+  });
+});
+
 describe('arcPlanner — manuscript completeness + derive-from-manuscript', () => {
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;
     stageRunnerSpy = undefined;
+    stageContextSpy = undefined;
   });
 
   it('issueSynopsisFromSeason joins logline + synopsis (and is empty for nothing)', () => {
@@ -1525,6 +1688,41 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     const out = await planner.analyzeManuscriptCompleteness(s.id);
     expect(out.issues).toHaveLength(1);
     expect(out.issues[0]).toMatchObject({ category: 'arc-gap', severity: 'high' });
+    expect(out.chunked).toBe(false);
+  });
+
+  it('chunks a large manuscript that exceeds the model window and merges findings (first-wins dedupe + prior-findings digest)', async () => {
+    const s = await setupSeries();
+    const big = 'word '.repeat(12_000); // ~60k chars (~15k tokens) per issue
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { prose: { output: `ONE ${big}`, status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Two', arcPosition: 2, stages: { prose: { output: `TWO ${big}`, status: 'ready' } } });
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Three', arcPosition: 3, stages: { prose: { output: `THREE ${big}`, status: 'ready' } } });
+    stageContextSpy = vi.fn(async () => ({ provider: { id: 'p' }, model: 'm', contextWindow: 40_000 }));
+    let n = 0;
+    stageRunnerSpy = vi.fn(async () => {
+      n += 1;
+      return {
+        content: { issues: [
+          // same finding surfaced by every chunk — must be recorded once
+          { severity: 'high', category: 'arc-gap', issueNumber: 1, anchorQuote: 'dup', problem: 'duplicated finding', suggestion: 'x' },
+          { severity: 'low', category: 'pacing', problem: `unique ${n}`, suggestion: '' },
+        ] },
+        runId: `r${n}`, providerId: 'p', model: 'm',
+      };
+    });
+
+    const out = await planner.analyzeManuscriptCompleteness(s.id);
+
+    expect(out.chunked).toBe(true);
+    expect(out.chunkCount).toBeGreaterThanOrEqual(2);
+    expect(stageRunnerSpy).toHaveBeenCalledTimes(out.chunkCount);
+    // duplicate finding collapsed to one; each chunk's unique finding kept
+    expect(out.issues.filter((f) => f.anchorQuote === 'dup')).toHaveLength(1);
+    expect(out.issues.filter((f) => f.problem.startsWith('unique'))).toHaveLength(out.chunkCount);
+    // later chunks get a digest of earlier findings inside the manuscript field
+    const secondManuscript = stageRunnerSpy.mock.calls[1][1].manuscript;
+    expect(secondManuscript).toContain('already recorded for EARLIER chapters');
+    expect(secondManuscript).toContain('duplicated finding');
   });
 
   it('analyzeManuscriptCompleteness refuses when no manuscript exists', async () => {

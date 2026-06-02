@@ -46,7 +46,7 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
-import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
+import { setSyncBaseHash, contentHashForRecord, flushBaseHashes, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
@@ -216,6 +216,16 @@ export async function getOutboundCoverageForPeer(peerId) {
  * receiver-side reverse-subscribe path; it suppresses the immediate push so
  * we don't ping-pong (the peer that triggered the reverse just pushed us
  * the latest state by definition).
+ *
+ * `opts.awaitInitialPush` makes the first-insert push AWAITED instead of
+ * fire-and-forget. Default false preserves the non-blocking single-subscribe
+ * contract (the HTTP route and one-off subscribes must not stall on a slow
+ * peer). The fan-out helpers set it true so the push — and the base-hash
+ * stamps inside it — settle synchronously within an enclosing
+ * `withBaseHashFlushBatch` scope; otherwise the async stamps escape the scope
+ * and the per-record `sync_base_hashes.json` flush can't be coalesced. The
+ * push failure stays non-fatal either way (logged, never thrown), so one dead
+ * peer can't abort a fan-out loop.
  */
 export async function subscribePeer({ peerId, recordKind, recordId }, opts = {}) {
   if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) {
@@ -278,9 +288,13 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
   // result lastPushedHash will short-circuit anyway. Callers that need a
   // forced re-push can call pushRecordToPeer(sub) directly.
   if (created && !opts.adoptedFromReverse) {
-    pushRecordToPeer(sub).catch((err) => {
+    const initialPush = pushRecordToPeer(sub).catch((err) => {
       console.log(`⚠️ peerSync: initial push failed for ${sub.id}: ${err.message}`);
     });
+    // Fan-out callers await the push inside a flush batch so its base-hash
+    // stamps land before the batch's terminal flush; the default path leaves it
+    // fire-and-forget so a single subscribe never blocks on a slow peer.
+    if (opts.awaitInitialPush) await initialPush;
   }
   // `created` distinguishes a freshly-inserted subscription from an idempotent
   // hit on an existing one. Auto-subscribe helpers use this to suppress
@@ -369,16 +383,22 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
   // peers would otherwise return the existing subs and emit misleading
   // "🔗 auto-subscribed" lines on every retry / restart.
   const created = [];
-  for (const peer of targets) {
-    const sub = await subscribePeer({ peerId: peer.instanceId, recordKind, recordId }).catch((err) => {
-      console.log(`⚠️ peerSync: auto-subscribe ${recordKind}/${recordId} → ${peer.name || peer.instanceId} failed: ${err.message}`);
-      return null;
-    });
-    if (sub && sub.created) {
-      created.push({ peerId: peer.instanceId, subscriptionId: sub.id });
-      console.log(`🔗 peerSync: auto-subscribed ${recordKind}/${recordId} → ${peer.name || peer.instanceId}`);
+  // Coalesce the base-hash flushes across this fan-out: one record subscribed
+  // to N peers fires N initial pushes, each of which would otherwise rewrite
+  // sync_base_hashes.json. `awaitInitialPush` keeps each push's stamps inside
+  // the batch so the single terminal write covers all N.
+  await withBaseHashFlushBatch(async () => {
+    for (const peer of targets) {
+      const sub = await subscribePeer({ peerId: peer.instanceId, recordKind, recordId }, { awaitInitialPush: true }).catch((err) => {
+        console.log(`⚠️ peerSync: auto-subscribe ${recordKind}/${recordId} → ${peer.name || peer.instanceId} failed: ${err.message}`);
+        return null;
+      });
+      if (sub && sub.created) {
+        created.push({ peerId: peer.instanceId, subscriptionId: sub.id });
+        console.log(`🔗 peerSync: auto-subscribed ${recordKind}/${recordId} → ${peer.name || peer.instanceId}`);
+      }
     }
-  }
+  });
   return created;
 }
 
@@ -440,13 +460,19 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   // second toggle on the same category) don't double-report or noise the
   // backfill log line with already-subscribed records.
   const created = [];
-  for (const rec of missing) {
-    const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: cursorInited }).catch((err) => {
-      console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
-      return null;
-    });
-    if (sub && sub.created) created.push({ recordId: rec.id, subscriptionId: sub.id });
-  }
+  // Coalesce the base-hash flushes across the backfill: N records subscribed to
+  // one peer fire N initial pushes, each of which would otherwise rewrite
+  // sync_base_hashes.json. `awaitInitialPush` keeps each push's stamps inside
+  // the batch so the single terminal write covers all N.
+  await withBaseHashFlushBatch(async () => {
+    for (const rec of missing) {
+      const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: cursorInited, awaitInitialPush: true }).catch((err) => {
+        console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
+        return null;
+      });
+      if (sub && sub.created) created.push({ recordId: rec.id, subscriptionId: sub.id });
+    }
+  });
   if (created.length > 0) {
     console.log(`🔗 peerSync: backfill-subscribed ${created.length} ${recordKind} record(s) → ${peerId}`);
   }
@@ -504,6 +530,47 @@ export async function unsubscribeAllForRecord(recordKind, recordId) {
     }
   }
   return { removed, failed };
+}
+
+/**
+ * Drop peer subscriptions whose target record no longer resolves AT ALL —
+ * not even as a tombstone. The tombstone GC path (`pruneTombstonedUniverses`
+ * / `pruneTombstonedSeries` in tombstoneGc.js) rm's a pruned record's
+ * directory but leaves its rows in `peer_subscriptions.json`: on the next
+ * `peer:online`, `retryPendingPushesForPeer` walks them, `buildPushPayload`
+ * returns null ("record-not-found"), and the push silently no-ops — harmless,
+ * but it inflates the "retrying N pending pushes" log count and keeps the
+ * peer's tombstone cursor pinned by a dead row.
+ *
+ * `resolver(recordKind, recordId) => Promise<boolean>` returns true when the
+ * record still exists in ANY form (live OR tombstoned). Only subs whose
+ * resolver returns false are dropped. A tombstoned-but-not-yet-pruned record
+ * still resolves true, so its sub survives to push the delete to peers — we
+ * strip a sub only once the underlying record directory is actually gone.
+ *
+ * Mirrors the orphan-base-hash sweep's conservative contract: a resolver that
+ * throws is treated as "still resolves" so a transient listing failure can
+ * never trigger a false strip. Malformed rows (missing recordKind/recordId)
+ * are left untouched — they're a separate concern from the dir-gone orphan
+ * this sweep targets.
+ *
+ * Returns `{ pruned, removed }` — count and ids of dropped subscriptions.
+ */
+export async function pruneOrphanedPeerSubscriptions(resolver) {
+  if (typeof resolver !== 'function') return { pruned: 0, removed: [] };
+  const subs = await listPeerSubscriptions();
+  const removed = [];
+  for (const sub of subs) {
+    if (!isNonEmptyStr(sub?.recordKind) || !isNonEmptyStr(sub?.recordId)) continue;
+    const exists = await resolver(sub.recordKind, sub.recordId).catch(() => true);
+    if (exists) continue;
+    const ok = await unsubscribePeer(sub.id).then(() => true).catch((err) => {
+      console.log(`⚠️ peerSync: orphan-subscription sweep failed for ${sub.id}: ${err.message}`);
+      return false;
+    });
+    if (ok) removed.push(sub.id);
+  }
+  return { pruned: removed.length, removed };
 }
 
 // --- Asset manifest -----------------------------------------------------
@@ -861,6 +928,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     record: payload.record,
     issues: payload.issues ?? null,
     linkedCollection: payload.linkedCollection ?? null,
+    manuscriptReview: payload.manuscriptReview ?? null,
     assetManifest: payload.assetManifest ?? [],
   });
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
@@ -887,6 +955,12 @@ export async function pushRecordToPeer(sub, options = {}) {
     }).finally(() => clearTimeout(timeoutId));
   };
   let res = await postPayload(payload);
+  // Set when the older-peer retry below strips `manuscriptReview`: the retry
+  // succeeds with the review removed, so saving the full-payload hash would
+  // make the next push short-circuit as `unchanged` and never deliver the
+  // review once that peer upgrades. Withhold the hash (like reviewSyncPending)
+  // so the next cycle re-sends.
+  let reviewStrippedForLegacyPeer = false;
   // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
   // without a `portosMeta` field, so it 400-rejects our envelope at Zod
   // validation BEFORE its schema-version gate code (which doesn't exist on
@@ -898,22 +972,30 @@ export async function pushRecordToPeer(sub, options = {}) {
   // they upgrade, the next push round naturally re-includes `portosMeta`.
   // `catalogBundle` (catalog-federation push enrichment) is a second new
   // top-level key an even-newer-than-version-gate-but-pre-catalog peer's strict
-  // schema also rejects. Strip whichever key(s) the receiver actually named —
-  // surgically, so a peer that supports `portosMeta` but not `catalogBundle`
-  // keeps its version-gate handshake. Zod `.strict()` lists all unrecognized
-  // keys in one issue, so a single retry covers both.
-  if (res && res.status === 400 && (payload.portosMeta || payload.catalogBundle)) {
+  // schema also rejects. `manuscriptReview` (the bundled "Finish the draft"
+  // review doc) is a third — a pre-feature peer's series push schema is still
+  // `.strict()` without it, so it 400-rejects a review-bearing series push and
+  // would strand the series + issues. This retry is exactly what makes the
+  // review's "degrades gracefully on older peers" contract hold (see
+  // schemaVersions.js): strip the unknown key the older peer can't parse so the
+  // record/issues still land; the review reaches it once it upgrades. Strip
+  // whichever key(s) the receiver actually named — surgically, so a peer that
+  // supports `portosMeta` but not `catalogBundle`/`manuscriptReview` keeps its
+  // version-gate handshake. Zod `.strict()` lists all unrecognized keys in one
+  // issue, so a single retry covers all of them.
+  if (res && res.status === 400 && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview)) {
     const errBody = await res.clone().json().catch(() => null);
     const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
     const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
-    if (errBody?.code === 'VALIDATION_ERROR' && (mentions('portosMeta') || mentions('catalogBundle'))) {
+    if (errBody?.code === 'VALIDATION_ERROR' && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview'))) {
       const legacyPayload = { ...payload };
       const stripped = [];
       if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
       if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
-      // The universe record still lands; on a pre-catalog peer the catalog
-      // enrichments simply re-derive from the embedded canon on its backfill,
-      // and a re-push after it upgrades re-includes the stripped key(s).
+      if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
+      // The series + issues still land; on a pre-feature peer the review simply
+      // doesn't propagate until it upgrades, and a re-push after it upgrades
+      // re-includes the stripped key(s).
       console.log(
         `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
@@ -985,6 +1067,12 @@ export async function pushRecordToPeer(sub, options = {}) {
   // merge LWW path; only cost is one redundant POST per push cycle
   // until the receiver finishes pulling).
   const missingCount = Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0;
+  // REVIEW-STRANDED GUARD: the receiver merged the record/issues (returned 2xx)
+  // but its bundled manuscript-review merge threw. Withhold lastPushedHash like
+  // the missing-assets case so the next push cycle re-sends the review instead
+  // of short-circuiting on `unchanged` — the review has no independent
+  // reconciliation path, so a saved hash here would strand the update.
+  const reviewSyncPending = body?.reviewSyncPending === true || reviewStrippedForLegacyPeer;
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a
@@ -994,7 +1082,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the tombstone's deletedAt once it lands. The `missingAssets` case still
   // counts as confirmed delivery of the RECORD (merge ran on the receiver);
   // only the asset-stranded hash is withheld, not the confirmation mark.
-  await persistPushSuccess(sub.id, missingCount > 0 ? null : hash, { confirmedAtMs: Date.now() });
+  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -1003,13 +1091,38 @@ export async function pushRecordToPeer(sub, options = {}) {
   // shared-state base for the two journaled kinds. This is the symmetric
   // convergence point to the receiver advancing its base in mergeXxxFromSync —
   // it keeps a peer's echo (reverse-subscription push-back) from later looking
-  // like a divergence. Best-effort; never block the push result on it — the
-  // stamp + filesystem flush run fire-and-forget so a slow disk can't delay the
-  // push loop. The `.catch()` keeps the rejection from escaping as unhandled.
-  if ((sub.recordKind === 'universe' || sub.recordKind === 'series') && payload.record) {
-    setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))
-      .then(() => flushBaseHashes())
-      .catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
+  // like a divergence. Best-effort; never block the push result on a slow DISK
+  // — only the filesystem flush runs fire-and-forget. The in-memory stamps ARE
+  // awaited: `setSyncBaseHash` just mutates the cached map (no disk I/O), so
+  // awaiting it costs nothing once the map is loaded, and it guarantees
+  // `_baseDirty` is set before this push returns. That matters under
+  // `withBaseHashFlushBatch` — the batch's terminal flush only writes when a
+  // stamp landed, so a stamp still pending when the batch closed would be lost
+  // until the next flush. The `.catch()` keeps a rejection from escaping.
+  if (PEER_SUBSCRIBABLE_KINDS.includes(sub.recordKind) && payload.record) {
+    // For mediaCollection, contentHashForRecord hashes only the scalar subset
+    // (items are union-merged on the receiver, so the post-push collections are
+    // NOT byte-identical — but their scalars converge, which is what the base
+    // hash tracks). For universe/series it's the full wire record. Same call
+    // either way; the narrowing lives in contentHashForRecord.
+    const stamps = [setSyncBaseHash(sub.recordKind, sub.recordId, contentHashForRecord(sub.recordKind, payload.record))];
+    // A series push bundles its child issues (`payload.issues`, already in
+    // wire form). The receiver seeds each issue's base hash on insert in
+    // mergeIssuesFromSync; stamp the SAME base here so the SENDER side also
+    // detects the first issue divergence on a later push-back. Issues never
+    // carry their own subscription — they ride the series push — so this is
+    // the only place the origin can seed an `issue`-keyed base hash. Without
+    // it, issue conflict journaling would be one-sided (receiver-only).
+    if (sub.recordKind === 'series' && Array.isArray(payload.issues)) {
+      for (const issue of payload.issues) {
+        if (issue?.id) stamps.push(setSyncBaseHash('issue', issue.id, contentHashForRecord('issue', issue)));
+      }
+    }
+    await Promise.all(stamps).catch((err) => console.log(`⚠️ peerSync: base-hash stamp after push failed: ${err?.message || err}`));
+    // Non-blocking disk write. Inside a flush batch this is a no-op (the batch's
+    // terminal flush coalesces every record's stamps into one rewrite); outside
+    // a batch it fires async exactly as before.
+    flushBaseHashes().catch((err) => console.log(`⚠️ peerSync: base-hash flush after push failed: ${err?.message || err}`));
   }
   return {
     pushed: true,
@@ -1179,6 +1292,18 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const assetManifest = record.deleted === true
       ? []
       : await buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
+    // Bundle the manuscript-review sibling doc (the "Finish the draft" comment
+    // set) so review-only edits — which don't move the series record — still
+    // propagate. Same reasoning as the linkedCollection bundle above: the
+    // review rides the payload AND the push hash, defeating the lastPushedHash
+    // short-circuit. Skip for tombstones (a deleted series ships no review).
+    // Dynamic import keeps manuscriptReview's arcPlanner graph off peerSync's
+    // boot load path (matches the catalogBundle pattern).
+    const manuscriptReview = record.deleted === true
+      ? null
+      : await import('../pipeline/manuscriptReview.js')
+        .then(({ getReview }) => getReview(sub.recordId))
+        .catch(() => null);
     return {
       kind: 'series',
       record: sanitized,
@@ -1187,6 +1312,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       sourceInstanceId,
       portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
+      ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
     };
   }
   if (sub.recordKind === 'mediaCollection') {
@@ -1364,7 +1490,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, catalogBundle, assetManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, assetManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -1484,11 +1610,19 @@ export async function applyIncomingPush(payload) {
 
   // Merge into local state via the existing LWW path. The merge functions
   // honor `deleted: true` + bump `updatedAt`, so this is the single
-  // tombstone-aware reconciliation point.
+  // tombstone-aware reconciliation point. Attribute any conflict journaled by
+  // the merge to THIS push's origin peer so the Conflicts tab can show which
+  // peer collided (without `source`, the merge fns fall back to
+  // `{ via:'sync', peerId:null }` and the attribution is lost).
+  const source = { via: 'peer-push', peerId: sourceInstanceId };
+  // Set true when a bundled manuscript-review merge throws — returned to the
+  // sender so it withholds lastPushedHash and retries (the review has no other
+  // reconciliation path; see the merge block below).
+  let reviewSyncPending = false;
   if (kind === 'universe') {
-    await mergeUniversesFromSync([record]);
+    await mergeUniversesFromSync([record], { source });
   } else if (kind === 'series') {
-    await mergeSeriesFromSync([record]);
+    await mergeSeriesFromSync([record], { source });
     // Bundled issues: skip the entire batch if the LOCAL series is
     // ephemeral. mergeSeriesFromSync already refused the parent record on
     // its own, but child issue merges are a separate code path —
@@ -1496,18 +1630,36 @@ export async function applyIncomingPush(payload) {
     // the parent is marked ephemeral, so without this gate a stale reverse
     // subscription could overwrite the private fork's issue stages.
     if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
-      await mergeIssuesFromSync(issues);
+      await mergeIssuesFromSync(issues, { source });
+    }
+    // Merge the bundled manuscript-review sibling doc, LWW-per-comment. Same
+    // guards as the issue batch + linkedCollection below: skip for local-
+    // ephemeral records (the user opted this series out of sync) and tombstone
+    // pushes (a deleted series carries no live review). A merge failure must
+    // NOT fail the push (the series/issues already merged) — but unlike the
+    // linkedCollection bundle, the review has NO independent reconciliation
+    // cycle, so a swallowed failure could never resend once the sender saves
+    // lastPushedHash. Signal `reviewSyncPending` so the sender withholds the
+    // hash (mirrors the missing-assets guard) and retries next cycle.
+    // Dynamic import keeps the arcPlanner graph off peerSync's load path.
+    if (!localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
+      const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
+      await mergeReviewFromSync(record.id, manuscriptReview).catch((err) => {
+        console.log(`⚠️ peerSync: manuscriptReview merge failed: ${err.message}`);
+        reviewSyncPending = true;
+      });
     }
   } else if (kind === 'mediaCollection') {
-    await mergeMediaCollectionsFromSync([record]);
+    await mergeMediaCollectionsFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
   // semantics as the snapshot-sync mediaCollections category. Failures here
   // don't fail the push: the record itself is already merged and the next
   // snapshot-sync cycle will reconcile the collection if it diverged. The
-  // sanitizer in mediaCollections strips a peer-supplied `id` that isn't a
-  // string, so a bogus payload can't plant a malformed row.
+  // sanitizer in mediaCollections drops a peer-supplied `id` that isn't a
+  // valid path-segment (the store's id allowlist), so a bogus payload can't
+  // plant a malformed row or abort the batch.
   //
   // Defense in depth on the peer-supplied envelope:
   //   - plain-object check (arrays would get wrapped and the sanitizer
@@ -1521,7 +1673,7 @@ export async function applyIncomingPush(payload) {
   //     explicitly opted out of sync for this record, so peer-pushed
   //     collection mutations must not land.
   if (!localEphemeral && record.deleted !== true && isPlainObject(linkedCollection)) {
-    await mergeMediaCollectionsFromSync([linkedCollection]).catch((err) => {
+    await mergeMediaCollectionsFromSync([linkedCollection], { source }).catch((err) => {
       console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
     });
   }
@@ -1596,6 +1748,7 @@ export async function applyIncomingPush(payload) {
     missingAssets,
     reverseSubscriptionCreated,
     ackedDeletesUpTo,
+    ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
   };
 }
 
@@ -2033,16 +2186,22 @@ export async function retryPendingPushesForPeer(peerId) {
   // the network call for any sub whose content is unchanged — we still
   // "walked" the sub but never pushed it.
   let pushed = 0;
-  for (const sub of subs) {
-    // peer:online fired — re-probe schema-blocked subs immediately (peer
-    // may have upgraded since the last 409). Edit-triggered pushes still
-    // respect the cooldown.
-    const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
-      console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
-      return null;
-    });
-    if (result?.pushed) pushed += 1;
-  }
+  // Coalesce the per-push base-hash flushes: this loop pushes every subscribed
+  // record in sequence, and each push would otherwise rewrite
+  // sync_base_hashes.json once. The flush batch defers them into a single
+  // terminal write covering all N records' stamps.
+  await withBaseHashFlushBatch(async () => {
+    for (const sub of subs) {
+      // peer:online fired — re-probe schema-blocked subs immediately (peer
+      // may have upgraded since the last 409). Edit-triggered pushes still
+      // respect the cooldown.
+      const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
+        console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
+        return null;
+      });
+      if (result?.pushed) pushed += 1;
+    }
+  });
   return { walked: subs.length, pushed };
 }
 

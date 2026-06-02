@@ -18,11 +18,14 @@ const md5 = (str) => {
   return createHash('md5').update(normalized).digest('hex');
 };
 
-const OLD_SHIPPED_MD5 = {
+// Exported under the standard drift-constant names so setup-data.js's
+// `buildPromptDriftTables` sweep picks up this file's hashes from a single
+// source of truth instead of re-mirroring them by hand.
+export const ACCEPTED_OLD_MD5 = {
   'writers-room-places.md': '7f1f80eb63d67a21161994cde115045e',
 };
 
-const NEW_SHIPPED_MD5 = {
+export const NEW_SHIPPED_MD5 = {
   'writers-room-places.md': '24a33628cc94d80fa5ca60831d973daf',
 };
 
@@ -35,7 +38,7 @@ export default {
     let alreadyCurrent = 0;
     let skipped = 0;
 
-    for (const filename of Object.keys(OLD_SHIPPED_MD5)) {
+    for (const filename of Object.keys(ACCEPTED_OLD_MD5)) {
       const dataPath   = join(stagesDir, filename);
       const samplePath = join(sampleDir, filename);
 
@@ -56,7 +59,7 @@ export default {
         continue;
       }
 
-      if (existingMd5 !== OLD_SHIPPED_MD5[filename]) {
+      if (existingMd5 !== ACCEPTED_OLD_MD5[filename]) {
         console.warn(
           `⚠️  places extraction prompt ${filename} has been customized — skipping auto-update.\n` +
           `   To pick up the new intExt / timeOfDay fields, diff:\n` +

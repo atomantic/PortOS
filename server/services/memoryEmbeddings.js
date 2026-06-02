@@ -9,6 +9,7 @@ import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { getProviderById } from './providers.js';
 import { getConfig as getCosConfig } from './cos.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 
 const MODEL_LIST_TIMEOUT_MS = 10000;
 const MODEL_LOAD_TIMEOUT_MS = 60000;
@@ -39,7 +40,7 @@ async function ensureEmbeddingModelLoaded(config) {
 
   if (!response.ok) return;
 
-  const models = await response.json();
+  const models = await readResponseJson(response);
   const allModels = models.data || [];
   const embeddingModels = allModels.filter(m => m.type === 'embeddings');
 
@@ -146,7 +147,7 @@ export async function checkAvailability() {
     return { available: false, error: response._err || `LM Studio returned ${response.status}`, endpoint: config.embeddingEndpoint };
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
   const models = data.data?.map(m => m.id) || [];
 
   // If no embedding models are loaded, try to auto-load one
@@ -210,7 +211,7 @@ export async function generateEmbedding(text) {
     return null;
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
   return data.data?.[0]?.embedding || null;
 }
 
@@ -252,7 +253,7 @@ export async function generateBatchEmbeddings(texts) {
     return texts.map(() => null);
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
 
   // Sort by index to maintain order
   const embeddings = new Array(texts.length).fill(null);

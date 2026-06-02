@@ -36,6 +36,7 @@ import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeCoverLike } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { applyVolumeOrderedNumbers, UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
+import { maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash } from '../../lib/conflictJournal.js';
 import * as seriesSvc from './series.js';
 
 // TYPE-level (storage layout) schema version stamped on
@@ -59,9 +60,13 @@ const store = () => {
 
 export const issueStore = () => store();
 
-// Series-scoped queue for mutations that can renumber siblings. Ordinary
-// per-issue PATCH/stage writes use collectionStore's per-id queue so edits to
-// different issues no longer serialize behind one monolithic JSON tail.
+// Series-scoped write queue. ALL issue mutations — create, per-issue PATCH,
+// stage writes, deletes, and sibling-renumbering ops — route through this so
+// they serialize per series. Even though collectionStore keeps a per-id queue,
+// per-issue edits still share the series-level `index.json` (numbering, ordering),
+// so two concurrent writes to *different* issues in the same series could read a
+// stale index and clobber each other. A single tail per seriesId collapses that
+// race: each write awaits the previous one and merges against the freshest state.
 const seriesIssueTails = new Map();
 function queueSeriesIssuesWrite(seriesId, fn) {
   const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
@@ -382,6 +387,20 @@ const AUDIO_LINE_TEXT_MAX = 4000;
 const AUDIO_LINES_MAX = 1000;
 const AUDIO_FILENAME_MAX = 500;
 const AUDIO_LINE_ID_MAX = 80;
+// Cap a per-line VO offset at a generous episode length so a corrupted record
+// can't push an `adelay` filter into absurd territory. Two hours is far beyond
+// any single issue's runtime.
+const AUDIO_LINE_OFFSET_MAX_SEC = 7200;
+// Normalize a per-line start offset (seconds into the stitched episode where
+// this VO line plays). `null` = "not placed yet" — kept distinct from `0`
+// ("plays at the very start") so the muxer can skip un-placed lines instead of
+// stacking them all at t=0. Negative / non-finite input collapses to null.
+export const sanitizeLineOffset = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.min(n, AUDIO_LINE_OFFSET_MAX_SEC);
+};
 const sanitizeAudioLine = (raw, i) => {
   if (!raw || typeof raw !== 'object') return null;
   const text = trimTo(raw.text, AUDIO_LINE_TEXT_MAX);
@@ -397,6 +416,9 @@ const sanitizeAudioLine = (raw, i) => {
     audioFilename: isStr(raw.audioFilename) && raw.audioFilename
       ? raw.audioFilename.slice(0, AUDIO_FILENAME_MAX)
       : null,
+    // Per-line start offset for muxing VO into the stitched episode (Phase
+    // 4d.2). null until the user (or a future auto-spacer) places it.
+    offsetSec: sanitizeLineOffset(raw.offsetSec),
   };
 };
 
@@ -538,6 +560,22 @@ export async function listIssues({
 }
 
 /**
+ * Every live (or, with `includeDeleted`, every) issue id — UNCAPPED.
+ *
+ * `listIssues` slices at `ISSUES_PER_RESPONSE_MAX` (1000) even unpaginated, so
+ * it can't back a "does this id still exist?" membership check: an install with
+ * >1000 issues would report ids beyond the cap as missing. Callers that need
+ * the complete id set (e.g. the conflict-journal orphan-base-hash sweep, which
+ * would otherwise prune a live issue's base hash and silently disable conflict
+ * detection for it) use this. Returns ids only — no projection, no history.
+ */
+export async function listIssueIds({ includeDeleted = false } = {}) {
+  const { issues } = await readState();
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
+  return live.map((i) => i.id);
+}
+
+/**
  * Recently-updated issues across all series. Sorts the FULL issue set by
  * `updatedAt` desc before applying `limit` — unlike `listIssues`, which
  * sorts by `seriesId/number` then caps at `ISSUES_PER_RESPONSE_MAX`. That
@@ -568,7 +606,7 @@ export async function getIssue(id, { includeDeleted = false } = {}) {
   return found;
 }
 
-export function createIssue(input = {}) {
+export function createIssue(input = {}, { preloadedSeries = null } = {}) {
   const seriesId = trimTo(input.seriesId, SERIES_ID_MAX);
   if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
@@ -597,7 +635,7 @@ export function createIssue(input = {}) {
     });
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
     state.issues.push(next);
-    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
+    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR, preloadedSeries);
     await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     // New issue = series-level change for any active share subscription.
     emitRecordUpdated('series', next.seriesId);
@@ -605,8 +643,14 @@ export function createIssue(input = {}) {
   });
 }
 
-async function renumberInline(state, seriesId, fromSeasonId = null) {
-  const series = await seriesSvc.getSeries(seriesId).catch(() => null);
+async function renumberInline(state, seriesId, fromSeasonId = null, preloadedSeries = null) {
+  // Batch callers (e.g. commitEpisodesToIssues seeding a whole season) thread
+  // the already-fetched series so an N-episode loop doesn't pay N redundant
+  // getSeries reads of an unchanging record. Guard on id match so a mismatched
+  // preload can never renumber against the wrong season list.
+  const series = (preloadedSeries && preloadedSeries.id === seriesId)
+    ? preloadedSeries
+    : await seriesSvc.getSeries(seriesId).catch(() => null);
   // Exclude tombstones from numbering — surviving issues should keep a
   // contiguous sequence regardless of how many deletes happened.
   // applyVolumeOrderedNumbers mutates each issue's `number` in place, so the
@@ -701,17 +745,20 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
  * series-merge engine (recordMerge.js) so a duplicate series' issues survive
  * the merge instead of being orphaned under the tombstoned loser.
  *
- * Moved issues land UN-GROUPED (`seasonId: null`): seasons are series-scoped,
- * so the loser's season ids don't exist on the survivor. The survivor's
- * seasons were unioned by number separately; re-homing issues to specific
- * survivor seasons is left to the user. A single renumber pass on the survivor
- * sequences the combined set. Returns `{ reassigned }`.
+ * Issue→season grouping is preserved across the move via `seasonIdMap` — a
+ * `{ loserSeasonId: survivorSeasonId }` map the caller (`mergeSeries`) builds by
+ * pairing the loser's seasons to the survivor's by `number`. An issue whose
+ * `seasonId` resolves through the map lands in the matching survivor season; one
+ * with no `seasonId`, or a `seasonId` the map doesn't cover (a stale ref, or a
+ * loser season that didn't survive the union), lands UN-GROUPED (`seasonId:
+ * null`). A single renumber pass on the survivor sequences the combined set.
+ * Returns `{ reassigned }`.
  *
  * Serialized on the SURVIVOR's issues queue so the renumber can't race a
  * concurrent survivor edit. Tombstoned issues are skipped (moving them would
  * bump updatedAt and lose the originator's delete LWW race).
  */
-export function reassignIssuesToSeries(fromSeriesId, toSeriesId) {
+export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap = {} } = {}) {
   if (!isStr(fromSeriesId) || !isStr(toSeriesId) || fromSeriesId === toSeriesId) {
     return Promise.reject(makeErr('reassignIssuesToSeries: fromSeriesId and toSeriesId must differ', ERR_VALIDATION));
   }
@@ -728,7 +775,10 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId) {
     for (let i = 0; i < state.issues.length; i += 1) {
       const iss = state.issues[i];
       if (iss.seriesId !== fromSeriesId || iss.deleted) continue;
-      const merged = sanitizeIssue({ ...iss, seriesId: toSeriesId, seasonId: null, updatedAt: now });
+      // Map the issue's loser season to the survivor's same-number season so the
+      // grouping survives; fall back to un-grouped when there's no mapping.
+      const seasonId = (iss.seasonId && seasonIdMap[iss.seasonId]) || null;
+      const merged = sanitizeIssue({ ...iss, seriesId: toSeriesId, seasonId, updatedAt: now });
       if (!merged) continue;
       state.issues[i] = merged;
       moved.push(merged);
@@ -909,6 +959,68 @@ export function updateStage(issueId, stageId, patch = {}) {
   return updateStageWithLatest(issueId, stageId, () => patch);
 }
 
+function mergeStagePatch(currentStage, stageId, patch, { snapshotPrior = false } = {}) {
+  const isVisual = VISUAL_STAGE_IDS.includes(stageId);
+  const isAudio = AUDIO_STAGE_IDS.includes(stageId);
+  const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId, { force: snapshotPrior });
+  const merged = {
+    ...currentStage,
+    ...patch,
+    runHistory: nextRunHistory,
+    updatedAt: new Date().toISOString(),
+  };
+  if (isVisual) return sanitizeVisualStage(merged, stageId);
+  if (isAudio) return sanitizeAudioStage(merged);
+  return sanitizeTextStage(merged);
+}
+
+export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior = false } = {}) {
+  if (!isStr(seriesId) || !seriesId) {
+    return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
+  }
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return Promise.resolve([]);
+  }
+  for (const { stageId } of updates) {
+    if (!STAGE_IDS.includes(stageId)) {
+      return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
+    }
+  }
+
+  return queueSeriesIssuesWrite(seriesId, async () => {
+    const state = await readState();
+    const results = [];
+    let changed = false;
+    for (const update of updates) {
+      const idx = state.issues.findIndex((i) => i.id === update.issueId);
+      if (idx < 0) throw makeErr(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      const cur = state.issues[idx];
+      if (cur.deleted || cur.seriesId !== seriesId) throw makeErr(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      const currentStage = cur.stages[update.stageId];
+      const patch = update.computeFn(currentStage);
+      if (isPlainObject(patch) && Object.keys(patch).length === 0) {
+        results.push({ issue: cur, stage: currentStage });
+        continue;
+      }
+      const nextStage = mergeStagePatch(currentStage, update.stageId, patch, { snapshotPrior });
+      const mergedIssue = sanitizeIssue({
+        ...cur,
+        stages: { ...cur.stages, [update.stageId]: nextStage },
+        updatedAt: new Date().toISOString(),
+      });
+      if (!mergedIssue) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+      state.issues[idx] = mergedIssue;
+      results.push({ issue: mergedIssue, stage: mergedIssue.stages[update.stageId] });
+      changed = true;
+    }
+    if (changed) {
+      await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+      emitRecordUpdated('series', seriesId);
+    }
+    return results;
+  });
+}
+
 /**
  * Restore a prior `runHistory` snapshot as the active stage state. Looks up the
  * snapshot by `runId` against the freshest persisted record (so a concurrent
@@ -994,8 +1106,6 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     const cur = await store().loadOne(issueId);
     if (!cur) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-    const isVisual = VISUAL_STAGE_IDS.includes(stageId);
-    const isAudio = AUDIO_STAGE_IDS.includes(stageId);
     const currentStage = cur.stages[stageId];
     const patch = computeFn(currentStage);
     // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
@@ -1008,17 +1118,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     // Snapshot the prior `{ runId, input, output }` into runHistory when this
     // patch carries a fresh lastRunId (i.e. a generate just replaced prior
     // content). Computed BEFORE the spread so it reads pre-merge state.
-    const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId, { force: snapshotPrior });
-    const merged = {
-      ...currentStage,
-      ...patch,
-      runHistory: nextRunHistory,
-      updatedAt: new Date().toISOString(),
-    };
-    let next;
-    if (isVisual) next = sanitizeVisualStage(merged, stageId);
-    else if (isAudio) next = sanitizeAudioStage(merged);
-    else next = sanitizeTextStage(merged);
+    const next = mergeStagePatch(currentStage, stageId, patch, { snapshotPrior });
     const mergedIssue = sanitizeIssue({
       ...cur,
       stages: { ...cur.stages, [stageId]: next },
@@ -1041,7 +1141,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
  * valid id format). LWW by `updatedAt`; returns `{ applied, count }` where
  * `count` is the number of issues actually changed/added.
  */
-export async function mergeIssuesFromSync(remoteIssues) {
+export async function mergeIssuesFromSync(remoteIssues, { source = { via: 'sync', peerId: null } } = {}) {
   if (!Array.isArray(remoteIssues)) return { applied: false, count: 0 };
   // Series IDs whose issue set saw at least one delete-transition — drives a
   // post-write renumber so the receiver's issue numbering catches up with the
@@ -1092,6 +1192,11 @@ export async function mergeIssuesFromSync(remoteIssues) {
         // to compact; firing `emitRecordUpdated('series', …)` for a series
         // we may not even own would spuriously re-export.
         localById.set(sanitized.id, sanitized);
+        // Seed the conflict-journal base hash so a FUTURE divergence on this
+        // issue is detected. Issues are pushed under their parent series'
+        // subscription, so peerSync never seeds an `issue`-keyed base hash —
+        // this merge path (and the importer) own it.
+        await setSyncBaseHash('issue', sanitized.id, contentHashForRecord('issue', sanitized));
         changed++;
       } else if (local.ephemeral === true) {
         // Local-ephemeral issues are immune to inbound merges. See
@@ -1101,6 +1206,10 @@ export async function mergeIssuesFromSync(remoteIssues) {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
+          // Non-blocking conflict journal — archive the losing local issue on
+          // a true 3-way divergence; always advances the base hash. Never
+          // throws into the merge (convergence wins).
+          await maybeJournalBeforeOverwrite({ kind: 'issue', id: sanitized.id, local, remote: sanitized, source });
           localById.set(sanitized.id, sanitized);
           // Renumber on EITHER direction of the transition: a delete leaves
           // a gap, a resurrection (deleted→live) reintroduces a previously-
@@ -1133,6 +1242,9 @@ export async function mergeIssuesFromSync(remoteIssues) {
     for (const seriesId of seriesNeedingRenumber) {
       emitRecordUpdated('series', seriesId);
     }
+    // Persist the batched conflict-journal base-hash updates (seeds on insert,
+    // advances on overwrite) accumulated in the loop above.
+    await flushBaseHashes();
     return { applied: true, count: changed };
   });
 }
@@ -1157,6 +1269,12 @@ export async function pruneTombstonedIssues(beforeMs) {
       return t < beforeMs;
     });
     await Promise.all(prunable.map((i) => store().deleteOne(i.id)));
+    // Evict each pruned issue's conflict-journal base hash. Issues seed an
+    // `issue:<id>` base hash when their parent series is pushed (peerSync's
+    // pushRecordToPeer), but no eviction existed — so a pruned issue's key
+    // would linger in sync_base_hashes.json forever. Mirrors the universe /
+    // series / collection prune paths.
+    await Promise.all(prunable.map((i) => deleteSyncBaseHash('issue', i.id)));
     return { pruned: prunable.length };
   });
 }

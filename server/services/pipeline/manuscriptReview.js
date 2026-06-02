@@ -21,6 +21,7 @@ import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { seriesStore } from './series.js';
 import { collectManuscriptSections } from './arcPlanner.js';
+import { emitRecordUpdated } from '../sharing/recordEvents.js';
 
 // Storage-layout version for the review document. Bump + migrate if the
 // comment shape changes in a way older peers can't read.
@@ -50,8 +51,30 @@ function sanitizeFix(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const find = typeof raw.find === 'string' ? raw.find : '';
   const replace = typeof raw.replace === 'string' ? raw.replace : '';
-  if (!find && !replace) return null;
+  const edits = Array.isArray(raw.edits)
+    ? raw.edits
+      .map((e) => {
+        if (!e || typeof e !== 'object') return null;
+        const editFind = typeof e.find === 'string' ? e.find : '';
+        const editReplace = typeof e.replace === 'string' ? e.replace : '';
+        if (!editFind && !editReplace) return null;
+        const out = {
+          issueNumber: Number.isInteger(e.issueNumber) ? e.issueNumber : null,
+          issueId: typeof e.issueId === 'string' ? e.issueId : null,
+          stageId: typeof e.stageId === 'string' ? e.stageId : null,
+          title: clampStr(e.title, 200),
+          find: editFind,
+          replace: editReplace,
+          note: clampStr(e.note, 1000),
+        };
+        if (e.fuzzy === true) out.fuzzy = true;
+        return out;
+      })
+      .filter(Boolean)
+    : [];
+  if (!find && !replace && edits.length === 0) return null;
   const out = { find, replace };
+  if (edits.length) out.edits = edits;
   if (raw.fuzzy === true) out.fuzzy = true;
   return out;
 }
@@ -145,6 +168,13 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null 
 
     const next = { schemaVersion: SCHEMA_VERSION, comments: [...review.comments, ...fresh] };
     await writeReview(seriesId, next);
+    // The review is a sibling of the series record, so a review-only change
+    // doesn't move the series `index.json` — emit a series `updated` event so
+    // the peer-sync push + bucket re-export fire (both hash the review into
+    // their payload). Only when something actually changed; a no-op seed
+    // would just be short-circuited by the push hash anyway. Skipped on the
+    // sync RECEIVE path (`mergeReviewFromSync`) to avoid an echo loop.
+    if (fresh.length > 0) emitRecordUpdated('series', seriesId);
     return next;
   });
 }
@@ -169,6 +199,9 @@ export async function updateComment(seriesId, commentId, patch) {
     merged.updatedAt = new Date().toISOString();
     const next = { ...review, comments: review.comments.map((c, i) => (i === idx ? sanitizeComment(merged) : c)) };
     await writeReview(seriesId, next);
+    // Sibling-doc change → fire a series `updated` event so the review
+    // propagates to peers / re-exports to subscribed buckets (see seed above).
+    emitRecordUpdated('series', seriesId);
     return next.comments[idx];
   });
 }

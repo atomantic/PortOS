@@ -218,6 +218,39 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(params.referenceImageStrengths).toEqual([1.0]);
   });
 
+  // Edit-only models (Qwen-Image-Edit) require a source image. With an init
+  // image uploaded, the route stages it and enqueues normally — the editOnly
+  // gate only fires for text-only submissions.
+  it('edit-only model WITH an uploaded init image enqueues with initImagePath set', async () => {
+    const res = await postMultipart(app, '/api/image-gen/generate', [
+      { name: 'prompt', value: 'make the sky purple' },
+      { name: 'modelId', value: 'qwen-image-edit' },
+      { name: 'initImage', filename: 'src.png', contentType: 'image/png', value: PNG_FIXTURE },
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('queued');
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+    const params = enqueueJob.mock.calls[0][0].params;
+    const { dir, name, ext } = parsePath(params.initImagePath);
+    expect(dir).toBe(imagesSandbox);
+    expect(name.startsWith('init-')).toBe(true);
+    expect(ext).toBe('.png');
+  });
+
+  // The editOnly gate must fire for a text-only submission to an edit-only
+  // model even over multipart — no job is enqueued.
+  it('edit-only model with NO init image returns 400 before enqueueing', async () => {
+    const res = await postMultipart(app, '/api/image-gen/generate', [
+      { name: 'prompt', value: 'make the sky purple' },
+      { name: 'modelId', value: 'qwen-image-edit' },
+    ]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('IMAGE_GEN_EDIT_IMAGE_REQUIRED');
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('rejects refs uploaded for a non-FLUX.2 model before any file is copied', async () => {
     const res = await postMultipart(app, '/api/image-gen/generate', [
       { name: 'prompt', value: 'wrong-model ref' },

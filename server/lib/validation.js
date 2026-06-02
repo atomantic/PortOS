@@ -1148,6 +1148,26 @@ export const localLlmHuggingFaceSearchSchema = z.object({
   category: z.string().max(40).optional().default('all'),
   limit: z.coerce.number().int().min(1).max(30).optional().default(12),
 });
+export const localLlmPlaygroundOptionsSchema = z.object({
+  systemPrompt: z.string().max(8000).optional().default(''),
+  temperature: z.coerce.number().min(0).max(2).optional().default(0.3),
+  maxTokens: z.coerce.number().int().min(1).max(8192).optional().default(1000),
+  timeoutMs: z.coerce.number().int().min(1000).max(600000).optional().default(300000),
+});
+export const localLlmTestSchema = localLlmPlaygroundOptionsSchema.extend({
+  backend: localLlmBackendSchema,
+  modelId: localLlmModelIdSchema,
+  prompt: z.string().trim().min(1).max(50000),
+});
+export const localLlmCompareSchema = z.object({
+  mode: z.enum(['round-robin', 'parallel']).optional().default('round-robin'),
+  prompt: z.string().trim().min(1).max(50000),
+  targets: z.array(z.object({
+    backend: localLlmBackendSchema,
+    modelId: localLlmModelIdSchema,
+  })).min(1).max(6),
+  options: localLlmPlaygroundOptionsSchema.optional().default({}),
+});
 
 /**
  * Validate data against a Zod schema, throwing on failure.
@@ -1490,10 +1510,26 @@ const universePushSchema = z.object({
   ...linkedCollectionField,
   ...catalogBundleField,
 }).strict();
+// Optional bundled manuscript-review sibling doc — a series push carries the
+// "Finish the draft" comment set (data/pipeline-series/{id}/manuscript-review.json)
+// so review-only edits propagate via the per-record push pipeline. ONLY valid on
+// series pushes. `.passthrough()` on the review + each comment (same rationale as
+// portosMeta) so a newer sender that adds a comment field doesn't 400 at this
+// receiver BEFORE its merge — `sanitizeReview` clamps/drops everything on apply.
+// Comments are bounded (5000) so the array can't be used to force unbounded work.
+const manuscriptReviewField = {
+  manuscriptReview: z.object({
+    schemaVersion: z.number().int().min(0).max(1_000_000).optional(),
+    comments: z.array(z.object({
+      id: z.string().trim().min(1).max(120),
+    }).passthrough()).max(5000),
+  }).passthrough().optional(),
+};
 const seriesPushSchema = z.object({
   kind: z.literal('series'),
   ...peerSyncPushBase,
   ...linkedCollectionField,
+  ...manuscriptReviewField,
   issues: z.array(peerWireRecordSchema).max(1000).optional(),
 }).strict();
 const mediaCollectionPushSchema = z.object({
@@ -1672,7 +1708,8 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
 // active provider's context window.
 const importerSourceField = z.string().min(1).max(5_000_000);
 
-// Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript).
+// Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript /
+// stages.teleplay).
 // MUST stay ≤ `STAGE_OUTPUT_MAX` in server/services/pipeline/issues.js (400_000)
 // — createIssue trims stage output to that, so a larger excerpt would be
 // SILENTLY TRUNCATED on commit despite the import being advertised as verbatim.
@@ -1797,11 +1834,12 @@ export const importerCommitSchema = z.object({
   arc: importerArcShape.nullable().optional(),
   seasons: z.array(importerSeasonEntry).max(50).default([]),
   issues: z.array(importerIssueEntry).min(1).max(50),
-  // Drives which stage each issue's verbatim excerpt seeds: a `comic-script`
-  // import is already script-form, so its excerpt seeds `stages.comicScript`
-  // (ready) and the pipeline never regenerates — every other type seeds
-  // `stages.prose`. Optional + defaulting to prose-seed keeps older clients
-  // (which don't send it) on the prior behavior.
+  // Drives which stage each issue's verbatim excerpt seeds: a script-form
+  // import seeds its matching script stage (ready) and the pipeline never
+  // regenerates — `comic-script` → `stages.comicScript`, `screenplay` →
+  // `stages.teleplay`; prose-like types seed `stages.prose`. Optional +
+  // defaulting to prose-seed keeps older clients (which don't send it) on the
+  // prior behavior.
   contentType: z.enum(IMPORTER_CONTENT_TYPES).optional(),
   // Replace-mode flag — when true, every existing issue on the series is
   // deleted before the incoming `issues` are created, and `series.arc` +
@@ -1878,4 +1916,12 @@ export const storyStepRefineSchema = z.object({
 
 export const storyIssueLockSchema = z.object({
   locked: z.boolean(),
+}).strict();
+
+export const storyIssuesGenerateSchema = z.object({
+  providerId: storyProviderField,
+  model: storyModelField,
+  // Optional: scope generation to a single season; omit to cover every season
+  // on the arc.
+  seasonId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
 }).strict();

@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { filterSelectableModels } from '../utils/providers';
-import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { universeStylePreset } from '../lib/universeStylePreset';
+import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
-import { pipelineImageCfgToRenderOpts, readPipelineImageSettings, PIPELINE_IMAGE_DEFAULTS } from '../lib/pipelineImageDefaults';
+import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
+import useImageRenderSettings from '../hooks/useImageRenderSettings';
+import useSingleImageRender from '../hooks/useSingleImageRender';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import StyleProbeImage from '../components/universe/StyleProbeImage';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
   Plus, RefreshCw, Loader2, ExternalLink, Wand2,
@@ -14,17 +16,27 @@ import {
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
+import { useStoryStepProgress } from '../hooks/useStoryStepProgress';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
-  generateStoryStep, refineStoryStep, setStoryIssueLock,
+  generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
-  getProviders, getSettings, generateImage, updateUniverse,
+  getProviders, updateUniverse,
 } from '../services/api';
+import ArcCanvas from '../components/pipeline/ArcCanvas';
+import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
+import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
+
+// Bible fields the embedded arc step flushes before an ArcCanvas generate/verify.
+// The Story Builder edits these on their own steps (not inside the arc step), so
+// the flush is usually a no-op — kept for API-shape parity with ArcCanvas's
+// contract. Module-level so the `useArcCanvasSync` callbacks keep a stable identity.
+const ARC_FLUSH_FIELDS = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'universeId'];
 const pickArcFields = (arc) => {
   if (!arc) return null;
   const out = {};
@@ -40,7 +52,13 @@ const CONTENT_TYPE_LABELS = {
 // Builder operation (idea expand, aesthetic, arc, reader map, character refine,
 // and the importer's analyze) — see the session.llm fallback in the conductor.
 // `value` is `{ provider, model }`; empty strings mean "use the stage default".
-function ProviderModelPicker({ value, onChange, id = 'stb' }) {
+//
+// The two selects are rendered by the shared `ProviderModelSelector` so the
+// markup matches every other provider/model picker. The value is parent-
+// controlled (session.llm / the import-panel state), so this stays controlled
+// rather than using the self-owning `useProviderModels` hook — it just fetches
+// the enabled provider list to feed the selector's options.
+function ProviderModelPicker({ value, onChange }) {
   const [providers, setProviders] = useState([]);
   useEffect(() => {
     let cancelled = false;
@@ -49,33 +67,24 @@ function ProviderModelPicker({ value, onChange, id = 'stb' }) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
-  const models = useMemo(() => {
+  const availableModels = useMemo(() => {
     const p = providers.find((x) => x.id === value?.provider);
     return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   }, [providers, value?.provider]);
 
   return (
-    <div className="flex items-center gap-2">
-      <label htmlFor={`${id}-provider`} className="text-xs text-gray-500 whitespace-nowrap">AI</label>
-      <select
-        id={`${id}-provider`} value={value?.provider || ''}
-        onChange={(e) => onChange({ provider: e.target.value, model: '' })}
-        className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs max-w-[10rem]"
-      >
-        <option value="">Default provider</option>
-        {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-      </select>
-      {models.length > 0 && (
-        <select
-          id={`${id}-model`} aria-label="Model" value={value?.model || ''}
-          onChange={(e) => onChange({ provider: value?.provider || '', model: e.target.value })}
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs max-w-[12rem]"
-        >
-          <option value="">Default model</option>
-          {models.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-      )}
-    </div>
+    <ProviderModelSelector
+      providers={providers}
+      selectedProviderId={value?.provider || ''}
+      selectedModel={value?.model || ''}
+      availableModels={availableModels}
+      onProviderChange={(provider) => onChange({ provider, model: '' })}
+      onModelChange={(model) => onChange({ provider: value?.provider || '', model })}
+      label="AI"
+      compact
+      emptyProviderOption="Default provider"
+      emptyModelOption="Default model"
+    />
   );
 }
 
@@ -187,6 +196,19 @@ function ImportPanel({ onCreated }) {
   const [preview, setPreview] = useState(null);
   const [retrying, setRetrying] = useState(false);
   const [committing, setCommitting] = useState(false);
+  // Set after a partial commit (universe/series/arc/canon persisted, issues
+  // rolled back). The retry then drops arc + seasons + canon so it only
+  // re-creates the issues — re-sending the full payload would clobber the
+  // persisted state and risk duplicate issues. Mirrors Importer.jsx.
+  const [arcAlreadyPersisted, setArcAlreadyPersisted] = useState(false);
+  // Set once commitImport fully succeeds (issues created) but createStorySession
+  // then failed — a re-click must skip commitImport entirely and resume at
+  // session creation, otherwise it re-creates the already-created issues and
+  // overwrites the arc.
+  const [committed, setCommitted] = useState(false);
+  // Any path that clears the preview (analyze, Re-analyze) is a fresh attempt,
+  // so the retry/committed state can't survive it — centralize the reset here.
+  useEffect(() => { if (!preview) { setArcAlreadyPersisted(false); setCommitted(false); } }, [preview]);
 
   const types = IMPORTER_CONTENT_TYPES || ['short-story', 'novel', 'screenplay', 'comic-script'];
 
@@ -224,20 +246,39 @@ function ImportPanel({ onCreated }) {
     const issues = preview.issueProposals || [];
     if (issues.length === 0) { toast.error('No issues were extracted — retry the issue split or adjust the source'); return; }
     setCommitting(true);
-    const committed = await commitImport({
-      universeId: preview.universe.id,
-      seriesId: preview.series.id,
-      issues,
-      contentType,
-      canonSelections: {
-        characters: preview.canonPreview?.characters || [],
-        places: preview.canonPreview?.places || [],
-        objects: preview.canonPreview?.objects || [],
-      },
-      arc: pickArcFields(preview.arcPreview),
-      seasons: preview.seasonsPreview || [],
-    }, { silent: true }).catch((err) => { toast.error(err?.message || 'Import failed'); return null; });
-    if (!committed) { setCommitting(false); return; }
+    // Skip commitImport when a prior click already committed (only the later
+    // createStorySession failed) — re-running it would duplicate the
+    // already-created issues and overwrite the arc. Resume at session creation.
+    if (!committed) {
+      // On an arcAlreadyPersisted retry the server kept arc/seasons/canon from
+      // the failed commit, so resend issues only — re-sending the full payload
+      // would clobber the persisted state and risk duplicate issues.
+      const base = { universeId: preview.universe.id, seriesId: preview.series.id, issues, contentType };
+      const payload = arcAlreadyPersisted
+        ? { ...base, canonSelections: { characters: [], places: [], objects: [] }, arc: null, seasons: [] }
+        : {
+            ...base,
+            canonSelections: {
+              characters: preview.canonPreview?.characters || [],
+              places: preview.canonPreview?.places || [],
+              objects: preview.canonPreview?.objects || [],
+            },
+            arc: pickArcFields(preview.arcPreview),
+            seasons: preview.seasonsPreview || [],
+          };
+      const result = await commitImport(payload, { silent: true }).catch((err) => {
+        if (err?.code === 'IMPORTER_PARTIAL_COMMIT_ISSUES' && err?.context?.arcAlreadyPersisted) {
+          setArcAlreadyPersisted(true);
+          toast.warning('Arc + seasons saved; issues failed and were rolled back. Click again to re-create the issues only — the arc won\'t be re-sent.');
+          return null;
+        }
+        toast.error(err?.message || 'Import failed');
+        return null;
+      });
+      if (!result) { setCommitting(false); return; }
+      setArcAlreadyPersisted(false);
+      setCommitted(true);
+    }
     const session = await createStorySession({
       intakeMode: 'import',
       title: seriesName.trim() || universeName.trim(),
@@ -265,7 +306,7 @@ function ImportPanel({ onCreated }) {
       </p>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-xs text-gray-500">Provider/model used for this import and every later step:</span>
-        <ProviderModelPicker value={llm} onChange={setLlm} id="imp" />
+        <ProviderModelPicker value={llm} onChange={setLlm} />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -327,7 +368,7 @@ function ImportPanel({ onCreated }) {
             <button onClick={importAndBuild} disabled={committing || issueCount === 0}
               className="inline-flex items-center gap-2 bg-port-success hover:bg-green-600 disabled:opacity-50 text-white px-4 py-2 rounded text-sm">
               {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Import &amp; start building
+              {committed ? 'Retry starting the builder' : arcAlreadyPersisted ? 'Retry issues & start building' : 'Import & start building'}
             </button>
             <button onClick={() => setPreview(null)} disabled={committing}
               className="text-sm text-gray-400 hover:text-white px-2">Re-analyze</button>
@@ -358,6 +399,70 @@ function FieldBlock({ label, value }) {
   );
 }
 
+// A compact timeline of the reader map's emotional beats: each beat is a bar
+// positioned along the arc (normalized from `atArcPosition`) with its height
+// set by `intensity` and its color by `kind`. Gives the reader-map step the
+// at-a-glance escalation/pacing view the plain list can't. Beats without a
+// position fall back to even spacing so they still render.
+function ReaderMapBeatTimeline({ readerMap }) {
+  const beats = Array.isArray(readerMap?.beats) ? readerMap.beats : [];
+  if (beats.length === 0) return null;
+
+  const W = 320;
+  const H = 64;
+  const PAD = 4;
+  // Normalize positions: beats use an arbitrary `atArcPosition` scale (0..9999),
+  // so map the observed [min,max] span onto the plot width. When every beat
+  // shares a position (or none have one), fall back to even spacing by index.
+  const positioned = beats.filter((b) => Number.isFinite(b.atArcPosition));
+  const minPos = positioned.length ? Math.min(...positioned.map((b) => b.atArcPosition)) : 0;
+  const maxPos = positioned.length ? Math.max(...positioned.map((b) => b.atArcPosition)) : 0;
+  const span = maxPos - minPos;
+  const xFor = (b, i) => {
+    const usable = W - PAD * 2;
+    if (span > 0 && Number.isFinite(b.atArcPosition)) {
+      return PAD + ((b.atArcPosition - minPos) / span) * usable;
+    }
+    return beats.length === 1 ? W / 2 : PAD + (i / (beats.length - 1)) * usable;
+  };
+
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Beat timeline</div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-16 bg-port-bg border border-port-border rounded"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Reader-map beat timeline — ${beats.length} beats`}
+      >
+        <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="#2a2a2a" strokeWidth="1" />
+        {beats.map((b, i) => {
+          const x = xFor(b, i);
+          const intensity = Number.isFinite(b.intensity) ? Math.max(0, Math.min(1, b.intensity)) : 0.5;
+          // Floor the drawn height so a real beat with intensity 0 still shows a
+          // visible marker instead of a zero-height (invisible) bar.
+          const barH = Math.max(2, (H - PAD * 2) * intensity);
+          const color = getBeatKindColor(b.kind);
+          return (
+            <g key={b.id || i}>
+              <rect x={x - 1.5} y={H - PAD - barH} width="3" height={barH} fill={color} rx="1" />
+              <title>{`${b.kind}${b.intensity != null ? ` ${Math.round(intensity * 100)}%` : ''}${b.note ? ` — ${b.note}` : ''}`}</title>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+        {Object.entries(BEAT_KIND_COLORS).map(([kind, color]) => (
+          <span key={kind} className="inline-flex items-center gap-1 text-[10px] text-gray-500">
+            <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: color }} /> {kind}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReaderMapView({ readerMap }) {
   if (!readerMap) return <p className="text-gray-600 italic text-sm">No reader map yet. Generate one to plan the audience experience.</p>;
   const Section = ({ title, items, render }) => (
@@ -378,7 +483,75 @@ function ReaderMapView({ readerMap }) {
   );
 }
 
-function RefineBox({ onRefine, busy, disabled }) {
+// Kick off a step generate/refine and drive its SSE progress stream. The POST
+// returns immediately; we enable the stream only after it resolves so the run
+// is registered server-side before the EventSource connects (matches the
+// pipeline auto-run). The result content lives in the universe/series records,
+// so callers refetch via `onComplete` rather than reading a payload off the
+// frame. `op` lets a panel show the live phase on the button that triggered the
+// run while leaving sibling buttons merely disabled.
+function useStepStream(sessionId, stepId) {
+  const [starting, setStarting] = useState(false);
+  const [active, setActive] = useState(false);
+  const [phase, setPhase] = useState('');
+  const [op, setOp] = useState(null);
+  const handlersRef = useRef(null);
+  // The runId we're waiting on. useSseProgress only resets its `latest` a render
+  // AFTER `enabled` flips true, so on the subscribe render `latest` still holds
+  // the PREVIOUS run's terminal frame. Gating the terminal branches on a frame's
+  // runId stops that stale frame from firing the new run's onComplete instantly.
+  const runIdRef = useRef(null);
+  const { latest, closed } = useStoryStepProgress(sessionId, stepId, { enabled: active });
+
+  const settle = useCallback(() => {
+    setActive(false); setPhase(''); setOp(null);
+    runIdRef.current = null;
+    const h = handlersRef.current; handlersRef.current = null;
+    return h;
+  }, []);
+
+  // One effect handles every end-of-run path. A terminal frame and the stream's
+  // `closed` flag arrive together on completion, so the ordered branches (and
+  // settle() flipping `active` false) ensure exactly one of onComplete/onError
+  // fires — a separate `closed` effect would double-fire on the same render. The
+  // bare-`closed` branch covers a stream that died before any terminal frame
+  // (server pruned a fast run, or the connection dropped) so the button unsticks.
+  useEffect(() => {
+    if (!active) return;
+    // Ignore frames belonging to a previous run (stale `latest` not yet reset by
+    // the SSE hook). closed is reset on every (re)subscribe, so it never lingers.
+    const mine = latest && latest.runId === runIdRef.current;
+    if (mine && typeof latest.label === 'string' && latest.label) setPhase(latest.label);
+    if (mine && latest.type === 'complete') settle()?.onComplete?.(latest);
+    else if (mine && latest.type === 'error') settle()?.onError?.(new Error(latest.error || 'Generation failed'));
+    else if (closed) settle()?.onError?.(new Error('Lost connection to the generation stream'));
+  }, [latest, closed, active, settle]);
+
+  const start = useCallback(async (nextOp, kickoff, handlers = {}) => {
+    if (starting || active) return;
+    setStarting(true); setPhase('Starting…'); setOp(nextOp);
+    const res = await kickoff().catch((err) => { handlers.onError?.(err); return null; });
+    setStarting(false);
+    if (!res) { setPhase(''); setOp(null); return; }
+    // The kickoff collided with a DIFFERENT in-flight request for this step (a
+    // different op, or a refine of a different target/note). That run persists to
+    // the same records, so binding THIS button's success handler to its terminal
+    // frame would misreport. Don't subscribe — report it and leave the run alone.
+    // (A same-work re-click returns alreadyRunning without conflict and re-attaches.)
+    if (res.conflict) {
+      setPhase(''); setOp(null);
+      handlers.onError?.(new Error('Another operation is already running for this step — try again once it finishes.'));
+      return;
+    }
+    handlersRef.current = handlers;
+    runIdRef.current = res.runId; // only frames from this run drive our handlers
+    setActive(true); // enable the SSE subscription now that the run is registered
+  }, [starting, active]);
+
+  return { start, busy: starting || active, phase, op };
+}
+
+function RefineBox({ onRefine, disabled, busy, running, phase }) {
   const [feedback, setFeedback] = useState('');
   return (
     <div className="border-t border-port-border pt-3 mt-3">
@@ -387,23 +560,25 @@ function RefineBox({ onRefine, busy, disabled }) {
         <input
           type="text" value={feedback} onChange={(e) => setFeedback(e.target.value)}
           placeholder="e.g. make the midpoint reveal land harder"
-          disabled={disabled}
+          disabled={disabled || busy}
           className="flex-1 bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm disabled:opacity-50"
         />
         <button
           onClick={() => onRefine(feedback)} disabled={busy || disabled}
-          className="inline-flex items-center gap-1 bg-port-card border border-port-border hover:border-port-accent px-3 py-1.5 rounded text-sm disabled:opacity-50"
+          className="inline-flex items-center gap-1 bg-port-card border border-port-border hover:border-port-accent px-3 py-1.5 rounded text-sm disabled:opacity-50 whitespace-nowrap"
         >
-          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} Refine
+          {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+          {running ? (phase || 'Refining…') : 'Refine'}
         </button>
       </div>
     </div>
   );
 }
 
-function StepPanel({ session, universe, series, issues, stepId, locked, onChanged }) {
-  const [busy, setBusy] = useState(false);
+function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
+  const { start, busy, phase, op } = useStepStream(session.id, stepId);
   const arc = series?.arc || {};
+  const isRunning = (which) => busy && op === which;
 
   // True when at least one issue already carries text content — the prerequisite
   // for backfilling an upstream step (idea / arc) FROM the downstream work.
@@ -413,23 +588,17 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
       .some((sid) => (st[sid]?.input?.trim() || st[sid]?.output?.trim()));
   }), [issues]);
 
-  const runGenerate = async () => {
-    setBusy(true);
-    const res = await generateStoryStep(session.id, stepId, {}, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Generation failed'); return null; });
-    setBusy(false);
-    if (res) { toast.success('Generated'); onChanged(); }
-  };
+  const runGenerate = () => start('generate',
+    () => generateStoryStep(session.id, stepId, {}, { silent: true }),
+    { onComplete: () => { toast.success('Generated'); onChanged(); },
+      onError: (err) => toast.error(err?.message || 'Generation failed') });
 
   // Backfill: synthesize this upstream step from the series' existing issue
   // content instead of from its conventional upstream (start-from-anywhere).
-  const runBackfill = async () => {
-    setBusy(true);
-    const res = await generateStoryStep(session.id, stepId, { fromDownstream: true }, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Backfill failed'); return null; });
-    setBusy(false);
-    if (res) { toast.success('Backfilled from existing issues'); onChanged(); }
-  };
+  const runBackfill = () => start('backfill',
+    () => generateStoryStep(session.id, stepId, { fromDownstream: true }, { silent: true }),
+    { onComplete: () => { toast.success('Backfilled from existing issues'); onChanged(); },
+      onError: (err) => toast.error(err?.message || 'Backfill failed') });
 
   const backfillButton = () => (
     <button
@@ -437,30 +606,28 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
       title="Reverse-engineer this step from the scripts / prose your issues already have"
       className="inline-flex items-center gap-2 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-50 px-3 py-1.5 rounded text-sm"
     >
-      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-      Backfill from existing issues
+      {isRunning('backfill') ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+      {isRunning('backfill') ? (phase || 'Working…') : 'Backfill from existing issues'}
     </button>
   );
-  const runRefine = async (feedback, entryId) => {
-    setBusy(true);
-    const res = await refineStoryStep(session.id, stepId, { feedback, entryId }, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Refine failed'); return null; });
-    setBusy(false);
-    if (res) {
-      toast.success(res.changes?.length ? `Refined — ${res.changes.length} change(s)` : 'Refined');
-      onChanged();
-    }
-  };
+  const runRefine = (feedback, entryId) => start('refine',
+    () => refineStoryStep(session.id, stepId, { feedback, entryId }, { silent: true }),
+    { onComplete: (frame) => {
+        toast.success(frame.changes?.length ? `Refined — ${frame.changes.length} change(s)` : 'Refined');
+        onChanged();
+      },
+      onError: (err) => toast.error(err?.message || 'Refine failed') });
 
   // Once a step has generated content, the button becomes "Re-generate" (with a
-  // refresh icon) so it's clear it has already been run.
+  // refresh icon) so it's clear it has already been run. While running, the
+  // button surfaces the live SSE phase ("Planning the plot arc…").
   const genButton = (label = 'Generate with AI', hasContent = false) => (
     <button
       onClick={runGenerate} disabled={busy || locked}
       className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
     >
-      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : (hasContent ? <RefreshCw className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />)}
-      {hasContent ? 'Re-generate' : label}
+      {isRunning('generate') ? <Loader2 className="w-4 h-4 animate-spin" /> : (hasContent ? <RefreshCw className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />)}
+      {isRunning('generate') ? (phase || 'Working…') : (hasContent ? 'Re-generate' : label)}
     </button>
   );
 
@@ -499,29 +666,58 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
             </Link>
           )}
         </div>
-        {!locked && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} />}
+        {!locked && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />}
       </div>
     );
   }
   if (stepId === 'plotArc') {
+    const hasArc = Boolean((arc.logline || arc.summary || '').trim());
     return (
       <div className="space-y-3">
-        <FieldBlock label="Arc logline" value={arc.logline} />
-        <FieldBlock label="Arc summary" value={arc.summary} />
-        <FieldBlock label="Protagonist arc" value={arc.protagonistArc} />
-        <FieldBlock label="Themes" value={(arc.themes || []).join(', ')} />
-        <FieldBlock label="Emotional shape (Vonnegut)" value={arc.shape} />
         <div className="flex items-center gap-2 flex-wrap">
-          {!locked && genButton('Generate plot arc', Boolean((arc.logline || arc.summary || '').trim()))}
+          {!locked && genButton('Generate plot arc', hasArc)}
           {!locked && issuesHaveContent && backfillButton()}
           {series?.id && (
             <Link to={`/pipeline/series/${series.id}`} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-port-accent">
-              <ExternalLink className="w-4 h-4" /> Deep-edit on the Arc Canvas
+              <ExternalLink className="w-4 h-4" /> Open the full Arc Canvas page
             </Link>
           )}
         </div>
-        {issuesHaveContent && (
+        {issuesHaveContent && !hasArc && (
           <p className="text-xs text-gray-500">Started from drafted issues? Backfill extracts the arc from their scripts / prose.</p>
+        )}
+        {/* Embed the Arc Canvas inline once an arc exists AND the step is
+            unlocked, so the logline / summary / protagonist arc / themes /
+            Vonnegut shape AND the season roadmap are editable in-builder instead
+            of read-only field blocks + a deep-link. The arc step is the right
+            home for the whole-roadmap editor: it owns series.arc. We show the
+            read-only field summary when there's no arc yet (ArcCanvas has
+            nothing to render) OR when the step is LOCKED — ArcCanvas has no
+            read-only mode and could otherwise edit (or internally unlock) a
+            locked arc, bypassing the builder's "Unlock to revise" lock workflow.
+            The deep-link below covers intentional editing of a locked arc. The
+            `@container` wrapper activates ArcCanvas's `@5xl:` two-column layout. */}
+        {hasArc && !locked ? (
+          <div className="@container">
+            <ArcCanvas
+              series={series}
+              issues={issues}
+              onSeriesUpdate={onSeriesUpdate}
+              onIssuesUpdate={onIssuesUpdate}
+              onFlushPending={onFlushPending}
+            />
+          </div>
+        ) : (
+          <>
+            <FieldBlock label="Arc logline" value={arc.logline} />
+            <FieldBlock label="Arc summary" value={arc.summary} />
+            <FieldBlock label="Protagonist arc" value={arc.protagonistArc} />
+            <FieldBlock label="Themes" value={(arc.themes || []).join(', ')} />
+            <FieldBlock label="Emotional shape (Vonnegut)" value={arc.shape} />
+          </>
+        )}
+        {!locked && hasArc && (
+          <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />
         )}
       </div>
     );
@@ -529,9 +725,10 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
   if (stepId === 'readerMap') {
     return (
       <div className="space-y-3">
+        <ReaderMapBeatTimeline readerMap={arc.readerMap} />
         <ReaderMapView readerMap={arc.readerMap} />
         {!locked && genButton('Generate reader map', Boolean(arc.readerMap))}
-        {!locked && arc.readerMap && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} />}
+        {!locked && arc.readerMap && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />}
       </div>
     );
   }
@@ -564,52 +761,22 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
 
 // Characters step — review the cast and generate a styled preview image per
 // character so the world style + character style can be eyeballed together.
-// Reuses the Universe Builder's exact render path: composeStyledPrompt +
-// universeStylePreset → generateImage → EntryThumbSlot (spinner → image), and
-// persists the resulting filename onto the universe canon entry's imageRefs.
+// Reuses the Universe Builder's exact render path via the shared
+// `composeCanonStyledPrompt` helper + `useSingleImageRender` jobId lifecycle →
+// EntryThumbSlot (spinner → image), and persists the resulting filename onto
+// the universe canon entry's imageRefs.
 function StepCharacters({ session, universe, locked, onChanged }) {
   const cast = universe?.characters || [];
-  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
-  const [renderingJobs, setRenderingJobs] = useState({});
+  const { imageCfg } = useImageRenderSettings();
   const [refiningId, setRefiningId] = useState(null);
-  // MediaJobThumb's onFilename effect can fire more than once (StrictMode +
-  // the unstable per-render onComplete arrow); guard so each (char, filename)
-  // append runs exactly once.
-  const processedRef = useRef(new Set());
-
-  useEffect(() => {
-    getSettings({ silent: true })
-      .then((s) => setImageCfg(readPipelineImageSettings(s)))
-      .catch(() => {});
-  }, []);
-
-  const renderChar = async (c) => {
-    const description = descriptorForCanonEntry('characters', c);
-    if (!description.trim()) { toast.error(`Add a description for ${c.name} before generating a preview`); return; }
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
-    const styled = composeStyledPrompt(
-      `${c.name}: ${description}`,
-      baseOpts.negativePrompt || '',
-      universe ? universeStylePreset(universe) : null,
-    );
-    const queued = await generateImage(
-      { ...baseOpts, prompt: styled.prompt, negativePrompt: styled.negativePrompt || undefined },
-      { silent: true },
-    ).catch((err) => { toast.error(err?.message || 'Render failed'); return null; });
-    if (!queued?.jobId) return;
-    setRenderingJobs((p) => ({ ...p, [c.id]: queued.jobId }));
-  };
+  const { start: startRefine, busy: refineBusy, phase: refinePhase } = useStepStream(session.id, 'characters');
 
   // Section-local renders don't carry a universeRun tag, so the server's
   // imageRef append hook never fires — persist the filename ourselves. Refetch
   // the freshest universe before appending so a sibling character's just-
   // persisted imageRef isn't clobbered by a stale full-array PATCH.
-  const onCharRendered = async (charId, filename) => {
-    setRenderingJobs((p) => { if (!p[charId]) return p; const n = { ...p }; delete n[charId]; return n; });
-    if (!filename || !universe?.id) return;
-    const key = `${charId}:${filename}`;
-    if (processedRef.current.has(key)) return; // multi-fire guard
-    processedRef.current.add(key);
+  const onCharRendered = async (filename, charId) => {
+    if (!universe?.id) return;
     const fresh = await getUniverse(universe.id, { silent: true }).catch(() => null);
     const chars = (fresh?.characters) || universe.characters || [];
     const list = chars.map((e) => (
@@ -621,12 +788,36 @@ function StepCharacters({ session, universe, locked, onChanged }) {
     onChanged();
   };
 
-  const refineChar = async (entryId) => {
+  // One render per character, keyed by char id. `buildPrompt(charId)` composes
+  // the universe-styled prompt for that character; a blank description aborts
+  // the render (the hook returns null) after toasting why. Reuses the canon
+  // styled-render routine the Universe Builder's canon section renders through.
+  const { renderingJobs, render: queueCharRender, handleComplete: onCharComplete } = useSingleImageRender({
+    buildPrompt: (charId) => {
+      const c = cast.find((x) => x.id === charId);
+      if (!c) return null;
+      const description = descriptorForCanonEntry('characters', c);
+      if (!description.trim()) { toast.error(`Add a description for ${c.name} before generating a preview`); return null; }
+      const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+      return composeCanonStyledPrompt({ name: c.name, description, universe, baseNegative: baseOpts.negativePrompt });
+    },
+    onComplete: onCharRendered,
+    onError: (err) => toast.error(err?.message || 'Render failed'),
+  });
+
+  const renderChar = (c) => queueCharRender(imageCfg, c.id);
+
+  const refineChar = (entryId) => {
+    if (refineBusy) return;
     setRefiningId(entryId);
-    const res = await refineStoryStep(session.id, 'characters', { entryId }, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Refine failed'); return null; });
-    setRefiningId(null);
-    if (res) { toast.success(res.changes?.length ? `Refined — ${res.changes.length} change(s)` : 'Refined'); onChanged(); }
+    startRefine('refine',
+      () => refineStoryStep(session.id, 'characters', { entryId }, { silent: true }),
+      { onComplete: (frame) => {
+          setRefiningId(null);
+          toast.success(frame.changes?.length ? `Refined — ${frame.changes.length} change(s)` : 'Refined');
+          onChanged();
+        },
+        onError: (err) => { setRefiningId(null); toast.error(err?.message || 'Refine failed'); } });
   };
 
   return (
@@ -645,7 +836,7 @@ function StepCharacters({ session, universe, locked, onChanged }) {
             imageRefs={c.imageRefs}
             inFlightJobId={renderingJobs[c.id] || null}
             onRender={() => renderChar(c)}
-            onComplete={(fn) => onCharRendered(c.id, fn)}
+            onComplete={(fn) => onCharComplete(fn, c.id)}
             canRender={!locked && Boolean(universe?.id)}
             alt={c.name}
           />
@@ -655,10 +846,11 @@ function StepCharacters({ session, universe, locked, onChanged }) {
           </div>
           {!locked && (
             <button
-              onClick={() => refineChar(c.id)} disabled={refiningId === c.id}
-              className="text-xs inline-flex items-center gap-1 border border-port-border rounded px-2 py-1 hover:border-port-accent disabled:opacity-50 shrink-0"
+              onClick={() => refineChar(c.id)} disabled={refineBusy}
+              className="text-xs inline-flex items-center gap-1 border border-port-border rounded px-2 py-1 hover:border-port-accent disabled:opacity-50 shrink-0 whitespace-nowrap"
             >
-              {refiningId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} Refine
+              {refiningId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+              {refiningId === c.id ? (refinePhase || 'Refining…') : 'Refine'}
             </button>
           )}
         </div>
@@ -670,6 +862,8 @@ function StepCharacters({ session, universe, locked, onChanged }) {
 function IssuesPanel({ session, series, issues, onChanged }) {
   const locks = session.steps?.issues?.issueLocks || {};
   const [busyId, setBusyId] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const hasSeasons = Array.isArray(series?.seasons) && series.seasons.length > 0;
 
   const toggleIssue = async (issueId, next) => {
     setBusyId(issueId);
@@ -679,18 +873,69 @@ function IssuesPanel({ session, series, issues, onChanged }) {
     if (res) { toast.success(next ? 'Issue marked done' : 'Issue reopened'); onChanged(); }
   };
 
+  // Seed issues from the arc — generates a per-episode breakdown for every
+  // season and persists one issue per episode, so the user never leaves the
+  // builder. Provider/model is resolved server-side from the session picker.
+  const generateIssues = async () => {
+    setGenerating(true);
+    const res = await generateStoryIssues(session.id, {}, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to generate issues'); return null; });
+    setGenerating(false);
+    if (!res) return;
+    const created = res.createdIssues?.length || 0;
+    const seasons = res.seasons || [];
+    // Skipped = genuinely ineligible (locked / no synopsis); failed = a
+    // transient provider/LLM error. Surface them separately so an infra
+    // failure never reads as a config skip. Distinct reasons are deduped so a
+    // multi-season batch shows every cause, not just the first.
+    const skipped = seasons.filter((s) => s.skipped);
+    const failed = seasons.filter((s) => s.failed);
+    const reasons = (list) => [...new Set(list.map((s) => s.reason).filter(Boolean))].join('; ');
+    const noun = (n) => (n === 1 ? 'season' : 'seasons');
+    if (created > 0) {
+      toast.success(`Created ${created} issue${created === 1 ? '' : 's'} from the arc`);
+      // A skipped season is an expected config state (locked / no synopsis) —
+      // warn (yellow), don't error (red). A failed season is a real error.
+      if (skipped.length) toast.warning(`Skipped ${skipped.length} ${noun(skipped.length)}: ${reasons(skipped)}`);
+      if (failed.length) toast.error(`Couldn't generate ${failed.length} ${noun(failed.length)}: ${reasons(failed)}`);
+    } else if (failed.length) {
+      toast.error(`Couldn't generate issues — ${reasons(failed) || 'a provider error occurred'}`);
+    } else if (skipped.length) {
+      toast.warning(`No issues created — ${reasons(skipped)}`);
+    } else {
+      toast.error('No issues were generated');
+    }
+    onChanged();
+  };
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-sm text-gray-400">Complete issues one at a time. Lock issue #1 before moving to #2.</p>
-        {series?.id && (
-          <Link to={`/pipeline/series/${series.id}`} className="text-sm text-port-accent inline-flex items-center gap-1">
-            Plan issues in Pipeline <ExternalLink className="w-4 h-4" />
-          </Link>
-        )}
+        <div className="flex items-center gap-3">
+          {hasSeasons && (
+            <button
+              onClick={generateIssues} disabled={generating}
+              title="Generate a per-episode breakdown for every season and create the issues here"
+              className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+            >
+              {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              Generate issues from arc
+            </button>
+          )}
+          {series?.id && (
+            <Link to={`/pipeline/series/${series.id}`} className="text-sm text-port-accent inline-flex items-center gap-1">
+              Plan issues in Pipeline <ExternalLink className="w-4 h-4" />
+            </Link>
+          )}
+        </div>
       </div>
       {(!issues || issues.length === 0) && (
-        <p className="text-gray-600 italic text-sm">No issues yet — generate seasons on the plot-arc step, then plan issues in the Pipeline.</p>
+        <p className="text-gray-600 italic text-sm">
+          {hasSeasons
+            ? 'No issues yet — “Generate issues from arc” seeds one issue per episode for each season, or plan them in the Pipeline.'
+            : 'No issues yet — generate seasons on the plot-arc step first, then seed issues from the arc.'}
+        </p>
       )}
       {(issues || []).map((i) => {
         const isLocked = locks[i.id]?.locked;
@@ -752,6 +997,19 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     setLoading(false);
   }, [storyId]);
 
+  // ── Embedded ArcCanvas wiring (plotArc step) ──────────────────────────────
+  // The Arc Canvas edits series.arc + the issue roadmap in place, so it needs
+  // server-confirmed setters. The flush is usually a no-op here (the bible
+  // fields are edited on their own steps, not inside the arc step), so a
+  // pre-flush save failure is swallowed (silent) rather than toasted.
+  const { updateSeriesFromServer, handleIssuesUpdate, flushPending } = useArcCanvasSync({
+    series,
+    setSeries,
+    setIssues,
+    flushFields: ARC_FLUSH_FIELDS,
+    silent: true,
+  });
+
   // Load the step manifest first; gate the loading spinner on BOTH it and the
   // session so the detail view never renders with an empty step rail.
   useEffect(() => {
@@ -796,7 +1054,10 @@ function StoryBuilderDetail({ storyId, stepParam }) {
         const nextId = stepIds[activeIdx + 1];
         setStoryCurrentStep(storyId, nextId, { silent: true })
           .then(() => navigate(`/story-builder/${storyId}/${nextId}`))
-          .catch(() => {});
+          // The lock succeeded, but the pointer move was re-gated/rejected. Stay
+          // put (don't strand the URL ahead of the persisted currentStep) and
+          // resync so the rail reflects the server's actual pointer.
+          .catch(() => { toast.error('Locked, but could not advance'); reload(); });
       }
     },
     lockedMessage: `${activeStep?.label || 'Step'} locked`,
@@ -807,8 +1068,12 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const goToStep = async (id) => {
     // Free navigation — any step is reachable. Upstream lock/stale state is
     // surfaced as a warning on the step (not a block), so a user can jump to a
-    // later step and backfill the earlier ones.
-    await setStoryCurrentStep(storyId, id, { silent: true }).catch(() => {});
+    // later step and backfill the earlier ones. Navigate only AFTER the server
+    // accepts the pointer move — otherwise a rejected re-gate (deleted session,
+    // invalid step) strands the URL on a step the persisted currentStep never
+    // advanced to. On rejection, resync so the rail reflects the real pointer.
+    const ok = await setStoryCurrentStep(storyId, id, { silent: true }).then(() => true).catch(() => false);
+    if (!ok) { toast.error('Could not switch step'); reload(); return; }
     navigate(`/story-builder/${storyId}/${id}`);
   };
 
@@ -843,7 +1108,6 @@ function StoryBuilderDetail({ storyId, stepParam }) {
           <ProviderModelPicker
             value={{ provider: session.llm?.provider || '', model: session.llm?.model || '' }}
             onChange={saveLlm}
-            id="stb-detail"
           />
         </header>
 
@@ -900,6 +1164,9 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               key={activeStepId}
               session={session} universe={universe} series={series} issues={issues}
               stepId={activeStepId} locked={stepState.locked} onChanged={reload}
+              onSeriesUpdate={updateSeriesFromServer}
+              onIssuesUpdate={handleIssuesUpdate}
+              onFlushPending={flushPending}
             />
 
             {/* Footer: lock + navigation */}

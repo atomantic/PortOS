@@ -12,6 +12,7 @@ export * from './sheetPointers.js';
 export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
+export * from './beatColors.js';
 export * from './bibleLimits.js';
 export * from './catalogTypes.js';
 export * from './editorialRoadmap.js';
@@ -36,6 +37,7 @@ export * from './clipboard.js';
 export * from './compareHelpers.js';
 export * from './genUtils.js';
 export * from './joinInfluenceList.js';
+export * from './localLlmTargetKey.js';
 export * from './loopbackHost.js';
 export * from './mediaNavigation.js';
 export * from './sameJsonShape.js';

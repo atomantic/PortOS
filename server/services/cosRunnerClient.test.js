@@ -42,9 +42,14 @@ import {
   stopRunViaRunner
 } from './cosRunnerClient.js';
 
+// The client reads the body via text() and tolerantly JSON.parses it, so a
+// non-JSON runner response (e.g. an HTML 500 page) becomes a synthesized
+// { error: <raw text> } instead of crashing with "Unexpected token <".
+// A string `data` is treated as a raw (possibly non-JSON) body; an object is
+// serialized to JSON the way the real runner would respond.
 const mockResponse = (ok, data) => ({
   ok,
-  json: vi.fn().mockResolvedValue(data)
+  text: vi.fn().mockResolvedValue(typeof data === 'string' ? data : JSON.stringify(data))
 });
 
 describe('cosRunnerClient', () => {
@@ -220,6 +225,28 @@ describe('cosRunnerClient', () => {
       const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
       expect(callBody.cliCommand).toBe('claude');
       expect(callBody.cliArgs).toEqual(['--model', 'opus']);
+    });
+
+    it('surfaces a non-JSON error body instead of crashing on "Unexpected token <"', async () => {
+      // Simulates the runner returning an HTML 500 page (e.g. PM2 restarting it
+      // mid-request) rather than JSON. Parsing it as JSON used to throw.
+      fetchWithTimeout.mockResolvedValue(
+        mockResponse(false, '<!DOCTYPE html><html><body>502 Bad Gateway</body></html>')
+      );
+      await expect(spawnAgentViaRunner({ agentId: 'a1' }))
+        .rejects.toThrow('502 Bad Gateway');
+    });
+
+    it('falls back to the default message when an error body is empty', async () => {
+      fetchWithTimeout.mockResolvedValue(mockResponse(false, ''));
+      await expect(spawnAgentViaRunner({ agentId: 'a1' }))
+        .rejects.toThrow('Failed to spawn agent');
+    });
+
+    it('does not crash on a non-JSON success body', async () => {
+      fetchWithTimeout.mockResolvedValue(mockResponse(true, 'not json'));
+      const result = await spawnAgentViaRunner({ agentId: 'a1' });
+      expect(result).toEqual({ error: 'not json' });
     });
   });
 

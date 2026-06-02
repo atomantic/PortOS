@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
-  getUniverse, updateUniverse,
+  updateUniverse,
   refineUniverseCharacter,
   getUniverseSeriesNames,
 } from '../../../services/apiUniverseBuilder';
@@ -35,6 +35,7 @@ import { composeStyledPrompt } from '../../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
 import { universeStylePreset } from '../../../lib/universeStylePreset';
 import useMounted from '../../../hooks/useMounted';
+import useUniverse from '../../../hooks/useUniverse';
 import usePreviewRoute from '../../../hooks/usePreviewRoute';
 import CanonCard from '../CanonCard';
 import MediaPreview from '../../media/MediaPreview';
@@ -80,7 +81,10 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
   const [imageModels, setImageModels] = useState([]);
   const [sysSettings, setSysSettings] = useState(null);
-  const [universe, setUniverse] = useState(null);
+  // Linked universe — reference renders inherit its stylePrompt + negativePrompt
+  // so ref images stay visually coherent with the comic-page renderer. `setUniverse`
+  // applies optimistic updates after canon patches / refines / extracts.
+  const [universe, setUniverse] = useUniverse(series?.universeId);
   // Per-entry in-flight render: { [entryId]: jobId }. NounCard subscribes to
   // job progress and surfaces MediaJobThumb until completion — the entry's
   // imageRefs[] is only PATCHed onto the series when the job actually
@@ -141,20 +145,6 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     });
     return () => { cancelled = true; };
   }, [mountedRef]);
-
-  // Fetch the linked universe so reference renders inherit the same
-  // stylePrompt + negativePrompt the comic-page renderer uses. Codex can't
-  // accept reference images, so a consistent aesthetic is the only knob
-  // keeping ref images and comic pages visually coherent.
-  useEffect(() => {
-    if (!series?.universeId) { setUniverse(null); return; }
-    let cancelled = false;
-    getUniverse(series.universeId).then((w) => {
-      if (cancelled || !mountedRef.current) return;
-      setUniverse(w || null);
-    }).catch(() => { if (mountedRef.current) setUniverse(null); });
-    return () => { cancelled = true; };
-  }, [series?.universeId, mountedRef]);
 
   // Sibling-series name lookup for the canon-card "from <series>" chip.
   // The current series is in `series.name`; everything else (including the
@@ -250,7 +240,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     if (result.universe) setUniverse(result.universe);
     const summary = result.rationale || (result.changes?.[0] ? result.changes[0] : 'description rewritten');
     toast.success(`Refined description — ${summary.slice(0, 140)}`);
-  }, [universe, series, refiningCharacterId, mountedRef]);
+  }, [universe, setUniverse, series, refiningCharacterId, mountedRef]);
 
   const handleExtract = async () => {
     if (!universe || !proseReady) return;
@@ -379,7 +369,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     const updated = await updateUniverse(universe.id, { [kindKey]: list })
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
     if (updated && mountedRef.current) setUniverse(updated);
-  }, [universe, mountedRef]);
+  }, [universe, setUniverse, mountedRef]);
 
   // Inline-edit channel for canon fields the user picks directly (today:
   // setting intExt + timeOfDay chips). Optimistic — UI updates before the
@@ -394,7 +384,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     const updated = await updateUniverse(universe.id, { [kindKey]: list })
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
     if (updated && mountedRef.current) setUniverse(updated);
-  }, [universe, mountedRef]);
+  }, [universe, setUniverse, mountedRef]);
 
   const handleRefFailed = useCallback((entryId, errMsg) => {
     setRenderingJobs((prev) => {

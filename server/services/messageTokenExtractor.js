@@ -10,6 +10,7 @@
 
 import { getPages, evaluateOnPage } from './messagePlaywrightSync.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const TOKEN_VALIDATION_TIMEOUT_MS = 15000;
@@ -252,7 +253,7 @@ export async function testApi(provider, token, top = 5) {
     return { success: false, status: response.status, error: text.slice(0, 500) };
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
 
   if (provider === 'outlook') {
     return {

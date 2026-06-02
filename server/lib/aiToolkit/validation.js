@@ -22,6 +22,16 @@ export const providerSchema = z.object({
   mediumModel: z.string().nullable().optional(),
   heavyModel: z.string().nullable().optional(),
   fallbackProvider: z.string().nullable().optional(),
+  // Model to run on the fallback provider. The UI sends '' when no model is
+  // pinned (fall back to the fallback provider's own default), so allow empty.
+  fallbackModel: z.string().nullable().optional(),
+  // Per-request context window (Ollama num_ctx). Lifts the ~4K default so long
+  // prompts (e.g. a whole manuscript) aren't silently truncated. Null = unset.
+  numCtx: z.number().int().min(512).max(1048576).nullable().optional(),
+  // Planning-time context window (tokens) the editorial budgeter may assume for
+  // this provider — distinct from numCtx (what we *ask Ollama for*). For cloud
+  // providers numCtx stays null and this reflects the model's real ceiling.
+  contextWindow: z.number().int().min(512).max(2097152).nullable().optional(),
   timeout: z.number().int().min(1000).max(1800000).optional(),
   enabled: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),

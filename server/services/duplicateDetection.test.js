@@ -19,6 +19,7 @@ vi.mock('crypto', async () => {
 
 const universeSvc = await import('./universeBuilder.js');
 const seriesSvc = await import('./pipeline/series.js');
+const mediaCollections = await import('./mediaCollections.js');
 const dup = await import('./duplicateDetection.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -64,6 +65,34 @@ describe('duplicateDetection', () => {
       const groups = await dup.findDuplicateUniverseGroups();
       const rec = groups[0].records.find((r) => r.id === u1.id);
       expect(rec.linkedSeriesCount).toBe(2);
+    });
+
+    it('sums linkedCollectionItemCount across all collections sharing a universeId', async () => {
+      // Two universes share a name → a duplicate group. The first owns TWO
+      // collections (the deterministic `uc-` bucket plus a stray same-universeId
+      // record that a sync merge could leave behind). The count must add both
+      // collections' items, not last-wins on whichever the scan reads last.
+      const u1 = await universeSvc.createUniverse({ name: 'WithCollections' });
+      await universeSvc.createUniverse({ name: 'WithCollections' });
+      const now = new Date().toISOString();
+      const seed = (id, itemCount) => mediaCollections.mediaCollectionStore().saveOneNow(id, {
+        id,
+        name: `${id}-name`,
+        description: '',
+        coverKey: null,
+        universeId: u1.id,
+        items: Array.from({ length: itemCount }, (_, i) => ({
+          kind: 'image', ref: `${id}-item-${i}`, key: `${id}-item-${i}`,
+        })),
+        createdAt: now,
+        updatedAt: now,
+      });
+      await seed(`uc-${u1.id}`, 3);
+      await seed('stray-merged-bucket', 2);
+
+      const groups = await dup.findDuplicateUniverseGroups();
+      const rec = groups[0].records.find((r) => r.id === u1.id);
+      expect(rec.linkedCollectionItemCount).toBe(5);
     });
   });
 

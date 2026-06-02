@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getProviders, updatePipelineSeries } from '../../services/api';
+import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 
 /**
  * Two-select provider+model picker bound to `series.llm`. Saves on change so
  * the choice applies to every subsequent LLM call on this series (arc, idea,
  * prose, scripts, auto-run). Mirrors the Universe Builder `universe.llm` picker.
+ *
+ * Renders through the shared {@link ProviderModelSelector}; the series-specific
+ * semantics (unset → "Active provider" fallback, save-on-change) live here.
  */
 export default function SeriesLlmPicker({ series, onSeriesUpdate, disabled = false }) {
   const [providers, setProviders] = useState([]);
@@ -35,37 +39,24 @@ export default function SeriesLlmPicker({ series, onSeriesUpdate, disabled = fal
     if (updated) onSeriesUpdate(updated);
   };
 
+  // Bind to `?? ''` (NOT `|| activeProviderId`) — unset must select the
+  // "Active provider" empty option, otherwise the dropdown would silently pin
+  // the active provider as if the user had chosen it.
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {/* Bind to `?? ''` (NOT `|| activeProviderId || ''`) — unset must select
-          the "Active provider" empty option, otherwise the dropdown would
-          silently pin the active provider as if the user had chosen it. */}
-      <select
-        value={series.llm?.provider ?? ''}
-        onChange={(e) => saveLlm({ provider: e.target.value || null, model: null })}
-        disabled={disabled}
-        title="AI provider — applies to every LLM operation on this series"
-        className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40"
-      >
-        <option value="">Active provider ({providerLabel(activeProviderId)})</option>
-        {providers.map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </select>
-      <select
-        value={series.llm?.model || ''}
-        onChange={(e) => saveLlm({ ...(series.llm || {}), model: e.target.value || null })}
-        disabled={disabled || providerModels.length === 0}
-        title="Model"
-        className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40 max-w-[180px]"
-      >
-        <option value="">Default model</option>
-        {providerModels.map((m) => {
-          const id = typeof m === 'string' ? m : m.id;
-          const label = typeof m === 'string' ? m : (m.name || m.id);
-          return <option key={id} value={id}>{label}</option>;
-        })}
-      </select>
-    </div>
+    <ProviderModelSelector
+      providers={providers}
+      selectedProviderId={series.llm?.provider ?? ''}
+      selectedModel={series.llm?.model || ''}
+      availableModels={providerModels}
+      onProviderChange={(id) => saveLlm({ provider: id || null, model: null })}
+      onModelChange={(model) => saveLlm({ ...(series.llm || {}), model: model || null })}
+      label="AI provider"
+      disabled={disabled}
+      modelDisabled={providerModels.length === 0}
+      compact
+      alwaysShowModel
+      emptyProviderOption={`Active provider (${providerLabel(activeProviderId)})`}
+      emptyModelOption="Default model"
+    />
   );
 }

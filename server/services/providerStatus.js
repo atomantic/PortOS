@@ -78,15 +78,18 @@ export async function markProviderAvailable(providerId) {
 
 /**
  * Get the best available fallback provider
- * Returns null if no fallback is available
+ * Returns `{ provider, source, model }` (or null if no fallback is available).
+ * `model` is the configured fallback model to run on the chosen provider (the
+ * task-level pin, the primary's `fallbackModel`, or null = use the fallback's
+ * own default) — never the primary's model.
  *
  * Priority order:
- * 1. Task-level fallback (task.metadata.fallbackProvider)
- * 2. Provider-level fallback (provider.fallbackProvider)
+ * 1. Task-level fallback (task.metadata.fallbackProvider / fallbackModel)
+ * 2. Provider-level fallback (provider.fallbackProvider / fallbackModel)
  * 3. System default priority list
  */
-export function getFallbackProvider(primaryProviderId, providers, taskFallbackId = null) {
-  return providerStatusService.getFallbackProvider(primaryProviderId, providers, taskFallbackId);
+export function getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null) {
+  return providerStatusService.getFallbackProvider(primaryProviderId, providers, taskFallbackId, taskFallbackModelId);
 }
 
 /**

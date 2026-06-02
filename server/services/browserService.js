@@ -12,6 +12,7 @@ import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 
 const execFileAsync = promisify(execFile);
 const PM2_SHELL = process.platform === 'win32';
@@ -38,7 +39,10 @@ const DEFAULT_CONFIG = {
   cdpHost: process.env.CDP_HOST || '127.0.0.1',
   healthPort: 5557,
   autoConnect: true,
-  headless: true,
+  // Default HEADED — the managed CDP browser is meant to be visible (see
+  // browser/server.js, which already launches headed unless `headless === true`).
+  // Keeping this fallback headed matches that and the shipped seed.
+  headless: false,
   userDataDir: DEFAULT_PROFILE_DIR,
   downloadDir: DEFAULT_DOWNLOAD_DIR
 };
@@ -105,7 +109,7 @@ export async function getHealthStatus() {
     };
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
   return {
     connected: data.status === 'healthy',
     processRunning: true,
@@ -201,7 +205,7 @@ export async function cdpRequest(path, options = {}) {
 export async function listCdpPages() {
   const response = await cdpRequest('/json/list', { timeout: HEALTH_TIMEOUT_MS }).catch(() => null);
   if (!response || !response.ok) return [];
-  return response.json();
+  return readResponseJson(response, { fallback: [] });
 }
 
 export async function findOrOpenPage(targetUrl) {
@@ -210,7 +214,8 @@ export async function findOrOpenPage(targetUrl) {
   if (existing) return existing;
   const response = await cdpRequest(`/json/new?${encodeURIComponent(targetUrl)}`, { method: 'PUT' });
   if (!response.ok) return null;
-  return response.json();
+  // Preserve the null-on-failure contract: a malformed body stays null, not {}.
+  return readResponseJson(response, { fallback: null, emptyValue: null });
 }
 
 export function isAuthPage(page) {
@@ -263,7 +268,13 @@ export async function navigateToUrl(url) {
     throw new Error(`CDP navigate failed (${response.status}): ${text}`);
   }
 
-  const page = await response.json();
+  // A successful CDP /json/new always returns a target with an id; a malformed
+  // 200 body must fail like a !ok navigate rather than return a truthy tab with
+  // undefined id/url that a caller mistakes for a successful navigation.
+  const page = await readResponseJson(response, { fallback: null, emptyValue: null });
+  if (!page?.id) {
+    throw new Error(`CDP navigate returned a malformed response for ${url}`);
+  }
   console.log(`🌐 Opened ${url} in CDP browser (tab ${page.id})`);
   return { id: page.id, title: page.title || '(loading)', url: page.url, type: page.type };
 }
@@ -285,7 +296,9 @@ export async function getOpenPages() {
 export async function getCdpVersion() {
   const response = await cdpRequest('/json/version', { timeout: HEALTH_TIMEOUT_MS }).catch(() => null);
   if (!response || !response.ok) return null;
-  return response.json();
+  // Preserve the null-on-failure contract: the /version route 503s when this is
+  // falsy, so a malformed body must stay null, not become a truthy {}.
+  return readResponseJson(response, { fallback: null, emptyValue: null });
 }
 
 // ---------- Downloads ----------

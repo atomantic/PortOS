@@ -60,6 +60,7 @@ vi.mock('../services/brain.js', () => ({
   getLinkByUrl: vi.fn(),
   createLink: vi.fn(),
   updateLink: vi.fn(),
+  reorderLinks: vi.fn(),
   deleteLink: vi.fn(),
   // Buckets
   getBuckets: vi.fn(),
@@ -1242,6 +1243,56 @@ describe('Brain Routes', () => {
       expect(brainService.updateBucket).toHaveBeenNthCalledWith(1, id3, { order: 0 });
       expect(brainService.updateBucket).toHaveBeenNthCalledWith(2, id1, { order: 1 });
       expect(brainService.updateBucket).toHaveBeenNthCalledWith(3, id2, { order: 2 });
+    });
+  });
+
+  describe('POST /api/brain/links/reorder', () => {
+    const idA = '11111111-1111-4111-8111-111111111111';
+    const idB = '22222222-2222-4222-8222-222222222222';
+    const bucket = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+    it('applies the whole batch in one atomic reorderLinks call', async () => {
+      const updates = [
+        { id: idB, bucketId: bucket, bucketOrder: 0 },
+        { id: idA, bucketId: bucket, bucketOrder: 1 }
+      ];
+      brainService.getLinks.mockResolvedValue([{ id: idA }, { id: idB }]);
+      brainService.reorderLinks.mockResolvedValue(updates.map(u => ({ ...u, url: 'x' })));
+      const res = await request(app).post('/api/brain/links/reorder').send({ updates });
+      expect(res.status).toBe(200);
+      // One atomic call (not N concurrent updateLink PUTs).
+      expect(brainService.reorderLinks).toHaveBeenCalledTimes(1);
+      expect(brainService.reorderLinks).toHaveBeenCalledWith(updates);
+      expect(brainService.updateLink).not.toHaveBeenCalled();
+      expect(res.body.links).toHaveLength(2);
+    });
+
+    it('rejects an empty or malformed batch', async () => {
+      const res = await request(app).post('/api/brain/links/reorder').send({ updates: [] });
+      expect(res.status).toBe(400);
+      expect(brainService.reorderLinks).not.toHaveBeenCalled();
+    });
+
+    it('rejects the whole batch (no write) when any id is unknown', async () => {
+      brainService.getLinks.mockResolvedValue([{ id: idA }]); // idB no longer exists
+      const res = await request(app).post('/api/brain/links/reorder').send({
+        updates: [
+          { id: idA, bucketId: bucket, bucketOrder: 0 },
+          { id: idB, bucketId: bucket, bucketOrder: 1 }
+        ]
+      });
+      expect(res.status).toBe(404);
+      expect(brainService.reorderLinks).not.toHaveBeenCalled();
+    });
+
+    it('is matched before /links/:id so "reorder" is not treated as an id', async () => {
+      brainService.getLinks.mockResolvedValue([{ id: idA }]);
+      brainService.reorderLinks.mockResolvedValue([]);
+      const res = await request(app)
+        .post('/api/brain/links/reorder')
+        .send({ updates: [{ id: idA, bucketId: bucket, bucketOrder: 0 }] });
+      expect(res.status).toBe(200);
+      expect(brainService.reorderLinks).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -13,6 +13,7 @@
  */
 
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { readResponseJson } from '../lib/readResponseJson.js'
 import {
   LOCAL_LLM_REVIEWERS,
   DEFAULT_REVIEWERS,
@@ -163,7 +164,12 @@ export async function runLocalCodeReview({ backend, model, diff, timeoutMs = 120
     return { ok: false, backend, model, error: `${backend} API error ${response.status}: ${text.slice(0, 300)}` }
   }
 
-  const data = await response.json().catch(() => null)
+  // Surface the server's raw error text instead of swallowing a non-JSON body to
+  // null — a 200-with-HTML answer used to read as the misleading "no content".
+  const data = await readResponseJson(response, { fallback: (raw) => ({ _nonJson: raw }) })
+  if (data?._nonJson !== undefined) {
+    return { ok: false, backend, model, error: `${backend} returned a non-JSON response: ${data._nonJson.slice(0, 300)}` }
+  }
   const findings = data?.choices?.[0]?.message?.content
   if (!findings || typeof findings !== 'string') {
     return { ok: false, backend, model, error: `${backend} returned no content.` }

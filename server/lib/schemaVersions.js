@@ -46,6 +46,25 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // the field back onto a newer peer. Per-category gate → only series sync
   // pauses with old peers; issues/universes keep flowing.
   pipelineSeries: 2,
+  // NOT bumped for the manuscript-review sibling doc now bundled on series
+  // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
+  // Unlike `readerMap` (v2), the review is NOT a field inside the series
+  // record — it's a separate doc that rides a dedicated `manuscriptReview`
+  // payload key, so an older peer never round-trips it through the series
+  // sanitizer (no silent-strip-then-LWW-back corruption — the readerMap gate's
+  // whole reason to exist). It is additive + gracefully degrading: a pre-feature
+  // receiver ignores the unknown key (review just doesn't reach it) and ships
+  // no review back, so the newer peer's `if (manuscriptReview)` receive guard
+  // is a no-op and the local review is preserved. Bumping `pipelineSeries` here
+  // would be actively harmful — it would 412-reject the ENTIRE series push
+  // (record + issues) to every not-yet-upgraded peer over an OPTIONAL doc that
+  // degrades fine. Registering a brand-new gated category would hit the same
+  // whole-payload footgun documented for `videoHistory` below. So manuscript-
+  // review is intentionally UNGATED today (all peers ship review-doc shape v1).
+  // The FIRST incompatible review-doc shape change (manuscriptReview.js
+  // SCHEMA_VERSION 1→2, where an older peer's sanitizer would strip a field and
+  // LWW it back) MUST introduce a gate then — mirroring the catalog
+  // payloadSchemaVersion lockstep note below.
   mediaCollections: 1,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).

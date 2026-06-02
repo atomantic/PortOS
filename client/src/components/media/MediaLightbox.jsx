@@ -362,6 +362,10 @@ function SettingsPane({
   const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
   const [cleaning, setCleaning] = useState(false);
   const starred = !!annotation?.starred;
+  const closeThenRun = (handler) => {
+    onClose?.();
+    handler?.(item);
+  };
   // Local draft state debounces saves so each keystroke doesn't PATCH.
   // onSaveRef keeps the debounce effect off the parent's render churn —
   // page components pass inline-arrow onAnnotationChange callbacks, which
@@ -563,7 +567,7 @@ function SettingsPane({
         {onRemix && (
           <button
             type="button"
-            onClick={() => { onRemix(item); onClose(); }}
+            onClick={() => closeThenRun(onRemix)}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
           >
             <Sparkles className="w-3.5 h-3.5" /> Remix
@@ -572,7 +576,7 @@ function SettingsPane({
         {!isVideo && onSendToVideo && (
           <button
             type="button"
-            onClick={() => { onSendToVideo(item); onClose(); }}
+            onClick={() => closeThenRun(onSendToVideo)}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
           >
             <Film className="w-3.5 h-3.5" /> Send to Video
@@ -606,7 +610,7 @@ function SettingsPane({
         {isVideo && onContinue && (
           <button
             type="button"
-            onClick={() => { onContinue(item); onClose(); }}
+            onClick={() => closeThenRun(onContinue)}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
           >
             <ImageIcon className="w-3.5 h-3.5" /> Continue

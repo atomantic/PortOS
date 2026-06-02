@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   unlockStoryStep: vi.fn(),
   generateStoryStep: vi.fn(),
   refineStoryStep: vi.fn(),
+  storyStepProgressSseUrl: vi.fn((id, stepId) => `/api/story-builder/${id}/steps/${stepId}/progress`),
   setStoryIssueLock: vi.fn(),
   getUniverse: vi.fn(),
   getPipelineSeries: vi.fn(),
@@ -39,8 +40,27 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   generateImage: vi.fn(),
   updateUniverse: vi.fn(),
+  updatePipelineSeries: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
+
+// Spy on toast so the rejection tests can prove the catch-path notice fired —
+// the success path never toasts, so a specific toast.error message uniquely
+// pins the rejection branch (a bare reload-count check can't, since onSuccess
+// already reloads before the pointer move).
+const toastMock = vi.hoisted(() => {
+  const fn = vi.fn();
+  fn.success = vi.fn(); fn.error = vi.fn(); fn.loading = vi.fn(); fn.warning = vi.fn(); fn.dismiss = vi.fn();
+  return fn;
+});
+vi.mock('../components/ui/Toast', () => ({ default: toastMock, toast: toastMock, Toaster: () => null }));
+
+// The plotArc step embeds the full ArcCanvas roadmap editor; mock it to an
+// inert sentinel so these tests assert the EMBEDDING (and its props) without
+// pulling ArcCanvas's heavy import graph or its own API calls into scope.
+vi.mock('../components/pipeline/ArcCanvas', () => ({
+  default: ({ series }) => <div data-testid="arc-canvas">ArcCanvas[{series?.id}]</div>,
+}));
 
 import StoryBuilder from './StoryBuilder';
 
@@ -155,6 +175,91 @@ describe('StoryBuilder — index', () => {
     ));
   });
 
+  it('import tab: a partial commit (issues rolled back) retries issues-only without re-sending arc/canon', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.analyzeImport.mockResolvedValue({
+      universe: { id: 'u9', name: 'Giant' }, series: { id: 's9' },
+      canonPreview: { characters: [{ name: 'Kessa' }], places: [], objects: [] },
+      arcPreview: { logline: 'A giant wakes.', summary: 'spine' },
+      seasonsPreview: [{ number: 1, title: 'Vol 1' }],
+      issueProposals: [{ title: 'Issue 1' }], issueSplitFailed: false,
+    });
+    // First commit fails after persisting universe/series/arc/canon; the server
+    // rolled the issues back and signals arcAlreadyPersisted.
+    const partial = Object.assign(new Error('issues rolled back'), {
+      code: 'IMPORTER_PARTIAL_COMMIT_ISSUES', context: { arcAlreadyPersisted: true },
+    });
+    api.commitImport.mockRejectedValueOnce(partial);
+    api.commitImport.mockResolvedValueOnce({ universe: { id: 'u9' }, series: { id: 's9' }, createdIssueIds: ['iss-1'] });
+    api.createStorySession.mockResolvedValue({ id: 'stb-import', currentStep: 'idea' });
+
+    renderAt('/story-builder');
+    fireEvent.click(await screen.findByText('Import a finished work'));
+    fireEvent.change(await screen.findByLabelText('Universe name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText('Series name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText(/Source text/), { target: { value: 'PAGE ONE...' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Analyze$/ }));
+    await waitFor(() => expect(screen.getByText(/Extracted/)).toBeTruthy());
+
+    // First click → partial-commit warning, button flips to the issues-only retry label.
+    fireEvent.click(screen.getByRole('button', { name: /Import & start building/ }));
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /Retry issues & start building/ })).toBeTruthy());
+    // No session created from the failed commit.
+    expect(api.createStorySession).not.toHaveBeenCalled();
+
+    // Second click → retry drops arc + seasons + canon, re-sends issues only.
+    fireEvent.click(screen.getByRole('button', { name: /Retry issues & start building/ }));
+    await waitFor(() => expect(api.createStorySession).toHaveBeenCalled());
+    expect(api.commitImport).toHaveBeenCalledTimes(2);
+    expect(api.commitImport).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        universeId: 'u9', seriesId: 's9', issues: [{ title: 'Issue 1' }],
+        arc: null, seasons: [], canonSelections: { characters: [], places: [], objects: [] },
+      }),
+      expect.objectContaining({ silent: true }),
+    );
+  });
+
+  it('import tab: a committed import whose session-create fails retries the session only, never re-committing', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.analyzeImport.mockResolvedValue({
+      universe: { id: 'u9', name: 'Giant' }, series: { id: 's9' },
+      canonPreview: { characters: [{ name: 'Kessa' }], places: [], objects: [] },
+      arcPreview: { logline: 'A giant wakes.', summary: 'spine' },
+      seasonsPreview: [{ number: 1, title: 'Vol 1' }],
+      issueProposals: [{ title: 'Issue 1' }], issueSplitFailed: false,
+    });
+    // Commit succeeds on the first click; createStorySession then fails, leaving
+    // the import committed but no session created.
+    api.commitImport.mockResolvedValue({ universe: { id: 'u9' }, series: { id: 's9' }, createdIssueIds: ['iss-1'] });
+    api.createStorySession.mockRejectedValueOnce(new Error('session create failed'));
+    api.createStorySession.mockResolvedValueOnce({ id: 'stb-import', currentStep: 'idea' });
+
+    renderAt('/story-builder');
+    fireEvent.click(await screen.findByText('Import a finished work'));
+    fireEvent.change(await screen.findByLabelText('Universe name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText('Series name'), { target: { value: 'Giant' } });
+    fireEvent.change(screen.getByLabelText(/Source text/), { target: { value: 'PAGE ONE...' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Analyze$/ }));
+    await waitFor(() => expect(screen.getByText(/Extracted/)).toBeTruthy());
+
+    // First click → commit succeeds, session fails, button flips to the
+    // session-only retry label.
+    fireEvent.click(screen.getByRole('button', { name: /Import & start building/ }));
+    await waitFor(() => expect(api.createStorySession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Retry starting the builder/ })).toBeTruthy());
+    expect(api.commitImport).toHaveBeenCalledTimes(1);
+
+    // Second click → commitImport is NOT re-run; only createStorySession retries.
+    fireEvent.click(screen.getByRole('button', { name: /Retry starting the builder/ }));
+    await waitFor(() => expect(api.createStorySession).toHaveBeenCalledTimes(2));
+    expect(api.commitImport).toHaveBeenCalledTimes(1);
+    // …and the retry's success is consumed: onCreated navigates to the new
+    // session's detail view, which loads it (proving the result wasn't dropped).
+    await waitFor(() => expect(api.getStorySession).toHaveBeenCalledWith('stb-import', expect.anything()));
+  });
+
   it('import tab: blocks "Import & build" when no issues were extracted, offers retry', async () => {
     const { fireEvent } = await import('@testing-library/react');
     api.analyzeImport.mockResolvedValue({
@@ -207,6 +312,56 @@ describe('StoryBuilder — detail stepper', () => {
     expect(screen.queryByText('Generate reader map')).toBeNull();
   });
 
+  it('plotArc step embeds the ArcCanvas once an arc exists, and shows the field summary before that', async () => {
+    // No arc yet → read-only field summary, no embedded canvas.
+    api.getPipelineSeries.mockResolvedValueOnce({ id: 's1', arc: { logline: '', summary: '' } });
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'X', currentStep: 'plotArc', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' },
+    });
+    const { unmount } = renderAt('/story-builder/stb-1/plotArc');
+    await waitFor(() => expect(screen.getByText('Generate plot arc')).toBeTruthy());
+    expect(screen.queryByTestId('arc-canvas')).toBeNull();
+    unmount();
+
+    // Arc present + step unlocked → the ArcCanvas is embedded inline.
+    api.getPipelineSeries.mockResolvedValue({ id: 's1', arc: { logline: 'AL', summary: 'AS' } });
+    renderAt('/story-builder/stb-1/plotArc');
+    await waitFor(() => expect(screen.getByTestId('arc-canvas')).toBeTruthy());
+    expect(screen.getByTestId('arc-canvas').textContent).toContain('s1');
+  });
+
+  it('plotArc step does NOT embed the editable ArcCanvas when the step is locked', async () => {
+    // ArcCanvas has no read-only mode and could edit (or internally unlock) a
+    // locked arc, bypassing the "Unlock to revise" workflow — so a locked
+    // plotArc must fall back to the read-only field summary, not the editor.
+    api.getPipelineSeries.mockResolvedValue({ id: 's1', arc: { logline: 'AL', summary: 'AS' } });
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'X', currentStep: 'plotArc', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true }, plotArc: { status: 'locked', locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' },
+    });
+    renderAt('/story-builder/stb-1/plotArc');
+    await waitFor(() => expect(screen.getByText('Arc logline')).toBeTruthy());
+    expect(screen.queryByTestId('arc-canvas')).toBeNull();
+  });
+
+  it('readerMap step renders the beat timeline when the map has beats', async () => {
+    api.getPipelineSeries.mockResolvedValue({
+      id: 's1',
+      arc: { logline: 'AL', summary: 'AS', readerMap: { beats: [{ id: 'rm-b1', kind: 'hook', atArcPosition: 0, intensity: 0.4 }, { id: 'rm-b2', kind: 'payoff', atArcPosition: 100, intensity: 0.9 }] } },
+    });
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'X', currentStep: 'readerMap', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true }, plotArc: { locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' },
+    });
+    renderAt('/story-builder/stb-1/readerMap');
+    await waitFor(() => expect(screen.getByText('Beat timeline')).toBeTruthy());
+    expect(screen.getByLabelText(/beat timeline — 2 beats/i)).toBeTruthy();
+  });
+
   it('"Lock & continue" locks the step AND auto-advances to the next', async () => {
     const { fireEvent } = await import('@testing-library/react');
     api.getStorySession.mockResolvedValue({
@@ -219,6 +374,48 @@ describe('StoryBuilder — detail stepper', () => {
     await waitFor(() => expect(api.lockStoryStep).toHaveBeenCalledWith('stb-1', 'idea', expect.anything()));
     // …then advances the current-step pointer to the next step (universeAesthetic).
     await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'universeAesthetic', expect.anything()));
+  });
+
+  it('manual step click: a rejected pointer move stays put and resyncs (no navigation)', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Salt Run', currentStep: 'idea', seedIdea: 'seed',
+      universeId: 'u1', seriesId: 's1', steps: mkSteps(), staleSteps: [], llm: { provider: '', model: '' },
+    });
+    // Server re-gate rejects the pointer move (e.g. session deleted out-of-band).
+    api.setStoryCurrentStep.mockRejectedValue(new Error('gate rejected'));
+    renderAt('/story-builder/stb-1/idea');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
+    const callsBefore = api.getStorySession.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: /Plot Arc/i }));
+    await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'plotArc', expect.anything()));
+    // Rejection → the catch path toasts + resyncs (reload refetches the session),
+    // and the URL never advances, so the heading stays on Idea instead of
+    // stranding ahead of currentStep. The specific toast pins the rejection branch.
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Could not switch step'));
+    expect(api.getStorySession.mock.calls.length).toBeGreaterThan(callsBefore);
+    expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy();
+  });
+
+  it('"Lock & continue": a rejected pointer move keeps the lock but does not advance', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Salt Run', currentStep: 'idea', seedIdea: 'seed',
+      universeId: 'u1', seriesId: 's1', steps: mkSteps(), staleSteps: [], llm: { provider: '', model: '' },
+    });
+    api.setStoryCurrentStep.mockRejectedValue(new Error('gate rejected'));
+    renderAt('/story-builder/stb-1/idea');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
+    fireEvent.click(screen.getByText('Lock & continue'));
+    await waitFor(() => expect(api.lockStoryStep).toHaveBeenCalledWith('stb-1', 'idea', expect.anything()));
+    // The auto-advance attempt fires…
+    await waitFor(() => expect(api.setStoryCurrentStep).toHaveBeenCalledWith('stb-1', 'universeAesthetic', expect.anything()));
+    // …but is rejected, so the catch path toasts (this specific message only
+    // fires on the rejected pointer move, not the success path) and the URL
+    // stays on Idea — navigation is gated on .then().
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Locked, but could not advance'));
+    expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy();
   });
 
   it('characters step: renders a per-character preview slot and generates a styled preview image', async () => {

@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { collapseToSingleVolume } from './Importer.jsx';
+import { collapseToSingleVolume, resolveRetryArcSummary } from './Importer.jsx';
+
+describe('resolveRetryArcSummary', () => {
+  it('uses the summary when present and non-empty', () => {
+    expect(resolveRetryArcSummary({ summary: 'A real summary', logline: 'LG' })).toBe('A real summary');
+  });
+
+  it('falls back to the logline when the summary is ABSENT (null/undefined)', () => {
+    expect(resolveRetryArcSummary({ logline: 'LG' })).toBe('LG');
+    expect(resolveRetryArcSummary({ summary: null, logline: 'LG' })).toBe('LG');
+  });
+
+  it('honors an intentionally-cleared (empty-string) summary instead of substituting the logline', () => {
+    // The bug this guards: `summary || logline` resent the logline as the
+    // summary the user just cleared in Review. An empty string must win.
+    expect(resolveRetryArcSummary({ summary: '', logline: 'LG' })).toBe('');
+  });
+
+  it('returns undefined when neither summary nor logline is set', () => {
+    expect(resolveRetryArcSummary({})).toBeUndefined();
+    expect(resolveRetryArcSummary(null)).toBeUndefined();
+  });
+});
 
 describe('collapseToSingleVolume', () => {
   const seasonsPreview = [

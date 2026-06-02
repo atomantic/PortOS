@@ -43,6 +43,7 @@ describe('sharing/buckets', () => {
     expect(fs.existsSync(join(bucketTargetDir, 'records', 'issues'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'records', 'universes'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'records', 'media'))).toBe(true);
+    expect(fs.existsSync(join(bucketTargetDir, 'records', 'reviews'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'assets', 'images'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'assets', 'videos'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'assets', 'blobs'))).toBe(true);
@@ -96,6 +97,23 @@ describe('sharing/buckets', () => {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });
     }
+  });
+
+  describe('bucketRecordsDir / bucketRecordPath', () => {
+    it('joins the per-type records directory under the bucket path', () => {
+      expect(buckets.bucketRecordsDir('/b', 'series')).toBe(join('/b', 'records', 'series'));
+      expect(buckets.bucketRecordsDir('/b', 'reviews')).toBe(join('/b', 'records', 'reviews'));
+    });
+
+    it('joins the per-record file path under its type directory', () => {
+      expect(buckets.bucketRecordPath('/b', 'series', 'ser-1')).toBe(join('/b', 'records', 'series', 'ser-1.json'));
+      expect(buckets.bucketRecordPath('/b', 'media', 'abc')).toBe(join('/b', 'records', 'media', 'abc.json'));
+    });
+
+    it('nests inside the matching records directory', () => {
+      expect(buckets.bucketRecordPath('/b', 'issues', 'iss-9'))
+        .toBe(join(buckets.bucketRecordsDir('/b', 'issues'), 'iss-9.json'));
+    });
   });
 
   describe('sanitizeAssetFilename', () => {

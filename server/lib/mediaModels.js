@@ -216,6 +216,10 @@ const DEFAULT_REGISTRY = {
       pipelineClass: 'QwenImageEditPipeline',
       steps: 30,
       guidance: 4.0,
+      // QwenImageEditPipeline requires a source `image` arg — a text-only
+      // submission crashes deep inside diffusers. `editOnly` lets the route
+      // reject (and the UI gate) a render with no init image up-front.
+      editOnly: true,
     },
     // z-image runner — Apache 2.0, ungated, reuses the FLUX.2 venv. Turbo
     // distillation runs ~8 steps with CFG disabled (guidance 1.0).
@@ -355,12 +359,33 @@ const backfillCfgDisabled = (list) => {
   });
 };
 
+// IDs whose underlying pipeline REQUIRES a source `image` arg (Qwen-Image-Edit
+// loads QwenImageEditPipeline). A text-only render against one of these crashes
+// deep inside diffusers, so the route rejects (and the UI gates) it up-front.
+// Backfilled at load time — same pattern as cfgDisabled — so installs that
+// stored their `qwen-image-edit` entry before this flag existed pick it up
+// without a migration. Mirrored in data.reference/media-models.json.
+const EDIT_ONLY_IDS = new Set([
+  'qwen-image-edit',
+]);
+
+const backfillEditOnly = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || typeof entry.id !== 'string') return entry;
+    if ('editOnly' in entry) return entry; // user override (true OR false) wins
+    if (!EDIT_ONLY_IDS.has(entry.id)) return entry;
+    return { ...entry, editOnly: true };
+  });
+};
+
 export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
 export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
 export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
 export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
 export const isCfgDisabled = (model) => model?.cfgDisabled === true;
+export const isEditOnly = (model) => model?.editOnly === true;
 
 // Append models that are genuinely new in this release (not in
 // _shippedDefaults) to the user's list, while respecting deletions the user
@@ -471,9 +496,9 @@ const normalizeRegistry = (parsed) => {
   // (treat as fresh install — let the new entries land).
   const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
   const isImageBootstrap = shippedImage === null;
-  const upgradedImage = backfillCfgDisabled(
+  const upgradedImage = backfillEditOnly(backfillCfgDisabled(
     upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
-  );
+  ));
   // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
   // Image is getting `_shippedDefaults` for the first time in this release, so
   // there's no prior history of deletions to preserve via the union trick the

@@ -36,6 +36,10 @@ export const lockStoryStep = (id, stepId, options = {}) =>
 export const unlockStoryStep = (id, stepId, options = {}) =>
   request(`/story-builder/${id}/steps/${stepId}/unlock`, { method: 'POST', ...options });
 
+// generate / refine kick off a background run and return { runId, alreadyRunning,
+// sseUrl }. Subscribe to progress via storyStepProgressSseUrl (see
+// hooks/useStoryStepProgress.js); the result lands on the stream's `complete`
+// frame and the persisted content is read back by refetching the session view.
 export const generateStoryStep = (id, stepId, payload = {}, options = {}) =>
   request(`/story-builder/${id}/steps/${stepId}/generate`, {
     method: 'POST',
@@ -45,6 +49,18 @@ export const generateStoryStep = (id, stepId, payload = {}, options = {}) =>
 
 export const refineStoryStep = (id, stepId, payload = {}, options = {}) =>
   request(`/story-builder/${id}/steps/${stepId}/refine`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    ...options,
+  });
+
+// Deterministic SSE URL for a step's generate/refine progress stream. Mirrors
+// pipelineAutoRunSseUrl — derived from ids, not the kickoff response.
+export const storyStepProgressSseUrl = (id, stepId) =>
+  `/api/story-builder/${encodeURIComponent(id)}/steps/${encodeURIComponent(stepId)}/progress`;
+
+export const generateStoryIssues = (id, payload = {}, options = {}) =>
+  request(`/story-builder/${id}/issues/generate`, {
     method: 'POST',
     body: JSON.stringify(payload),
     ...options,

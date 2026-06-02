@@ -7,8 +7,23 @@
 
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 
 const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
+
+/**
+ * Read a runner response body as JSON, tolerating a non-JSON body.
+ *
+ * The runner can answer with an HTML error page (e.g. a 500 while PM2 is
+ * restarting it mid-request) instead of JSON, which would crash a bare
+ * `response.json()` with `Unexpected token <`. The non-JSON fallback surfaces
+ * the runner's raw message as `{ error: <raw text> }` so callers throw a useful
+ * error; an empty body returns `{}` (the shared helper's `emptyValue`), distinct
+ * from a parse failure, so spreading callers like `getRunnerHealth` don't pick
+ * up a spurious `error`.
+ */
+const readRunnerJson = (response) =>
+  readResponseJson(response, { fallback: (text) => ({ error: text.trim() }) });
 
 // Socket.IO client for real-time events
 let socket = null;
@@ -98,7 +113,7 @@ export async function getRunnerHealth() {
   if (!response || !response.ok) {
     return { available: false, error: 'Runner not available' };
   }
-  const data = await response.json();
+  const data = await readRunnerJson(response);
   return { available: true, ...data };
 }
 
@@ -137,11 +152,11 @@ export async function spawnAgentViaRunner(options) {
   }, 60000);
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to spawn agent');
   }
 
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -152,7 +167,7 @@ export async function getActiveAgentsFromRunner() {
   if (!response.ok) {
     throw new Error('Failed to get agents');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -163,10 +178,10 @@ export async function terminateAgentViaRunner(agentId) {
     method: 'POST'
   }, 30000);
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to terminate agent');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -177,10 +192,10 @@ export async function killAgentViaRunner(agentId) {
     method: 'POST'
   }, 30000);
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to kill agent');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -193,10 +208,10 @@ export async function pauseAgentViaRunner(agentId, reason = null) {
     body: JSON.stringify({ reason })
   }, 30000);
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to pause agent');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -207,7 +222,7 @@ export async function getAgentStatsFromRunner(agentId) {
   if (!response.ok) {
     return null;
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -220,7 +235,7 @@ export async function terminateAllAgentsViaRunner() {
   if (!response.ok) {
     throw new Error('Failed to terminate agents');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -229,10 +244,10 @@ export async function terminateAllAgentsViaRunner() {
 export async function getAgentOutputFromRunner(agentId) {
   const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents/${agentId}/output`, {}, 10000);
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to get agent output');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 // ============================================
@@ -268,11 +283,11 @@ export async function executeCliRunViaRunner(options) {
   }, 60000);
 
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to execute run');
   }
 
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -283,7 +298,7 @@ export async function getActiveRunsFromRunner() {
   if (!response.ok) {
     throw new Error('Failed to get runs');
   }
-  return response.json();
+  return readRunnerJson(response);
 }
 
 /**
@@ -294,7 +309,7 @@ export async function isRunActiveInRunner(runId) {
   if (!response.ok) {
     return false;
   }
-  const data = await response.json();
+  const data = await readRunnerJson(response);
   return data.active;
 }
 
@@ -306,7 +321,7 @@ export async function getRunOutputFromRunner(runId) {
   if (!response.ok) {
     return null;
   }
-  const data = await response.json();
+  const data = await readRunnerJson(response);
   return data.output;
 }
 
@@ -318,8 +333,8 @@ export async function stopRunViaRunner(runId) {
     method: 'POST'
   }, 30000);
   if (!response.ok) {
-    const error = await response.json();
+    const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to stop run');
   }
-  return response.json();
+  return readRunnerJson(response);
 }

@@ -184,7 +184,8 @@ describe('Provider Status Service', () => {
       'primary-provider': {
         id: 'primary-provider',
         enabled: true,
-        fallbackProvider: 'configured-fallback'
+        fallbackProvider: 'configured-fallback',
+        fallbackModel: 'configured-fallback-model'
       },
       'configured-fallback': {
         id: 'configured-fallback',
@@ -214,9 +215,24 @@ describe('Provider Status Service', () => {
       expect(result).toBeTruthy();
       expect(result.provider.id).toBe('fallback-provider-1');
       expect(result.source).toBe('task');
+      // No task-level model passed → null (let the fallback resolve its own).
+      expect(result.model).toBeNull();
     });
 
-    it('should return provider-level fallback second', () => {
+    it('should carry the task-level fallback model when provided', () => {
+      const result = statusService.getFallbackProvider(
+        'primary-provider',
+        mockProviders,
+        'fallback-provider-1',
+        'task-chosen-model'
+      );
+
+      expect(result.provider.id).toBe('fallback-provider-1');
+      expect(result.source).toBe('task');
+      expect(result.model).toBe('task-chosen-model');
+    });
+
+    it('should return provider-level fallback second, with its configured fallbackModel', () => {
       const result = statusService.getFallbackProvider(
         'primary-provider',
         mockProviders
@@ -225,6 +241,8 @@ describe('Provider Status Service', () => {
       expect(result).toBeTruthy();
       expect(result.provider.id).toBe('configured-fallback');
       expect(result.source).toBe('provider');
+      // The primary's fallbackModel must ride along — NOT the primary's model.
+      expect(result.model).toBe('configured-fallback-model');
     });
 
     it('should return system fallback if no configured fallback', () => {
@@ -247,6 +265,9 @@ describe('Provider Status Service', () => {
       expect(result).toBeTruthy();
       expect(result.provider.id).toBe('fallback-provider-1');
       expect(result.source).toBe('system');
+      // System-priority picks have no configured model — the fallback resolves
+      // its own default rather than inheriting the primary's model.
+      expect(result.model).toBeNull();
     });
 
     it('should skip disabled providers', () => {

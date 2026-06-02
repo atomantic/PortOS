@@ -57,7 +57,7 @@ Stored in `data/browser-config.json`:
   "cdpHost": "127.0.0.1",
   "healthPort": 5557,
   "autoConnect": true,
-  "headless": true,
+  "headless": false,
   "userDataDir": ""
 }
 ```

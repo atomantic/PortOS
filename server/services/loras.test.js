@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mockJsonResponse } from '../lib/testHelper.js';
 import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -220,7 +221,7 @@ describe('installFromCivitai', () => {
     const fetchImpl = async (url) => {
       calls.push(url);
       if (url.startsWith('https://civitai.com/api/v1/models/2600698')) {
-        return { ok: true, status: 200, json: async () => FAKE_MODEL };
+        return mockJsonResponse(FAKE_MODEL);
       }
       if (url.startsWith('https://civitai.com/api/download/models/7')) {
         // Return a Web ReadableStream so Readable.fromWeb can consume it.
@@ -250,7 +251,7 @@ describe('installFromCivitai', () => {
   });
 
   it('refuses to install non-LoRA model types', async () => {
-    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ ...FAKE_MODEL, type: 'Checkpoint' }) });
+    const fetchImpl = async () => (mockJsonResponse({ ...FAKE_MODEL, type: 'Checkpoint' }));
     await expect(
       lorasService.installFromCivitai({ url: 'https://civitai.com/models/2600698' }, { fetchImpl }),
     ).rejects.toThrow(/not a LoRA/);
@@ -261,7 +262,7 @@ describe('installFromCivitai', () => {
     // / lower-case variants are all the same family from diffusers' POV.
     const fetchImpl = async (url) => {
       if (url.startsWith('https://civitai.com/api/v1/models/')) {
-        return { ok: true, status: 200, json: async () => ({ ...FAKE_MODEL, type: 'DoRA' }) };
+        return mockJsonResponse({ ...FAKE_MODEL, type: 'DoRA' });
       }
       const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
       return { ok: true, status: 200, body: stream };
@@ -275,7 +276,7 @@ describe('installFromCivitai', () => {
     await fs.mkdir(tmpLoras, { recursive: true });
     await fs.writeFile(join(tmpLoras, 'lora-realstagram-v7.safetensors'), 'pre-existing');
     const fetchImpl = async (url) => {
-      if (url.startsWith('https://civitai.com/api/v1/models/')) return { ok: true, status: 200, json: async () => FAKE_MODEL };
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(FAKE_MODEL);
       throw new Error(`should not download: ${url}`);
     };
     await expect(
@@ -285,7 +286,7 @@ describe('installFromCivitai', () => {
 
   it('surfaces a friendly auth error when download is gated (no key)', async () => {
     const fetchImpl = async (url) => {
-      if (url.startsWith('https://civitai.com/api/v1/models/')) return { ok: true, status: 200, json: async () => FAKE_MODEL };
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(FAKE_MODEL);
       return { ok: false, status: 401, statusText: 'Unauthorized' };
     };
     await expect(
@@ -295,7 +296,7 @@ describe('installFromCivitai', () => {
 
   it('surfaces a different auth error message when a key was provided but download still fails', async () => {
     const fetchImpl = async (url) => {
-      if (url.startsWith('https://civitai.com/api/v1/models/')) return { ok: true, status: 200, json: async () => FAKE_MODEL };
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(FAKE_MODEL);
       return { ok: false, status: 403, statusText: 'Forbidden' };
     };
     // Provide apiKey inline so hasApiKey=true
@@ -317,7 +318,7 @@ describe('installFromCivitai', () => {
     const destFilename = 'lora-realstagram-v7.safetensors';
 
     const fetchImpl = async (url) => {
-      if (url.startsWith('https://civitai.com/api/v1/models/')) return { ok: true, status: 200, json: async () => FAKE_MODEL };
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(FAKE_MODEL);
       if (url.startsWith('https://civitai.com/api/download/models/7')) {
         // Plant the dest file to simulate a concurrent install winning before
         // our link() call — this is what makes link() return EEXIST.

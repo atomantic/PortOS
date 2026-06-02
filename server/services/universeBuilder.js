@@ -1071,7 +1071,12 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   // ORIGINATED from a catalog→canon projection. Threaded into projectToCatalog
   // below so the originating catalog row isn't written back a second time
   // (breaks the projectToCanon → updateUniverse → projectToCatalog loop).
-  const { silent = false, canonProjectionGuard = null } = options;
+  // `options.replaceCategories: true` replaces the whole `categories` map with
+  // the patch's instead of unioning it per-key. Used by the conflict-journal
+  // "restore mine" path so a faithful restore of the archived snapshot drops a
+  // category the live record gained since the conflict, rather than resurrecting
+  // it under the normal additive-PATCH semantics (see `mergedCategories` below).
+  const { silent = false, canonProjectionGuard = null, replaceCategories = false } = options;
   const s = store();
   const { merged, nameChanged, skipped, removedCharacterIds, prevEphemeral, nextEphemeral } = await s.queueRecordWrite(id, async () => {
     const cur = await s.loadOne(id);
@@ -1096,8 +1101,11 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     // Merge `categories` per-key — a partial PATCH that only includes
     // `landscapes` must NOT wipe characters/structures/etc. Whole categories
     // not present in the patch are kept as-is from the current universe.
+    // EXCEPT under `replaceCategories` (conflict-journal restore), where the
+    // patch's categories map replaces the current one wholesale so a faithful
+    // restore can drop a category the live record gained since the conflict.
     const mergedCategories = 'categories' in patch
-      ? { ...cur.categories, ...(patch.categories || {}) }
+      ? (replaceCategories ? (patch.categories || {}) : { ...cur.categories, ...(patch.categories || {}) })
       : cur.categories;
 
     // Merge `llm` field-by-field — sending only `{ provider }` shouldn't

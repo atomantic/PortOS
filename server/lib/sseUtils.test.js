@@ -154,4 +154,32 @@ describe('closeJobAfterDelay', () => {
     closeJobAfterDelay(jobs, 'missing', 10);
     expect(() => vi.advanceTimersByTime(10)).not.toThrow();
   });
+
+  it('leaves a replacement job untouched when expectedJob no longer holds the key', () => {
+    const jobs = new Map();
+    const stale = { clients: [makeRes()] };
+    const fresh = { clients: [makeRes()] };
+    jobs.set('j1', stale);
+
+    // Schedule cleanup for `stale`, then a new run replaces it under the same key.
+    closeJobAfterDelay(jobs, 'j1', 100, stale);
+    jobs.set('j1', fresh);
+
+    vi.advanceTimersByTime(100);
+    // The stale run's lingering client is drained, but the live entry survives.
+    expect(stale.clients[0].end).toHaveBeenCalled();
+    expect(fresh.clients[0].end).not.toHaveBeenCalled();
+    expect(jobs.get('j1')).toBe(fresh);
+  });
+
+  it('deletes the job when expectedJob still holds the key', () => {
+    const jobs = new Map();
+    const job = { clients: [makeRes()] };
+    jobs.set('j1', job);
+
+    closeJobAfterDelay(jobs, 'j1', 100, job);
+    vi.advanceTimersByTime(100);
+    expect(job.clients[0].end).toHaveBeenCalled();
+    expect(jobs.has('j1')).toBe(false);
+  });
 });

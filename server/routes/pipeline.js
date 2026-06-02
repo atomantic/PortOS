@@ -60,7 +60,7 @@ import {
 import { extractCanonFromProse, summarizeCanonExtraction } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../services/duplicateDetection.js';
-import { mergeSeries } from '../services/recordMerge.js';
+import { mergeSeries, buildCascadeContext } from '../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
@@ -68,6 +68,7 @@ import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/own
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
+import { resolveSeriesLlmOverride } from '../lib/seriesLlmOverride.js';
 import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE, ERR_NO_RENDERED_PAGES } from '../services/pipeline/comicPdf.js';
 import {
   buildVolumePdf,
@@ -84,6 +85,15 @@ import {
   MUSIC_SOURCE,
   MUSIC_UPLOAD_MAX_BYTES,
 } from '../services/pipeline/musicLibrary.js';
+import {
+  generateMusic,
+  MUSICGEN_MODELS,
+  DEFAULT_MUSICGEN_MODEL_ID,
+  DEFAULT_DURATION_SEC,
+  MIN_DURATION_SEC,
+  MAX_DURATION_SEC,
+  isMusicGenReady,
+} from '../services/pipeline/musicGen.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
 import {
@@ -124,11 +134,18 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NO_RENDERED_ISSUES]: 409,
   // recordMerge validation (unresolved conflicts, bad ids, cross-universe).
   MERGE_VALIDATION: 400,
+  // recordMerge cascade partially completed (the issue reassign failed) → 409 so
+  // the client can surface "merge incomplete, re-run to finish".
+  MERGE_CASCADE_INCOMPLETE: 409,
 };
 
 const mapServiceError = (err) => {
   const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
+  if (status) {
+    // An incomplete merge cascade forwards the survivor/loser ids + which step
+    // failed so the UI can tell the user exactly what didn't move.
+    return new ServerError(err.message, { status, code: err.code, context: buildCascadeContext(err) });
+  }
   return err;
 };
 
@@ -386,6 +403,15 @@ const visualGenerateSchema = z.object({
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
+  // Per-scene wardrobe picks threaded from the storyboards UI — the generic
+  // visual route has no scene index, so the client sends the selected
+  // appearances directly. Each pins one canon character to one of its
+  // wardrobes; the prompt builder appends the wardrobe after the character's
+  // physical description.
+  characterAppearances: z.array(z.object({
+    characterId: z.string().trim().min(1).max(120),
+    wardrobeId: z.string().trim().min(1).max(120).nullable().optional(),
+  })).max(50).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // Render-schema factory — every cover/back-cover render route shares the
@@ -595,18 +621,38 @@ const manuscriptCompletenessSchema = z.object(providerOverrideShape);
 
 // Manuscript editor — review comment operations.
 const manuscriptFixGenerateSchema = z.object(providerOverrideShape);
-const manuscriptFixAcceptSchema = z.object({
+const manuscriptFixEditSchema = z.object({
+  issueNumber: z.number().int().nullable().optional(),
+  issueId: z.string().min(1).max(120).nullable().optional(),
+  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES).nullable().optional(),
   find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX),
   replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+});
+const manuscriptFixAcceptSchema = z.object({
+  find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+  replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+  edits: z.array(manuscriptFixEditSchema).max(20).optional(),
+}).refine((v) => (Array.isArray(v.edits) && v.edits.length > 0) || !!v.find, {
+  message: 'Provide find/replace or at least one edit',
+}).refine((v) => !v.find || typeof v.replace === 'string', {
+  path: ['replace'],
+  message: 'replace is required when find is provided',
 });
 // Comment PATCH: status flip and/or attach/clear a fix. `.strict()` rejects
 // stray keys; `fix` nullable so an explicit clear is distinguishable from absent.
 const manuscriptCommentPatchSchema = z.object({
   status: z.enum(['open', 'accepted', 'dismissed']).optional(),
   fix: z.object({
-    find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
-    replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+    find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+    replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
     fuzzy: z.boolean().optional(),
+    edits: z.array(manuscriptFixEditSchema.extend({
+      title: z.string().max(200).optional(),
+      note: z.string().max(1000).optional(),
+      fuzzy: z.boolean().optional(),
+    })).max(20).optional(),
+  }).refine((v) => !!v.find || !!v.replace || (Array.isArray(v.edits) && v.edits.length > 0), {
+    message: 'Fix must include find/replace or edits',
   }).nullable().optional(),
 }).strict();
 // Versioned free-text section save — writes one issue's manuscript stage.
@@ -733,6 +779,9 @@ router.post('/issues/:id/stages/audio/extract-lines', asyncHandler(async (req, r
 const lineEditSchema = z.object({
   text: z.string().max(4000).optional(),
   voiceIdOverride: z.string().trim().max(200).nullable().optional(),
+  // Per-line VO start offset (seconds into the stitched episode). null clears
+  // the placement so the muxer skips the line. The sanitizer clamps the range.
+  offsetSec: z.number().min(0).max(7200).nullable().optional(),
 });
 router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
@@ -757,6 +806,7 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
       const next = { ...line };
       if ('text' in body) next.text = body.text;
       if ('voiceIdOverride' in body) next.voiceIdOverride = body.voiceIdOverride;
+      if ('offsetSec' in body) next.offsetSec = body.offsetSec;
       const nextLines = [...lines];
       nextLines[lineIdx] = next;
       return { status: 'edited', lines: nextLines };
@@ -847,6 +897,52 @@ const audioStatusAfterMusicChange = (stage) =>
 
 router.get('/audio/music-library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
+}));
+
+// Local-OSS music generators available to the audio stage (Phase 4c.2).
+// `ready` reflects whether the opt-in MusicGen venv is provisioned, so the UI
+// can show an install hint instead of letting the user type a prompt that 503s.
+router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
+  res.json({
+    models: MUSICGEN_MODELS.map(({ id, name }) => ({ id, name })),
+    defaultModelId: DEFAULT_MUSICGEN_MODEL_ID,
+    defaultDurationSec: DEFAULT_DURATION_SEC,
+    minDurationSec: MIN_DURATION_SEC,
+    maxDurationSec: MAX_DURATION_SEC,
+    ready: isMusicGenReady(),
+  });
+}));
+
+// Generate a background-music track with MusicGen (MLX) and attach it to the
+// issue as a `source: 'gen'` track. The generated WAV lands in the shared
+// music library, so it's reusable across issues exactly like an upload.
+const musicGenerateSchema = z.object({
+  prompt: z.string().trim().min(1).max(800),
+  durationSec: z.number().min(MIN_DURATION_SEC).max(MAX_DURATION_SEC).optional(),
+  modelId: z.enum(MUSICGEN_MODELS.map((m) => m.id)).optional(),
+});
+router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicGenerateSchema, req.body ?? {});
+  // Guard the (expensive) generation behind a 404 check first — generating a
+  // multi-second clip only to discover the issue is gone wastes GPU time and
+  // would orphan the WAV in the library.
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, 'audio');
+  const gen = await generateMusic({
+    prompt: body.prompt,
+    durationSec: body.durationSec ?? DEFAULT_DURATION_SEC,
+    modelId: body.modelId ?? DEFAULT_MUSICGEN_MODEL_ID,
+  }).catch((err) => { throw mapServiceError(err); });
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => ({
+      status: audioStatusAfterMusicChange(current),
+      music: { source: MUSIC_SOURCE.GEN, trackFilename: gen.filename, label: gen.model },
+      errorMessage: '',
+    }),
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId });
 }));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {
@@ -1154,56 +1250,50 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
   const result = await arcPlanner.generateSeasonEpisodes(req.params.id, req.params.seasonId, body)
     .catch((err) => { throw mapServiceError(err); });
 
-  const createdIssues = [];
+  let createdIssues = [];
   let bibleExtracted = null;
   if (body.commit) {
     // Create one issue per episode under this season. The issue sanitizer
-    // already accepts `seasonId` + `arcPosition`, so we forward them in the
-    // create payload. The episode's `synopsis` lands in `stages.idea.input`
-    // so the downstream auto-run-text chain has a seed to expand against.
-    for (const ep of result.episodes) {
-      const created = await issuesSvc.createIssue({
-        seriesId: req.params.id,
-        title: ep.title,
-        // Issue `number` is derived from (volume order, arcPosition) by
-        // `createIssue`'s renumber pass — a new V1 episode falls into V1's
-        // slot and later volumes' numbers shift to make room.
-        seasonId: req.params.seasonId,
-        arcPosition: ep.number,
-        // `arcRole` carries the LLM's pilot / complication / midpoint / etc.
-        // classification forward so the idea-expansion prompt can size beats
-        // to the role (a finale needs a different cadence than a complication).
-        arcRole: ep.arcRole,
-        // Episode-level length sizing from the season-episodes LLM pass.
-        // Defaults to 'standard' inside the issue sanitizer when missing.
-        lengthProfile: ep.lengthProfile,
-        stages: {
-          idea: {
-            status: ep.synopsis ? 'edited' : 'empty',
-            input: [ep.logline, ep.synopsis].filter(Boolean).join('\n\n'),
-          },
-        },
-      });
-      createdIssues.push(created);
-    }
+    // already accepts `seasonId` + `arcPosition`; the shared helper owns the
+    // per-episode → createIssue mapping so the Story Builder's batch path
+    // mints identical issue shapes.
+    // Fetch the series once and thread it through both the issue-creation
+    // batch (so each createIssue's renumber pass skips a redundant read) and
+    // the continuity extraction below.
+    const series = await seriesSvc.getSeries(req.params.id).catch(() => null);
+    createdIssues = await arcPlanner.commitEpisodesToIssues(
+      req.params.id, req.params.seasonId, result.episodes, { preloadedSeries: series },
+    );
 
     // Non-fatal: episode creation already succeeded, so a noisy extraction
     // failure must not invalidate the user's accepted breakdown. Phase B.4:
     // canon lives on the linked universe — orphan series (no universeId)
     // skip extraction.
-    const series = await seriesSvc.getSeries(req.params.id).catch(() => null);
     const corpus = result.episodes
       .map((ep) => `## E${ep.number} — ${ep.title}\n\n${ep.logline || ''}\n\n${ep.synopsis || ''}`.trim())
       .filter(Boolean)
       .join('\n\n');
     if (corpus.trim() && series?.universeId) {
+      // Fall back to the series' configured LLM when the client doesn't pass an
+      // explicit override — matches the extract-canon and extract-scenes routes
+      // so continuity extraction honors the provider/model picked in the series
+      // header instead of the global active provider. A model id is
+      // provider-specific, so only inherit the series model when the effective
+      // provider is still the series provider; an override that switches
+      // providers without naming a model leaves it blank so the new provider's
+      // default resolves.
+      const { provider, model } = resolveSeriesLlmOverride(series, {
+        overrideProvider: body.providerOverride,
+        overrideModel: body.modelOverride,
+      });
       // Stamp new inserts as series-extracted (autoLock + sourceSeriesId) so
       // continuity-derived canon survives later AI refines and stays
       // attributable to this series. Matches the pre-B.4 series-side
       // extract semantics.
       const extractRes = await extractCanonFromProse(series.universeId, {
         corpus,
-        providerOverride: body.providerOverride,
+        providerOverride: provider,
+        modelOverride: model,
         parallel: true,
         autoLock: true,
         sourceSeriesId: series.id,
@@ -1373,7 +1463,7 @@ router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(a
   res.json({ comment });
 }));
 
-// Generate an anchored find/replace fix for one comment (does not apply it).
+// Generate one or more anchored fix edits for one comment (does not apply them).
 router.post('/series/:id/manuscript/review/comments/:commentId/fix', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptFixGenerateSchema, req.body ?? {});
@@ -1382,7 +1472,7 @@ router.post('/series/:id/manuscript/review/comments/:commentId/fix', asyncHandle
   res.json(result);
 }));
 
-// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
+// Apply selected, optionally edited fix edits into stage output + mark accepted.
 router.post('/series/:id/manuscript/review/comments/:commentId/accept', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptFixAcceptSchema, req.body ?? {});
@@ -1626,8 +1716,10 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   // provider would be paired with a foreign model id and fail (same guard as
   // the extract-canon route). When the override switches providers without
   // naming a model, leave it blank so the new provider's default resolves.
-  const sceneProviderMatchesSeries = !body.providerOverride
-    || body.providerOverride === (series.llm?.provider || '');
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: body.providerOverride,
+    overrideModel: body.modelOverride,
+  });
   const result = await extractScenes({
     source,
     sourceKind,
@@ -1637,10 +1729,8 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     work: { title: issue.title, kind: 'tv-episode' },
     series: { name: series.name, styleNotes: series.styleNotes },
     issue: { number: issue.number, title: issue.title },
-    providerOverride: body.providerOverride || series.llm?.provider || undefined,
-    modelOverride: body.modelOverride
-      || (sceneProviderMatchesSeries ? series.llm?.model : undefined)
-      || undefined,
+    providerOverride: provider,
+    modelOverride: model,
     tag: `pipeline-storyboards-extract-${sourceKind}`,
   });
 
@@ -1776,17 +1866,16 @@ router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req
   // explicit override — matches every other Pipeline LLM action (e.g.
   // storyboards/extract-scenes) so a manual extract honors the provider/model
   // picked in the series header instead of the global default.
-  const provider = body.providerOverride || series.llm?.provider || '';
   // A model id is provider-specific. Only inherit the series model when the
   // EFFECTIVE provider is still the series provider — otherwise the retry
   // picker's whole point (switch provider, keep "Default model") would forward
   // e.g. `providerOverride: anthropic` paired with a Codex/OpenAI model id and
   // fail. When the user overrode to a different provider without naming a
   // model, leave it blank so the extractor resolves that provider's default.
-  const providerMatchesSeries = !body.providerOverride
-    || body.providerOverride === (series.llm?.provider || '');
-  const model = body.model
-    || (providerMatchesSeries ? (series.llm?.model || '') : '');
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: body.providerOverride,
+    overrideModel: body.model,
+  });
 
   // Stamp the outcome on the stage so the Nouns UI can persist a
   // failure/partial banner and the user can retry with a different
@@ -1796,8 +1885,8 @@ router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req
   try {
     result = await extractCanonFromProse(series.universeId, {
       corpus,
-      providerOverride: provider || undefined,
-      modelOverride: model || undefined,
+      providerOverride: provider,
+      modelOverride: model,
       parallel: true,
       autoLock: true,
       sourceSeriesId: series.id,

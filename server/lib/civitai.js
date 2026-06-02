@@ -17,6 +17,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { RUNNER_FAMILIES } from './runners.js';
+import { readResponseJson } from './readResponseJson.js';
 
 const CIVITAI_API = 'https://civitai.com/api/v1';
 const CIVITAI_HOSTS = new Set(['civitai.com', 'civitai.red', 'civitai.green', 'www.civitai.com']);
@@ -206,7 +207,7 @@ export const fetchCivitaiModel = async (modelId, { apiKey, fetchImpl = fetch } =
     }
     throw new ServerError(`Civitai metadata fetch failed: ${res.status}`, { status: 502, code: 'CIVITAI_FETCH_FAILED' });
   }
-  return res.json();
+  return readResponseJson(res);
 };
 
 // Apply the auth token to a Civitai download URL. The download endpoint
@@ -344,7 +345,7 @@ export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Mos
     }
     throw new ServerError(`Civitai search failed: ${res.status}`, { status: 502, code: 'CIVITAI_SEARCH_FAILED' });
   }
-  const body = await res.json();
+  const body = await readResponseJson(res);
   return Array.isArray(body?.items) ? body.items : [];
 };
 

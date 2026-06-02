@@ -39,6 +39,7 @@ const normalizeEol = (s) => s.replace(/\r\n/g, '\n');
 const AGENT_CLI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentCliSpawning.js'), 'utf-8'));
 const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentTuiSpawning.js'), 'utf-8'));
 const AGENT_LIFECYCLE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8'));
+const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentManagement.js'), 'utf-8'));
 
 vi.mock('./cos.js', () => ({
   updateTask: vi.fn().mockResolvedValue(true),
@@ -606,5 +607,44 @@ describe('close-handler skip-finalization — source contract', () => {
     // Between the guard and the early return, runnerAgents.delete must be called
     const guardToReturn = fnBody.slice(guardPos, returnAfterGuard + 10);
     expect(guardToReturn).toMatch(/runnerAgents\.delete\(agentId\)/);
+  });
+});
+
+describe('terminate/kill drains batched output before completion — source contract', () => {
+  function fnBody(src, signature) {
+    const start = src.indexOf(signature);
+    if (start === -1) return '';
+    const braceStart = src.indexOf('{', start);
+    let depth = 0;
+    for (let i = braceStart; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(braceStart, i + 1); }
+    }
+    return '';
+  }
+
+  it('terminateRunnerAgent flushes the runner output batcher before completeAgent', () => {
+    const body = fnBody(AGENT_MANAGEMENT_SRC, 'async function terminateRunnerAgent');
+    expect(body).toMatch(/flushRunnerOutputBatcher\(agentId\)/);
+    const flushPos = body.indexOf('flushRunnerOutputBatcher(agentId)');
+    const completePos = body.indexOf('completeAgent(');
+    expect(flushPos, 'runner batcher must drain before completeAgent').toBeGreaterThan(-1);
+    expect(flushPos).toBeLessThan(completePos);
+  });
+
+  it('terminateAgent (direct) drains agent.flushOutput before completeAgent', () => {
+    const body = fnBody(AGENT_MANAGEMENT_SRC, 'export async function terminateAgent');
+    expect(body).toMatch(/agent\.flushOutput\?\.\(\)/);
+    const flushPos = body.indexOf('agent.flushOutput?.()');
+    const completePos = body.indexOf('completeAgent(');
+    expect(flushPos).toBeLessThan(completePos);
+  });
+
+  it('killAgent (direct) drains agent.flushOutput before completeAgent', () => {
+    const body = fnBody(AGENT_MANAGEMENT_SRC, 'export async function killAgent');
+    expect(body).toMatch(/agent\.flushOutput\?\.\(\)/);
+    const flushPos = body.indexOf('agent.flushOutput?.()');
+    const completePos = body.indexOf('completeAgent(');
+    expect(flushPos).toBeLessThan(completePos);
   });
 });

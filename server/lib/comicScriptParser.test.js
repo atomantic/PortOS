@@ -485,4 +485,57 @@ Thud!`;
     expect(pages[0].panels[0].dialogue).toEqual([]);
     expect(pages[0].panels).toHaveLength(2);
   });
+
+  it('keeps a trailing all-caps shout (followed by a new panel) as the same speaker, not a new cue', () => {
+    // `STOP` matches the speaker-cue shape but is a shouted continuation of
+    // GIANT's balloon, not a second speaker — the next content line is PANEL 2,
+    // not a spoken line, so one-line lookahead keeps it under GIANT.
+    const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP\nPANEL 2\nAnother shot.');
+    expect(pages[0].panels[0].dialogue).toEqual([
+      { character: 'GIANT', line: 'Wait.' },
+      { character: 'GIANT', line: 'STOP' },
+    ]);
+    expect(pages[0].panels).toHaveLength(2);
+  });
+
+  it('keeps a trailing all-caps shout at end-of-script as the same speaker, not a dangling cue', () => {
+    // Same as above but the shout is the very last line (EOF lookahead). It
+    // must stay GIANT's dialogue rather than be flushed as dangling cue text.
+    const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP');
+    expect(pages[0].panels[0].dialogue).toEqual([
+      { character: 'GIANT', line: 'Wait.' },
+      { character: 'GIANT', line: 'STOP' },
+    ]);
+  });
+
+  it('still opens a NEW balloon for an all-caps cue that IS followed by its own dialogue', () => {
+    // The fix must not regress the common two-speaker case: KESSA is followed by
+    // a spoken line, so lookahead correctly treats it as a fresh cue even though
+    // it sits in continuation position after GIANT's first balloon line.
+    const { pages } = parseComicScript('PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nKESSA\nNo!');
+    expect(pages[0].panels[0].dialogue).toEqual([
+      { character: 'GIANT', line: 'Wait.' },
+      { character: 'KESSA', line: 'No!' },
+    ]);
+  });
+
+  // Lock the lookahead heuristic against EACH block type that can follow a
+  // trailing shout (PAGE / PANEL / CAPTION / SFX), plus the blank-line-skipped
+  // case — every one must keep the shout attributed to the current speaker.
+  describe('trailing all-caps shout — lookahead across every block boundary', () => {
+    const cases = [
+      ['next PAGE', 'PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP\nPAGE 2\nPANEL 1\nElsewhere.'],
+      ['next PANEL', 'PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP\nPANEL 2\nAnother shot.'],
+      ['next CAPTION', 'PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP\nCAPTION\nLater.'],
+      ['next SFX', 'PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP\nSFX\nBOOM'],
+      ['blank line then next PANEL', 'PAGE 1\nPANEL 1\nA face.\nGIANT\nWait.\nSTOP\n\nPANEL 2\nAnother shot.'],
+    ];
+    it.each(cases)('keeps the shout under the speaker when followed by %s', (_label, script) => {
+      const { pages } = parseComicScript(script);
+      expect(pages[0].panels[0].dialogue).toEqual([
+        { character: 'GIANT', line: 'Wait.' },
+        { character: 'GIANT', line: 'STOP' },
+      ]);
+    });
+  });
 });

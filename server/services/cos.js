@@ -796,6 +796,9 @@ export async function evaluateTasks() {
   const liveSchedule = await taskSchedule.loadSchedule();
   const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
 
+  // Track apps already marked review-started this cycle so multiple on-demand
+  // requests for the same app don't each rewrite its activity record.
+  const reviewStartedApps = new Set();
   if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {
       if (tasksToSpawn.length >= availableSlots) break;
@@ -831,7 +834,10 @@ export async function evaluateTasks() {
 
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
-        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        if (!reviewStartedApps.has(targetApp.id)) {
+          await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+          reviewStartedApps.add(targetApp.id);
+        }
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
       } else {
@@ -2545,6 +2551,9 @@ async function dequeueNextTask() {
   const taskSchedule = await taskScheduleMod.loadSchedule();
   const onDemandRequests = await taskScheduleMod.getOnDemandRequests();
 
+  // Track apps already marked review-started this cycle so multiple on-demand
+  // requests for the same app don't each rewrite its activity record.
+  const reviewStartedApps = new Set();
   for (const request of onDemandRequests) {
     if (spawned >= availableSlots) break;
 
@@ -2578,7 +2587,10 @@ async function dequeueNextTask() {
 
     if (targetApp) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
-      await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+      if (!reviewStartedApps.has(targetApp.id)) {
+        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        reviewStartedApps.add(targetApp.id);
+      }
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
     } else {
@@ -2813,7 +2825,9 @@ export async function reorderTasks(taskIds) {
   const content = await readFile(filePath, 'utf-8');
   const tasks = parseTasksMarkdown(content);
 
-  // Create a map of tasks by ID for quick lookup
+  // Create a map of tasks by ID for quick lookup. parseTasksMarkdown guarantees
+  // unique ids (it suffixes any duplicate it encounters), so this Map can't
+  // silently collapse colliding tasks and drop them on write-back.
   const taskMap = new Map(tasks.map(t => [t.id, t]));
 
   // Reorder based on the provided order

@@ -253,3 +253,57 @@ describe('scenePrompt — buildScenePrompt', () => {
     expect(buildScenePrompt('', {}, [], '', null)).toBe('');
   });
 });
+
+describe('scenePrompt — buildScenePrompt wardrobe appearances', () => {
+  const baseScene = { visualPrompt: 'wide shot' };
+  const aria = {
+    id: 'c1',
+    name: 'Aria',
+    physicalDescription: 'tall, dark hair',
+    wardrobes: [
+      { id: 'wd-1', name: 'Field gear', description: 'mud-caked tactical jacket and boots' },
+      { id: 'wd-2', name: 'Gala', description: 'emerald silk gown' },
+    ],
+  };
+
+  it('appends the selected wardrobe after physicalDescription without replacing it', () => {
+    const scene = { ...baseScene, characterAppearances: [{ characterId: 'c1', wardrobeId: 'wd-1' }] };
+    const out = buildScenePrompt('S', scene, [aria], '', null);
+    expect(out).toContain('Aria: tall, dark hair. Wearing: mud-caked tactical jacket and boots');
+  });
+
+  it('leaves the character on their physical description when no wardrobe is picked', () => {
+    const out = buildScenePrompt('S', baseScene, [aria], '', null);
+    expect(out).toContain('Featuring — Aria: tall, dark hair');
+    expect(out).not.toContain('Wearing:');
+  });
+
+  it('ignores an appearance whose wardrobeId no longer resolves on the character', () => {
+    const scene = { ...baseScene, characterAppearances: [{ characterId: 'c1', wardrobeId: 'wd-gone' }] };
+    const out = buildScenePrompt('S', scene, [aria], '', null);
+    expect(out).toContain('Aria: tall, dark hair');
+    expect(out).not.toContain('Wearing:');
+  });
+
+  it('only applies the appearance to its matching characterId', () => {
+    const marcus = { id: 'c2', name: 'Marcus', physicalDescription: 'broad shoulders', wardrobes: [] };
+    const scene = { ...baseScene, characterAppearances: [{ characterId: 'c1', wardrobeId: 'wd-2' }] };
+    const out = buildScenePrompt('S', scene, [aria, marcus], '', null);
+    expect(out).toContain('Aria: tall, dark hair. Wearing: emerald silk gown');
+    expect(out).toContain('Marcus: broad shoulders');
+  });
+
+  it('surfaces wardrobe even when the character has no physical description', () => {
+    const ghost = { id: 'c3', name: 'Ghost', wardrobes: [{ id: 'wd-x', name: 'Cloak', description: 'a tattered grey cloak' }] };
+    const scene = { ...baseScene, characterAppearances: [{ characterId: 'c3', wardrobeId: 'wd-x' }] };
+    const out = buildScenePrompt('S', scene, [ghost], '', null);
+    expect(out).toContain('Ghost: Wearing: a tattered grey cloak');
+  });
+
+  it('tolerates a malformed characterAppearances list', () => {
+    const scene = { ...baseScene, characterAppearances: [null, { wardrobeId: 'wd-1' }, 'nope'] };
+    const out = buildScenePrompt('S', scene, [aria], '', null);
+    expect(out).toContain('Aria: tall, dark hair');
+    expect(out).not.toContain('Wearing:');
+  });
+});

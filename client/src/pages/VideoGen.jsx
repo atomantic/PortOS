@@ -47,6 +47,7 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import ModelSelect from '../components/ModelSelect';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
 import { useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID } from '../hooks/useModelDownloadStatus';
+import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -58,7 +59,7 @@ import {
   getSettings, patchSettingsSlice,
   getActiveVideoJob,
 } from '../services/api';
-import { randomSeed, safeParseJSON } from '../lib/genUtils';
+import { randomSeed } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import { resolveResolutionLabel } from '../lib/imageGenResolutions';
@@ -90,6 +91,25 @@ const videoModelMemoryGb = (model) => {
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
   const match = String(model?.name || '').match(/~\s*(\d+(?:\.\d+)?)\s*GB/i);
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+};
+
+// Mirror of server computeFflfSafeFrames (server/services/videoGen/local.js):
+// the largest numFrames that fits the FFLF/ltx2 stage-2 pixel-frame budget at
+// this resolution, rounded down to the LTX 8k+1 latent boundary. The budget
+// itself comes from /status (`fflfLtx2PixelBudget`, honors the env override) so
+// only this back-solve arithmetic is duplicated — not the constant. Lets the
+// multi-keyframe picker reject out-of-budget indices before submit instead of
+// letting the worker 400 mid-render. Returns numFrames when it already fits or
+// the budget is unknown (fail-open — the server still enforces the real cap).
+const computeFflfSafeFrames = (width, height, numFrames, budget) => {
+  const wh = Number(width) * Number(height);
+  const nf = Number(numFrames);
+  const b = Number(budget);
+  if (!(wh > 0) || !(nf > 0) || !(b > 0)) return nf;
+  if (wh * nf <= b) return nf;
+  const safeRaw = Math.floor(b / wh);
+  const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
+  return safeLatent * 8 + 1;
 };
 
 // Mode-compatibility predicate for the Model dropdown. a2v requires the
@@ -151,6 +171,16 @@ export default function VideoGen() {
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
   const [lastImageFile, setLastImageFile] = useState(null);
   const [lastImageUpload, setLastImageUpload] = useState(null);
+  // Multi-keyframe FFLF (ltx2 runtime only): the user anchors 2–8 gallery
+  // images at specific pixel-frame indices and the model interpolates between
+  // them. This is a distinct server path from the legacy first/last pair
+  // (the route rejects mixing the two) — `keyframesMode` flips fflf between
+  // the two pickers. Each entry is { file, index } where file is a gallery
+  // basename; the route resolves it to an absolute path. Keyframes are
+  // gallery-only (no per-frame upload) because the route only accepts
+  // gallery references for them.
+  const [keyframesMode, setKeyframesMode] = useState(false);
+  const [keyframes, setKeyframes] = useState([]);
   const [extendFromVideoId, setExtendFromVideoId] = useState('');
   const [extendingFrame, setExtendingFrame] = useState(false);
   // a2v mode — direct audio upload only (no gallery for audio yet). The File
@@ -161,6 +191,13 @@ export default function VideoGen() {
   // Image gallery — used by both the start and end frame pickers so the
   // user can pull from any prior render in either slot.
   const [imageGallery, setImageGallery] = useState([]);
+  // Visible gallery options, shared by every gallery <select> (the frame
+  // panels and each multi-keyframe row) so the filter+slice runs once per
+  // gallery change rather than once per picker per render.
+  const visibleGallery = useMemo(
+    () => imageGallery.filter((img) => !img.hidden).slice(0, 50),
+    [imageGallery],
+  );
 
   // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
   useEffect(() => {
@@ -404,7 +441,7 @@ export default function VideoGen() {
   const [statusMsg, setStatusMsg] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const eventSourceRef = useRef(null);
+  const { attach, eventSourceRef } = useMediaJobSse('video');
   // Hold the reject() of the in-flight runGeneration Promise so cancel can
   // settle it. Without this, handleCancel() closes the EventSource but the
   // outstanding Promise dangles forever — and the queue worker's .finally()
@@ -441,63 +478,50 @@ export default function VideoGen() {
   useEffect(() => {
     refreshStatus();
     return () => eventSourceRef.current?.close();
-  }, [refreshStatus]);
+  }, [refreshStatus, eventSourceRef]);
 
   // SSE subscriber shared by the in-flight POST path and the mount-time
   // resume path. `withToast: false` on resume suppresses the success/error
   // toast — the user already saw it the first time and a page reload
   // shouldn't replay it.
   const attachJobEvents = (jobId, { isCurrent = () => true, settleResolve = () => {}, settleReject = () => {}, withToast = true } = {}) => {
-    const es = new EventSource(`/api/video-gen/${jobId}/events`);
-    eventSourceRef.current = es;
-    es.onmessage = (ev) => {
-      if (!isCurrent()) { es.close(); return; }
-      const msg = safeParseJSON(ev.data);
-      if (!msg) return;
-      if (msg.type === 'queued') {
-        setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued');
-      }
-      if (msg.type === 'started') setStatusMsg('Starting render…');
-      if (msg.type === 'status') setStatusMsg(msg.message);
-      if (msg.type === 'progress') {
+    return attach(jobId, {
+      isCurrent,
+      onQueued: (msg) => setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued'),
+      onStarted: () => setStatusMsg('Starting render…'),
+      onStatus: (msg) => setStatusMsg(msg.message),
+      onProgress: (msg) => {
         setProgress({ progress: msg.progress });
         // A bare tqdm percentage shouldn't blank the STATUS line that just
         // preceded it; only overwrite when the progress event carries text.
         if (msg.message) setStatusMsg(msg.message);
-      }
-      if (msg.type === 'complete') {
+      },
+      onComplete: (msg) => {
         setResult(msg.result);
         setGenerating(false);
         setProgress({ progress: 1 });
         setStatusMsg('Complete');
-        es.close();
         if (withToast) toast.success('Video generated');
         refreshHistory();
-        settleResolve(msg.result);
-      }
-      if (msg.type === 'error') {
+        return msg.result;
+      },
+      onError: (msg) => {
         setError(msg.error);
         setGenerating(false);
-        es.close();
         if (withToast) toast.error(msg.error);
-        settleReject(new Error(msg.error));
-      }
-      if (msg.type === 'canceled') {
+        return new Error(msg.error);
+      },
+      onCanceled: (msg) => {
         setGenerating(false);
         setStatusMsg(msg.reason || 'Canceled');
-        es.close();
         if (withToast) toast(msg.reason || 'Render canceled');
-        settleReject(new Error(msg.reason || 'Canceled'));
-      }
-    };
-    es.onerror = () => {
-      if (!isCurrent()) { es.close(); return; }
-      setError('Lost connection to server');
-      setGenerating(false);
-      es.close();
-      settleReject(new Error('Lost connection to server'));
-    };
-    return es;
+        return new Error(msg.reason || 'Canceled');
+      },
+      onConnectionError: () => {
+        setError('Lost connection to server');
+        setGenerating(false);
+      },
+    }).then(settleResolve, settleReject);
   };
 
   // Resume an in-flight (or queued) render so a page reload doesn't lose
@@ -530,6 +554,16 @@ export default function VideoGen() {
       if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
       if (p.mode) setMode(p.mode);
       if (p.chunks && p.chunks > 1) setChunks(p.chunks);
+      // Multi-keyframe FFLF: the route maps the stored { path, index } back to
+      // { file, index } (gallery basename) for us, so restore the picker
+      // state directly. >= 2 mirrors the server's accept floor; flipping
+      // keyframesMode on re-renders the multi-keyframe picker (the model was
+      // ltx2 for the job to have keyframes, so keyframesSupported holds once
+      // setModelId above resolves).
+      if (Array.isArray(p.keyframes) && p.keyframes.length >= 2) {
+        setKeyframes(p.keyframes.map((kf) => ({ file: kf.file, index: kf.index })));
+        setKeyframesMode(true);
+      }
       setGenerating(true);
       // Skip a forced setProgress(0) here — attachJobEvents will replay the
       // server's last SSE payload synchronously after EventSource open, and
@@ -620,6 +654,46 @@ export default function VideoGen() {
 
   const currentModel = models.find((m) => m.id === modelId);
 
+  // Multi-keyframe availability + validation. Keyframes are an ltx2-runtime
+  // primitive (the route 400s with KEYFRAMES_REQUIRE_LTX2 otherwise), so the
+  // picker only offers itself when the selected model runs on ltx2. Mirror
+  // the server's accept rules (server/routes/videoGen.js ~line 574) so the
+  // form blocks before a doomed POST: 2–8 entries, each pinned to a gallery
+  // file, indices strictly ascending and within [0, numFrames-1].
+  const keyframesSupported = currentModel?.runtime === 'ltx2';
+  const keyframesActive = mode === 'fflf' && keyframesMode && keyframesSupported;
+  // The worker clamps FFLF/ltx2 numFrames down to fit a pixel-frame budget that
+  // depends on resolution, so at default 768×512 the real frame ceiling is far
+  // below numFrames. Compute the same cap the server enforces so the picker can
+  // gate indices (and the auto-seed) against it. Falls back to numFrames when
+  // the budget hasn't loaded yet (server still enforces the real cap).
+  const maxSafeFrames = useMemo(
+    () => computeFflfSafeFrames(width, height, numFrames, status?.fflfLtx2PixelBudget),
+    [width, height, numFrames, status?.fflfLtx2PixelBudget],
+  );
+  const keyframesError = useMemo(() => {
+    if (!keyframesActive) return null;
+    if (keyframes.length < 2) return 'Add at least 2 keyframes.';
+    if (keyframes.length > 8) return 'Use at most 8 keyframes.';
+    let prev = -1;
+    for (let i = 0; i < keyframes.length; i++) {
+      const kf = keyframes[i];
+      if (!kf.file) return `Keyframe ${i + 1} needs a gallery image.`;
+      if (!Number.isInteger(kf.index) || kf.index < 0) return `Keyframe ${i + 1} needs a frame index ≥ 0.`;
+      if (kf.index > numFrames - 1) return `Keyframe ${i + 1} frame ${kf.index} must be below numFrames (${numFrames}).`;
+      // Effective cap from the resolution-dependent pixel budget (< numFrames at
+      // higher resolutions). Mirrors the worker's clamp so we don't POST a
+      // render that 400s with LTX2_FFLF_PIXEL_BUDGET_EXCEEDED.
+      if (maxSafeFrames < numFrames && kf.index > maxSafeFrames - 1) {
+        return `Keyframe ${i + 1} frame ${kf.index} exceeds the ${width}×${height} pixel budget (max frame ${maxSafeFrames - 1}). Lower the resolution or raise FFLF_LTX2_PIXEL_BUDGET.`;
+      }
+      if (kf.index <= prev) return 'Keyframe frame indices must be strictly ascending.';
+      prev = kf.index;
+    }
+    return null;
+  }, [keyframesActive, keyframes, numFrames, maxSafeFrames, width, height]);
+  const keyframesBlocked = keyframesActive && !!keyframesError;
+
   // Probe the per-runtime status BEFORE the user hits Generate — without
   // this they'd see the buildArgs-time "venv not found" 500 with no good way
   // to recover. The set of "BYOV" runtimes comes from /status server-side so
@@ -694,6 +768,43 @@ export default function VideoGen() {
     setLastImageUpload(null);
   };
 
+  // The last addressable frame index — the smaller of numFrames and the
+  // resolution-dependent pixel-budget cap (maxSafeFrames), minus 1. Seeding new
+  // keyframe rows against this keeps the auto-seeded index inside the budget the
+  // server enforces, so toggling keyframes on at a high resolution doesn't seed
+  // an index that immediately trips keyframesError.
+  const lastSeedableIndex = Math.max(0, Math.min(numFrames, maxSafeFrames) - 1);
+  // Multi-keyframe list mutators. A new row defaults its index to the prior
+  // row's index + 1 (clamped to the last addressable frame) so the strictly-
+  // ascending invariant holds out of the box without the user hand-typing it.
+  const addKeyframe = () => setKeyframes((prev) => {
+    if (prev.length >= 8) return prev;
+    const lastIndex = prev.length ? prev[prev.length - 1].index : -1;
+    const nextIndex = Math.min(lastIndex + 1, lastSeedableIndex);
+    return [...prev, { file: '', index: nextIndex }];
+  });
+  const updateKeyframe = (i, patch) => setKeyframes((prev) =>
+    prev.map((kf, idx) => (idx === i ? { ...kf, ...patch } : kf)));
+  const removeKeyframe = (i) => setKeyframes((prev) => prev.filter((_, idx) => idx !== i));
+  // Toggling multi-keyframe mode on seeds two empty rows anchored at the first
+  // and last frame (the FFLF mental model, and the minimum 2 the server
+  // requires) and drops the legacy first/last pair (the route rejects mixing
+  // them). Toggling off clears the keyframe list for the same reason.
+  const toggleKeyframesMode = () => setKeyframesMode((on) => {
+    const next = !on;
+    if (next) {
+      clearSourceImage();
+      clearLastImage();
+      setKeyframes((prev) => (prev.length >= 2 ? prev : [
+        { file: '', index: 0 },
+        { file: '', index: Math.max(1, lastSeedableIndex) },
+      ]));
+    } else {
+      setKeyframes([]);
+    }
+    return next;
+  });
+
   // Switching mode resets the now-irrelevant fields so a stale choice from
   // a prior mode can't sneak into the next generation. (Prompt/seed/etc.
   // carry over because they apply to all modes.)
@@ -702,6 +813,10 @@ export default function VideoGen() {
     // Audio is only meaningful in a2v mode — drop it on every other switch
     // so a stale upload from a prior pick doesn't sneak into a non-a2v post.
     if (next !== 'a2v') setAudioFile(null);
+    // Multi-keyframe is fflf-only — drop it on every other switch so a stale
+    // keyframe list can't sneak into the next post (the route would 400 on a
+    // non-fflf mode anyway, but keep the form honest).
+    if (next !== 'fflf') { setKeyframesMode(false); setKeyframes([]); }
     if (next === 'text') {
       clearSourceImage();
       clearLastImage();
@@ -803,6 +918,10 @@ export default function VideoGen() {
     const promptOut = (noMusic && !disableAudio && !/no music/i.test(composed.prompt))
       ? `${composed.prompt}\n\nno music, no soundtrack`
       : composed.prompt;
+    // Legacy first/last-frame fflf: the two-image picker is mutually exclusive
+    // with multi-keyframe mode on the server, so its image fields only ride
+    // along when keyframes aren't active.
+    const legacyFflf = mode === 'fflf' && !keyframesActive;
     return {
       prompt: promptOut,
       negativePrompt: composed.negativePrompt,
@@ -821,18 +940,25 @@ export default function VideoGen() {
       // video's history id directly so the server resolves it to a disk
       // path and routes through ExtendPipeline. Legacy extend (mlx_video)
       // still uses sourceImageFile populated from extractLastFrame.
-      sourceImageFile: (mode === 'image' || mode === 'fflf'
+      // keyframes goes as a JSON string — buildFormData would otherwise
+      // stringify each {file,index} object to "[object Object]" (it appends
+      // arrays element-by-element); the route's zod preprocess JSON-parses it
+      // and strips any unknown keys, so sending the entries verbatim is safe.
+      keyframes: keyframesActive ? JSON.stringify(keyframes) : '',
+      sourceImageFile: (mode === 'image' || legacyFflf
         || (mode === 'extend' && currentModel?.runtime !== 'ltx2'))
         ? (sourceImageFile || '') : '',
-      sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
-      lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
-      lastImage: mode === 'fflf' ? (lastImageUpload || '') : '',
+      sourceImage: (mode === 'image' || legacyFflf) ? (sourceImageUpload || '') : '',
+      lastImageFile: legacyFflf ? (lastImageFile || '') : '',
+      lastImage: legacyFflf ? (lastImageUpload || '') : '',
       extendFromVideoId: (mode === 'extend' && currentModel?.runtime === 'ltx2')
         ? (extendFromVideoId || '') : '',
       // Audio File goes through under the multipart field 'audioFile'. Server
       // routes it to the durable uploads dir and into the a2v helper.
       audioFile: mode === 'a2v' ? (audioFile || '') : '',
-      chunks: mode !== 'a2v' && chunks > 1 ? chunks : '',
+      // Keyframes anchor a single clip — the route rejects chunks > 1 with
+      // KEYFRAMES_CHUNKS_CONFLICT, so suppress chunking when keyframes are on.
+      chunks: mode !== 'a2v' && !keyframesActive && chunks > 1 ? chunks : '',
     };
   };
 
@@ -904,7 +1030,7 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
+    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
@@ -913,7 +1039,7 @@ export default function VideoGen() {
     // would silently queue a doomed job that fails late in the worker with
     // VENV_MISSING, hiding the installer banner from the user. Block at
     // enqueue time so the only path forward is the install banner above.
-    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked) return;
+    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked) return;
     const payload = buildGeneratePayload();
     // Strip File blobs for snapshot — re-using a File across multiple queued
     // submissions is fine, but we need a stable JSON-ish summary for the
@@ -1020,7 +1146,7 @@ export default function VideoGen() {
   // ONLY a BYOV runtime via the modal would stay stuck behind a "not
   // configured" error from the unrelated legacy probe.
   const notConnected = !!status && status.connected === false && !needsByovProbe;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked && !keyframesBlocked;
 
   // Symmetric frame picker for the FFLF + image modes. Each slot accepts
   // EITHER a gallery filename OR a fresh upload; the preview renders
@@ -1070,7 +1196,7 @@ export default function VideoGen() {
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
             >
               <option value="">Pick from gallery…</option>
-              {imageGallery.filter((img) => !img.hidden).slice(0, 50).map((img) => (
+              {visibleGallery.map((img) => (
                 <option key={img.filename} value={img.filename}>{img.filename}</option>
               ))}
             </select>
@@ -1240,7 +1366,87 @@ export default function VideoGen() {
             </div>
           </div>
 
-          {(mode === 'image' || mode === 'fflf') && (
+          {mode === 'fflf' && keyframesSupported && (
+            <div className="border border-port-border/50 rounded-lg p-2 space-y-2">
+              <label htmlFor="keyframes-mode" className="flex items-center justify-between gap-2 cursor-pointer">
+                <span className="text-[11px] font-medium text-gray-400">
+                  Multi-keyframe interpolation
+                  <span className="block text-[10px] text-gray-500 font-normal">Anchor 2–8 gallery frames at frame indices (LTX-2)</span>
+                </span>
+                <input
+                  id="keyframes-mode"
+                  type="checkbox"
+                  checked={keyframesMode}
+                  onChange={toggleKeyframesMode}
+                  className="w-4 h-4 accent-port-accent cursor-pointer"
+                />
+              </label>
+              {keyframesActive && (
+                <div className="space-y-2">
+                  {keyframes.map((kf, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <div className="flex-1 space-y-1">
+                        <label htmlFor={`kf-file-${i}`} className="sr-only">{`Keyframe ${i + 1} gallery image`}</label>
+                        <select
+                          id={`kf-file-${i}`}
+                          value={kf.file}
+                          onChange={(e) => updateKeyframe(i, { file: e.target.value })}
+                          className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent"
+                        >
+                          <option value="">Pick from gallery…</option>
+                          {visibleGallery.map((img) => (
+                            <option key={img.filename} value={img.filename}>{img.filename}</option>
+                          ))}
+                        </select>
+                        {kf.file && (
+                          <ImagePreview src={`/data/images/${kf.file}`} alt={`Keyframe ${i + 1}`} label={kf.file} />
+                        )}
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <label htmlFor={`kf-index-${i}`} className="text-[10px] text-gray-500">frame</label>
+                        <input
+                          id={`kf-index-${i}`}
+                          type="number"
+                          min={0}
+                          max={numFrames - 1}
+                          value={kf.index}
+                          onChange={(e) => updateKeyframe(i, { index: e.target.value === '' ? '' : Number(e.target.value) })}
+                          aria-label={`Keyframe ${i + 1} frame index`}
+                          className="w-16 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeKeyframe(i)}
+                        disabled={keyframes.length <= 2}
+                        aria-label={`Remove keyframe ${i + 1}`}
+                        className="mt-5 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={addKeyframe}
+                      disabled={keyframes.length >= 8}
+                      className="flex items-center gap-1.5 text-[11px] text-port-accent hover:text-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ListPlus className="w-3.5 h-3.5" /> Add keyframe
+                    </button>
+                    <span className="text-[10px] text-gray-500">{keyframes.length}/8</span>
+                  </div>
+                  {keyframesError && <p className="text-[10px] text-port-error leading-snug">{keyframesError}</p>}
+                  <p className="text-[10px] text-gray-500 leading-snug">
+                    Keyframes pull from your gallery only. Indices must be strictly ascending and below numFrames ({numFrames}).
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(mode === 'image' || (mode === 'fflf' && !keyframesActive)) && (
             <div className={`grid gap-2 ${mode === 'fflf' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
               {renderFramePanel({
                 label: mode === 'fflf' ? 'First frame' : 'Source image',
@@ -1433,13 +1639,16 @@ export default function VideoGen() {
 
             {mode !== 'a2v' && (
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1" title="Chain N renders end-to-end. Each chunk's last frame seeds the next, then they're stitched into one clip. Wall time scales linearly with chunks.">
+                <label htmlFor="chunks-select" className="block text-xs font-medium text-gray-400 mb-1" title="Chain N renders end-to-end. Each chunk's last frame seeds the next, then they're stitched into one clip. Wall time scales linearly with chunks.">
                   Chunks
                 </label>
                 <select
-                  value={chunks}
+                  id="chunks-select"
+                  value={keyframesActive ? 1 : chunks}
                   onChange={(e) => setChunks(Number(e.target.value))}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                  disabled={keyframesActive}
+                  title={keyframesActive ? 'Multi-keyframe renders anchor a single clip — chunking is unavailable.' : undefined}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
                     <option key={n} value={n}>
@@ -1575,7 +1784,7 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
                   byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
@@ -1584,6 +1793,7 @@ export default function VideoGen() {
                     : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
                       ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
                       : 'Pick an audio file before generating')
+                    : keyframesBlocked ? keyframesError
                     : undefined
                 }
               >

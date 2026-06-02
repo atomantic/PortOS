@@ -1,5 +1,6 @@
 import { useParams, Navigate } from 'react-router-dom';
 import { AutofixerTab } from '../components/settings/AutofixerTab';
+import AiAssignmentsTab from '../components/settings/AiAssignmentsTab';
 import { BackupTab } from '../components/settings/BackupTab';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
@@ -30,6 +31,7 @@ export default function Settings() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'general': return <GeneralTab />;
+      case 'ai-assignments': return <AiAssignmentsTab />;
       case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
       case 'catalog': return <CatalogTypesTab />;
@@ -45,14 +47,14 @@ export default function Settings() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 p-4 border-b border-port-border">
+    <div className="flex flex-col h-full min-w-0 overflow-hidden">
+      <div className="flex items-center gap-3 p-4 border-b border-port-border shrink-0">
         <h1 className="text-2xl font-bold text-white">Settings</h1>
       </div>
 
       <SettingsTabsHeader activeTab={activeTab} />
 
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 min-w-0 overflow-auto p-4">
         {renderTabContent()}
       </div>
     </div>

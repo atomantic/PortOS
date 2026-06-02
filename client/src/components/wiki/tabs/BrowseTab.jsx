@@ -5,6 +5,7 @@ import {FileText, FolderOpen,
   ChevronDown, ChevronRight, ArrowLeft, Tag, Link2, Edit3, Save,
   Trash2, X} from 'lucide-react';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -255,11 +256,12 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
 
             {/* Delete confirmation */}
             {confirmDelete === selectedNote.path && (
-              <div className="px-4 py-2 bg-port-error/10 border-b border-port-error/30 flex items-center gap-3 text-sm">
-                <span className="text-port-error">Delete this note permanently?</span>
-                <button onClick={() => handleDeleteNote(selectedNote.path)} className="px-2 py-1 rounded bg-port-error text-white text-xs">Delete</button>
-                <button onClick={() => setConfirmDelete(null)} className="px-2 py-1 rounded bg-port-card text-gray-300 text-xs">Cancel</button>
-              </div>
+              <InlineConfirmRow
+                variant="separator"
+                question="Delete this note permanently?"
+                onConfirm={() => handleDeleteNote(selectedNote.path)}
+                onCancel={() => setConfirmDelete(null)}
+              />
             )}
 
             {/* Note content */}

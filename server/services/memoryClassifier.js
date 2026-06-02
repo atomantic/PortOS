@@ -11,6 +11,7 @@ import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { readResponseJson } from '../lib/readResponseJson.js';
 import { getMemories } from './memoryBackend.js';
 
 const MODEL_LIST_TIMEOUT_MS = 5000;
@@ -196,7 +197,7 @@ async function ensureLLMModelLoaded(config) {
 
   if (!listResponse?.ok) return null;
 
-  const payload = await listResponse.json().catch(() => null);
+  const payload = await readResponseJson(listResponse);
   const allModels = payload?.data || [];
   const llmModels = allModels.filter(m => m.type === 'llm');
 
@@ -271,7 +272,7 @@ async function callLLM(prompt, config) {
     throw new Error(`LLM API error ${response.status}: ${error}`);
   }
 
-  const data = await response.json();
+  const data = await readResponseJson(response);
   return data.choices?.[0]?.message?.content || '';
 }
 

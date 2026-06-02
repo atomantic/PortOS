@@ -23,6 +23,15 @@ const svc = {
 };
 vi.mock('../services/storyBuilder.js', () => svc);
 
+// generate/refine kick off through the SSE runner; the route returns the runId +
+// sseUrl and the work streams in the background. Stub the runner so the route
+// test verifies dispatch + the kickoff response shape, not the run lifecycle.
+const runner = {
+  startStepRun: vi.fn(() => ({ runId: 'run-1', alreadyRunning: false })),
+  attachClient: vi.fn(() => true),
+};
+vi.mock('../services/storyBuilderRunner.js', () => runner);
+
 const { default: storyBuilderRoutes } = await import('./storyBuilder.js');
 
 const makeApp = () => {
@@ -98,13 +107,38 @@ describe('step state machine routes', () => {
     expect(svc.setCurrentStep).toHaveBeenCalledWith('stb-1', 'universeAesthetic');
   });
 
-  it('generates and refines a step', async () => {
+  it('kicks off a generate run and returns the runId + sseUrl', async () => {
     const g = await request(makeApp()).post('/api/story-builder/stb-1/steps/readerMap/generate').send({});
     expect(g.status).toBe(200);
-    expect(svc.generateStep).toHaveBeenCalledWith('stb-1', 'readerMap', expect.any(Object));
+    expect(runner.startStepRun).toHaveBeenCalledWith('stb-1', 'readerMap', expect.objectContaining({ op: 'generate' }));
+    expect(g.body.runId).toBe('run-1');
+    expect(g.body.sseUrl).toBe('/api/story-builder/stb-1/steps/readerMap/progress');
+  });
+
+  it('kicks off a refine run with the validated feedback', async () => {
     const r = await request(makeApp()).post('/api/story-builder/stb-1/steps/readerMap/refine').send({ feedback: 'tighter' });
     expect(r.status).toBe(200);
-    expect(r.body.changes).toEqual(['c']);
+    expect(runner.startStepRun).toHaveBeenCalledWith('stb-1', 'readerMap', expect.objectContaining({ op: 'refine', feedback: 'tighter' }));
+    expect(r.body.sseUrl).toBe('/api/story-builder/stb-1/steps/readerMap/progress');
+  });
+
+  it('404s a kickoff for a missing session before starting a run', async () => {
+    svc.getStorySession.mockRejectedValueOnce(Object.assign(new Error('nope'), { code: svc.ERR_NOT_FOUND }));
+    const res = await request(makeApp()).post('/api/story-builder/stb-x/steps/readerMap/generate').send({});
+    expect(res.status).toBe(404);
+    expect(runner.startStepRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown step id on the progress stream with 400', async () => {
+    const res = await request(makeApp()).get('/api/story-builder/stb-1/steps/bogus/progress');
+    expect(res.status).toBe(400);
+    expect(runner.attachClient).not.toHaveBeenCalled();
+  });
+
+  it('404s the progress stream when no run is active', async () => {
+    runner.attachClient.mockReturnValueOnce(false);
+    const res = await request(makeApp()).get('/api/story-builder/stb-1/steps/readerMap/progress');
+    expect(res.status).toBe(404);
   });
 });
 

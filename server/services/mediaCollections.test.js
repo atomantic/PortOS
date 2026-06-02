@@ -1,15 +1,22 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { writeFile, mkdir, readFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
-const fileStore = new Map();
+// Real per-suite tmpdir backing the per-record media-collections/ layout that
+// migration 059 produces. The fileUtils mock below overrides PATHS.data so the
+// service + collectionStore land here instead of the real ./data; everything
+// else (atomicWrite/readJSONFile/ensureDir) uses the real impl so the store's
+// readdir/lstat/rm operate against a real fs tree.
+const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'media-collections-test-'));
+const COLLECTIONS_DIR = join(TEST_DATA_ROOT, 'media-collections');
 
-vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: '/mock/data' },
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
-  readJSONFile: vi.fn(async (path, fallback) => fileStore.has(path) ? fileStore.get(path) : fallback),
-}));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+});
 
 // Suppress the fire-and-forget dynamic import so tests don't load the real
 // peerSync module graph (which reads the live peer registry and imports
@@ -23,12 +30,55 @@ vi.mock('crypto', async () => {
 });
 
 const svc = await import('./mediaCollections.js');
+const cj = await import('../lib/conflictJournal.js');
+
+// Wipe + recreate the collections dir before every test so each starts clean.
+// The empty dir means collectionStore's readdir is the source of truth and its
+// process-local knownIds fallback never leaks ids across tests.
+//
+// Also wipe the conflict-journal + base-hash side store and reset the
+// conflictJournal in-memory base-hash cache: mergeMediaCollectionsFromSync now
+// seeds/advances per-collection base hashes, and that Map is module-level — so
+// without a reset a base hash seeded by an earlier test's insert would bleed
+// into a later test that reuses the same collection id and spuriously trip the
+// 3-way divergence detector (base==null is the correct first-merge state).
+function resetStore() {
+  rmSync(COLLECTIONS_DIR, { recursive: true, force: true });
+  rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
+  rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
+  mkdirSync(COLLECTIONS_DIR, { recursive: true });
+  cj.__resetBaseHashCacheForTests();
+  uuidCounter = 0;
+}
+
+// Seed per-record files exactly as migration 059 would (one dir per record +
+// a type-level index.json). Takes the same `{ collections: [...] }` shape the
+// suite previously handed to the monolithic file store.
+async function seedState({ collections = [] } = {}) {
+  await mkdir(COLLECTIONS_DIR, { recursive: true });
+  for (const c of collections) {
+    const recDir = join(COLLECTIONS_DIR, c.id);
+    await mkdir(recDir, { recursive: true });
+    await writeFile(join(recDir, 'index.json'), JSON.stringify(c, null, 2));
+  }
+  await writeFile(join(COLLECTIONS_DIR, 'index.json'), JSON.stringify({
+    schemaVersion: 1, type: 'mediaCollections', updatedAt: new Date().toISOString(), config: {},
+  }, null, 2));
+}
+
+// Read the raw persisted record (pre-sanitize) for storage-level assertions.
+async function readStored(id) {
+  const raw = await readFile(join(COLLECTIONS_DIR, id, 'index.json'), 'utf-8').catch(() => null);
+  return raw ? JSON.parse(raw) : null;
+}
+
+afterAll(() => {
+  rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+});
+
+beforeEach(() => resetStore());
 
 describe('mediaCollections service', () => {
-  beforeEach(() => {
-    fileStore.clear();
-    uuidCounter = 0;
-  });
 
   it('listCollections returns [] for fresh state', async () => {
     expect(await svc.listCollections()).toEqual([]);
@@ -108,6 +158,25 @@ describe('mediaCollections service', () => {
     expect(all[0].id).toBe(c.id);
   });
 
+  it('write mutators map a malformed id to ERR_NOT_FOUND (not a raw store error → 500)', async () => {
+    // A path-param id that fails the store allowlist (e.g. "has space",
+    // "../escape") must surface as a clean NOT_FOUND — the same result the
+    // pre-split scan gave — instead of throwing an uncoded error from
+    // queueRecordWrite that the route mapper would turn into a 500.
+    for (const bad of ['has space', '../escape', 'a/b']) {
+      await expect(svc.addItem(bad, { kind: 'image', ref: 'x.png' }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.updateCollection(bad, { description: 'x' }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.deleteCollection(bad))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.removeItem(bad, 'image:x.png'))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      await expect(svc.bulkUpdateCollectionItems(bad, { add: [{ kind: 'image', ref: 'x.png' }] }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    }
+  });
+
   it('deleteCollection clears coverKey on the persisted tombstone (no dangling cover in the wire record)', async () => {
     const c = await svc.createCollection({ name: 'WithCover' });
     await svc.addItem(c.id, { kind: 'image', ref: 'cover.png' });
@@ -115,7 +184,7 @@ describe('mediaCollections service', () => {
     await svc.deleteCollection(c.id);
     // Assert on the PERSISTED record — listCollections' sanitizer would null a
     // dangling coverKey on read regardless, so inspect storage directly.
-    const stored = fileStore.get('/mock/data/media-collections.json').collections.find((x) => x.id === c.id);
+    const stored = await readStored(c.id);
     expect(stored.deleted).toBe(true);
     expect(stored.items).toEqual([]);
     expect(stored.coverKey).toBeNull();
@@ -293,7 +362,7 @@ describe('mediaCollections service', () => {
       const fat = { ...all[0], items: Array.from({ length: svc.ITEMS_MAX }, (_, i) => ({
         kind: 'image', ref: `r${i}.png`, addedAt: new Date().toISOString(),
       })) };
-      fileStore.set('/mock/data/media-collections.json', { collections: [fat] });
+      await seedState({ collections: [fat] });
       await expect(svc.bulkUpdateCollectionItems(c.id, {
         add: [{ kind: 'image', ref: 'overflow.png' }],
       })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
@@ -348,6 +417,48 @@ describe('mediaCollections service', () => {
       expect(found?.id).toBe(linked.id);
     });
 
+    it('findCollectionByUniverseId falls back to the scan for a legacy record at a random id', async () => {
+      // A pre-migration-038 collection carries the universeId at a random id,
+      // so the deterministic loadOne fast-path misses it — the full scan must
+      // still resolve it.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uuid-legacy', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uuid-legacy');
+    });
+
+    it('findCollectionByUniverseId skips a tombstone at the deterministic id and finds the live legacy record', async () => {
+      // A tombstone sitting at uc-<id> must not shadow a still-live collection
+      // carrying the same universeId at a random id (fast-path excludes
+      // deleted, fallback scan finds the live one).
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uc-u-1', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now, deleted: true, deletedAt: now },
+        { id: 'uuid-live', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uuid-live');
+    });
+
+    it('findCollectionByUniverseId prefers the canonical deterministic id when a live random-id duplicate also carries the stamp', async () => {
+      // A transient duplicate — e.g. an unconverged peer pushed a random-id
+      // copy while a converged canonical copy already exists. The fast path
+      // deterministically returns the canonical uc-<id> record (the converged
+      // cross-machine identity) rather than whichever the directory scan
+      // happened to list first (the old loadAll order was filesystem-dependent,
+      // so this also removes a source of non-determinism). Items union-merge on
+      // sync, so the random-id duplicate is reconciled without loss.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uc-u-1', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+        { id: 'uuid-dupe', name: 'Universe: Foo', description: '', coverKey: null, universeId: 'u-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe('uc-u-1');
+    });
+
     it('renameCollectionForUniverse cascades a new name onto the linked collection', async () => {
       const linked = await svc.findOrCreateCollectionByName({
         name: 'Universe: Foo', universeId: 'u-1',
@@ -381,7 +492,7 @@ describe('mediaCollections service', () => {
       const a = await svc.findOrCreateCollectionByName({
         name: 'Universe: OldName', universeId: 'u-1',
       });
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [
           a,
           { ...a, id: 'dup-id', name: 'Universe: OldName' },
@@ -419,7 +530,7 @@ describe('mediaCollections service', () => {
     it('unlinkCollectionsForUniverse preserves updatedAt (cascade side-effect, not a user edit)', async () => {
       // The bump would let the unlinked bucket out-race its own tombstone on a
       // peer during a universe merge — see unlinkCollectionsForUniverse's note.
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [{
           id: 'uc-u1', name: 'Universe: Foo', description: '', coverKey: null,
           universeId: 'u-1', seriesId: null,
@@ -584,7 +695,7 @@ describe('mediaCollections service', () => {
         });
         const current = await svc.listCollections();
         current[0] = { ...current[0], name: 'Universe: SomeOtherName' };
-        fileStore.set('/mock/data/media-collections.json', { collections: current });
+        await seedState({ collections: current });
         const found = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'NewName',
         });
@@ -704,6 +815,27 @@ describe('mediaCollections service', () => {
       expect(found?.id).toBe(linked.id);
     });
 
+    it('findCollectionBySeriesId falls back to the scan for a legacy record at a random id', async () => {
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uuid-legacy', name: 'Series: Foo', description: '', coverKey: null, seriesId: 'ser-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const found = await svc.findCollectionBySeriesId('ser-1');
+      expect(found?.id).toBe('uuid-legacy');
+    });
+
+    it('findOrCreateSeriesCollection adopts a legacy series record at a random id instead of duplicating', async () => {
+      // The deterministic loadOne fast-path misses a pre-migration-038 record,
+      // so the full scan must still find + reuse it rather than minting a new
+      // sc-<id> collection.
+      const now = new Date().toISOString();
+      await seedState({ collections: [
+        { id: 'uuid-legacy', name: 'Series: Foo', description: '', coverKey: null, seriesId: 'ser-1', items: [], createdAt: now, updatedAt: now },
+      ] });
+      const got = await svc.findOrCreateSeriesCollection({ seriesId: 'ser-1', seriesName: 'Foo' });
+      expect(got.id).toBe('uuid-legacy');
+    });
+
     it('findOrCreateSeriesCollection returns the existing series-linked collection on second call', async () => {
       const first = await svc.findOrCreateSeriesCollection({
         seriesId: 'ser-1', seriesName: 'Foo',
@@ -747,7 +879,7 @@ describe('mediaCollections service', () => {
     });
 
     it('unlinkCollectionsForSeries preserves updatedAt (cascade side-effect, not a user edit)', async () => {
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [{
           id: 'sc-ser1', name: 'Series: Foo', description: '', coverKey: null,
           universeId: null, seriesId: 'ser-1',
@@ -797,7 +929,7 @@ describe('mediaCollections service', () => {
     });
 
     it('sanitizer drops seriesId when universeId is also set (universeId wins)', async () => {
-      fileStore.set('/mock/data/media-collections.json', {
+      await seedState({
         collections: [{
           id: 'c1', name: 'Mixed', items: [],
           universeId: 'u-1', seriesId: 'ser-1',
@@ -811,7 +943,7 @@ describe('mediaCollections service', () => {
   });
 
   it('sanitizes hand-edited JSON with bogus items', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [
         { id: 'c1', name: 'OK', items: [
           { kind: 'image', ref: 'a.png' },
@@ -828,15 +960,80 @@ describe('mediaCollections service', () => {
 });
 
 describe('mergeMediaCollectionsFromSync', () => {
-  beforeEach(() => {
-    fileStore.clear();
-    uuidCounter = 0;
-  });
-
   it('returns {applied:false,count:0} for empty / non-array input', async () => {
     expect(await svc.mergeMediaCollectionsFromSync(null)).toEqual({ applied: false, count: 0 });
     expect(await svc.mergeMediaCollectionsFromSync('nope')).toEqual({ applied: false, count: 0 });
     expect(await svc.mergeMediaCollectionsFromSync([])).toEqual({ applied: false, count: 0 });
+  });
+
+  it('applies a multi-record batch (bounded fan-out) — all distinct ids land, count is exact', async () => {
+    // The parallelized snapshot-apply path: a batch larger than the concurrency
+    // bound, mixing inserts with a no-op (identical to an existing record, which
+    // must NOT count as changed). Confirms every distinct id is written and the
+    // returned count reflects only the records that actually changed.
+    await seedState({
+      collections: [{
+        id: 'c-existing', name: 'Existing', description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T00:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
+      }],
+    });
+    const remotes = [];
+    for (let i = 0; i < 12; i++) {
+      remotes.push({
+        id: `c-batch-${i}`, name: `Batch ${i}`, description: '', coverKey: null,
+        universeId: null, seriesId: null,
+        items: [{ kind: 'image', ref: `b${i}.png`, addedAt: '2026-05-22T01:00:00Z' }],
+        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+      });
+    }
+    // A remote identical to the existing record → merges to no change.
+    remotes.push({
+      id: 'c-existing', name: 'Existing', description: '', coverKey: null,
+      universeId: null, seriesId: null,
+      items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-22T00:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
+    });
+
+    const result = await svc.mergeMediaCollectionsFromSync(remotes);
+    expect(result).toEqual({ applied: true, count: 12 }); // 12 new, the identical one no-ops
+    const ids = (await svc.listCollections()).map((c) => c.id).sort();
+    expect(ids).toContain('c-existing');
+    for (let i = 0; i < 12; i++) expect(ids).toContain(`c-batch-${i}`);
+  });
+
+  it('rethrows after the whole batch settles + still flushes when a worker fails', async () => {
+    // Error-handling contract for the parallel fan-out: if one record's write
+    // throws, the call must reject (throw-on-failure preserved) — but only AFTER
+    // every other in-flight worker settles, so no write leaks into the
+    // background past the rejection, and the base-hash flush still runs for the
+    // records that DID complete.
+    const store = svc.mediaCollectionStore();
+    const realSave = store.saveOneNow.bind(store);
+    const saveSpy = vi.spyOn(store, 'saveOneNow').mockImplementation((id, rec) => {
+      if (id === 'c-boom') return Promise.reject(new Error('disk full'));
+      return realSave(id, rec);
+    });
+    const mk = (id) => ({
+      id, name: id, description: '', coverKey: null, universeId: null, seriesId: null,
+      items: [{ kind: 'image', ref: `${id}.png`, addedAt: '2026-05-22T01:00:00Z' }],
+      createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T01:00:00Z',
+    });
+    const remotes = ['c-ok-1', 'c-ok-2', 'c-boom', 'c-ok-3'].map(mk);
+
+    await expect(svc.mergeMediaCollectionsFromSync(remotes)).rejects.toThrow('disk full');
+    saveSpy.mockRestore();
+
+    // The non-failing records all persisted (no early abort skipped them) and
+    // each carries a seeded base hash (the flush ran despite the throw).
+    const persisted = new Set((await svc.listCollections()).map((c) => c.id));
+    for (const id of ['c-ok-1', 'c-ok-2', 'c-ok-3']) {
+      expect(persisted.has(id)).toBe(true);
+      expect(await cj.getSyncBaseHash('mediaCollection', id)).not.toBeNull();
+    }
+    expect(persisted.has('c-boom')).toBe(false);
+    expect(await cj.getSyncBaseHash('mediaCollection', 'c-boom')).toBeNull();
   });
 
   it('inserts a previously-unseen collection', async () => {
@@ -861,7 +1058,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('unions items by kind:ref so neither side ever loses a render', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'A',
@@ -902,7 +1099,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('LWW: newer remote wins on top-level scalars (name, description, coverKey)', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'Old Name',
@@ -935,7 +1132,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('LWW: older remote loses on scalars, but items still union', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'Local',
@@ -978,7 +1175,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // own (older) tombstone would then lose LWW and a live duplicate would
     // survive. Because the cascade unlink preserves updatedAt, the tombstone
     // still wins and converges to deleted.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'uc-loser',
         name: 'Universe: Clandestiny',
@@ -1018,7 +1215,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('reports count:0 when nothing actually changes (no-op no-op)', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'A',
@@ -1047,7 +1244,7 @@ describe('mergeMediaCollectionsFromSync', () => {
   });
 
   it('drops dangling coverKey that points at an item missing post-union', async () => {
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1',
         name: 'A',
@@ -1088,6 +1285,20 @@ describe('mergeMediaCollectionsFromSync', () => {
     expect(all[0].id).toBe('good');
   });
 
+  it('skips a record whose id is not a valid store path-segment WITHOUT aborting the batch', async () => {
+    // A malformed/peer-supplied id like '../../escape' can't be persisted (the
+    // store's id allowlist would throw inside queueRecordWrite). sanitizeCollection
+    // must drop it at the boundary so the valid records in the same batch still merge.
+    const result = await svc.mergeMediaCollectionsFromSync([
+      { id: '../../escape', name: 'Evil', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+      { id: 'has space', name: 'Spacey', items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+      { id: 'valid-after-bad', name: 'Survivor', description: '', coverKey: null, universeId: null, seriesId: null, items: [], createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
+    ]);
+    expect(result).toEqual({ applied: true, count: 1 });
+    const all = await svc.listCollections({ includeDeleted: true });
+    expect(all.map((c) => c.id)).toEqual(['valid-after-bad']);
+  });
+
   it('rejects items whose ref contains path-traversal tokens', async () => {
     // Defense in depth — a peer can push a collection containing a ref
     // like '../etc/passwd' via the linkedCollection field. sanitizeItem
@@ -1124,7 +1335,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // wrong way. The slash-format timestamp here ('05/22/2026 18:00 UTC')
     // sorts BEFORE the ISO timestamp lexicographically ('0' < '2'), but
     // it's actually LATER in real time — so remote should win.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'Local', description: 'local', coverKey: null,
         universeId: null, seriesId: null,
@@ -1150,7 +1361,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // Defense in depth — a hand-edit or corrupted record shipping a
     // garbage `updatedAt` shouldn't be able to claim "newer" than a valid
     // local record and overwrite its scalars.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'Local', description: 'local', coverKey: null,
         universeId: null, seriesId: null,
@@ -1254,7 +1465,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // deletedAt. The effective deletion time should align with the most-recent
     // timestamp (updatedAt), not createdAt — otherwise LWW + GC see it as far
     // older than it really is.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'Gone', description: '', coverKey: null,
         universeId: null, seriesId: null, items: [],
@@ -1275,7 +1486,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // digit '0' sorts before '2'), but as parsed timestamps the slash-format
     // is actually EARLIER here. Numeric compare keeps "earlier wins" honest
     // across formats.
-    fileStore.set('/mock/data/media-collections.json', {
+    await seedState({
       collections: [{
         id: 'c1', name: 'A', description: '', coverKey: null,
         universeId: null, seriesId: null,
@@ -1293,6 +1504,71 @@ describe('mergeMediaCollectionsFromSync', () => {
     // The 08:00 slash-format timestamp is earlier than 10:00 ISO; numeric
     // compare picks it. Lexicographic compare would have picked the ISO one.
     expect(Date.parse(merged.items[0].addedAt)).toBe(Date.parse('05/22/2026 08:00:00 UTC'));
+  });
+});
+
+describe('mergeMediaCollectionsFromSync — conflict journal', () => {
+  const baseColl = (over = {}) => ({
+    id: 'c1', name: 'Bucket', description: 'd', coverKey: null,
+    universeId: null, seriesId: null,
+    items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-05-01T00:00:00Z' }],
+    createdAt: '2026-05-01T00:00:00Z', updatedAt: '2026-05-01T00:00:00Z', ...over,
+  });
+  const journalEntries = () => cj.conflictJournalStore().loadAll();
+
+  it('seeds a base hash on first insert (new record) so a future divergence is detectable', async () => {
+    await svc.mergeMediaCollectionsFromSync([baseColl()]);
+    expect(await cj.getSyncBaseHash('mediaCollection', 'c1'))
+      .toBe(cj.contentHashForRecord('mediaCollection', baseColl()));
+    expect(await journalEntries()).toHaveLength(0);
+  });
+
+  it('item-only divergence does NOT journal (items union-merged, never lost)', async () => {
+    // Establish a shared base, then both sides add different items only.
+    await svc.mergeMediaCollectionsFromSync([baseColl()]);
+    // Local adds an item directly on disk; remote arrives with a different item.
+    await seedState({ collections: [baseColl({
+      items: [
+        { kind: 'image', ref: 'a.png', addedAt: '2026-05-01T00:00:00Z' },
+        { kind: 'image', ref: 'local.png', addedAt: '2026-05-02T00:00:00Z' },
+      ],
+      updatedAt: '2026-05-02T00:00:00Z',
+    })] });
+    const before = (await journalEntries()).length;
+    await svc.mergeMediaCollectionsFromSync([baseColl({
+      items: [
+        { kind: 'image', ref: 'a.png', addedAt: '2026-05-01T00:00:00Z' },
+        { kind: 'image', ref: 'remote.png', addedAt: '2026-05-03T00:00:00Z' },
+      ],
+      updatedAt: '2026-05-03T00:00:00Z',
+    })]);
+    expect((await journalEntries()).length).toBe(before);
+    // ...and both items survived the union (the whole reason scalars-only is safe).
+    const [merged] = await svc.listCollections();
+    expect(merged.items.map((i) => i.ref).sort()).toEqual(['a.png', 'local.png', 'remote.png']);
+  });
+
+  it('journals when a newer remote overwrites a diverged local scalar (name)', async () => {
+    await svc.mergeMediaCollectionsFromSync([baseColl()]);          // seed base
+    await seedState({ collections: [baseColl({ name: 'LOCAL rename', updatedAt: '2026-05-02T00:00:00Z' })] });
+    await svc.mergeMediaCollectionsFromSync([baseColl({ name: 'REMOTE rename', updatedAt: '2026-05-03T00:00:00Z' })]);
+    const entries = await journalEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ recordKind: 'mediaCollection', recordId: 'c1', status: 'pending' });
+    expect(entries[0].localSnapshot.name).toBe('LOCAL rename');
+    // Remote won LWW; local archived.
+    const [merged] = await svc.listCollections();
+    expect(merged.name).toBe('REMOTE rename');
+  });
+
+  it('does NOT journal when local wins LWW (its scalars are kept, nothing lost)', async () => {
+    await svc.mergeMediaCollectionsFromSync([baseColl()]);          // seed base
+    await seedState({ collections: [baseColl({ name: 'LOCAL rename', updatedAt: '2026-05-05T00:00:00Z' })] });
+    // Older remote — local wins; no overwrite, no journal.
+    await svc.mergeMediaCollectionsFromSync([baseColl({ name: 'REMOTE rename', updatedAt: '2026-05-03T00:00:00Z' })]);
+    expect(await journalEntries()).toHaveLength(0);
+    const [merged] = await svc.listCollections();
+    expect(merged.name).toBe('LOCAL rename');
   });
 });
 
@@ -1403,30 +1679,55 @@ describe('mutators — mediaCollection updated emission (standalone per-record s
 });
 
 describe('pruneTombstonedCollections', () => {
-  beforeEach(() => {
-    fileStore.clear();
-    uuidCounter = 0;
-  });
-
   it('prunes tombstoned collections older than the cutoff and returns the count', async () => {
     // Create a live collection and soft-delete it with an old timestamp by
     // injecting the tombstone directly into the file store.
     const c = await svc.createCollection({ name: 'ToDelete' });
     const oldTs = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    // Overwrite the file store with a tombstone carrying an old deletedAt.
-    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-    const path = '/mock/data/media-collections.json';
-    const current = await readJSONFile(path, { collections: [] });
-    const withTombstone = current.collections.map((col) =>
-      col.id === c.id
-        ? { ...col, deleted: true, deletedAt: oldTs, updatedAt: oldTs, items: [] }
-        : col,
-    );
-    await atomicWrite(path, { collections: withTombstone });
+    // Re-seed the record as a tombstone carrying an old deletedAt.
+    const stored = await readStored(c.id);
+    await seedState({ collections: [{ ...stored, deleted: true, deletedAt: oldTs, updatedAt: oldTs, items: [] }] });
+
+    // Seed a base hash so we can confirm the prune evicts it.
+    await cj.setSyncBaseHash('mediaCollection', c.id, cj.contentHashForRecord('mediaCollection', stored));
+    expect(await cj.getSyncBaseHash('mediaCollection', c.id)).not.toBeNull();
 
     const result = await svc.pruneTombstonedCollections(Date.now());
     expect(result).toEqual({ pruned: 1 });
     expect(await svc.listCollections({ includeDeleted: true })).toHaveLength(0);
+    // The conflict-journal base hash is evicted so the side store doesn't leak.
+    expect(await cj.getSyncBaseHash('mediaCollection', c.id)).toBeNull();
+  });
+
+  it('prunes a multi-candidate batch (bounded fan-out) — only the old tombstones, exact count', async () => {
+    // The parallelized GC sweep: more candidates than the concurrency bound,
+    // interleaved with a live record and a too-recent tombstone that must survive.
+    const oldTs = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const futureTs = new Date(Date.now() + 60 * 1000).toISOString();
+    const collections = [];
+    for (let i = 0; i < 10; i++) {
+      collections.push({
+        id: `c-old-${i}`, name: `Old ${i}`, description: '', coverKey: null,
+        universeId: null, seriesId: null, items: [],
+        createdAt: oldTs, updatedAt: oldTs, deleted: true, deletedAt: oldTs,
+      });
+    }
+    collections.push({
+      id: 'c-live', name: 'Live', description: '', coverKey: null,
+      universeId: null, seriesId: null, items: [],
+      createdAt: oldTs, updatedAt: oldTs, deleted: false, deletedAt: null,
+    });
+    collections.push({
+      id: 'c-recent', name: 'RecentDelete', description: '', coverKey: null,
+      universeId: null, seriesId: null, items: [],
+      createdAt: oldTs, updatedAt: futureTs, deleted: true, deletedAt: futureTs,
+    });
+    await seedState({ collections });
+
+    const result = await svc.pruneTombstonedCollections(Date.now());
+    expect(result).toEqual({ pruned: 10 }); // 10 old tombstones; live + recent survive
+    const surviving = (await svc.listCollections({ includeDeleted: true })).map((c) => c.id).sort();
+    expect(surviving).toEqual(['c-live', 'c-recent']);
   });
 
   it('does NOT prune a live collection', async () => {
@@ -1438,17 +1739,10 @@ describe('pruneTombstonedCollections', () => {
 
   it('does NOT prune a tombstone newer than the cutoff', async () => {
     const c = await svc.createCollection({ name: 'RecentDelete' });
-    // Soft-delete with a future timestamp (simulating a delete that just happened).
-    const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-    const path = '/mock/data/media-collections.json';
-    const current = await readJSONFile(path, { collections: [] });
+    // Re-seed as a tombstone with a future timestamp (simulating a delete that just happened).
     const futureTs = new Date(Date.now() + 60 * 1000).toISOString();
-    const withTombstone = current.collections.map((col) =>
-      col.id === c.id
-        ? { ...col, deleted: true, deletedAt: futureTs, updatedAt: futureTs, items: [] }
-        : col,
-    );
-    await atomicWrite(path, { collections: withTombstone });
+    const stored = await readStored(c.id);
+    await seedState({ collections: [{ ...stored, deleted: true, deletedAt: futureTs, updatedAt: futureTs, items: [] }] });
 
     // Cut-off is now; the tombstone's deletedAt is in the future → not pruned.
     const result = await svc.pruneTombstonedCollections(Date.now());

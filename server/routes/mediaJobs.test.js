@@ -42,6 +42,37 @@ describe('mediaJobs routes', () => {
     vi.clearAllMocks();
   });
 
+  it('GET /:id exposes progress and statusMsg while sanitizing params', async () => {
+    jobStore.set('j-progress', {
+      id: 'j-progress',
+      kind: 'video',
+      owner: null,
+      status: 'running',
+      queuedAt: '2026-05-30T10:00:00.000Z',
+      startedAt: '2026-05-30T10:00:01.000Z',
+      position: 1,
+      progress: 0.37,
+      statusMsg: 'Rendering step 37/100',
+      params: {
+        prompt: 'visible prompt',
+        pythonPath: '/private/python',
+        uploadedTempPath: '/private/upload.png',
+      },
+    });
+
+    const r = await request(makeApp()).get('/api/media-jobs/j-progress');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      id: 'j-progress',
+      status: 'running',
+      progress: 0.37,
+      statusMsg: 'Rendering step 37/100',
+      params: { prompt: 'visible prompt' },
+    });
+    expect(r.body.params.pythonPath).toBeUndefined();
+    expect(r.body.params.uploadedTempPath).toBeUndefined();
+  });
+
   it('POST /:id/retry 404s for unknown id', async () => {
     const r = await request(makeApp()).post('/api/media-jobs/nope/retry').send({});
     expect(r.status).toBe(404);

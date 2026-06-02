@@ -58,3 +58,9 @@ export const unloadOllamaModel = (modelId, options) =>
     body: JSON.stringify({ backend: 'ollama', modelId }),
     ...options,
   });
+
+export const testLocalLlmModel = (payload, options) =>
+  request('/local-llm/test', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+export const compareLocalLlmModels = (payload, options) =>
+  request('/local-llm/compare', { method: 'POST', body: JSON.stringify(payload), ...options });

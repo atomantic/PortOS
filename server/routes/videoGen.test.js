@@ -29,6 +29,10 @@ vi.mock('../services/videoGen/local.js', () => ({
   // Mirrors the real export — keeps the route's keyframe-range check in
   // sync with whatever the service actually defaults to.
   DEFAULT_NUM_FRAMES: 121,
+  // /status advertises the FFLF pixel-frame budget so the client can mirror
+  // the keyframe-index clamp. Mock returns the real default so the status
+  // shape test sees a concrete number.
+  resolveFflfLtx2PixelBudget: vi.fn(() => 704 * 448 * 25),
   // The route gates pythonPath enforcement on this allowlist (ltx2/wan22/
   // hunyuan bring their own venv). Mirror the real export so the
   // "accepts BYOV-runtime when pythonPath missing" case passes and the
@@ -187,6 +191,10 @@ describe('videoGen routes', () => {
       // presence + type so a future accidental removal is caught here.
       expect(typeof r.body.systemMemoryGb).toBe('number');
       expect(r.body.systemMemoryGb).toBeGreaterThan(0);
+      // fflfLtx2PixelBudget lets the client mirror the FFLF keyframe-index
+      // clamp without hardcoding the constant. Pin presence + type.
+      expect(typeof r.body.fflfLtx2PixelBudget).toBe('number');
+      expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
     });
 
     it('reports disconnected with reason + missingPackages when packages fail to import', async () => {
@@ -775,6 +783,46 @@ describe('videoGen routes', () => {
       expect(p.uploadedTempPath).toBeUndefined();
       expect(p.uploadedTempPaths).toBeUndefined();
       expect(p.extendFromVideoPath).toBeUndefined();
+    });
+
+    // keyframes are stored as { path, index } (absolute gallery paths) but
+    // must surface to the resuming client as { file, index } (basename only)
+    // — same internal-path-leak rule as sourceImagePath, plus the client
+    // picker's submit shape uses gallery filenames.
+    it('maps stored keyframes { path, index } -> { file, index } without leaking the absolute path', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'running-kf', kind: 'video', status: 'running', position: 1, params: {
+          prompt: 'kf prompt', modelId: 'ltx2_unified', mode: 'fflf',
+          keyframes: [
+            { path: '/Users/secret/data/images/a.png', index: 0 },
+            { path: '/Users/secret/data/images/b.png', index: 24 },
+          ],
+        } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      const p = r.body.activeJob.params;
+      expect(p.keyframes).toEqual([
+        { file: 'a.png', index: 0 },
+        { file: 'b.png', index: 24 },
+      ]);
+      // The absolute server path must never round-trip.
+      expect(JSON.stringify(p.keyframes)).not.toMatch(/secret/);
+    });
+
+    // Defensive: malformed keyframe entries (missing path / non-integer index)
+    // are dropped rather than surfaced as half-formed picker rows. When every
+    // entry is malformed, keyframes is omitted entirely (no empty array).
+    it('drops malformed keyframe entries and omits keyframes when none survive', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'running-bad-kf', kind: 'video', status: 'running', position: 1, params: {
+          prompt: 'p', modelId: 'ltx2_unified',
+          keyframes: [{ index: 0 }, { path: '/x/y.png', index: 'nope' }, null],
+        } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.params.keyframes).toBeUndefined();
     });
   });
 

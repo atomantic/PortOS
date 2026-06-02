@@ -3,12 +3,37 @@ import { EventEmitter } from 'events';
 
 // Heavy modules needed only by spawnDirectly — mock them all before importing.
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./cosAgents.js', () => ({
-  updateAgent: vi.fn().mockResolvedValue(undefined),
-  completeAgent: vi.fn().mockResolvedValue(undefined),
-  appendAgentOutput: vi.fn().mockResolvedValue(undefined),
-  appendAgentOutputLines: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('./cosAgents.js', () => {
+  const appendAgentOutput = vi.fn().mockResolvedValue(undefined);
+  const appendAgentOutputLines = vi.fn().mockResolvedValue(undefined);
+  // Faithful stand-in for the real debounced batcher: accumulates pushed lines
+  // and, on flush(), routes them through the mocked appendAgentOutputLines while
+  // swallowing+logging failures (mirrors the real createAgentOutputBatcher in
+  // cosAgents.js — whose error handling is unit-tested in cosAgents.test.js).
+  const createAgentOutputBatcher = vi.fn((agentId) => {
+    let pending = [];
+    return {
+      push(lineOrLines) {
+        if (Array.isArray(lineOrLines)) pending.push(...lineOrLines);
+        else pending.push(lineOrLines);
+      },
+      async flush() {
+        if (pending.length === 0) return;
+        const batch = pending;
+        pending = [];
+        await appendAgentOutputLines(agentId, batch).catch((err) =>
+          console.error(`❌ agent ${agentId} output batch flush failed: ${err.message}`));
+      },
+    };
+  });
+  return {
+    updateAgent: vi.fn().mockResolvedValue(undefined),
+    completeAgent: vi.fn().mockResolvedValue(undefined),
+    appendAgentOutput,
+    appendAgentOutputLines,
+    createAgentOutputBatcher,
+  };
+});
 vi.mock('./agents.js', () => ({
   registerSpawnedAgent: vi.fn(),
   unregisterSpawnedAgent: vi.fn(),
@@ -215,10 +240,10 @@ describe('stream error containment', () => {
     vi.restoreAllMocks();
   });
 
-  it('stdout handler catches appendAgentOutputLines rejection and logs ❌ prefix — no unhandled rejection escapes', async () => {
-    // Arrange: make appendAgentOutputLines reject so the handler's catch is exercised.
-    // Use mockRejectedValueOnce so only the first call (during data event) throws;
-    // subsequent calls in the close handler are unaffected.
+  it('drains stdout output on close and a failed batch flush is logged, not leaked as an unhandled rejection', async () => {
+    // stdout output is now batched: the data handler pushes lines to the output
+    // batcher and the close handler drains it. Make the drain's state write fail
+    // and assert the batcher swallows+logs it with a ❌ prefix — no escape.
     cosAgentsMocks.appendAgentOutputLines.mockRejectedValueOnce(new Error('db write failed'));
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -234,13 +259,16 @@ describe('stream error containment', () => {
     // Yield to let the await inside spawnDirectly resolve so listeners are registered.
     await new Promise((r) => setTimeout(r, 10));
 
-    // Emit data on stdout to trigger the async handler
-    fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
+    // Emit a stream-json text delta on stdout so the parser yields a line the
+    // handler enqueues into the batcher.
+    fakeProcess.stdout.emit('data', Buffer.from(
+      '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello\\n"}}}\n'
+    ));
 
     // Give the microtask queue a chance to drain so the async handler runs.
     await new Promise((r) => setTimeout(r, 50));
 
-    // Trigger close so spawnDirectly resolves
+    // Trigger close so the batcher drains and spawnDirectly resolves.
     fakeProcess.emit('close', 0);
     await spawnPromise.catch(() => {});
 
@@ -249,13 +277,13 @@ describe('stream error containment', () => {
     // Assert: error was swallowed into console.error, not an unhandled rejection
     expect(unhandledRejections).toHaveLength(0);
     const logged = consoleSpy.mock.calls.some(
-      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agentCli stdout handler failed:')
+      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
     );
     expect(logged).toBe(true);
   });
 
-  it('stderr handler catches appendAgentOutput rejection and logs ❌ prefix — no unhandled rejection escapes', async () => {
-    cosAgentsMocks.appendAgentOutput.mockRejectedValueOnce(new Error('stderr db write failed'));
+  it('drains stderr output on close and a failed batch flush is logged, not leaked as an unhandled rejection', async () => {
+    cosAgentsMocks.appendAgentOutputLines.mockRejectedValueOnce(new Error('stderr db write failed'));
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const unhandledRejections = [];
@@ -267,7 +295,7 @@ describe('stream error containment', () => {
     // Yield to let the await inside spawnDirectly resolve so listeners are registered.
     await new Promise((r) => setTimeout(r, 10));
 
-    // Emit data on stderr to trigger the async stderr handler
+    // Emit data on stderr to enqueue a batched `[stderr] …` line.
     fakeProcess.stderr.emit('data', Buffer.from('some stderr output\n'));
 
     await new Promise((r) => setTimeout(r, 50));
@@ -279,7 +307,7 @@ describe('stream error containment', () => {
 
     expect(unhandledRejections).toHaveLength(0);
     const logged = consoleSpy.mock.calls.some(
-      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agentCli stderr handler failed:')
+      (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
     );
     expect(logged).toBe(true);
   });

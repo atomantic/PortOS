@@ -110,6 +110,44 @@ describe('peer-sync routes', () => {
       }));
     });
 
+    it('accepts a series push that bundles a manuscriptReview (Finish-the-draft comment set)', async () => {
+      // Regression: seriesPushSchema is `.strict()`, so without the
+      // manuscriptReview field the production review-bearing series push 400s
+      // at the Zod boundary before applyIncomingPush ever runs.
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'series',
+          record: { id: 's1' },
+          issues: [],
+          manuscriptReview: {
+            schemaVersion: 1,
+            comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+          },
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+      expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
+        manuscriptReview: expect.objectContaining({ comments: expect.any(Array) }),
+      }));
+    });
+
+    it('400s when a universe push carries manuscriptReview (series-only field, no side-channel)', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'universe',
+          record: { id: 'u1' },
+          assetManifest: [],
+          manuscriptReview: { schemaVersion: 1, comments: [] },
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(400);
+      expect(svc.applyIncomingPush).not.toHaveBeenCalled();
+    });
+
     it('400s on an invalid kind (Zod boundary catches before service)', async () => {
       const res = await request(buildApp())
         .post('/api/peer-sync/push')

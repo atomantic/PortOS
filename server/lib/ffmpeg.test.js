@@ -3,7 +3,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { verifyVideoPlayable, safeUnder, runFfmpegProcess } from './ffmpeg.js';
+import { verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream } from './ffmpeg.js';
 
 describe('verifyVideoPlayable', () => {
   let tmpDir;
@@ -48,6 +48,25 @@ describe('verifyVideoPlayable', () => {
     } else {
       expect(res.ok).toBe(true);
     }
+  });
+});
+
+describe('hasAudioStream', () => {
+  it('returns false for an empty/invalid path without shelling out', async () => {
+    expect(await hasAudioStream('')).toBe(false);
+    expect(await hasAudioStream(null)).toBe(false);
+    expect(await hasAudioStream(undefined)).toBe(false);
+  });
+
+  it('returns false for a non-media file (no audio stream, or ffprobe absent)', async () => {
+    // Garbage bytes: ffprobe reports no audio stream → false. When ffprobe is
+    // not installed the helper short-circuits to false (documented safe
+    // default), so false is the expected outcome either way.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'portos-ffmpeg-audio-'));
+    const junk = join(tmpDir, 'junk.mp4');
+    writeFileSync(junk, Buffer.alloc(64, 0));
+    expect(await hasAudioStream(junk)).toBe(false);
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 });
 

@@ -37,6 +37,13 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
   if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
   const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message }));
   if (result.success) {
+    // Drain + drop this agent's runner output batcher before the terminal
+    // record so pending ~250ms-batched output lands first, and the Map entry
+    // doesn't leak if the runner never emits a later completion event. Dynamic
+    // import avoids a static cycle (subAgentSpawner statically re-exports this
+    // module). flushRunnerOutputBatcher is a no-op if no batcher exists.
+    const { flushRunnerOutputBatcher } = await import('./subAgentSpawner.js');
+    await flushRunnerOutputBatcher(agentId);
     await completeAgent(agentId, { success: false, error: errorMessage });
     const task = agentInfo?.task;
     if (task) {
@@ -178,6 +185,10 @@ export async function terminateAgent(agentId) {
   // Track as user-terminated so the close handler doesn't re-queue
   userTerminatedAgents.add(agentId);
 
+  // Drain pending batched stdout/stderr before the terminal record so it
+  // doesn't land after completion (the close handler also drains; idempotent).
+  await agent.flushOutput?.();
+
   // Mark agent as completed immediately with termination status
   await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
 
@@ -265,6 +276,10 @@ export async function killAgent(agentId) {
 
   // Track as user-terminated so the close handler doesn't re-queue
   userTerminatedAgents.add(agentId);
+
+  // Drain pending batched stdout/stderr before the terminal record so it
+  // doesn't land after completion (the close handler also drains; idempotent).
+  await agent.flushOutput?.();
 
   // Mark agent as completed immediately with kill status
   await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });

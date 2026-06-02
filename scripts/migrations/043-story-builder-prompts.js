@@ -8,6 +8,15 @@
  * pulls + `pm2 restart`s (rather than running `update.sh`) would otherwise
  * leave the new Story Builder stages unseeded and the first reader-map /
  * idea-expand generation would throw "Stage not found".
+ *
+ * FIRST-SHIPMENT SEED ONLY — no MD5 hashing here: it copies *missing*
+ * templates and never overwrites an install's existing prompt. When a FUTURE
+ * migration AMENDS any of these story-builder prompts, follow migration 003's
+ * pattern instead: normalize line endings (\r\n → \n, bare \r → \n) before
+ * hashing, and ship both the prior-shipped hash (OLD_SHIPPED_MD5 /
+ * ACCEPTED_OLD_MD5) and the new one (NEW_SHIPPED_MD5) so unmodified installs
+ * auto-update and customized ones warn instead of being clobbered.
+ * See scripts/migrations/003-update-pipeline-stage-prompts.js.
  */
 
 import { access, copyFile, mkdir, readFile, constants } from 'fs/promises';

@@ -12,7 +12,7 @@ import BucketCard from './BucketCard';
  * dragged from another bucket, and a bucket header dragged to reorder all
  * resolve the same way regardless of which component started the drag.
  */
-export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, onAddLinkToBucket, onBucketDeleted }) {
+export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, onAddLinkToBucket, onBucketDeleted, onMoveLinkToIndex }) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
 
@@ -59,6 +59,12 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
     }
   }, [links, onAssignLink]);
 
+  // --- Drag: drop a chip at a specific position within (or into) a bucket ---
+  const handleMoveLink = useCallback((linkId, bucketId, targetIndex) => {
+    const link = links.find(l => l.id === linkId);
+    if (link) onMoveLinkToIndex?.(link, bucketId, targetIndex);
+  }, [links, onMoveLinkToIndex]);
+
   // --- Drag: reorder buckets ---
   const handleReorder = useCallback((draggedId, targetBucket) => {
     if (!draggedId || draggedId === targetBucket.id) return;
@@ -96,6 +102,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
             onRemoveLink={(link) => onAssignLink?.(link, null)}
             onDropLink={(linkId) => handleDropLink(linkId, bucket.id)}
             onReorderBucket={(draggedId) => handleReorder(draggedId, bucket)}
+            onMoveLink={(linkId, index) => handleMoveLink(linkId, bucket.id, index)}
           />
         ))}
 

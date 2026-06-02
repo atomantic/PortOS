@@ -1,14 +1,14 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2, Circle } from 'lucide-react';
+import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { useImporterProgress, stageStatusIcon } from '../hooks/useImporterProgress';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import EntryCard from '../components/universe/EntryCard';
+import ProviderModelSelector from '../components/ProviderModelSelector';
+import useProviderModels from '../hooks/useProviderModels';
 import { previewCanonFragments } from '../lib/canonPrompt';
-import { getProviders } from '../services/api';
-import { filterSelectableModels } from '../utils/providers';
 import {
   analyzeImport,
   classifyImport,
@@ -26,6 +26,17 @@ const CONTENT_TYPE_LABELS = {
   'screenplay': 'Screenplay',
   'comic-script': 'Comic Script',
 };
+
+// Mirrors the server's CONTENT_TYPE_SEED_STAGE (server/services/importer.js):
+// a script-form content type seeds its matching script stage (ready) instead
+// of prose. Drives the Review-panel copy + per-issue excerpt label so they
+// name the stage the verbatim excerpt actually lands in.
+const SEED_STAGE_DISPLAY = {
+  'comic-script': { stagePath: 'stages.comicScript.output', excerptLabel: 'Comic script excerpt' },
+  'screenplay': { stagePath: 'stages.teleplay.output', excerptLabel: 'Screenplay excerpt' },
+};
+const DEFAULT_SEED_STAGE_DISPLAY = { stagePath: 'stages.prose.output', excerptLabel: 'Prose excerpt' };
+const seedStageDisplayFor = (contentType) => SEED_STAGE_DISPLAY[contentType] || DEFAULT_SEED_STAGE_DISPLAY;
 
 // Whitelist of arc fields forwarded to the commit endpoint. The wire schema
 // (`importerArcShape`) is `.passthrough()` today and `sanitizeArc` ignores
@@ -46,6 +57,17 @@ const pickArcFields = (arc) => {
 // importerIssueEntry caps synopsis at 4000 chars (server schema) — clamp the
 // zipped season text so the structural remap can't 400 on commit.
 const IMPORT_ISSUE_SYNOPSIS_MAX = 4000;
+
+// Pick the arc summary to send when retrying the issue split. Follows the
+// absent-vs-intentionally-empty rule: an ABSENT summary (null/undefined) falls
+// back to the logline, but a present-but-EMPTY summary ('') is an intentional
+// clear in the Review panel — return it as-is so the caller sends no
+// arcSummary and the server fills its own synthetic fallback. A bare
+// `summary || logline` would conflate the two and silently resend the logline
+// as the summary the user just cleared.
+export function resolveRetryArcSummary(arc) {
+  return arc?.summary == null ? arc?.logline : arc.summary;
+}
 
 // Collapse the LLM's multi-season proposal into a SINGLE graphic-novel volume.
 // Every issue is pinned to volume 1; each season's logline/synopsis is folded
@@ -87,32 +109,8 @@ export default function Importer() {
   const [preview, setPreview] = useState(null);
 
   // Live analyze-phase stage progress, driven by `importer:progress` socket
-  // frames. `null` = no run started yet (or reset before a fresh Analyze).
-  // The server broadcasts to all clients (single-user trust model), so each
-  // frame carries a `runId` and we ignore stage frames that don't match the
-  // run a `start` frame opened — guards against a straggler from a prior run.
-  const [analyzeStages, setAnalyzeStages] = useState(null);
-  const activeRunIdRef = useRef(null);
-  useEffect(() => {
-    const onProgress = (ev) => {
-      if (!ev || typeof ev !== 'object') return;
-      if (ev.type === 'start') {
-        activeRunIdRef.current = ev.runId;
-        setAnalyzeStages(
-          (Array.isArray(ev.stages) ? ev.stages : []).map((s) => ({ ...s, status: 'pending' })),
-        );
-        return;
-      }
-      if (ev.type === 'stage') {
-        if (ev.runId !== activeRunIdRef.current) return;
-        setAnalyzeStages((prev) =>
-          Array.isArray(prev) ? prev.map((s) => (s.id === ev.id ? { ...s, status: ev.status } : s)) : prev,
-        );
-      }
-    };
-    socket.on('importer:progress', onProgress);
-    return () => socket.off('importer:progress', onProgress);
-  }, []);
+  // frames. `null` = no run started yet. See `useImporterProgress`.
+  const { stages: analyzeStages, reset: resetAnalyzeStages } = useImporterProgress();
 
   // Server is the source of truth for the enums — a prior client-side copy
   // (`IMPORTER_ARC_ROLES_FALLBACK`) silently drifted, so we wait on the GET
@@ -146,23 +144,17 @@ export default function Importer() {
   // AI provider/model override for the extraction LLM calls (classify +
   // analyze). Empty string = "use the stage/active provider default" — sent
   // as `''` and coerced to undefined server-side (see importer*Schema).
-  const [providers, setProviders] = useState([]);
-  const [llmProvider, setLlmProvider] = useState('');
-  const [llmModel, setLlmModel] = useState('');
-  useEffect(() => {
-    let cancelled = false;
-    getProviders({ silent: true }).then((data) => {
-      if (cancelled) return;
-      setProviders((data?.providers || []).filter((p) => p.enabled));
-    }).catch((err) => {
-      console.warn(`⚠️ Importer provider list fetch failed: ${err?.message || err}`);
-    });
-    return () => { cancelled = true; };
-  }, []);
-  const llmModels = useMemo(() => {
-    const p = providers.find((x) => x.id === llmProvider);
-    return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
-  }, [providers, llmProvider]);
+  // `allowDefault` keeps both selectors at `''` (no auto-select) so the
+  // "Default" option is the resting state; `silent` matches the prior
+  // console.warn-only failure behavior for this secondary control.
+  const {
+    providers,
+    selectedProviderId: llmProvider,
+    selectedModel: llmModel,
+    availableModels: llmModels,
+    setSelectedProviderId: setLlmProvider,
+    setSelectedModel: setLlmModel,
+  } = useProviderModels({ allowDefault: true, silent: true });
 
   const [canonSelections, setCanonSelections] = useState({ characters: [], places: [], objects: [] });
   const [selectedCanon, setSelectedCanon] = useState({ characters: new Set(), places: new Set(), objects: new Set() });
@@ -213,8 +205,7 @@ export default function Importer() {
     abortConfigRef.current?.abort();
     // Clear any prior run's checklist; the server's `start` frame repopulates
     // it once the first AI pass begins (a generic spinner shows until then).
-    activeRunIdRef.current = null;
-    setAnalyzeStages(null);
+    resetAnalyzeStages();
     const payload = {
       universeName: intake.universeName.trim(),
       seriesName: intake.seriesName.trim(),
@@ -305,8 +296,9 @@ export default function Importer() {
       seriesId: preview.series.id,
       issues: issuesDraft,
       // Routes the verbatim excerpt to the right stage server-side — a
-      // comic-script import seeds stages.comicScript (ready) so the pipeline
-      // renders the user's script as-is instead of regenerating it.
+      // script-form import (comic-script → comicScript, screenplay → teleplay)
+      // seeds that script stage (ready) so the pipeline renders the user's
+      // script as-is instead of regenerating it.
       contentType: intake.contentType,
     };
     const payload = arcAlreadyPersisted
@@ -363,8 +355,10 @@ export default function Importer() {
       providerOverride: llmProvider,
       modelOverride: llmModel,
     };
-    const arcSummary = arcDraft?.summary || arcDraft?.logline || '';
-    if (arcSummary.trim()) payload.arcSummary = arcSummary;
+    // See resolveRetryArcSummary: a cleared summary is honored (send none, let
+    // the server synthesize) instead of silently falling back to the logline.
+    const arcSummary = resolveRetryArcSummary(arcDraft);
+    if (typeof arcSummary === 'string' && arcSummary.trim()) payload.arcSummary = arcSummary;
     // Round to an integer — the server schema is z.number().int(), so a
     // pasted/typed decimal like 2.5 would otherwise 400 with a confusing error.
     const tic = intake.targetIssueCount === '' ? null : Math.round(Number(intake.targetIssueCount));
@@ -412,7 +406,7 @@ export default function Importer() {
           llmProvider={llmProvider}
           llmModel={llmModel}
           llmModels={llmModels}
-          onProviderChange={(id) => { setLlmProvider(id); setLlmModel(''); }}
+          onProviderChange={setLlmProvider}
           onModelChange={setLlmModel}
         />
       )}
@@ -592,36 +586,19 @@ function IntakeForm({
           <p className="text-xs text-port-text-muted mt-1">Leave blank to let the LLM split based on natural chapter/issue/act boundaries.</p>
         </div>
         <div>
-          <label htmlFor="importer-llm-provider" className="block text-sm font-medium mb-1">
-            AI Provider &amp; Model (optional)
-          </label>
-          <div className="flex items-center gap-2">
-            <select
-              id="importer-llm-provider"
-              value={llmProvider}
-              onChange={(e) => onProviderChange(e.target.value)}
-              className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
-            >
-              <option value="">Default (stage provider)</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            {llmModels.length > 0 && (
-              <select
-                id="importer-llm-model"
-                aria-label="Model"
-                value={llmModel}
-                onChange={(e) => onModelChange(e.target.value)}
-                className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
-              >
-                <option value="">Default model</option>
-                {llmModels.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            )}
-          </div>
+          <p className="block text-sm font-medium mb-1">AI Provider &amp; Model (optional)</p>
+          <ProviderModelSelector
+            providers={providers}
+            selectedProviderId={llmProvider}
+            selectedModel={llmModel}
+            availableModels={llmModels}
+            onProviderChange={onProviderChange}
+            onModelChange={onModelChange}
+            compact
+            label="AI Provider"
+            emptyProviderOption="Default (stage provider)"
+            emptyModelOption="Default model"
+          />
           <p className="text-xs text-port-text-muted mt-1">Model used to extract canon, arc, and the issue split. Defaults to each stage&apos;s configured provider.</p>
         </div>
       </div>
@@ -655,22 +632,17 @@ function ImporterProgress({ stages }) {
       </p>
       {Array.isArray(stages) && stages.length > 0 ? (
         <ul className="space-y-1.5 mt-2">
-          {stages.map((s) => (
-            <li key={s.id} className="flex items-center gap-2 text-sm">
-              {s.status === 'done' ? (
-                <CheckCircle2 className="w-4 h-4 text-port-success flex-shrink-0" />
-              ) : s.status === 'error' ? (
-                <AlertTriangle className="w-4 h-4 text-port-warning flex-shrink-0" />
-              ) : s.status === 'running' ? (
-                <Loader2 className="w-4 h-4 text-port-accent animate-spin flex-shrink-0" />
-              ) : (
-                <Circle className="w-4 h-4 text-port-text-muted/40 flex-shrink-0" />
-              )}
-              <span className={s.status === 'running' ? 'text-port-text' : 'text-port-text-muted'}>
-                {s.label}
-              </span>
-            </li>
-          ))}
+          {stages.map((s) => {
+            const { Icon, className } = stageStatusIcon(s.status);
+            return (
+              <li key={s.id} className="flex items-center gap-2 text-sm">
+                <Icon className={className} />
+                <span className={s.status === 'running' ? 'text-port-text' : 'text-port-text-muted'}>
+                  {s.label}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="text-xs text-port-text-muted">Starting…</p>
@@ -739,10 +711,10 @@ function ReviewPanel({
     });
   };
 
-  // A comic-script import seeds the verbatim excerpt into stages.comicScript
-  // (not stages.prose) — keep the Review copy + per-issue label accurate.
-  const isComic = contentType === 'comic-script';
-  const excerptLabel = isComic ? 'Comic script excerpt' : 'Prose excerpt';
+  // A script-form import (comic-script → comicScript, screenplay → teleplay)
+  // seeds the verbatim excerpt into its script stage, not stages.prose — keep
+  // the Review copy + per-issue label accurate to the actual seed stage.
+  const { stagePath: seedStagePath, excerptLabel } = seedStageDisplayFor(contentType);
 
   return (
     <div className="space-y-6">
@@ -759,7 +731,7 @@ function ReviewPanel({
           <p className="text-xs text-port-text-muted mt-1">
             Review the canon below, edit any issue titles or synopses, then click Commit to seed
             the pipeline. The verbatim excerpt for each issue lands in{' '}
-            <code>{isComic ? 'stages.comicScript.output' : 'stages.prose.output'}</code>.
+            <code>{seedStagePath}</code>.
           </p>
           {preview.isExistingSeries && (
             <label className={`text-xs mt-2 flex items-center gap-2 cursor-pointer ${replaceMode ? 'text-port-error' : 'text-port-text-muted'}`}>

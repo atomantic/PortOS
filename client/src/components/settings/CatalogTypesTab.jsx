@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Sparkles, Plus, Trash2, Save, X, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { createCatalogType, updateCatalogType, deleteCatalogType } from '../../services/apiCatalogTypes';
 import { useCatalogTypes } from '../../hooks/useCatalogTypes.jsx';
 import { USER_TYPE_FIELD_KINDS } from '../../lib/catalogTypes';
@@ -154,15 +155,13 @@ export function CatalogTypesTab() {
                     Edit
                   </button>
                   {armedDeleteId === t.id || armedDeleteId === `force:${t.id}` ? (
-                    <span className="inline-flex items-center gap-1">
-                      <button type="button" disabled={busy}
-                        onClick={() => confirmDelete(t.id, { force: armedDeleteId === `force:${t.id}` })}
-                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded bg-port-error/20 text-port-error hover:bg-port-error/30 text-sm">
-                        {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Confirm
-                      </button>
-                      <button type="button" onClick={() => setArmedDeleteId(null)}
-                        className="px-2 py-1.5 rounded text-gray-400 hover:text-white text-sm">Cancel</button>
-                    </span>
+                    <ConfirmButtonPair
+                      confirmText="Confirm"
+                      confirmIcon={Trash2}
+                      busy={busy}
+                      onConfirm={() => confirmDelete(t.id, { force: armedDeleteId === `force:${t.id}` })}
+                      onCancel={() => setArmedDeleteId(null)}
+                    />
                   ) : (
                     <button type="button" onClick={() => setArmedDeleteId(t.id)} disabled={editing !== null}
                       aria-label={`Delete ${t.label}`}

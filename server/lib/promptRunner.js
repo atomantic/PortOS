@@ -33,6 +33,7 @@ import { ServerError } from './errorHandler.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 import { getAIToolkitInstance } from './aiToolkitState.js';
+import { createSingleFlight } from './singleFlight.js';
 
 // noteFallbackHandled lives in services/autoFixer.js, which transitively
 // pulls in services/cos.js (PM2 + fs + sockets). Importing it lazily on
@@ -254,26 +255,31 @@ export async function runPromptThroughProvider(args) {
     // `noteFallbackHandled` cancels the right queued task.
     const failed = firstError.effectiveProvider;
     const failedModel = firstError.effectiveModel || resolveEffectiveModel(failed, args.model);
-    const fallback = await pickFallbackProvider(failed);
-    if (!fallback) {
+    // Coalesce the per-provider mark-and-pick during an N-way failure
+    // storm: the 2nd…Nth simultaneous failure for the same provider awaits
+    // the first's result instead of independently re-reading providers.json
+    // (pickFallbackProvider) and re-writing provider-status.json
+    // (markUnavailable). The fallback *run* below is NOT coalesced — each
+    // failed call still executes its own fallback to get its own result.
+    const picked = await coalesceFallbackMarkAndPick(failed, firstError);
+    if (!picked) {
       throw stripFallbackContext(firstError);
     }
-
-    await markProviderUnavailableFromError(failed, firstError.message, firstError.errorAnalysis).catch(err => {
-      console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
-    });
+    const fallback = picked.provider;
 
     console.log(`⚡ Retrying ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
 
-    // Run the fallback as a fresh attempt — explicit `model: undefined`
-    // so the fallback picks its own default rather than inheriting the
-    // primary's model id (which usually doesn't exist on the fallback).
+    // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
+    // when one is set (so the user's chosen fallback provider+model pair is
+    // honored); otherwise `undefined` lets the fallback pick its own default.
+    // Either way we never inherit the primary's model id, which usually
+    // doesn't exist on the fallback.
     let fallbackResult;
     try {
       fallbackResult = await executeProviderRunOnce({
         ...args,
         provider: fallback,
-        model: undefined,
+        model: picked.model ?? undefined,
         runId: undefined, // fresh runId so the failed primary's record stays intact
       });
     } catch (fallbackError) {
@@ -310,10 +316,45 @@ export async function runPromptThroughProvider(args) {
   }
 }
 
+// In-flight mark-and-pick work, keyed by the failed provider id. During an
+// N-way failure storm (one stuck provider, many simultaneous in-flight
+// calls) every failure would otherwise independently re-read providers.json
+// (pickFallbackProvider) and re-write provider-status.json (markUnavailable).
+// Sharing the first failure's promise collapses that to a single read +
+// single write. The slot clears as soon as it settles, so a genuinely new
+// failure after the storm re-picks against fresh provider status.
+const _fallbackMarkAndPick = createSingleFlight();
+
+/**
+ * Mark the failed provider unavailable and pick its fallback, coalescing
+ * concurrent calls for the same provider id onto one shared promise.
+ * Resolves to the same `{ provider, model }` shape as `pickFallbackProvider`
+ * (or null when no usable fallback exists). The mark is skipped when no
+ * fallback is available — matching the prior ordering where the original
+ * error is rethrown without benching a provider that has no recovery path.
+ *
+ * @param {object} failed — the provider that actually ran and failed
+ * @param {Error} firstError — the execution error (carries message + errorAnalysis)
+ * @returns {Promise<{ provider: object, model: string|null }|null>}
+ */
+function coalesceFallbackMarkAndPick(failed, firstError) {
+  return _fallbackMarkAndPick.run(failed.id, async () => {
+    const picked = await pickFallbackProvider(failed);
+    if (!picked) return null;
+    await markProviderUnavailableFromError(failed, firstError.message, firstError.errorAnalysis).catch(err => {
+      console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
+    });
+    return picked;
+  });
+}
+
 /**
  * Pick a fallback provider for `failed`. Honors the failed provider's
  * `fallbackProvider` field first, then the toolkit's system priority
- * list. Returns null when no usable fallback exists.
+ * list. Returns `{ provider, model }` (or null when no usable fallback
+ * exists). `model` is the configured `fallbackModel` hint for the chosen
+ * fallback (null for system-priority picks, meaning "use the fallback's
+ * own default") — never the failed provider's model.
  *
  * The toolkit's `getFallbackProvider` reads `providers[failed.id]` to
  * look up the `fallbackProvider` field, so the primary MUST stay in the
@@ -332,7 +373,8 @@ async function pickFallbackProvider(failed) {
   for (const p of all.providers) providersMap[p.id] = p;
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap);
-  return picked?.provider || null;
+  if (!picked?.provider) return null;
+  return { provider: picked.provider, model: picked.model ?? null };
 }
 
 /**
@@ -432,7 +474,12 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
     runId = runResult.runId;
     if (runResult.provider && runResult.provider.id !== provider.id) {
       effectiveProvider = runResult.provider;
-      effectiveModel = resolveEffectiveModel(effectiveProvider, model);
+      // Re-resolve against the FALLBACK provider using the configured
+      // `fallbackModel` createRun surfaced — NOT the caller's `model`, which
+      // was resolved against the (now-benched) primary and almost never
+      // exists on the fallback. Forwarding it is the leak that sent
+      // `codex-configured-default` to LM Studio (mirrors stageRunner.js).
+      effectiveModel = resolveEffectiveModel(effectiveProvider, runResult.fallbackModel ?? null);
       // createRun persisted `metadata.model = effectiveModel || provider.defaultModel`
       // using the ORIGINAL provider's resolved value — so /runs would
       // attribute a model that doesn't belong to the fallback (e.g. an

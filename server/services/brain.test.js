@@ -50,6 +50,7 @@ vi.mock('./brainStorage.js', () => {
     getLinkByUrl: vi.fn(),
     createLink: vi.fn(),
     updateLink: vi.fn(),
+    reorderLinks: vi.fn(),
     deleteLink: vi.fn(),
     getBuckets: vi.fn(),
     getBucketById: vi.fn(),

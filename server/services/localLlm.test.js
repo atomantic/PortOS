@@ -100,10 +100,20 @@ describe('localLlm', () => {
   });
 
   describe('ensureBackendProvider', () => {
-    it('does not re-enable an already-enabled provider', async () => {
-      mocks.providers.getProviderById.mockResolvedValueOnce({ id: 'ollama', enabled: true });
+    it('does not touch a provider already enabled with a context window set', async () => {
+      mocks.providers.getProviderById.mockResolvedValueOnce({ id: 'ollama', enabled: true, numCtx: 32768 });
       await svc.ensureBackendProvider('ollama');
       expect(mocks.providers.updateProvider).not.toHaveBeenCalled();
+    });
+    it('defaults a context window on an enabled Ollama provider that lacks one', async () => {
+      mocks.providers.getProviderById.mockResolvedValueOnce({ id: 'ollama', enabled: true });
+      await svc.ensureBackendProvider('ollama');
+      expect(mocks.providers.updateProvider).toHaveBeenCalledWith('ollama', { numCtx: 32768 });
+    });
+    it('enables and sets a context window for a disabled Ollama provider', async () => {
+      mocks.providers.getProviderById.mockResolvedValueOnce({ id: 'ollama', enabled: false });
+      await svc.ensureBackendProvider('ollama');
+      expect(mocks.providers.updateProvider).toHaveBeenCalledWith('ollama', { enabled: true, numCtx: 32768 });
     });
   });
 

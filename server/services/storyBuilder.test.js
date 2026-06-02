@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../lib/mockPathsDataRoot.js';
+import { hashUpstream } from '../lib/storyBuilderIntegrity.js';
 
 // In-memory file store shared by all collection stores (storyBuilder, universe,
 // series) — mirrors the arcPlanner.test.js fixture so create paths persist.
@@ -72,6 +73,29 @@ describe('storyBuilder — CRUD', () => {
     await expect(sb.createStorySession({ title: '   ' })).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
   });
 
+  it('rolls back the just-minted universe when createSeries throws (no orphan)', async () => {
+    const createSpy = vi.spyOn(seriesSvc, 'createSeries').mockRejectedValueOnce(new Error('series boom'));
+    await expect(sb.createStorySession({ title: 'Doomed', seedIdea: 'idea' })).rejects.toThrow('series boom');
+    // The universe minted just before the failed series create is tombstoned —
+    // exactly one universe was created in this call, so any live universe is a leak.
+    const live = (await universeSvc.listUniverses()).filter((u) => !u.deleted);
+    expect(live).toHaveLength(0);
+    createSpy.mockRestore();
+  });
+
+  it('does NOT delete a caller-supplied universe when createSeries throws', async () => {
+    const universe = await universeSvc.createUniverse({ name: 'Pre-existing' });
+    const createSpy = vi.spyOn(seriesSvc, 'createSeries').mockRejectedValueOnce(new Error('series boom'));
+    await expect(
+      sb.createStorySession({ title: 'Doomed', seedIdea: 'idea', universeId: universe.id }),
+    ).rejects.toThrow('series boom');
+    // The universe the caller passed in must survive — we only roll back what we minted.
+    const survivor = await universeSvc.getUniverse(universe.id);
+    expect(survivor).toBeTruthy();
+    expect(survivor.deleted).toBeFalsy();
+    createSpy.mockRestore();
+  });
+
   it('lists, gets, updates, and soft-deletes', async () => {
     const s = await sb.createStorySession({ title: 'X' });
     expect((await sb.listStorySessions()).map((x) => x.id)).toContain(s.id);
@@ -88,8 +112,19 @@ describe('storyBuilder — lock state machine + gating', () => {
     const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
     const locked = await sb.lockStep(s.id, 'idea');
     expect(locked.steps.idea.locked).toBe(true);
-    expect(locked.steps.idea.upstreamHash).toMatch(/^[0-9a-f]{64}$/);
     expect(locked.steps.idea.lockedAt).toBeTruthy();
+    // Shape AND derivation: the stamped hash must be the SAME value the
+    // integrity helper produces from the idea step's whitelisted upstream
+    // inputs — not just any 64-char hex digest. Asserting against the real
+    // `hashUpstream` with the inputs spelled out here means any future drift in
+    // the idea step's input set (e.g. a field added to / removed from
+    // `buildUpstreamInputs`) surfaces as a failure on this line instead of
+    // silently passing a shape-only regex. A buggy impl that always stamped
+    // `hashUpstream('idea', null)` would now fail.
+    const expectedHash = hashUpstream('idea', { intakeMode: 'seed', seedIdea: 'seed' });
+    expect(locked.steps.idea.upstreamHash).toBe(expectedHash);
+    // Sanity: the derived hash is still the documented 64-char hex shape.
+    expect(expectedHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('allows jumping to any step out of order (start-from-anywhere)', async () => {
@@ -242,6 +277,91 @@ describe('storyBuilder — generate delegation', () => {
   });
 });
 
+describe('storyBuilder — refine delegation', () => {
+  it('refineStep(plotArc) persists the refined arc narrative onto the series', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'old', summary: 'old summary', shape: 'man-in-hole' } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'refined logline', summary: 'refined summary', changes: ['x'], rationale: 'y' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await sb.refineStep(s.id, 'plotArc', { feedback: 'sharpen it' });
+    expect(stageRunnerSpy).toHaveBeenCalledWith('story-builder-arc-refine', expect.any(Object), expect.objectContaining({ returnsJson: true }));
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.arc.logline).toBe('refined logline');
+    expect(series.arc.summary).toBe('refined summary');
+    // narrative-only refine preserves the picked shape.
+    expect(series.arc.shape).toBe('man-in-hole');
+    expect(out.changes).toEqual(['x']);
+    expect(out.rationale).toBe('y');
+    // The conductor surfaces which provider/model ran so the runner's SSE
+    // `complete` event (and the UI toast) can attribute the refine.
+    expect(out.providerId).toBe('p');
+    expect(out.model).toBe('m');
+  });
+
+  it('refineStep(readerMap) persists the reader map and surfaces provider/model attribution', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum', readerMap: { hooks: [{ label: 'old' }] } } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { hooks: [{ label: 'new' }], payoffs: [], beats: [], cliffhangers: [], changes: ['c'], rationale: 'r' },
+      runId: 'run-x', providerId: 'prov-x', model: 'model-y',
+    }));
+    const out = await sb.refineStep(s.id, 'readerMap', { feedback: 'sharpen' });
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.arc.readerMap.hooks[0].label).toBe('new');
+    expect(out.changes).toEqual(['c']);
+    expect(out.rationale).toBe('r');
+    // Without this the runner reports an undefined provider/model on the SSE
+    // `complete` event for reader-map refines (the bug this guards against).
+    expect(out.providerId).toBe('prov-x');
+    expect(out.model).toBe('model-y');
+  });
+
+  it('refineStep(plotArc) leaves the season breakdown untouched (arc-only persist)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'old', summary: 'old summary' },
+      seasons: [{ number: 1, title: 'Volume One', episodeCountTarget: 6 }],
+    });
+    const before = await seriesSvc.getSeries(s.seriesId);
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { logline: 'refined', summary: 'refined summary', changes: [], rationale: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    await sb.refineStep(s.id, 'plotArc', { feedback: 'sharpen' });
+    const after = await seriesSvc.getSeries(s.seriesId);
+    expect(after.arc.logline).toBe('refined');
+    // Seasons are byte-for-byte unchanged — refine never routes through the
+    // season remap, so no id churn or issue reassignment.
+    expect(after.seasons).toEqual(before.seasons);
+  });
+
+  it('refineStep(plotArc) refuses when the arc is locked', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc'); // sets series.locked.arc = true
+    stageRunnerSpy = vi.fn();
+    await expect(sb.refineStep(s.id, 'plotArc', { feedback: 'x' })).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+    expect(stageRunnerSpy).not.toHaveBeenCalled();
+  });
+
+  it('refineStep(plotArc) re-checks the arc lock at commit time (locked mid-flight) and does not persist', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    // Simulate the arc being locked DURING the in-flight LLM call: the stage
+    // runner locks the arc before returning, so refineArc's pre-call snapshot
+    // saw it unlocked but the commit-time re-read must catch it.
+    stageRunnerSpy = vi.fn(async () => {
+      await sb.lockStep(s.id, 'plotArc');
+      return { content: { logline: 'should not land', summary: 'nope', changes: [], rationale: '' }, runId: 'r', providerId: 'p', model: 'm' };
+    });
+    await expect(sb.refineStep(s.id, 'plotArc', { feedback: 'x' })).rejects.toMatchObject({ code: 'PIPELINE_ARC_VALIDATION' });
+    const after = await seriesSvc.getSeries(s.seriesId);
+    expect(after.arc.logline).toBe('spine'); // unchanged — refine did not persist
+  });
+});
+
 describe('generateStep backfill (fromDownstream)', () => {
   // Record the stage + vars of the most recent staged-LLM call so a test can
   // assert which prompt a backfill routed through.
@@ -327,5 +447,133 @@ describe('generateStep backfill (fromDownstream)', () => {
     const s = await sb.createStorySession({ title: 'Empty' });
     await expect(sb.generateStep(s.id, 'idea', { fromDownstream: true }))
       .rejects.toThrow(/No issue content/);
+  });
+});
+
+describe('generateIssuesFromArc (issues step)', () => {
+  // Attach one or more seasons to a freshly-minted seed session's series and
+  // return the persisted season ids (sanitizer may re-mint them).
+  async function seedSeasons(seriesId, seasons) {
+    await seriesSvc.updateSeries(seriesId, { seasons });
+    const series = await seriesSvc.getSeries(seriesId);
+    return series.seasons;
+  }
+
+  // The season-episodes LLM pass returns `{ episodes: [...] }`; shapeEpisodes
+  // keeps title + number + arcRole + lengthProfile + logline/synopsis.
+  function episodesSpy(episodesBySeasonTitle) {
+    stageRunnerSpy = vi.fn(async (stage, vars) => {
+      if (stage !== 'pipeline-season-episodes') return { content: {}, runId: 'r', providerId: 'p', model: 'm' };
+      const episodes = episodesBySeasonTitle[vars?.season?.title] || [];
+      return { content: { episodes }, runId: 'r', providerId: 'p', model: 'm' };
+    });
+  }
+
+  it('creates one issue per episode for every season and seeds idea input', async () => {
+    const s = await sb.createStorySession({ title: 'Arc Seed' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'foundry goes silent' },
+    ]);
+    episodesSpy({
+      'Vol 1': [
+        { number: 1, title: 'Pilot', logline: 'it begins', synopsis: 'cold open', arcRole: 'pilot', lengthProfile: 'standard' },
+        { number: 2, title: 'Complication', logline: 'it worsens', synopsis: '', arcRole: 'complication' },
+      ],
+    });
+    const res = await sb.generateIssuesFromArc(s.id);
+    expect(res.createdIssues).toHaveLength(2);
+    expect(res.seasons).toEqual([
+      expect.objectContaining({ seasonId: seasons[0].id, created: 2, skipped: false }),
+    ]);
+    const issues = await issuesSvc.listIssues({ seriesId: s.seriesId });
+    expect(issues.map((i) => i.title).sort()).toEqual(['Complication', 'Pilot']);
+    const pilot = issues.find((i) => i.title === 'Pilot');
+    expect(pilot.seasonId).toBe(seasons[0].id);
+    // logline + synopsis land in stages.idea.input; status is 'edited' when a
+    // synopsis exists, 'empty' otherwise.
+    expect(pilot.stages.idea.input).toBe('it begins\n\ncold open');
+    expect(pilot.stages.idea.status).toBe('edited');
+    const comp = issues.find((i) => i.title === 'Complication');
+    expect(comp.stages.idea.status).toBe('empty');
+    expect(comp.stages.idea.input).toBe('it worsens');
+  });
+
+  it('skips a locked season but still seeds the eligible ones (partial batch)', async () => {
+    const s = await sb.createStorySession({ title: 'Partial' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'open', locked: true },
+      { number: 2, title: 'Vol 2', synopsis: 'rises' },
+    ]);
+    episodesSpy({ 'Vol 2': [{ number: 1, title: 'V2 E1', arcRole: 'pilot' }] });
+    const res = await sb.generateIssuesFromArc(s.id);
+    expect(res.createdIssues).toHaveLength(1);
+    const locked = res.seasons.find((r) => r.seasonId === seasons[0].id);
+    const open = res.seasons.find((r) => r.seasonId === seasons[1].id);
+    // A locked season is an ineligible-config skip, not a failure.
+    expect(locked).toMatchObject({ skipped: true, failed: false, created: 0 });
+    expect(locked.reason).toMatch(/locked/i);
+    expect(open).toMatchObject({ skipped: false, failed: false, created: 1 });
+  });
+
+  it('reports a transient provider/LLM error as failed (not skipped)', async () => {
+    const s = await sb.createStorySession({ title: 'Flaky' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'open' },
+      { number: 2, title: 'Vol 2', synopsis: 'rises' },
+    ]);
+    // Vol 1's episodes pass throws a plain (non-validation) error — provider
+    // down / timeout. Vol 2 succeeds. The batch must not abort, and Vol 1 must
+    // be `failed`, not `skipped`.
+    stageRunnerSpy = vi.fn(async (stage, vars) => {
+      if (vars?.season?.title === 'Vol 1') throw new Error('provider unavailable');
+      return { content: { episodes: [{ number: 1, title: 'V2 E1', arcRole: 'pilot' }] }, runId: 'r', providerId: 'p', model: 'm' };
+    });
+    const res = await sb.generateIssuesFromArc(s.id);
+    expect(res.createdIssues).toHaveLength(1);
+    const bad = res.seasons.find((r) => r.seasonId === seasons[0].id);
+    const good = res.seasons.find((r) => r.seasonId === seasons[1].id);
+    expect(bad).toMatchObject({ skipped: false, failed: true, created: 0 });
+    expect(bad.reason).toMatch(/provider unavailable/);
+    expect(good).toMatchObject({ skipped: false, failed: false, created: 1 });
+  });
+
+  it('scopes to a single season when seasonId is given', async () => {
+    const s = await sb.createStorySession({ title: 'Scoped' });
+    const seasons = await seedSeasons(s.seriesId, [
+      { number: 1, title: 'Vol 1', synopsis: 'a' },
+      { number: 2, title: 'Vol 2', synopsis: 'b' },
+    ]);
+    episodesSpy({
+      'Vol 1': [{ number: 1, title: 'V1 E1', arcRole: 'pilot' }],
+      'Vol 2': [{ number: 1, title: 'V2 E1', arcRole: 'pilot' }],
+    });
+    const res = await sb.generateIssuesFromArc(s.id, { seasonId: seasons[1].id });
+    expect(res.seasons).toHaveLength(1);
+    expect(res.seasons[0].seasonId).toBe(seasons[1].id);
+    const issues = await issuesSvc.listIssues({ seriesId: s.seriesId });
+    expect(issues.map((i) => i.title)).toEqual(['V2 E1']);
+  });
+
+  it('forwards the session.llm provider/model into the episodes pass', async () => {
+    const s = await sb.createStorySession({ title: 'LLM', llm: { provider: 'prov-x', model: 'model-y' } });
+    await seedSeasons(s.seriesId, [{ number: 1, title: 'Vol 1', synopsis: 'a' }]);
+    episodesSpy({ 'Vol 1': [{ number: 1, title: 'E1', arcRole: 'pilot' }] });
+    await sb.generateIssuesFromArc(s.id);
+    expect(stageRunnerSpy).toHaveBeenCalledWith(
+      'pipeline-season-episodes', expect.any(Object),
+      expect.objectContaining({ providerOverride: 'prov-x', modelOverride: 'model-y' }),
+    );
+  });
+
+  it('throws when the series has no seasons yet', async () => {
+    const s = await sb.createStorySession({ title: 'No Seasons' });
+    await expect(sb.generateIssuesFromArc(s.id)).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+  });
+
+  it('throws when the scoped seasonId is unknown', async () => {
+    const s = await sb.createStorySession({ title: 'Bad Season' });
+    await seedSeasons(s.seriesId, [{ number: 1, title: 'Vol 1', synopsis: 'a' }]);
+    await expect(sb.generateIssuesFromArc(s.id, { seasonId: 'season-nope' }))
+      .rejects.toMatchObject({ code: sb.ERR_VALIDATION });
   });
 });

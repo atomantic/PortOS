@@ -44,6 +44,7 @@ export * from './creativeDirectorPrompts.js';
 export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
+export * from './seriesLlmOverride.js';
 export * from './storyArc.js';
 export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';
@@ -66,6 +67,7 @@ export * from './cliProviderArgs.js';
 export * from './cliProviderRun.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
+export * from './contextBudget.js';
 export * from './hfToken.js';
 export * from './hfCache.js';
 export * from './hfDownload.js';
@@ -105,12 +107,14 @@ export * from './pythonSetup.js';
 
 // === Networking ===
 export * from './fetchWithTimeout.js';
+export * from './requestAbort.js';
 export * from './httpClient.js';
 export * from './httpsState.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
+export * from './readResponseJson.js';
 export * from './sharingOrigin.js';
 export * from './syncIntegrity.js';
 export * from './syncWire.js';
@@ -153,7 +157,9 @@ export * from './timezone.js';
 // === General utilities ===
 export * from './asyncMutex.js';
 export * from './errorHandler.js';
+export * from './mapWithConcurrency.js';
 export * from './objects.js';
+export * from './singleFlight.js';
 export * from './sseUtils.js';
 export * from './uuid.js';
 

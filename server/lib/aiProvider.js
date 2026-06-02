@@ -6,6 +6,7 @@
 import { getAllProviders } from '../services/providers.js';
 import { startAIOp } from '../services/aiStatusEvents.js';
 import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../services/ollamaManager.js';
+import { readResponseJson } from './readResponseJson.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 
@@ -143,8 +144,15 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
     return { error: `Provider returned ${response.status}: ${errorText}`, status: response.status, body: errorText };
   }
 
-  const data = await response.json();
-  return { text: data.choices?.[0]?.message?.content || '' };
+  const data = await readResponseJson(response);
+  // A valid completion always carries `choices`; its absence means the 200 body
+  // wasn't the expected JSON (e.g. a proxy HTML page). Surface that as an error
+  // rather than masquerading a malformed body as an empty-but-successful reply.
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') {
+    return { error: 'Provider returned a malformed (non-JSON or unexpected) response body' };
+  }
+  return { text: content };
 }
 
 /**

@@ -150,7 +150,17 @@ function normalizeBareComicScript(script) {
     }
   };
 
-  for (const raw of script.split(/\r?\n/)) {
+  // A line that begins a NEW structural block (page/panel/caption/sfx) or EOF
+  // is what follows a trailing all-caps SHOUT in a balloon; a genuine second
+  // speaker cue is instead followed by its own spoken (dialogue) line. The
+  // one-line lookahead below uses this to disambiguate the two.
+  const startsNewBlock = (t) =>
+    BARE_PAGE_LINE.test(t) || BARE_PANEL_LINE.test(t)
+    || BARE_CAPTION_LINE.test(t) || BARE_SFX_LINE.test(t);
+
+  const lines = script.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
     const t = raw.trim();
 
     if (BARE_PAGE_LINE.test(t)) {
@@ -190,14 +200,31 @@ function normalizeBareComicScript(script) {
     }
     // Continuation line of a multi-line balloon — attribute it to the same
     // speaker so parsePanelBody captures it (otherwise lines 2+ were dropped).
-    // Unlike the first-line branch above, a fresh all-caps NAME-like line in
-    // continuation position IS treated as a SECOND speaker cue: the
-    // `!BARE_SPEAKER_LINE` guard lets it fall through to the speaker-cue branch
-    // below. Two speakers in one panel is common, and a second balloon's cue
-    // naturally follows the first speaker's spoken line.
-    if (field === 'dialogue' && dialogueSpeaker && t && !BARE_SPEAKER_LINE.test(t)) {
-      out.push(`${dialogueSpeaker}: ${t}`);
-      continue;
+    // A fresh all-caps NAME-like line in continuation position is AMBIGUOUS: it
+    // could be a SECOND speaker's cue (common — two speakers in one panel) or a
+    // shouted continuation of the same balloon (`STOP`, `NO`). Disambiguate with
+    // one-line lookahead: a real cue is followed by its own spoken line, while a
+    // trailing shout is followed by a structural marker (PAGE/PANEL/CAPTION/SFX)
+    // or EOF. So treat a NAME-like line as a continuation shout when the next
+    // content line starts a new block or there is none; otherwise let it fall
+    // through to the speaker-cue branch below.
+    if (field === 'dialogue' && dialogueSpeaker && t) {
+      if (!BARE_SPEAKER_LINE.test(t)) {
+        out.push(`${dialogueSpeaker}: ${t}`);
+        continue;
+      }
+      // NAME-like continuation line: peek at the next non-blank line.
+      let next = '';
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const nt = lines[j].trim();
+        if (nt) { next = nt; break; }
+      }
+      if (next === '' || startsNewBlock(next)) {
+        // Trailing shout — no following dialogue line, so it's not a new cue.
+        out.push(`${dialogueSpeaker}: ${t}`);
+        continue;
+      }
+      // Falls through: a spoken line follows, so this is a genuine 2nd cue.
     }
     // Speaker cue — only when NOT the forced first content line after a label.
     if (inPanel && t && !awaitingFirst && BARE_SPEAKER_LINE.test(t)) {

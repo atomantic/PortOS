@@ -19,7 +19,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
-import { importerEvents } from './importerEvents.js';
+import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
@@ -92,6 +92,24 @@ export function initSocket(io) {
     // means the tab is running stale code against a freshly-rebuilt server
     // and the user is offered a reload.
     socket.emit('build:id', { buildId: getBuildId() });
+
+    // Replay the in-flight importer analyze snapshot ON DEMAND so a tab that
+    // (re)connects mid-analyze rebuilds its stage checklist instead of staying
+    // stuck on "Starting…" — the original gate dropped every `stage` frame
+    // whose run the client never saw a `start` for. Replay is request-driven
+    // (not fired at `connection` time) because the socket auto-connects at app
+    // load, before the lazily-mounted Importer page registers its
+    // `importer:progress` listener — a connection-time replay would land
+    // before any listener exists and be lost. The client requests this right
+    // after registering its listener and again on every reconnect (see
+    // useImporterProgress). No-op when no analyze is running (empty list).
+    // `setupImporterEventForwarding` (below) keeps the snapshot fed; it's armed
+    // at server start.
+    socket.on('importer:progress:replay', () => {
+      for (const frame of getImporterProgressFrames()) {
+        socket.emit('importer:progress', frame);
+      }
+    });
 
     // Handle streaming app detection
     socket.on('detect:start', async (rawData) => {

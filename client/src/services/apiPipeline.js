@@ -437,19 +437,19 @@ export const patchPipelineManuscriptComment = (seriesId, commentId, patch, optio
     ...options,
   });
 
-// Generate an anchored find/replace fix for a comment (does not apply it).
+// Generate one or more anchored fix edits for a comment (does not apply them).
 export const generatePipelineManuscriptFix = (seriesId, commentId, { providerOverride, modelOverride } = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/fix`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride }),
   });
 
-// Apply an (optionally edited) fix into the issue's stage output + mark accepted.
-// Returns { comment, section }.
-export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace }) =>
+// Apply one or more optionally edited fixes into stage output + mark accepted.
+// Returns { comment, section, sections }.
+export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace, edits }) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/accept`, {
     method: 'POST',
-    body: JSON.stringify({ find, replace }),
+    body: JSON.stringify({ find, replace, edits }),
   });
 
 // Versioned free-text save of one manuscript section. Snapshots the prior text
@@ -612,4 +612,23 @@ export const detachPipelineMusicTrack = (issueId) =>
 export const deletePipelineMusicTrack = (filename) =>
   request(`/pipeline/audio/music-library/${encodeURIComponent(filename)}`, {
     method: 'DELETE',
+  });
+
+// ---- Local-OSS music generation (Phase 4c.2) ----
+
+// Available MusicGen generators + whether the opt-in MLX runtime is installed.
+// Returns { models, defaultModelId, defaultDurationSec, minDurationSec,
+// maxDurationSec, ready }. `ready=false` → show the install hint instead of
+// the prompt box.
+export const listPipelineMusicGenerators = (options = {}) =>
+  request('/pipeline/audio/music/generators', options);
+
+// Generate a background-music track with MusicGen (MLX) and attach it to the
+// issue (source: 'gen'). Long-running (~tens of seconds); callers own a busy
+// state. Returns { issue, stage, music, durationSec, modelId }.
+export const generatePipelineMusic = (issueId, { prompt, durationSec, modelId } = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ prompt, durationSec, modelId }),
+    ...options,
   });

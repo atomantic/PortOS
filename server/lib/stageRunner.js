@@ -84,6 +84,52 @@ export function resolveModel(provider, modelHint) {
   return modelHint;
 }
 
+// A conservative-large window assumed for frontier CLI / cloud-API providers
+// that haven't declared one. 128K is below every current frontier model's real
+// ceiling (Claude/GPT/Gemini are ≥128K, often ~1M), so it means "a typical
+// whole manuscript fits in one call" without over-promising. Users with very
+// large manuscripts can set an explicit `contextWindow` to lift it further.
+export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
+
+const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
+const isLocalEndpoint = (endpoint) =>
+  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+
+// CLI/TUI providers (Claude Code, Codex, Antigravity) are frontier models;
+// non-local API providers are cloud. Local backends (ollama/lmstudio on
+// localhost) are the only genuinely small-window case.
+const isLikelyLargeContextProvider = (provider) => {
+  if (provider?.type === 'cli' || provider?.type === 'tui') return true;
+  if (provider?.type === 'api') return !isLocalEndpoint(provider.endpoint);
+  return false;
+};
+
+// Planning-time context window for a provider: an explicit `contextWindow`
+// wins, else the Ollama per-request `numCtx`, else a large default for frontier
+// providers, else null (the budgeter applies a conservative floor for unknown
+// local backends). Model-level windows can be layered in later.
+export function effectiveContextWindow(provider) {
+  if (Number(provider?.contextWindow) > 0) return Number(provider.contextWindow);
+  if (Number(provider?.numCtx) > 0) return Number(provider.numCtx);
+  if (isLikelyLargeContextProvider(provider)) return DEFAULT_LARGE_CONTEXT_WINDOW;
+  return null;
+}
+
+/**
+ * Resolve which provider/model a stage WOULD run against (without executing)
+ * plus its planning context window — for callers that must budget the prompt
+ * before building it (e.g. manuscript editorial chunking).
+ *
+ * Best-effort planning: this resolves the PRIMARY provider; a runtime fallback
+ * to a different (possibly smaller-window) provider is not reflected here.
+ */
+export async function resolveStageContext(stageName, options = {}) {
+  const stage = getStage(stageName);
+  const provider = await resolveProviderForStage(stage, options);
+  const model = resolveModel(provider, options.modelOverride || stage?.model);
+  return { provider, model, contextWindow: effectiveContextWindow(provider) };
+}
+
 // Stage config can pin a specific provider via `stage.provider`. If set we
 // must use it (or fail) — falling back to the active provider would route
 // silently through whatever's currently selected, defeating the override.
@@ -261,7 +307,12 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const fellBack = runResult.provider && runResult.provider.id !== provider.id;
   if (fellBack) {
     effectiveProvider = runResult.provider;
-    effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
+    // Re-resolve against the FALLBACK provider. Do NOT pass `resolvedModel` —
+    // that was resolved against the PRIMARY (e.g. codex's
+    // `codex-configured-default`) and forwarding it leaks a model id the
+    // fallback can't run. Prefer the configured `fallbackModel`; null falls
+    // through to the fallback provider's own default / args-baked model.
+    effectiveModel = resolveEffectiveModel(effectiveProvider, runResult.fallbackModel ?? null);
   }
   // Always patch metadata with the effective timeout (the toolkit doesn't
   // persist `timeout` in its initial metadata.json write). On fallback we

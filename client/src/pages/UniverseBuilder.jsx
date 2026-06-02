@@ -30,6 +30,7 @@ import { useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
 import useUniverseAction from '../hooks/useUniverseAction';
 import { useUniverseNav } from '../hooks/useUniverseNav';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
 import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
@@ -51,6 +52,7 @@ import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipel
 import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canonPrompt';
 import { listSheetPointers } from '../lib/sheetPointers';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
+import { sameJsonShape } from '../lib/sameJsonShape';
 import { BIBLE_LIMITS } from '../lib/bibleLimits';
 import {
   mergeVariations, mergeCanonByName, mergeExpandIntoDraft, extractPreservedFromDraft,
@@ -561,8 +563,16 @@ export default function UniverseBuilder() {
   // flush via handleSave() when they diverge so the server doesn't operate
   // on a stale copy.
   const savedDraftSnapshotRef = useRef(draftSnapshotForDirty(emptyTemplate()));
+  // Saved-record influences snapshot, tracked alongside the full-draft snapshot.
+  // StyleProbeImage builds its prompt from `influences` but persists only the
+  // resulting `styleImageRefs` to the SERVER record — so a probe rendered from
+  // unsaved influence edits would get pinned to a record whose influences are
+  // still the prior values. Comparing this against the live draft tells the
+  // probe when the style is dirty so it can block until the user saves.
+  const savedStyleSnapshotRef = useRef(ensureInfluences(emptyTemplate().influences));
   const markDraftSaved = useCallback((snapshotSource) => {
     savedDraftSnapshotRef.current = draftSnapshotForDirty(snapshotSource);
+    savedStyleSnapshotRef.current = ensureInfluences(snapshotSource?.influences);
   }, []);
   const isDraftDirty = useCallback(
     () => savedDraftSnapshotRef.current !== draftSnapshotForDirty(draftRef.current || draft),
@@ -898,13 +908,25 @@ export default function UniverseBuilder() {
     return () => clearTimeout(t);
   }, [location.hash, selectedId, draft.id]);
 
-  // Create-from-selector path: builds a universe from just the typed name
-  // (everything else empty) and navigates to it. Distinct from handleSave so
-  // typing a new name while an existing universe is selected doesn't rename
-  // that universe — Create always makes a new record.
+  // Create-from-selector path. Two cases, distinguished by whether a universe
+  // is already open:
+  //   - No universe selected (unsaved new draft): the user has been building a
+  //     draft in place — e.g. expanded a starter idea into a starterPrompt,
+  //     categories, and canon — then typed a name. That work must be preserved,
+  //     so delegate to handleSave (which persists the FULL draft, not just the
+  //     name). Previously this path spread emptyTemplate() and silently
+  //     obliterated the generated idea/content, creating a blank universe.
+  //   - An existing universe is selected: typing a new name must NOT rename or
+  //     clone the open universe — make a fresh blank record from just the name.
   const handleCreateNamed = async (rawName) => {
     const name = (rawName || '').trim();
     if (!name) { toast.error('Name is required'); return; }
+    if (!selectedId) {
+      // draft.name already mirrors the typed value (selector value === draft.name),
+      // so handleSave creates a new universe carrying the full in-progress draft.
+      await handleSave();
+      return;
+    }
     setSaving(true);
     const result = await createUniverse({
       ...emptyTemplate(),
@@ -1674,6 +1696,10 @@ export default function UniverseBuilder() {
   const categoryKeys = getCategoryKeys(draft.categories);
   const totalVariations = totalVariationCount(draft);
   const totalSheets = draft.compositeSheets?.length || 0;
+  // True when the draft's influences diverge from the saved record. The style
+  // probe renders from these influences but pins its filename server-side, so a
+  // probe taken while dirty would mis-attribute to style the record never had.
+  const styleProbeDirty = !sameJsonShape(savedStyleSnapshotRef.current, ensureInfluences(draft.influences));
 
   // URL-driven tab + bucket state (per CLAUDE.md "Linkable routes for all
   // views"). `?tab=cast&bucket=heroes` deep-links into a sub-bucket; both fall
@@ -1851,6 +1877,7 @@ export default function UniverseBuilder() {
             totalSheets={totalSheets}
             onPreview={openPreviewByFilename}
             onStyleProbeRenderComplete={bumpGalleryRefresh}
+            styleProbeDirty={styleProbeDirty}
           />
         )}
 
@@ -2950,6 +2977,7 @@ function BibleTab({
   totalVariations, categoryKeyCount, totalSheets,
   onPreview,
   onStyleProbeRenderComplete = null,
+  styleProbeDirty = false,
 }) {
   const { providers, providerModels, providerLabel, activeProviderId } = llm;
   const {
@@ -2975,30 +3003,25 @@ function BibleTab({
             />
           </div>
           <div>
-            <label htmlFor="world-llm-provider" className="text-xs text-gray-400 mb-1 block">LLM for expansion</label>
-            <select
-              id="world-llm-provider"
-              value={draft.llm?.provider ?? ''}
-              onChange={(e) => updateDraft({ llm: { ...draft.llm, provider: e.target.value || null, model: null } })}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
-            >
-              <option value="">Active provider ({providerLabel(activeProviderId)})</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <select
-              value={draft.llm?.model || ''}
-              onChange={(e) => updateDraft({ llm: { ...draft.llm, model: e.target.value || null } })}
-              className="mt-1 w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
-            >
-              <option value="">Default model</option>
-              {providerModels.map((m) => {
-                const id = typeof m === 'string' ? m : m.id;
-                const label = typeof m === 'string' ? m : (m.name || m.id);
-                return <option key={id} value={id}>{label}</option>;
-              })}
-            </select>
+            <p className="text-xs text-gray-400 mb-1 block">LLM for expansion</p>
+            {/* The selection here is part of the draft and persisted to the
+                server (feeds expand/render), not ephemeral like the Importer —
+                so we drive it from `draft.llm` and use only the shared
+                component, not useProviderModels' auto-select/load machinery. */}
+            <ProviderModelSelector
+              providers={providers}
+              selectedProviderId={draft.llm?.provider ?? ''}
+              selectedModel={draft.llm?.model || ''}
+              availableModels={providerModels}
+              onProviderChange={(id) => updateDraft({ llm: { ...draft.llm, provider: id || null, model: null } })}
+              onModelChange={(m) => updateDraft({ llm: { ...draft.llm, model: m || null } })}
+              compact
+              label="LLM for expansion"
+              layout="stacked"
+              emptyProviderOption={`Active provider (${providerLabel(activeProviderId)})`}
+              emptyModelOption="Default model"
+              alwaysShowModel
+            />
           </div>
         </div>
 
@@ -3141,12 +3164,15 @@ function BibleTab({
         />
         <div className="mt-4 pt-4 border-t border-port-border">
           {/* StyleProbeImage persists styleImageRefs server-side itself; merge
-              only that field into the draft so unsaved style edits aren't lost. */}
+              only that field into the draft so unsaved style edits aren't lost.
+              `styleDirty` blocks the render while influences have unsaved edits —
+              otherwise the probe pins to a saved record that lacks that style. */}
           <StyleProbeImage
             universe={draft}
             onUniverseChange={(updated) => updateDraft({ styleImageRefs: updated?.styleImageRefs || [] })}
             onPreview={onPreview}
             onRenderComplete={() => onStyleProbeRenderComplete?.()}
+            styleDirty={styleProbeDirty}
           />
         </div>
       </section>

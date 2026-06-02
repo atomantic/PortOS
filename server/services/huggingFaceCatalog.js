@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { readResponseJson } from '../lib/readResponseJson.js'
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'
 
 const HF_API_BASE = 'https://huggingface.co/api/models'
@@ -245,7 +246,7 @@ async function fetchModels(search, limit, useGgufFilter) {
     const text = await response.text().catch(() => '')
     throw new Error(`Hugging Face search failed: ${response.status}${text ? ` — ${text.slice(0, 160)}` : ''}`)
   }
-  const data = await response.json()
+  const data = await readResponseJson(response, { fallback: [] })
   return Array.isArray(data) ? data : []
 }
 

@@ -19,13 +19,17 @@ import {
   localLlmMigrateSchema,
   localLlmInstallBackendSchema,
   localLlmOllamaServiceSchema,
-  localLlmHuggingFaceSearchSchema
+  localLlmHuggingFaceSearchSchema,
+  localLlmTestSchema,
+  localLlmCompareSchema
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { searchHuggingFaceModels } from '../services/huggingFaceCatalog.js'
 import {
   getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
 } from '../services/localLlm.js'
+import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
+import { abortSignalFromResponse } from '../lib/requestAbort.js'
 import { getLoadedModels as getLoadedOllamaModels, unloadModel as unloadOllamaModel } from '../services/ollamaManager.js'
 
 const router = Router()
@@ -217,6 +221,22 @@ router.post('/unload', asyncHandler(async (req, res) => {
     return res.status(502).json({ error: result.reason || 'unload failed', modelId })
   }
   res.json({ success: true, ...result })
+}))
+
+// POST /api/local-llm/test — run one installed local model with a prompt.
+// Returns speed metrics and a run id so the playground can inspect output
+// quality without leaving the Local LLM workflow.
+router.post('/test', asyncHandler(async (req, res) => {
+  const body = validateRequest(localLlmTestSchema, req.body)
+  res.json(await runLocalLlmTest({ ...body, signal: abortSignalFromResponse(res) }))
+}))
+
+// POST /api/local-llm/compare — run one prompt through multiple local models.
+// `round-robin` measures each model in isolation; `parallel` intentionally
+// measures contention when several loaded local models run at once.
+router.post('/compare', asyncHandler(async (req, res) => {
+  const body = validateRequest(localLlmCompareSchema, req.body)
+  res.json(await compareLocalLlmModels({ ...body, signal: abortSignalFromResponse(res) }))
 }))
 
 export default router

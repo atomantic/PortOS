@@ -69,4 +69,37 @@ describe('ConflictsTab', () => {
     await user.click(screen.getByRole('button', { name: /Discard/ }));
     await waitFor(() => expect(api.resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'discard' }, expect.anything()));
   });
+
+  it('renders per-sub-entry diffs for a field carrying `parts`, and still merges at field granularity', async () => {
+    const deepEntry = {
+      id: 'entry-2', recordKind: 'universe', recordId: 'u-deep0000000', detectedAt: '2026-05-25T10:00:00Z',
+      source: { via: 'sync' },
+      diffSummary: [{
+        field: 'characters', changed: 'both',
+        parts: [
+          { path: 'c1', label: 'Alice', changed: 'both', localValue: { bio: 'mine' }, remoteValue: { bio: 'theirs' } },
+          { path: 'c2', label: 'Bob', changed: 'local-only', localValue: { bio: 'gone' }, remoteValue: undefined },
+        ],
+      }],
+      status: 'pending',
+    };
+    api.listConflicts.mockResolvedValue({ conflicts: [deepEntry] });
+    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    const user = userEvent.setup();
+    render(<ConflictsTab />);
+    await waitFor(() => expect(screen.getByText(/1 field\(s\)/)).toBeInTheDocument());
+
+    await user.click(screen.getByText(/u-deep0000000/)); // expand
+    // Each changed sub-entry is labelled and rendered as its own diff.
+    expect(await screen.findByText(/Alice/)).toBeInTheDocument();
+    expect(screen.getByText(/Bob/)).toBeInTheDocument();
+    expect(screen.getAllByTestId('diff')).toHaveLength(2); // one InlineDiff per part, not one blob
+
+    // Merge still selects the whole field (one checkbox for the field, not per-part).
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(1);
+    await user.click(checkboxes[0]);
+    await user.click(screen.getByRole('button', { name: /Merge 1 selected field/ }));
+    await waitFor(() => expect(api.resolveConflict).toHaveBeenCalledWith('entry-2', { action: 'merge-fields', fields: ['characters'] }, expect.anything()));
+  });
 });

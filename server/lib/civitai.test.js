@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { mockJsonResponse } from './testHelper.js';
 import {
   applyDownloadToken,
   baseModelToRunner,
@@ -267,7 +268,7 @@ describe('fetchCivitaiModel', () => {
       calledUrl = url;
       expect(opts.headers.Accept).toBe('application/json');
       expect(opts.headers.Authorization).toBe('Bearer k');
-      return { ok: true, status: 200, json: async () => ({ id: 1, name: 'X' }) };
+      return mockJsonResponse({ id: 1, name: 'X' });
     };
     const out = await fetchCivitaiModel('123', { apiKey: 'k', fetchImpl });
     expect(calledUrl).toBe('https://civitai.com/api/v1/models/123');
@@ -283,7 +284,7 @@ describe('fetchCivitaiModel', () => {
   });
   it('rejects non-numeric modelId without hitting the network', async () => {
     let called = false;
-    const fetchImpl = async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; };
+    const fetchImpl = async () => { called = true; return mockJsonResponse({}); };
     await expect(fetchCivitaiModel('abc', { fetchImpl })).rejects.toThrow(/Invalid Civitai model id/);
     expect(called).toBe(false);
   });

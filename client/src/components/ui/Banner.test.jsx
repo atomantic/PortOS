@@ -41,6 +41,18 @@ describe('Banner', () => {
     expect(svg.getAttribute('class')).toContain('text-port-accent');
   });
 
+  it('marks the icon aria-hidden by default so screen readers skip the decorative glyph', () => {
+    const { container } = render(<Banner icon={AlertTriangle}>x</Banner>);
+    const svg = container.querySelector('svg');
+    expect(svg.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('exposes the icon to assistive tech when iconAriaHidden={false}', () => {
+    const { container } = render(<Banner icon={AlertTriangle} iconAriaHidden={false}>x</Banner>);
+    const svg = container.querySelector('svg');
+    expect(svg.getAttribute('aria-hidden')).toBeNull();
+  });
+
   it('renders a bold title above the children when supplied', () => {
     render(<Banner title="Heads up">details below</Banner>);
     const titleEl = screen.getByText('Heads up');

@@ -11,6 +11,8 @@
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
 #   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 0; opt in with INSTALL_LTX2=1.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
+#   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
+#   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 
 set -euo pipefail
 
@@ -21,6 +23,22 @@ PORTOS_DATA="${PORTOS_DATA:-${REPO_ROOT}/data}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+
+# Check out a pin (a commit SHA, tag, or branch name) in an already-fetched
+# clone. A bare `git checkout <branch>` lands on the *local* branch created at
+# clone time, which `git fetch origin` never advances — so re-running with a
+# branch pin like `main` would stick on a stale commit. When the pin names a
+# remote branch, hard-reset to `origin/<pin>` so branch pins always track the
+# freshly-fetched upstream tip; SHA / tag pins (no matching `origin/<pin>`)
+# fall through to the detached checkout untouched.
+git_checkout_pin() {
+  local dir="$1" pin="$2"
+  if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/${pin}"; then
+    git -C "$dir" checkout --quiet -B "$pin" "origin/${pin}"
+  else
+    git -C "$dir" checkout --quiet "$pin"
+  fi
+}
 
 if ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
@@ -146,7 +164,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
     (cd "${LTX2_DIR}" && git fetch origin)
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
-  (cd "${LTX2_DIR}" && git checkout --quiet "${LTX2_PIN}")
+  git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
   # Force Python 3.11 — ltx-core-mlx pins requires-python>=3.11 and the
   # macOS bundled python3 is sometimes 3.10. uv resolves this for us when
   # the env doesn't already exist.
@@ -179,10 +197,10 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   # translation layer (PortOS arg stability) while upstream owns the
   # actual inference (upstream-tracked changes).
   #
-  # EXPERIMENTAL — upstream CLI hasn't been pinned across releases; if a
-  # commit reshapes --task / --ckpt_dir, set `broken: true` on the
-  # wan22_* entries in data/media-models.json until generate_wan22.py is
-  # updated to match.
+  # EXPERIMENTAL — the clone is pinned (WAN22_PIN below) so new installs are
+  # reproducible, but bumping that pin can still reshape --task / --ckpt_dir;
+  # if it does, set `broken: true` on the wan22_* entries in
+  # data/media-models.json until generate_wan22.py is updated to match.
   if ! have uv; then
     echo "❌ INSTALL_WAN22=1 requires the 'uv' Python installer." >&2
     echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
@@ -192,7 +210,12 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     echo "❌ INSTALL_WAN22=1 requires git." >&2
     exit 1
   fi
-  WAN22_PIN="${WAN22_PIN:-main}"
+  # Pinned to a known-good commit (the repo's HEAD as of 2026-06-02). Floating
+  # `main` on a community-maintained port means every new install gets whatever
+  # HEAD is that day — a pin keeps installs reproducible. To upgrade: bump this
+  # SHA and verify with PortOS's video gen smoke tests. Set WAN22_PIN=main to
+  # bypass the pin and track upstream HEAD for development.
+  WAN22_PIN="${WAN22_PIN:-0b6b09aaa0d0b7cd7360fa358208437646dece60}"
   WAN22_DIR="${HOME}/.portos/wan2.2-mlx"
   WAN22_PY="${WAN22_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -203,7 +226,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     echo "📦 Fetching Wan2.2-mlx updates..."
     (cd "${WAN22_DIR}" && git fetch origin)
   fi
-  (cd "${WAN22_DIR}" && git checkout --quiet "${WAN22_PIN}")
+  git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
   if [[ ! -x "${WAN22_PY}" ]]; then
     echo "📦 Creating Wan2.2-mlx venv with Python 3.11..."
     (cd "${WAN22_DIR}" && uv venv --python 3.11)
@@ -228,8 +251,9 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
   # 4-bit Gemma text encoder + everything else evicted (see the Memory
   # Management panel under Settings → Local LLMs).
   #
-  # EXPERIMENTAL — same caveat as Wan 2.2: upstream CLI isn't pinned. If
-  # sample_video.py args drift, flip `hunyuan_video` broken in
+  # EXPERIMENTAL — same caveat as Wan 2.2: the clone is pinned (HUNYUAN_PIN
+  # below) for reproducible installs, but bumping that pin can still drift
+  # sample_video.py args. If it does, flip `hunyuan_video` broken in
   # data/media-models.json and update scripts/generate_hunyuan.py.
   if ! have uv; then
     echo "❌ INSTALL_HUNYUAN=1 requires the 'uv' Python installer." >&2
@@ -239,7 +263,12 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
     echo "❌ INSTALL_HUNYUAN=1 requires git." >&2
     exit 1
   fi
-  HUNYUAN_PIN="${HUNYUAN_PIN:-main}"
+  # Pinned to a known-good commit (the repo's HEAD as of 2026-06-02). Floating
+  # `main` on a community-maintained port means every new install gets whatever
+  # HEAD is that day — a pin keeps installs reproducible. To upgrade: bump this
+  # SHA and verify with PortOS's video gen smoke tests. Set HUNYUAN_PIN=main to
+  # bypass the pin and track upstream HEAD for development.
+  HUNYUAN_PIN="${HUNYUAN_PIN:-d5ec346aac3322066c1f1cb149830d1246dbe6dd}"
   HUNYUAN_DIR="${HOME}/.portos/hunyuan-video-mlx"
   HUNYUAN_PY="${HUNYUAN_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -250,7 +279,7 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
     echo "📦 Fetching HunyuanVideo_MLX updates..."
     (cd "${HUNYUAN_DIR}" && git fetch origin)
   fi
-  (cd "${HUNYUAN_DIR}" && git checkout --quiet "${HUNYUAN_PIN}")
+  git_checkout_pin "${HUNYUAN_DIR}" "${HUNYUAN_PIN}"
   if [[ ! -x "${HUNYUAN_PY}" ]]; then
     echo "📦 Creating HunyuanVideo_MLX venv with Python 3.11..."
     (cd "${HUNYUAN_DIR}" && uv venv --python 3.11)
@@ -271,6 +300,70 @@ if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
     (cd "${HUNYUAN_DIR}" && uv sync)
   fi
   echo "✅ HunyuanVideo_MLX venv ready: ${HUNYUAN_PY}"
+fi
+
+INSTALL_MUSICGEN="${INSTALL_MUSICGEN:-0}"
+if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
+  # Local background-music generation for the pipeline audio stage (Phase
+  # 4c.2). Meta's MusicGen runs on Apple Silicon via MLX, but the MLX
+  # implementation lives in ml-explore/mlx-examples (`musicgen/`), which isn't
+  # a pip package — so we clone the repo and build a sibling venv. The sidecar
+  # `scripts/generate_musicgen.py` imports `MusicGen` from the clone;
+  # server/lib/pythonSetup.js (resolveMusicgenPython) looks for python3 here.
+  if ! is_macos; then
+    echo "⚠️ INSTALL_MUSICGEN=1 is macOS / Apple-Silicon only (MLX). Skipping." >&2
+  else
+    if ! have git; then
+      echo "❌ INSTALL_MUSICGEN=1 requires git." >&2
+      exit 1
+    fi
+    MUSICGEN_VENV="${HOME}/.portos/venv-musicgen"
+    MUSICGEN_PY="$MUSICGEN_VENV/bin/python3"
+    MLX_EXAMPLES_DIR="${HOME}/.portos/mlx-examples"
+    MLX_EXAMPLES_PIN="${MLX_EXAMPLES_PIN:-main}"
+    mkdir -p "${HOME}/.portos"
+
+    if [[ ! -d "${MLX_EXAMPLES_DIR}/.git" ]]; then
+      echo "📦 Cloning ml-explore/mlx-examples → ${MLX_EXAMPLES_DIR}..."
+      git clone https://github.com/ml-explore/mlx-examples.git "${MLX_EXAMPLES_DIR}"
+    fi
+    # Pin to a known commit when MLX_EXAMPLES_PIN is set to a SHA; default
+    # 'main' tracks HEAD (the musicgen example is stable, but a pin keeps new
+    # installs reproducible — mirror of the LTX2_PIN pattern above).
+    git -C "${MLX_EXAMPLES_DIR}" fetch --quiet origin
+    git_checkout_pin "${MLX_EXAMPLES_DIR}" "${MLX_EXAMPLES_PIN}"
+
+    if [[ ! -x "$MUSICGEN_PY" ]]; then
+      echo "📦 Creating MusicGen venv at ${MUSICGEN_VENV}..."
+      "$PYTHON_BIN" -m venv "$MUSICGEN_VENV"
+    fi
+    echo "📦 Installing MusicGen (MLX) packages into ${MUSICGEN_VENV}..."
+    "$MUSICGEN_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # mlx + numpy run the model; transformers (<5 for MLX compat) + sentencepiece
+    # provide the T5 text conditioner's tokenizer; scipy is imported by the
+    # mlx-examples musicgen utils. torch is required because MusicGen.from_pretrained
+    # loads the upstream PyTorch checkpoints (torch.load) before converting to MLX —
+    # without it generation fails at model-load even though the class imports fine.
+    # We write WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
+    "$MUSICGEN_PY" -m pip install --upgrade \
+      mlx \
+      numpy \
+      torch \
+      "transformers<5" \
+      sentencepiece \
+      "huggingface_hub[hf_xet]" \
+      scipy
+    # Verify BOTH that the class imports AND that torch loaded — the import alone
+    # passed even when torch was missing, so install used to report ready and
+    # then fail on the first generation.
+    if ! PORTOS_MUSICGEN_RUNTIME_DIR="${MLX_EXAMPLES_DIR}/musicgen" \
+         "$MUSICGEN_PY" -c "import sys, os, torch; sys.path.insert(0, os.environ['PORTOS_MUSICGEN_RUNTIME_DIR']); from musicgen import MusicGen" 2>/dev/null; then
+      echo "❌ MusicGen venv built but 'import torch; from musicgen import MusicGen' failed." >&2
+      echo "   Check that ${MLX_EXAMPLES_DIR}/musicgen exists and torch installed cleanly." >&2
+      exit 1
+    fi
+    echo "✅ MusicGen venv ready: $MUSICGEN_PY (runtime: ${MLX_EXAMPLES_DIR}/musicgen @ ${MLX_EXAMPLES_PIN:0:12})"
+  fi
 fi
 
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
@@ -342,6 +435,9 @@ echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"
 if [[ "$INSTALL_LTX2" == "1" ]]; then
   echo "   LTX-2.3:   ${HOME}/.portos/ltx-2-mlx/.venv/bin/python3 (separate venv, dgrauet pipeline @ ${LTX2_PIN:0:12})"
+fi
+if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
+  echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
 fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"

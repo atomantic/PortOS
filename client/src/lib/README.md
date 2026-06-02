@@ -25,11 +25,12 @@ grep -i "what you want to do" client/src/lib/README.md
 |---|---|
 | `canonPrompt.js` | Mirror of `server/lib/canonPrompt.js`. SHORT/RICH/PREVIEW spec + `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` / `descriptorForCanonEntry`. |
 | `scenePrompt.js` | Mirror of `server/lib/scenePrompt.js`. Scene-prompt composer + bible matchers. |
-| `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. |
+| `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. `composeCanonStyledPrompt` builds the `"<name>: <description>"` + universe-preset render the canon section and characters step share. |
 | `cleanPlatePrompt.js` | Clean-plate prompt builder for setting canon entries (Cluster A — A4). |
 | `seasonStructure.js` | Mirror of `server/lib/seasonStructure.js`. |
 | `sheetPointers.js` | Mirror of the character-sheet pointer helpers from `server/lib/storyBible.js`. `LEGACY_SHEET_VARIANT_ID` + `readSheetPointer` / `listSheetPointers` / `applySheetPointer` for traversing both the legacy `referenceSheetImageRef` field and the `referenceSheets` map. |
 | `universeStylePreset.js` | Build the client-side style preset that `composeStyledPrompt` layers on top. |
+| `beatColors.js` | `BEAT_KIND_COLORS` + `getBeatKindColor(kind)` — per-kind display colors for reader-map emotional beats (kinds defined server-side in `storyArc.js`). Keeps every beat visualization consistent. |
 | `bibleLimits.js` | Mirror of `server/lib/storyBible.js` `BIBLE_LIMITS`. |
 | `catalogTypes.js` | Client mirror of `server/lib/catalogTypes.js` — catalog ingredient type registry (label, badge color, primary-content key/label, snippet fallback chain, per-type editor field list) for the Catalog list/picker/editor. |
 | `editorialRoadmap.js` | `projectAnalyzedPoints` (aggregate roadmap → analyzed chart points with arc-position `frac`) + `dominant` (most-frequent string). Shared by EditorialRoadmapPanel and the Reader Map page. |
@@ -65,6 +66,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `compareHelpers.js` | `equalByKeys(a, b, keys)` / `equalListByKeys(a, b, keys)` — typed key-based equality for `useAutoRefetch`'s `compare`. Keys are property names, dotted paths (`'context.running'`), or `(item) => value` accessors. The typed alternative to `sameJsonShape` when a monotonic timestamp or unrendered field would break stringify-equality dedup. |
 | `genUtils.js` | Shared bits between Image Gen and Video Gen pages. |
 | `joinInfluenceList.js` | Mirror of `joinInfluenceList` in server universe builder. |
+| `localLlmTargetKey.js` | `localLlmTargetKey({ backend, modelId })` — stable string key for a local-LLM compare target. Shared by the LocalLlmTab checkbox grid and the LocalLlmPlayground compare URL so a delimiter change can't desync the round-trip. |
 | `loopbackHost.js` | `isLoopbackHost(host)` / `isLoopbackOrigin()` / `describeMicAvailability()` — Secure Context / loopback-origin heuristics. Use these in any new mic, clipboard, or `getUserMedia`-gated surface; matches the full `127.0.0.0/8` range, IPv6 `::1`, and the browser-bracketed `[::1]` form. |
 | `mediaNavigation.js` | `getAdjacentMedia(items, item)` — prev/next computation for lightboxes. |
 | `sameJsonShape.js` | `sameJsonShape(prev, next)` — JSON.stringify-based equality for `useAutoRefetch`'s `compare` option on small, deterministically-shaped poll payloads. |

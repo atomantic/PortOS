@@ -34,7 +34,7 @@ import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { findDuplicateUniverseGroups, findSameNameUniverses } from '../services/duplicateDetection.js';
-import { mergeUniverses } from '../services/recordMerge.js';
+import { mergeUniverses, buildCascadeContext } from '../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../services/recordMergeAI.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
@@ -53,15 +53,20 @@ const SERVICE_ERROR_STATUS = {
   [svc.ERR_HAS_LIVE_SERIES]: 409,
   // recordMerge validation (unresolved conflicts, bad ids).
   MERGE_VALIDATION: 400,
+  // recordMerge cascade partially completed (a child re-point failed) → 409 so
+  // the client can surface "merge incomplete, re-run to finish".
+  MERGE_CASCADE_INCOMPLETE: 409,
 };
 
 const mapServiceError = (err) => {
   const status = SERVICE_ERROR_STATUS[err?.code];
   if (status) {
-    // Propagate the blocking-series list (if any) so the UI can list which
-    // series block the delete — rides in `context`, which the error handler
-    // serializes onto the response body.
-    const context = err?.blockingSeries ? { blockingSeries: err.blockingSeries } : undefined;
+    // Propagate diagnostic context onto the response body via `context`: the
+    // blocking-series list for a delete-guard 409, or the survivor/loser ids +
+    // which children failed to re-point for an incomplete merge cascade.
+    const context = err?.blockingSeries
+      ? { blockingSeries: err.blockingSeries }
+      : buildCascadeContext(err);
     return new ServerError(err.message, { status, code: err.code, context });
   }
   return err;

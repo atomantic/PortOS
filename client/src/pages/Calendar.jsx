@@ -14,7 +14,9 @@ import ReviewTab from '../components/calendar/ReviewTab';
 import CalendarLifetimeTab from '../components/meatspace/tabs/CalendarTab';
 import SyncTab from '../components/calendar/SyncTab';
 
-const TABS = [
+// Exported so the nav-manifest tab-coverage guard (server/lib/navManifest.test.js)
+// can assert each tab round-trips to a NAV_COMMANDS path.
+export const TABS = [
   { id: 'agenda', label: 'Agenda', icon: CalendarDays },
   { id: 'day', label: 'Day', icon: CalendarIcon },
   { id: 'week', label: 'Week', icon: Columns },

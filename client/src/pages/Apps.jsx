@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import AppIcon from '../components/AppIcon';
 import BrailleSpinner from '../components/BrailleSpinner';
 import KanbanBoard from '../components/KanbanBoard';
@@ -331,25 +332,14 @@ export default function Apps() {
 
                     {/* Edit/Delete Actions */}
                     {confirmingDelete === app.id ? (
-                      <div className="flex items-center gap-2" role="alertdialog" aria-label={`Confirm deletion of ${app.name}`}>
-                        <span className="text-xs text-gray-400">Remove?</span>
-                        <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-                          <button
-                            onClick={() => handleDelete(app)}
-                            className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs focus:outline-hidden focus:ring-2 focus:ring-port-error"
-                            aria-label={`Confirm delete ${app.name}`}
-                          >
-                            Yes
-                          </button>
-                          <button
-                            onClick={() => setConfirmingDelete(null)}
-                            className="px-2 py-1 bg-port-border/50 text-gray-400 hover:text-white text-xs border-l border-port-border focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-                            aria-label="Cancel deletion"
-                          >
-                            No
-                          </button>
-                        </div>
-                      </div>
+                      <ConfirmButtonPair
+                        prompt="Remove?"
+                        confirmText="Yes"
+                        cancelText="No"
+                        ariaLabel={`Confirm deletion of ${app.name}`}
+                        onConfirm={() => handleDelete(app)}
+                        onCancel={() => setConfirmingDelete(null)}
+                      />
                     ) : (
                       <div className="flex items-center gap-2">
                         {/* Archive/Unarchive button (hidden for PortOS baseline) */}

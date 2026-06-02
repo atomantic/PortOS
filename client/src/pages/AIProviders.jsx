@@ -453,6 +453,7 @@ export default function AIProviders() {
                   {provider.fallbackProvider && (
                     <p className="text-xs">
                       Fallback: <span className="text-port-accent">{providers.find(p => p.id === provider.fallbackProvider)?.name || provider.fallbackProvider}</span>
+                      {provider.fallbackModel && <span className="ml-1 text-gray-300">({provider.fallbackModel})</span>}
                     </p>
                   )}
                   {provider.envVars && Object.keys(provider.envVars).length > 0 && (
@@ -614,6 +615,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     mediumModel: provider?.mediumModel || '',
     heavyModel: provider?.heavyModel || '',
     fallbackProvider: provider?.fallbackProvider || '',
+    fallbackModel: provider?.fallbackModel || '',
     timeout: provider?.timeout || 300000,
     enabled: provider?.enabled !== false,
     envVars: provider?.envVars || {},
@@ -631,6 +633,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
 
   // Filter out current provider from fallback options (treat undefined enabled as enabled)
   const fallbackOptions = allProviders.filter(p => p.id !== provider?.id && p.enabled !== false);
+
+  // The fallback model is a model OF the selected fallback provider, so its
+  // option list comes from that provider's `models` — not this provider's.
+  const selectedFallbackProvider = allProviders.find(p => p.id === formData.fallbackProvider);
+  const fallbackModelOptions = selectedFallbackProvider?.models || [];
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -989,7 +996,14 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <label className="block text-sm text-gray-400 mb-1">Fallback Provider</label>
             <select
               value={formData.fallbackProvider}
-              onChange={(e) => setFormData(prev => ({ ...prev, fallbackProvider: e.target.value }))}
+              onChange={(e) => setFormData(prev => ({
+                ...prev,
+                fallbackProvider: e.target.value,
+                // The model belongs to the fallback provider; clear it when the
+                // provider changes so a stale model from the previous pick
+                // doesn't carry over.
+                fallbackModel: ''
+              }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             >
               <option value="">None (use system default)</option>
@@ -1000,6 +1014,35 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <p className="text-xs text-gray-500 mt-1">
               If this provider hits a usage limit or becomes unavailable, tasks will automatically use the fallback provider.
             </p>
+
+            {formData.fallbackProvider && (
+              <div className="mt-3">
+                <label className="block text-sm text-gray-400 mb-1">Fallback Model</label>
+                {fallbackModelOptions.length > 0 ? (
+                  <select
+                    value={formData.fallbackModel}
+                    onChange={(e) => setFormData(prev => ({ ...prev, fallbackModel: e.target.value }))}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  >
+                    <option value="">Use fallback provider's default</option>
+                    {fallbackModelOptions.map(model => (
+                      <option key={model} value={model}>{model}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={formData.fallbackModel}
+                    onChange={(e) => setFormData(prev => ({ ...prev, fallbackModel: e.target.value }))}
+                    placeholder="Use fallback provider's default"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  />
+                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Model to run on the fallback provider. Leave blank to use that provider's default model.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Environment Variables */}

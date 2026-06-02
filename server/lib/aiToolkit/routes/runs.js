@@ -46,10 +46,28 @@ export function createRunsRoutes(runnerService, options = {}) {
     const { runId, provider, metadata, timeout: effectiveTimeout } = runData;
     console.log(`🚀 Run created: ${runId}, provider type: ${provider.type}`);
 
+    // When createRun proactively swapped to a fallback (the requested provider
+    // was benched), the request `model` was resolved against the now-benched
+    // PRIMARY and almost never exists on the fallback — running it would leak
+    // a bad model id onto the fallback (the same bug as the staged-LLM path).
+    // Use the fallback's configured model (or its own default) instead; for
+    // non-fallback runs keep honoring the request `model`.
+    const runModel = runData.usedFallback
+      ? (runData.fallbackModel || provider.defaultModel || null)
+      : model;
+    // executeCliRun reads `provider.defaultModel` for `--model` injection, so a
+    // fallback pin must be threaded in via a clone (mirrors the TUI branch and
+    // promptRunner's `providerForRun`). Only on the fallback path — non-fallback
+    // CLI runs keep their existing behavior of using the provider's own default
+    // (the request `model` has never been threaded into CLI runs here).
+    const cliProvider = (runData.usedFallback && runModel && runModel !== provider.defaultModel)
+      ? { ...provider, defaultModel: runModel }
+      : provider;
+
     if (provider.type === 'cli') {
       runnerService.executeCliRun(
         runId,
-        provider,
+        cliProvider,
         prompt,
         workspacePath,
         (data) => {
@@ -65,7 +83,7 @@ export function createRunsRoutes(runnerService, options = {}) {
       runnerService.executeApiRun(
         runId,
         provider,
-        model,
+        runModel,
         prompt,
         workspacePath,
         screenshots,
@@ -80,10 +98,11 @@ export function createRunsRoutes(runnerService, options = {}) {
       // Honor the user-picked model from the Runs UI — `executeTuiRun` reads
       // `provider.defaultModel` for its `--model` injection, so without the
       // clone every TUI run would silently fall back to the provider's saved
-      // default even when the user picked something else. Matches the API
-      // branch's `model` parameter being passed through.
-      const effectiveProvider = model
-        ? { ...provider, defaultModel: model }
+      // default even when the user picked something else. Uses `runModel` so a
+      // fallback swap runs the fallback's model rather than leaking the
+      // primary's request model onto the fallback.
+      const effectiveProvider = runModel
+        ? { ...provider, defaultModel: runModel }
         : provider;
       runnerService.executeTuiRun(
         runId,

@@ -144,7 +144,7 @@ export function hasBeenProcessed(cursor, manifestFilename, manifestId = null) {
  * content-changes re-process correctly.
  */
 export function buildManifest({
-  kind, senderInstanceId, source, sourceBio, recordIds, assetRefs,
+  kind, senderInstanceId, source, sourceBio, recordIds, assetRefs, reviewRefs,
   bucketId, bucketName, note, producedByVersion, subscription, collection,
   portosSchemaVersions,
 }) {
@@ -180,6 +180,13 @@ export function buildManifest({
     bucketName: bucketName || bucketId,
     recordIds: Array.isArray(recordIds) ? recordIds : [],
     assetRefs: Array.isArray(assetRefs) ? assetRefs : [],
+    // Series ids whose manuscript-review sibling doc (records/reviews/<id>.json)
+    // is bundled in this manifest. Declared separately from `recordIds` because
+    // the review is keyed by seriesId, not a record id of its own — so the
+    // importer can WAIT for the review file to land before markProcessed
+    // (cloud-relayed buckets deliver files out of order). Absent on legacy
+    // manifests → importer treats as "no declared reviews".
+    reviewRefs: Array.isArray(reviewRefs) ? reviewRefs : [],
     // Optional payload for universe/series shares — the linked media
     // collection so recipients gain the same set of generated images and
     // the link is restored on their side. Either `universeId` (universe-

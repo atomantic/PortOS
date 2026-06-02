@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import MediaLightbox from './MediaLightbox';
 
 // The footer's AddToCollectionMenu and the (closed) PromptRefineModal pull the
@@ -17,6 +17,16 @@ const videoItem = {
   previewUrl: '/data/video-thumbnails/abc.jpg',
   downloadUrl: '/data/videos/abc.mp4',
   prompt: 'a cat',
+  createdAt: Date.now(),
+};
+
+const imageItem = {
+  kind: 'image',
+  key: 'image:frame.png',
+  filename: 'frame.png',
+  previewUrl: '/data/images/frame.png',
+  downloadUrl: '/data/images/frame.png',
+  prompt: 'a cat portrait',
   createdAt: Date.now(),
 };
 
@@ -74,5 +84,27 @@ describe('MediaLightbox video element (mobile playback)', () => {
     );
     const video = container.querySelector('video');
     expect(video.hasAttribute('poster')).toBe(false);
+  });
+});
+
+describe('MediaLightbox route-changing actions', () => {
+  it('closes the preview before Send to Video runs so query cleanup cannot override navigation', () => {
+    const calls = [];
+    const onClose = vi.fn(() => calls.push('close'));
+    const onSendToVideo = vi.fn(() => calls.push('send'));
+
+    render(
+      <MediaLightbox
+        item={imageItem}
+        onClose={onClose}
+        onSendToVideo={onSendToVideo}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /send to video/i }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSendToVideo).toHaveBeenCalledWith(imageItem);
+    expect(calls).toEqual(['close', 'send']);
   });
 });

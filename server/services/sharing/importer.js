@@ -27,12 +27,13 @@ import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { isSafeRecordId } from '../../lib/validation.js';
-import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName, isHexHash } from './buckets.js';
+import { getBucket, bucketBlobPath, bucketBlobSidecarPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { PORTOS_SCHEMA_VERSIONS, RECORD_KIND_SCHEMA_CATEGORIES, compareSchemaVersions, scopeVersionDiff, formatVersionGap } from '../../lib/schemaVersions.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
+import { mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
 import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
@@ -42,6 +43,12 @@ import { mergePeerAnnotations } from '../mediaAnnotations.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
+
+// Record kinds that participate in the non-blocking conflict journal. Universe,
+// series, AND issue all seed a base hash on first import and archive a losing
+// local version before an LWW overwrite. (Media collections are journaled
+// separately via their own merge path; see mediaCollections.js.)
+const JOURNALED_KINDS = new Set(['universe', 'series', 'issue']);
 
 function isSelfAuthored(senderInstanceId, localInstanceId) {
   return !!localInstanceId
@@ -305,7 +312,7 @@ async function processAnnotationManifest(bucket, manifest) {
   const recordId = (manifest.recordIds || [])[0] || manifest.senderInstanceId;
   if (!recordId) return { applied: 0, missing: true, reason: 'no-record-id' };
   if (!isSafeRecordId(recordId)) return { applied: 0, missing: true, reason: 'bad-record-id' };
-  const recordPath = join(bucket.path, 'records', 'media-annotations', `${recordId}.json`);
+  const recordPath = bucketRecordPath(bucket.path, 'media-annotations', recordId);
   const record = await readJSONFile(recordPath, null, { logError: false });
   if (!record) return { applied: 0, missing: true, reason: 'record-not-synced' };
   // record.instanceId is the source-of-truth for the author; fall back to the
@@ -324,14 +331,14 @@ async function processAnnotationManifest(bucket, manifest) {
 
 /** Merge bucket-bundled media-job records into local data/media-jobs.json. */
 async function mergeMediaJobRecords(bucketPath, recordIds) {
-  const mediaDir = join(bucketPath, 'records', 'media');
+  const mediaDir = bucketRecordsDir(bucketPath, 'media');
   if (!existsSync(mediaDir)) return;
   const persistedPath = join(PATHS.data, 'media-jobs.json');
   const [persisted, incoming] = await Promise.all([
     readJSONFile(persistedPath, { jobs: [] }, { logError: false }),
     Promise.all((recordIds || []).map(async (id) => {
       if (!isSafeRecordId(id)) return null;
-      const recordPath = join(mediaDir, `${id}.json`);
+      const recordPath = bucketRecordPath(bucketPath, 'media', id);
       if (!existsSync(recordPath)) return null;
       return readJSONFile(recordPath, null, { logError: false });
     })),
@@ -356,17 +363,32 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
  * (chr-/set-/obj-) are sub-records of universes and never standalone, so they
  * are skipped without being tracked as missing.
  */
+// Declared manuscript-review files (records/reviews/<seriesId>.json) the manifest
+// says are bundled but aren't yet readable on disk. Parses each (not just
+// existsSync) so a present-but-partial/corrupt file mid-cloud-sync counts as
+// "not ready" and keeps the manifest pending — mirroring readReferencedRecords,
+// where an unparseable record file is treated as missing. Returns the seriesIds
+// still pending; legacy manifests (no reviewRefs) → [].
+async function missingDeclaredReviews(bucketPath, manifest) {
+  const refs = (Array.isArray(manifest.reviewRefs) ? manifest.reviewRefs : []).filter(isSafeRecordId);
+  const checks = await Promise.all(refs.map(async (sid) => {
+    const r = await readJSONFile(bucketRecordPath(bucketPath, 'reviews', sid), null, { logError: false });
+    return r == null ? sid : null;
+  }));
+  return checks.filter(Boolean);
+}
+
 async function readReferencedRecords(bucketPath, manifest) {
   const records = { series: [], issues: [], universes: [], media: [] };
   const missing = [];
   const resolveOne = async (id) => {
     if (!isSafeRecordId(id)) return { kind: 'missing', id };
     if (id.startsWith('ser-')) {
-      const r = await readJSONFile(join(bucketPath, 'records', 'series', `${id}.json`), null, { logError: false });
+      const r = await readJSONFile(bucketRecordPath(bucketPath, 'series', id), null, { logError: false });
       return r ? { kind: 'series', record: r } : { kind: 'missing', id };
     }
     if (id.startsWith('iss-')) {
-      const r = await readJSONFile(join(bucketPath, 'records', 'issues', `${id}.json`), null, { logError: false });
+      const r = await readJSONFile(bucketRecordPath(bucketPath, 'issues', id), null, { logError: false });
       return r ? { kind: 'issues', record: r } : { kind: 'missing', id };
     }
     if (id.startsWith('chr-') || id.startsWith('set-') || id.startsWith('obj-')) {
@@ -374,9 +396,9 @@ async function readReferencedRecords(bucketPath, manifest) {
       return { kind: 'skip' };
     }
     // UUID-only — could be a universe or a media job. Try both.
-    const uni = await readJSONFile(join(bucketPath, 'records', 'universes', `${id}.json`), null, { logError: false });
+    const uni = await readJSONFile(bucketRecordPath(bucketPath, 'universes', id), null, { logError: false });
     if (uni) return { kind: 'universes', record: uni };
-    const med = await readJSONFile(join(bucketPath, 'records', 'media', `${id}.json`), null, { logError: false });
+    const med = await readJSONFile(bucketRecordPath(bucketPath, 'media', id), null, { logError: false });
     if (med) return { kind: 'media', record: med };
     return { kind: 'missing', id };
   };
@@ -493,7 +515,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
         // seed on their insert branch too; without this a bucket-imported
         // record has base==null and the first conflict would be missed). Hash
         // the STORED record so the base matches a future `local` hash exactly.
-        if (kind === 'universe' || kind === 'series') {
+        if (JOURNALED_KINDS.has(kind)) {
           const stored = await getFn(record.id).catch(() => null);
           if (stored) await setSyncBaseHash(kind, record.id, contentHashForRecord(kind, stored));
         }
@@ -511,11 +533,11 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       if (kind === 'series' && !record.universeId && existing.universeId) {
         record = { ...record, universeId: existing.universeId };
       }
-      // Non-blocking conflict journal for the two synced top-level kinds — a
+      // Non-blocking conflict journal for every synced record kind — a
       // share-bucket import that LWW-overwrites a locally-diverged record
-      // archives the losing local version first. Issues ride LWW silently
-      // (child-issue conflict journaling is a v1 follow-up).
-      if (kind === 'universe' || kind === 'series') {
+      // archives the losing local version first. Issues are included now
+      // (they previously rode LWW silently).
+      if (JOURNALED_KINDS.has(kind)) {
         await maybeJournalBeforeOverwrite({
           kind, id: record.id, local: existing, remote: record,
           source: { via: 'share-bucket', bucketId: bucket.id, peerId: manifest.senderInstanceId ?? null },
@@ -621,6 +643,35 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     });
   }
 
+  // Merge the bundled manuscript-review sibling doc into local state,
+  // LWW-per-comment. Keyed by seriesId under records/reviews/ — read by
+  // seriesId rather than via `recordIds` because the review has no record id of
+  // its own. The manifest's `reviewRefs` is AUTHORITATIVE: only merge a review
+  // file the THIS manifest declared. The exporter writes (but never deletes) a
+  // review file, so a stale file from a prior export can linger in the bucket;
+  // a later manifest that shipped an emptied review declares `reviewRefs: []`,
+  // and reading the lingering file anyway would resurrect dismissed comments.
+  // Legacy manifests (no reviewRefs) → empty set → nothing merged (those
+  // senders never bundled a review file either).
+  // A merge FAILURE (transient write/parse error) must NOT silently advance the
+  // cursor — the review has no independent reconciliation cycle (it only rides
+  // the series push/export), so a swallowed failure would drop it permanently.
+  // Surface it as a pending condition (like recordImportFailures /
+  // collectionPending*) so processManifest leaves the manifest retryable.
+  // `mergeReviewFromSync` does not emit a record event, so no re-export loop.
+  const declaredReviews = new Set((Array.isArray(manifest.reviewRefs) ? manifest.reviewRefs : []).filter(isSafeRecordId));
+  const reviewMergeFailures = [];
+  for (const s of records.series) {
+    if (skipSeriesMerge.has(s.id) || !declaredReviews.has(s.id)) continue;
+    const review = await readJSONFile(bucketRecordPath(bucket.path, 'reviews', s.id), null, { logError: false });
+    if (review) {
+      await mergeReviewFromSync(s.id, review).catch((err) => {
+        console.log(`⚠️ sharing.importer: manuscript-review merge for ${s.id} failed: ${err.message}`);
+        reviewMergeFailures.push(s.id);
+      });
+    }
+  }
+
   // Universe and series shares can both carry a linked media collection
   // payload. Items are unioned into a local "Universe: <name>" or
   // "Series: <name>" collection so peer-generated images appear alongside
@@ -682,6 +733,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     legacyCanonPendingUniverses: legacyCanonPendingUniverses.length > 0 ? legacyCanonPendingUniverses : null,
     legacyCanonPendingFailures: legacyCanonPendingFailures.length > 0 ? legacyCanonPendingFailures : null,
     recordImportFailures: failedInserts.length > 0 ? failedInserts : null,
+    reviewMergeFailures: reviewMergeFailures.length > 0 ? reviewMergeFailures : null,
     adoptedSubscription: adoptedSubscription
       ? { id: adoptedSubscription.id, bucketId: adoptedSubscription.bucketId, recordKind: adoptedSubscription.recordKind, recordId: adoptedSubscription.recordId }
       : null,
@@ -914,6 +966,15 @@ export async function processManifest(bucketId, manifestFilename) {
   }
   const { records, missing: missingRecords } = await readReferencedRecords(bucket.path, manifest);
 
+  // Declared manuscript-review files (records/reviews/<seriesId>.json) that the
+  // manifest says are bundled but haven't landed on disk yet. Cloud-relayed
+  // buckets (Drive/Dropbox) deliver files out of order, so the manifest can be
+  // processed before its review file syncs; without this wait the importer
+  // would read null, treat it as "no review", and markProcessed — permanently
+  // dropping the review. Mirror the missingRecords pending gate. Legacy
+  // manifests have no `reviewRefs` → empty → no wait (back-compat).
+  const missingReviews = await missingDeclaredReviews(bucket.path, manifest);
+
   // Always copy assets + media-job records ahead of the merge so canon and
   // pipeline records that reference them point at present files. Asset and
   // record-bundle sync can both lag behind manifest sync in Drive/Dropbox/etc.;
@@ -942,6 +1003,7 @@ export async function processManifest(bucketId, manifestFilename) {
   const legacyCanonPendingUniverses = outcome?.legacyCanonPendingUniverses || null;
   const legacyCanonPendingFailures = outcome?.legacyCanonPendingFailures || null;
   const recordImportFailures = outcome?.recordImportFailures || null;
+  const reviewMergeFailures = outcome?.reviewMergeFailures || null;
   // Tombstoned universe: the collection owner IS on disk but locally deleted.
   // Unlike the truly-missing case this will never self-resolve via sync, so we
   // advance the cursor (no infinite pending loop) and emit a clear signal. The
@@ -952,16 +1014,18 @@ export async function processManifest(bucketId, manifestFilename) {
     console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
     return { processed: true, manifest, outcome };
   }
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures) {
+  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || missingReviews.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures || reviewMergeFailures) {
     if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
     if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
+    if (missingReviews.length > 0) outcome.pendingReviews = missingReviews;
     if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
     if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
     if (legacyCanonPendingUniverses) outcome.pendingLegacyCanonUniverses = legacyCanonPendingUniverses;
     if (legacyCanonPendingFailures) outcome.pendingLegacyCanonFailures = legacyCanonPendingFailures;
     if (recordImportFailures) outcome.pendingRecordImportFailures = recordImportFailures;
+    if (reviewMergeFailures) outcome.pendingReviewMergeFailures = reviewMergeFailures;
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${missingReviews.length > 0 ? ` waitingForReviews=${missingReviews.length}` : ''}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}${reviewMergeFailures ? ` reviewMergeFailures=${reviewMergeFailures.join(',')}` : ''}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
@@ -1070,6 +1134,16 @@ export async function promoteInboxItem(bucketId, manifestId) {
       missingAssets: assetCopy.missing,
     });
   }
+  // Same out-of-order delivery guard as the auto-merge path: a declared review
+  // file that hasn't landed (or is present-but-unparseable) must block the
+  // promote, or applyAutoMerge would read null and silently drop the review.
+  const missingReviews = await missingDeclaredReviews(bucket.path, manifest);
+  if (missingReviews.length > 0) {
+    throw Object.assign(new Error(`Manifest reviews are still syncing (${missingReviews.length} missing)`), {
+      code: 'SHARING_REVIEWS_PENDING',
+      missingReviews,
+    });
+  }
   await mergeMediaJobRecords(bucket.path, manifest.recordIds);
   const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
   const outcome = await applyAutoMerge(bucket, manifest, records, { availableAssetKeys });
@@ -1111,6 +1185,15 @@ export async function promoteInboxItem(bucketId, manifestId) {
     throw Object.assign(new Error(`Legacy series canon migration failed for ${outcome.legacyCanonPendingFailures.join(', ')} — retry after resolving the underlying error`), {
       code: 'SHARING_LEGACY_CANON_FAILED',
       pendingLegacyCanonFailures: outcome.legacyCanonPendingFailures,
+    });
+  }
+  // A transient manuscript-review merge failure must also keep the inbox row —
+  // otherwise the manual promote consumes it while the bundled review silently
+  // never lands (the review has no independent reconciliation cycle).
+  if (outcome.reviewMergeFailures) {
+    throw Object.assign(new Error(`Manuscript-review merge failed for ${outcome.reviewMergeFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_REVIEW_MERGE_FAILED',
+      reviewMergeFailures: outcome.reviewMergeFailures,
     });
   }
   // Drop from inbox.

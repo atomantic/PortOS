@@ -30,7 +30,12 @@ function makeStreamResponse(frames, { rejectAt } = {}) {
   }
 }
 
-const versionResponse = () => ({ ok: true, status: 200, json: async () => ({ version: '0.24.0' }) })
+// A real fetch Response exposes both json() and text(); ollamaRequest now reads
+// the body tolerantly via text() (readResponseJson), so the stub must provide it.
+const versionResponse = () => {
+  const body = { version: '0.24.0' }
+  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) }
+}
 
 // Install a fetch stub that answers /api/version and dispenses one scripted
 // /api/pull response per call from the given queue.

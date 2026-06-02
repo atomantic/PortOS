@@ -25,6 +25,12 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useAgentFeedbackToast` | Agent completion toast with thumbs-up/down UI. | Show actionable agent-run completion feedback. |
 | `useSharingNotifications` | Subscriber for share-bucket notifications. | Wire once to surface federation/sync events. |
 
+## Pipeline / Story Builder wiring
+
+| Hook | Purpose | Use when |
+|---|---|---|
+| `useArcCanvasSync` | Host-side wiring for the embedded `<ArcCanvas>`: `lastSavedRef` dirty-check + `updateSeriesFromServer` / `handleIssuesUpdate` / `flushPending`. Parameterized by `flushFields` (which bible fields to flush) + `silent`/`onFlushError`. | Embedding `<ArcCanvas>` in a host that owns `series`/`issues` state (PipelineSeries, Story Builder arc step). Don't re-implement the setter contract. |
+
 ## Progress & streaming (SSE / socket)
 
 | Hook | Purpose | Use when |
@@ -32,12 +38,15 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useSseProgress` | Generic JSON-frame EventSource subscriber. | New SSE progress stream — start here, build on top. |
 | `useModelDownloadStatus` | Image/video model cache-status + SSE pre-download. | Surfacing "Available" vs "Download" badge inline in the gen form. |
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
+| `useImporterProgress` | Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered); exports `stageStatusIcon` for the status→icon lookup. | Importer analyze progress UI only. |
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
+| `useMediaJobSse` | Imperative per-job `/{kind}-gen/:id/events` SSE; `attach()` returns a Promise that settles on the terminal frame. | POST-then-attach media render flows that await completion (ImageGen/VideoGen). |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineAutoRunProgress` | Auto-run-text SSE for a pipeline issue. | Pipeline auto-run UI surfaces only. |
 | `usePipelineEditorialProgress` | Series editorial reader-emotion batch SSE. | Editorial Roadmap analysis UI only. |
 | `usePipelineVolumeBeatsProgress` | Volume beat-sheet SSE. | Volume beat-sheet UI only. |
 | `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
+| `useStoryStepProgress` | Generate/refine SSE for one Story Builder step. | Story Builder step generate/refine progress only. |
 
 ## Media (annotations, completion, attachments)
 
@@ -49,6 +58,8 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMediaPreviewActions` | Shared MediaPreview / MediaLightbox action handlers (images + videos — dispatch by `item.kind`). | New surface that exposes the same 4 preview actions. |
 | `usePreviewRoute` | URL-driven `[preview, setPreview]` via `?preview=<filename>`. | Any page hosting `<MediaPreview>` — gives the preview a deep-link. |
 | `useImageGenQueue` | Work-scoped live queue of in-flight image renders. | Pages that show per-work image-gen queue state. |
+| `useImageRenderSettings` | Load the pipeline image-gen config once (`getSettings → readPipelineImageSettings`), failing open to `PIPELINE_IMAGE_DEFAULTS`; returns `{ imageCfg }`. | A single-image render slot that needs the render config and doesn't already load the full settings blob. |
+| `useSingleImageRender` | Queue-one-render / wait-for-completion jobId lifecycle: builds opts from `imageCfg`, calls `buildPrompt`, POSTs `generateImage`, tracks the `jobId` head, and runs a once-per-`(key, filename)` completion guard before `onComplete`. | Single-image render slots driven by `EntryThumbSlot`/`MediaJobThumb` (style probe, characters step). Completion SSE stays in the thumb. |
 
 ## Sockets & lifecycle
 
@@ -106,6 +117,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useProviderModels` | AI providers + two-step provider→model selection. | Any UI that picks a provider + model. |
 | `useTheme` | Dark/light theme + paired-theme switching. | Theme picker. |
 | `useSyncIntegrity` | Fetches per-kind integrity diff from every eligible online peer; reduces to worst-case `statusById` + `byPeer` breakdown maps. | Federated media sync integrity UI — badges, drawers, peer breakdown. |
+| `useUniverse` | Loads the universe record for a `universeId` with mount/cancel guards; returns `[universe, setUniverse, loading, error]` (setter exposed for optimistic post-mutation updates). | Any surface that loads a linked universe (pipeline stages, etc.) — use instead of re-rolling the getUniverse-on-mount effect. |
 | `useUniverseAction` | LLM-driven universe mutation scaffolding. | Universe Builder action UIs. |
 | `useUniverseNav` | `goToWorld(id)` → navigate to `/universes/:id`, preserve `location.search`. | Any Universe Builder caller that needs to switch worlds via URL. |
 | `useVoiceUiSync` | Keeps voice server's UI index in sync with current page. | Wire once at root for voice agent support. |

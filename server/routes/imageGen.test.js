@@ -453,6 +453,22 @@ describe('Image Gen Routes', () => {
       });
     });
 
+    // Edit-only models (Qwen-Image-Edit) require a source image. A text-only
+    // submission must be rejected up-front (400) — enqueueing it would crash
+    // the runner deep inside the diffusers QwenImageEditPipeline.
+    it('local mode with an edit-only model and no init image returns 400 IMAGE_GEN_EDIT_IMAGE_REQUIRED', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // qwen uses the flux2 venv — no pythonPath needed
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'make the sky purple', modelId: 'qwen-image-edit' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('IMAGE_GEN_EDIT_IMAGE_REQUIRED');
+      expect(response.body.error).toMatch(/source image/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
     // Codex with the toggle off rejects up-front rather than enqueueing.
     it('codex mode with disabled toggle returns 400 CODEX_IMAGEGEN_DISABLED', async () => {
       getSettings.mockResolvedValueOnce({

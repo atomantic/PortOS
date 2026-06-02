@@ -20,6 +20,47 @@ const WORKTREES_DIR = PATHS.worktrees;
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
 /**
+ * Remove a worktree directory robustly: try `git worktree remove --force`, and
+ * if git refuses (locked, already-gone, broken admin files), fall back to a
+ * plain recursive `rm` + `git worktree prune` to clear git's stale bookkeeping.
+ * Every step swallows its own error — cleanup is best-effort and must never
+ * throw into a completion/reap path. Inlined verbatim in four call sites
+ * before extraction (removeWorktree, removePersistentWorktree,
+ * reapMergedWorktrees, cleanupExternalRepoWorktrees).
+ *
+ * @param {string} repo - the git workspace to run worktree commands in (the
+ *   parent repo for the worktree, NOT the worktree dir itself).
+ * @param {string} worktreePath - absolute path of the worktree dir to remove.
+ * @param {object} [opts]
+ * @param {string} [opts.label] - traceability tag for the fallback log line
+ *   (`⚠️ <label>: <err>`). Required for any logging; omit for a fully silent
+ *   cleanup (background paths that must not spam on the common case).
+ * @param {'remove'|'all'} [opts.log='remove'] - how much to log when `label` is
+ *   set: `'remove'` logs only the `worktree remove` failure (the operator-
+ *   facing signal); `'all'` also logs the rm + prune sub-failures. Ignored when
+ *   `label` is absent (nothing logs). The two flags the four callers needed —
+ *   "label + log everything" and "label + log remove only" and "silent" — are
+ *   the three states here; there was never a "log without a label" caller.
+ * @param {string} [opts.subject] - identifier embedded in the rm/prune
+ *   sub-failure messages (only used when `log:'all'`). Defaults to
+ *   `worktreePath`; the agent-cleanup callers pass their agent id so the
+ *   message wording stays byte-identical to the pre-extraction logs an operator
+ *   may grep for (e.g. `… for worktree <agentId>`).
+ */
+export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath } = {}) {
+  const logAll = label && log === 'all';
+  await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
+    if (label) console.log(`⚠️ ${label}: ${err.message}`);
+    await rm(worktreePath, { recursive: true, force: true }).catch((rmErr) => {
+      if (logAll) console.log(`⚠️ Manual rm failed for worktree ${subject}: ${rmErr.message}`);
+    });
+    await execGit(['worktree', 'prune'], repo).catch((pruneErr) => {
+      if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
+    });
+  });
+}
+
+/**
  * Classify a `git status --porcelain` blob into real changes vs auto-generated
  * lockfile churn. Pure (testable) — callers decide what to do with the result.
  *
@@ -288,16 +329,11 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     }
   }
 
-  await execGit(['worktree', 'remove', worktreePath, '--force'], sourceWorkspace)
-    .catch(async (err) => {
-      console.log(`⚠️ Worktree remove failed for ${agentId}, falling back to manual cleanup: ${err.message}`);
-      await rm(worktreePath, { recursive: true, force: true }).catch(rmErr => {
-        console.log(`⚠️ Manual rm failed for worktree ${agentId}: ${rmErr.message}`);
-      });
-      await execGit(['worktree', 'prune'], sourceWorkspace).catch(pruneErr => {
-        console.log(`⚠️ Worktree prune failed for ${agentId}: ${pruneErr.message}`);
-      });
-    });
+  await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+    label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
+    log: 'all',
+    subject: agentId,
+  });
 
   // Preserve branch when (a) merge was attempted, failed, and has unmerged commits,
   // OR (b) merge was refused because HEAD is on a non-default branch — the commits
@@ -388,14 +424,10 @@ export async function removePersistentWorktree(featureAgentId, sourceWorkspace, 
 
   if (!existsSync(worktreePath)) return { removed: false };
 
-  await execGit(['worktree', 'remove', worktreePath, '--force'], sourceWorkspace).catch(async (err) => {
-    console.log(`⚠️ Persistent worktree remove failed for ${featureAgentId}, falling back: ${err.message}`);
-    await rm(worktreePath, { recursive: true, force: true }).catch(rmErr => {
-      console.log(`⚠️ Manual rm failed for persistent worktree ${featureAgentId}: ${rmErr.message}`);
-    });
-    await execGit(['worktree', 'prune'], sourceWorkspace).catch(pruneErr => {
-      console.log(`⚠️ Worktree prune failed for ${featureAgentId}: ${pruneErr.message}`);
-    });
+  await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+    label: `Persistent worktree remove failed for ${featureAgentId}, falling back`,
+    log: 'all',
+    subject: featureAgentId,
   });
 
   await execGit(['branch', '-D', branchName], sourceWorkspace).catch(err => {
@@ -627,12 +659,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
     // Remove the worktree, then force-delete the branch (-D because squash-merged
     // branches aren't recognized by -d, and we've proven the work is in default).
-    await execGit(['worktree', 'remove', wt.path, '--force'], sourceWorkspace)
-      .catch(async (err) => {
-        console.log(`⚠️ worktree remove failed for ${wt.path}, manual cleanup: ${err.message}`);
-        await rm(wt.path, { recursive: true, force: true }).catch(() => {});
-        await execGit(['worktree', 'prune'], sourceWorkspace).catch(() => {});
-      });
+    await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
+      label: `worktree remove failed for ${wt.path}, manual cleanup`,
+    });
     await execGit(['branch', '-D', branchName], sourceWorkspace).catch(err => {
       console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
     });
@@ -698,11 +727,7 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
       .then(r => r.stdout.trim())
       .catch(() => '');
 
-    await execGit(['worktree', 'remove', worktreePath, '--force'], parentRepo)
-      .catch(async () => {
-        await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
-        await execGit(['worktree', 'prune'], parentRepo).catch(() => {});
-      });
+    await forceRemoveWorktreeDir(parentRepo, worktreePath);
 
     if (branchName) {
       await execGit(['branch', '-D', branchName], parentRepo).catch(() => {});

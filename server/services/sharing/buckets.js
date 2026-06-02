@@ -106,6 +106,15 @@ export function bucketBlobSidecarPath(bucketPath, hash) {
 export function bucketBlobIndexPath(bucketPath) { return join(bucketBlobsDir(bucketPath), '.index.json'); }
 export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
 
+// Per-bucket record store — series/issues/universes/media/reviews JSON live
+// under `records/<type>/<id>.json`. Unlike the blob helpers above, these do
+// NOT validate `id`: every callsite supplies an id that's either locally
+// authored (the exporter) or already screened by `isSafeRecordId` (the
+// importer) before it reaches the path. Keeping them as plain joins preserves
+// the prior hand-joined behavior exactly.
+export function bucketRecordsDir(bucketPath, type) { return join(bucketPath, 'records', type); }
+export function bucketRecordPath(bucketPath, type, id) { return join(bucketRecordsDir(bucketPath, type), `${id}.json`); }
+
 /**
  * Returns the filename if it's safe to use as a path segment under an asset
  * directory, otherwise null. Rejects path separators, parent-directory
@@ -131,10 +140,11 @@ export async function ensureBucketLayout(bucket) {
   const base = bucket.path;
   await ensureDir(base);
   await ensureDir(join(base, 'manifests'));
-  await ensureDir(join(base, 'records', 'series'));
-  await ensureDir(join(base, 'records', 'issues'));
-  await ensureDir(join(base, 'records', 'universes'));
-  await ensureDir(join(base, 'records', 'media'));
+  await ensureDir(bucketRecordsDir(base, 'series'));
+  await ensureDir(bucketRecordsDir(base, 'issues'));
+  await ensureDir(bucketRecordsDir(base, 'universes'));
+  await ensureDir(bucketRecordsDir(base, 'media'));
+  await ensureDir(bucketRecordsDir(base, 'reviews'));
   await ensureDir(join(base, 'assets', 'images'));
   await ensureDir(join(base, 'assets', 'videos'));
   await ensureDir(join(base, 'assets', 'blobs'));

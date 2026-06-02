@@ -4,6 +4,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { readResponseJson } from './readResponseJson.js';
 
 const BASE_URL = 'https://api.telegram.org/bot';
 const POLL_TIMEOUT_SEC = 30;
@@ -28,7 +29,7 @@ async function apiCall(token, method, body = {}) {
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(API_TIMEOUT_MS)
   });
-  const json = await res.json();
+  const json = await readResponseJson(res);
   if (!json.ok) throw new Error(json.description || `Telegram API error: ${method}`);
   return json.result;
 }
@@ -56,7 +57,7 @@ export function createTelegramBot(token, opts = {}) {
           body: JSON.stringify({ offset, timeout: POLL_TIMEOUT_SEC, allowed_updates: ['message', 'callback_query'] }),
           signal: activePollController.signal
         });
-        const json = await res.json();
+        const json = await readResponseJson(res);
         if (!json.ok) {
           // Retry after a delay on API errors
           await new Promise(r => setTimeout(r, RETRY_DELAY_API_ERROR_MS));
