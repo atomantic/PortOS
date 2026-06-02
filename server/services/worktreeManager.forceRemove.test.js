@@ -72,4 +72,21 @@ describe('forceRemoveWorktreeDir', () => {
     await forceRemoveWorktreeDir('/repo', '/repo/wt', { label: 'L', log: 'all' });
     expect(console.log).toHaveBeenCalledTimes(3);
   });
+
+  it("subject identifies the rm/prune sub-failures (defaults to the path, overridable to an agent id)", async () => {
+    // Default subject = worktreePath.
+    execGit.mockRejectedValueOnce(new Error('boom')).mockRejectedValueOnce(new Error('prune boom'));
+    rm.mockRejectedValue(new Error('rm boom'));
+    await forceRemoveWorktreeDir('/repo', '/repo/wt', { label: 'L', log: 'all' });
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Manual rm failed for worktree /repo/wt'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Worktree prune failed for /repo/wt'));
+
+    // Override subject → the agent id appears instead (preserves pre-extraction wording).
+    console.log.mockClear();
+    execGit.mockRejectedValueOnce(new Error('boom')).mockRejectedValueOnce(new Error('prune boom'));
+    rm.mockRejectedValue(new Error('rm boom'));
+    await forceRemoveWorktreeDir('/repo', '/repo/wt', { label: 'L', log: 'all', subject: 'agent-42' });
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Manual rm failed for worktree agent-42'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Worktree prune failed for agent-42'));
+  });
 });

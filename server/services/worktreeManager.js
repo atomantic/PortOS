@@ -41,16 +41,21 @@ const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.y
  *   `label` is absent (nothing logs). The two flags the four callers needed —
  *   "label + log everything" and "label + log remove only" and "silent" — are
  *   the three states here; there was never a "log without a label" caller.
+ * @param {string} [opts.subject] - identifier embedded in the rm/prune
+ *   sub-failure messages (only used when `log:'all'`). Defaults to
+ *   `worktreePath`; the agent-cleanup callers pass their agent id so the
+ *   message wording stays byte-identical to the pre-extraction logs an operator
+ *   may grep for (e.g. `… for worktree <agentId>`).
  */
-export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove' } = {}) {
+export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath } = {}) {
   const logAll = label && log === 'all';
   await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
     await rm(worktreePath, { recursive: true, force: true }).catch((rmErr) => {
-      if (logAll) console.log(`⚠️ Manual rm failed for worktree ${worktreePath}: ${rmErr.message}`);
+      if (logAll) console.log(`⚠️ Manual rm failed for worktree ${subject}: ${rmErr.message}`);
     });
     await execGit(['worktree', 'prune'], repo).catch((pruneErr) => {
-      if (logAll) console.log(`⚠️ Worktree prune failed for ${worktreePath}: ${pruneErr.message}`);
+      if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
     });
   });
 }
@@ -327,6 +332,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
     label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
     log: 'all',
+    subject: agentId,
   });
 
   // Preserve branch when (a) merge was attempted, failed, and has unmerged commits,
@@ -421,6 +427,7 @@ export async function removePersistentWorktree(featureAgentId, sourceWorkspace, 
   await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
     label: `Persistent worktree remove failed for ${featureAgentId}, falling back`,
     log: 'all',
+    subject: featureAgentId,
   });
 
   await execGit(['branch', '-D', branchName], sourceWorkspace).catch(err => {
