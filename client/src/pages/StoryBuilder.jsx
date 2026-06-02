@@ -24,6 +24,7 @@ import {
   getProviders, getSettings, generateImage, updateUniverse,
 } from '../services/api';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
+import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
@@ -360,15 +361,6 @@ function FieldBlock({ label, value }) {
   );
 }
 
-// Color per reader-map beat kind (mirrors READER_MAP_BEAT_KINDS server-side).
-const BEAT_KIND_COLOR = {
-  hook: '#3b82f6',        // port-accent — a question planted
-  reveal: '#a855f7',      // purple — new information
-  payoff: '#22c55e',      // port-success — a question answered
-  emotional: '#f59e0b',   // port-warning — a felt beat
-  cliffhanger: '#ef4444', // port-error — an issue-boundary hook
-};
-
 // A compact timeline of the reader map's emotional beats: each beat is a bar
 // positioned along the arc (normalized from `atArcPosition`) with its height
 // set by `intensity` and its color by `kind`. Gives the reader-map step the
@@ -411,7 +403,7 @@ function ReaderMapBeatTimeline({ readerMap }) {
           const x = xFor(b, i);
           const intensity = Number.isFinite(b.intensity) ? Math.max(0, Math.min(1, b.intensity)) : 0.5;
           const barH = (H - PAD * 2) * intensity;
-          const color = BEAT_KIND_COLOR[b.kind] || '#9ca3af';
+          const color = getBeatKindColor(b.kind);
           return (
             <g key={b.id || i}>
               <rect x={x - 1.5} y={H - PAD - barH} width="3" height={barH} fill={color} rx="1" />
@@ -421,7 +413,7 @@ function ReaderMapBeatTimeline({ readerMap }) {
         })}
       </svg>
       <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-        {Object.entries(BEAT_KIND_COLOR).map(([kind, color]) => (
+        {Object.entries(BEAT_KIND_COLORS).map(([kind, color]) => (
           <span key={kind} className="inline-flex items-center gap-1 text-[10px] text-gray-500">
             <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: color }} /> {kind}
           </span>
@@ -976,7 +968,12 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   // dirty-check, an `updateSeriesFromServer` that keeps it aligned, and an
   // issues setter that accepts ArcCanvas's `setState(fn)`-shaped updates.
   const lastSavedRef = useRef(null);
-  useEffect(() => { if (series) lastSavedRef.current = series; }, [series]);
+  // Capture the FIRST server snapshot only (guard on empty ref) — like
+  // PipelineSeries.jsx. Updating on every `series` change would clobber the
+  // last-saved baseline on an unrelated refetch and defeat flushPending's
+  // dirty-check (it would always see series === lastSaved). After load, the ref
+  // only advances via updateSeriesFromServer (a server-confirmed save).
+  useEffect(() => { if (series && !lastSavedRef.current) lastSavedRef.current = series; }, [series]);
 
   const updateSeriesFromServer = useCallback((next) => {
     setSeries(next);
