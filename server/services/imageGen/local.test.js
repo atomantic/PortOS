@@ -21,13 +21,14 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 let tmpRegistryDir;
 let priorRegistryEnv;
 let buildArgs;
+let buildSidecarMeta;
 
 beforeAll(async () => {
   tmpRegistryDir = mkdtempSync(join(tmpdir(), 'portos-imagegen-local-test-'));
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
   vi.resetModules();
-  ({ buildArgs } = await import('./local.js'));
+  ({ buildArgs, buildSidecarMeta } = await import('./local.js'));
 });
 
 afterAll(() => {
@@ -418,5 +419,197 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
     });
     expect(args).not.toContain('--pipeline-class');
     expect(args).not.toContain('--use-pe');
+  });
+});
+
+describe('imageGen local.buildSidecarMeta', () => {
+  // Pull the real PATHS.loras prefix so LoRA candidates the meta-builder joins
+  // against it pass its resolve+prefix check. Existence is faked via the
+  // injected `loraExists` so the test never touches the filesystem.
+  let LORAS_ROOT;
+  let join_;
+  beforeAll(async () => {
+    ({ PATHS: { loras: LORAS_ROOT } } = await import('../../lib/fileUtils.js'));
+    ({ join: join_ } = await import('path'));
+  });
+
+  // Default injectable deps: resolveInputPath echoes any path it's given (i.e.
+  // every supplied path is "valid"), loraExists always true, fixed timestamp.
+  const ECHO = (p) => p;
+  const ALWAYS = () => true;
+  const FIXED_NOW = () => '2024-01-01T00:00:00.000Z';
+
+  const baseMetaInput = {
+    jobId: 'job-1234-5678',
+    model: { id: 'flux2-klein-9b', steps: 8, guidance: 0 },
+    prompt: 'a red cube',
+    negativePrompt: '',
+    modelId: 'flux2-klein-9b',
+    width: 1024,
+    height: 768,
+    steps: 8,
+    guidance: 0,
+    seed: 42,
+    quantize: 'sdnq',
+    resolveInputPath: ECHO,
+    loraExists: ALWAYS,
+    now: FIXED_NOW,
+  };
+
+  it('builds the canonical sidecar meta shape with reference fields populated', () => {
+    const refA = '/data/images/ref-a.png';
+    const refB = '/data/image-refs/ref-b.jpg';
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      referenceImagePaths: [refA, refB],
+      referenceImageStrengths: [0.85, 0.5],
+    });
+    expect(meta).toMatchObject({
+      id: 'job-1234-5678',
+      prompt: 'a red cube',
+      negativePrompt: '',
+      modelId: 'flux2-klein-9b',
+      seed: 42,
+      width: 1024,
+      height: 768,
+      steps: 8,
+      guidance: 0,
+      quantize: 'sdnq',
+      filename: 'job-1234-5678.png',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+    // referenceImageFilenames stores basenames, parallel to the strengths array.
+    expect(meta.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.jpg']);
+    expect(meta.referenceImageStrengths).toEqual([0.85, 0.5]);
+  });
+
+  it('defaults each missing reference strength to 1.0 (full influence)', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      referenceImagePaths: ['/data/images/r1.png', '/data/images/r2.png'],
+      referenceImageStrengths: [0.3], // only the first supplied
+    });
+    expect(meta.referenceImageFilenames).toEqual(['r1.png', 'r2.png']);
+    expect(meta.referenceImageStrengths).toEqual([0.3, 1.0]);
+  });
+
+  it('clamps reference strengths to 0..1 and falls back to 1.0 on non-finite', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      referenceImagePaths: ['/data/images/lo.png', '/data/images/hi.png', '/data/images/bad.png'],
+      referenceImageStrengths: [-2, 5, Number('nope')],
+    });
+    expect(meta.referenceImageStrengths).toEqual([0, 1, 1.0]);
+  });
+
+  it('drops a rejected reference path WITHOUT shifting the surviving strength', () => {
+    // resolveInputPath rejects the second path; the third must keep ITS own
+    // strength (0.9), not inherit the dropped slot's (0.2). This pins the
+    // "pair before filter" invariant the meta-builder relies on.
+    const resolveInputPath = (p) => (p.includes('reject') ? null : p);
+    const { meta, validReferenceImagePaths } = buildSidecarMeta({
+      ...baseMetaInput,
+      resolveInputPath,
+      referenceImagePaths: ['/data/images/keep.png', '/data/images/reject.png', '/data/images/also-keep.png'],
+      referenceImageStrengths: [0.4, 0.2, 0.9],
+    });
+    expect(validReferenceImagePaths).toEqual(['/data/images/keep.png', '/data/images/also-keep.png']);
+    expect(meta.referenceImageFilenames).toEqual(['keep.png', 'also-keep.png']);
+    expect(meta.referenceImageStrengths).toEqual([0.4, 0.9]);
+  });
+
+  it('emits empty reference arrays when no references are supplied', () => {
+    const { meta } = buildSidecarMeta({ ...baseMetaInput });
+    expect(meta.referenceImageFilenames).toEqual([]);
+    expect(meta.referenceImageStrengths).toEqual([]);
+  });
+
+  it('tolerates a non-array referenceImagePaths (sidecar replay corruption)', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      referenceImagePaths: null,
+      referenceImageStrengths: null,
+    });
+    expect(meta.referenceImageFilenames).toEqual([]);
+    expect(meta.referenceImageStrengths).toEqual([]);
+  });
+
+  it('records initImageFilename + clamped strength for i2i', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      initImagePath: '/data/images/init.png',
+      initImageStrength: 0.7,
+    });
+    expect(meta.initImageFilename).toBe('init.png');
+    expect(meta.initImageStrength).toBe(0.7);
+  });
+
+  it('leaves init strength null when no init image survives resolution', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      resolveInputPath: () => null, // init path rejected
+      initImagePath: '/somewhere/outside.png',
+      initImageStrength: 0.7,
+    });
+    expect(meta.initImageFilename).toBeNull();
+    expect(meta.initImageStrength).toBeNull();
+  });
+
+  it('keeps only LoRA basenames that exist, storing both filenames + paths', () => {
+    const loraFilenames = ['lora-good.safetensors', 'lora-missing.safetensors'];
+    const loraExists = (abs) => abs.endsWith('lora-good.safetensors');
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      loraFilenames,
+      loraScales: [1.0],
+      loraExists,
+    });
+    expect(meta.loraFilenames).toEqual(['lora-good.safetensors']);
+    expect(meta.loraPaths).toEqual([join_(LORAS_ROOT, 'lora-good.safetensors')]);
+    // loraScales passes through verbatim (the runner pairs them positionally).
+    expect(meta.loraScales).toEqual([1.0]);
+  });
+
+  it('rejects a LoRA path outside the loras root (sidecar replay traversal)', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      loraPaths: ['/etc/evil.safetensors'],
+      loraExists: ALWAYS, // would exist, but prefix-check must reject it first
+    });
+    expect(meta.loraFilenames).toEqual([]);
+    expect(meta.loraPaths).toEqual([]);
+  });
+
+  it('falls back to model defaults for steps and guidance when unset', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      model: { id: 'm', steps: 28, guidance: 3.5 },
+      steps: undefined,
+      guidance: undefined,
+    });
+    expect(meta.steps).toBe(28);
+    expect(meta.guidance).toBe(3.5);
+  });
+
+  it('clamps guidance to <=1.0 for cfgDisabled models, leaving sub-1.0 untouched', () => {
+    const high = buildSidecarMeta({
+      ...baseMetaInput,
+      model: { id: 'm', steps: 8, cfgDisabled: true },
+      guidance: 7.5,
+    }).meta;
+    expect(high.guidance).toBe(1.0);
+    const low = buildSidecarMeta({
+      ...baseMetaInput,
+      model: { id: 'm', steps: 8, cfgDisabled: true },
+      guidance: 0,
+    }).meta;
+    expect(low.guidance).toBe(0);
+  });
+
+  it('generates a random seed in range when none is supplied', () => {
+    const { meta } = buildSidecarMeta({ ...baseMetaInput, seed: undefined });
+    expect(Number.isInteger(meta.seed)).toBe(true);
+    expect(meta.seed).toBeGreaterThanOrEqual(0);
+    expect(meta.seed).toBeLessThan(2147483647);
   });
 });
