@@ -24,6 +24,7 @@
 
 ## Changed
 
+- **[consolidate-client-url-normalize]** Consolidated the three near-identical "add `https://` to a bare URL" routines behind Brain Links, the quick-capture bar, and Feeds into one shared, unit-tested helper, preserving each spot's existing behavior (no user-facing change).
 - **[nav-tabbed-page-coverage-guard] A few page tabs that were only reachable by clicking are now searchable from ⌘K and voice.** The Goals "Tree" view, the Insights "Genome-Health", "Taste & Identity" and "Cross-Domain Patterns" views, and the Settings "Catalog Types" tab are now jump-to destinations in the command palette and voice navigation, alongside every other tab. A new test keeps every tab of a tabbed page registered for search, so future tabs can't silently go unreachable.
 - **[nav-tabbed-page-coverage-guard-post]** Extended that tab-registration test to cover the POST page's tabs too, so they also can't silently drop out of command-palette/voice search (no user-facing change).
 - **[settings-header-switch-tab-parity-guard]** Added a test pinning every Settings tab in the tab bar to a matching renderer in the page, so a future Settings tab can't end up showing the wrong panel (no user-facing change).
