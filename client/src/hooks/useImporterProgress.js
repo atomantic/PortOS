@@ -56,7 +56,21 @@ export function useImporterProgress() {
       }
     };
     socket.on('importer:progress', onProgress);
-    return () => socket.off('importer:progress', onProgress);
+
+    // Ask the server to replay the in-flight analyze snapshot. The socket
+    // auto-connects at app load — before this lazily-mounted hook registers
+    // its listener — so a server-side connection-time replay would arrive
+    // before anyone was listening. Requesting it HERE (after `on()`) and again
+    // on every `connect` (reconnect) guarantees a listener is in place when the
+    // replayed frames land, so a tab that opens or reconnects mid-analyze
+    // rebuilds its checklist instead of staying on "Starting…".
+    const requestReplay = () => socket.emit('importer:progress:replay');
+    requestReplay();
+    socket.on('connect', requestReplay);
+    return () => {
+      socket.off('importer:progress', onProgress);
+      socket.off('connect', requestReplay);
+    };
   }, []);
 
   return { stages, reset };

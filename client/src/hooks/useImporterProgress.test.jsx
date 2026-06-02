@@ -3,21 +3,25 @@ import { renderHook, act, cleanup } from '@testing-library/react';
 import { CheckCircle2, AlertTriangle, Loader2, Circle } from 'lucide-react';
 
 // Mock the socket module so the test can drive the `importer:progress` handler
-// the hook registers with `on()`.
+// the hook registers with `on()` and observe the `emit()` replay requests.
 const handlers = new Map();
+const emitted = [];
 vi.mock('../services/socket', () => ({
   default: {
     on: (event, fn) => { handlers.set(event, fn); },
     off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
+    emit: (event, ...args) => { emitted.push([event, ...args]); },
   },
 }));
 
 import { useImporterProgress, stageStatusIcon } from './useImporterProgress.js';
 
 const fire = (payload) => act(() => { handlers.get('importer:progress')?.(payload); });
+// Simulate a socket (re)connect — the hook re-requests a snapshot replay.
+const fireConnect = () => act(() => { handlers.get('connect')?.(); });
 
 describe('useImporterProgress', () => {
-  beforeEach(() => handlers.clear());
+  beforeEach(() => { handlers.clear(); emitted.length = 0; });
   afterEach(cleanup);
 
   it('starts with null stages', () => {
@@ -82,6 +86,17 @@ describe('useImporterProgress', () => {
       { id: 'arc', label: 'Arc', status: 'running' },
       { id: 'issues', label: 'Issues', status: 'pending' },
     ]);
+  });
+
+  it('requests a snapshot replay on mount and on every reconnect', () => {
+    // The replay must be hook-driven: the socket auto-connects at app load,
+    // before this lazily-mounted hook registers its listener, so the hook asks
+    // the server to replay AFTER `on()` — and again on each `connect` so a
+    // reconnect mid-analyze re-fetches the snapshot.
+    renderHook(() => useImporterProgress());
+    expect(emitted).toEqual([['importer:progress:replay']]);
+    fireConnect();
+    expect(emitted).toEqual([['importer:progress:replay'], ['importer:progress:replay']]);
   });
 
   it('ignores malformed frames', () => {
