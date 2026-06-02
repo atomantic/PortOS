@@ -20,7 +20,7 @@ import {
   patchLoraSidecar,
 } from '../services/loras.js';
 import { getSuggestions } from '../services/civitaiSuggestions.js';
-import { getSettings, saveSettings } from '../services/settings.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 
 const router = Router();
 
@@ -57,23 +57,24 @@ const authPostSchema = z.object({ apiKey: z.string().min(1).max(256) });
 router.post('/auth/civitai', asyncHandler(async (req, res) => {
   const { apiKey } = validateRequest(authPostSchema, req.body);
   // Shared deepMerge so future civitai sub-fields don't get clobbered by
-  // updateSettings' shallow-merge contract (see lib/objects.js).
-  const current = await getSettings();
-  await saveSettings(deepMerge(current, { civitai: { apiKey: apiKey.trim() } }));
+  // updateSettings' shallow-merge contract (see lib/objects.js). Runs inside the
+  // settings write queue so a concurrent save can't clobber it with a stale base.
+  await updateSettingsWith((current) => deepMerge(current, { civitai: { apiKey: apiKey.trim() } }));
   res.json({ hasKey: true, source: 'settings' });
 }));
 
 router.delete('/auth/civitai', asyncHandler(async (_req, res) => {
-  const current = await getSettings();
-  const next = { ...current };
-  // typeof === 'object' is true for arrays — guard explicitly so a
-  // legacy/malformed `civitai: ['x']` value doesn't get spread into
-  // `{ '0': 'x', apiKey: undefined }`.
-  if (isPlainObject(next.civitai)) {
-    const { apiKey: _omit, ...rest } = next.civitai;
-    next.civitai = rest;
-  }
-  await saveSettings(next);
+  await updateSettingsWith((current) => {
+    const next = { ...current };
+    // typeof === 'object' is true for arrays — guard explicitly so a
+    // legacy/malformed `civitai: ['x']` value doesn't get spread into
+    // `{ '0': 'x', apiKey: undefined }`.
+    if (isPlainObject(next.civitai)) {
+      const { apiKey: _omit, ...rest } = next.civitai;
+      next.civitai = rest;
+    }
+    return next;
+  });
   // The env var (if set) still wins after a delete — surface that so the
   // UI can explain "you cleared the saved key but CIVITAI_API_KEY is still
   // active in the shell environment."

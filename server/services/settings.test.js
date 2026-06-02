@@ -14,7 +14,7 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -176,6 +176,77 @@ describe('settings.js', () => {
       // its own patch applied to the base.
       expect(b).toEqual({ base: true, first: 1, second: 2 });
       expect(a).toEqual({ base: true, first: 1 });
+    });
+  });
+
+  describe('updateSettingsWith', () => {
+    it('hands the mutator the current stripped settings and persists its return', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ civitai: { apiKey: 'old', other: 'keep' } }));
+      let seen;
+      const result = await updateSettingsWith((current) => {
+        seen = current;
+        return { ...current, civitai: { ...current.civitai, apiKey: 'new' } };
+      });
+      expect(seen).toEqual({ civitai: { apiKey: 'old', other: 'keep' } });
+      expect(result).toEqual({ civitai: { apiKey: 'new', other: 'keep' } });
+      expect(JSON.parse(atomicWrite.mock.calls[0][1])).toEqual({ civitai: { apiKey: 'new', other: 'keep' } });
+    });
+
+    it('supports building the next object by deleting a sub-key (no stale spread)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ imageGen: { hfToken: 'tok', model: 'flux' }, theme: 'dark' }));
+      const result = await updateSettingsWith((current) => {
+        const { hfToken: _drop, ...rest } = current.imageGen || {};
+        return { ...current, imageGen: rest };
+      });
+      expect(result).toEqual({ imageGen: { model: 'flux' }, theme: 'dark' });
+    });
+
+    it('runs the read-modify-write in one queued turn — a racing updateSettings is not clobbered', async () => {
+      // Slow disk: each write reflects onto the next read. If updateSettingsWith
+      // read OUTSIDE the queue (the old getSettings→saveSettings bug), it would
+      // overwrite the interleaved updateSettings patch with its stale base.
+      let current = { base: true };
+      tryReadFile.mockImplementation(async () => JSON.stringify(current));
+      atomicWrite.mockImplementation(async (_path, content) => { current = JSON.parse(content); });
+
+      const [withResult, plainResult] = await Promise.all([
+        updateSettingsWith((c) => ({ ...c, deep: { a: 1 } })),
+        updateSettings({ second: 2 }),
+      ]);
+
+      // Both landed; neither clobbered the other.
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
+      expect(current).toEqual({ base: true, deep: { a: 1 }, second: 2 });
+      // First-queued sees only the base; second-queued sees the first's result.
+      expect(withResult).toEqual({ base: true, deep: { a: 1 } });
+      expect(plainResult).toEqual({ base: true, deep: { a: 1 }, second: 2 });
+    });
+
+    it('strips MortalLoom store keys from the snapshot handed to the mutator', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ goals: [1, 2], theme: 'dark' }));
+      let seen;
+      await updateSettingsWith((current) => { seen = current; return current; });
+      // `goals` is a MortalLoom store key — getSettings strips it, so the mutator
+      // must not see it (matching the getSettings() the old callers read).
+      expect(seen).toEqual({ theme: 'dark' });
+    });
+
+    it('awaits an async mutator', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ a: 1 }));
+      const result = await updateSettingsWith(async (current) => {
+        await Promise.resolve();
+        return { ...current, b: 2 };
+      });
+      expect(result).toEqual({ a: 1, b: 2 });
+    });
+
+    it('throws and writes nothing when the mutator returns a non-object (missing return, array, primitive)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ a: 1 }));
+      for (const bad of [undefined, null, 'str', 42, [1, 2]]) {
+        await expect(updateSettingsWith(() => bad)).rejects.toThrow(/must return a plain settings object/);
+      }
+      // No invalid content (e.g. "undefined") was ever persisted.
+      expect(atomicWrite).not.toHaveBeenCalled();
     });
   });
 
