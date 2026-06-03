@@ -75,6 +75,14 @@ function CyberCityInner() {
     120_000,
   );
 
+  // Chronotype profile drives the ambient energy overlay — the city brightens during
+  // peak focus hours and dims during recovery. Low-frequency: the daily schedule
+  // rarely changes. Same last-good-snapshot semantics as the fetches above.
+  const { data: chronotypeData } = useAutoRefetch(
+    () => api.getChronotype({ silent: true }),
+    600_000,
+  );
+
   const handleBuildingClick = useCallback((app) => {
     if (app?.id) {
       navigate(`/apps/${app.id}`);
@@ -120,6 +128,7 @@ function CyberCityInner() {
         aiActivity={aiActivity}
         productivityData={productivityData}
         goals={goalsData}
+        chronotype={chronotypeData}
         settings={settings}
         playSfx={playSfx}
         keysRef={keysRef}

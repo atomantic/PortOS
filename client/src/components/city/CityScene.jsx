@@ -29,10 +29,11 @@ import CityEffects from './CityEffects';
 import CityClouds from './CityClouds';
 import CitySignalBeacons from './CitySignalBeacons';
 import CitySky from './CitySky';
+import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, goals, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, goals, chronotype, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -76,6 +77,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CitySky settings={settings} />
       <CityClouds settings={settings} />
       <CityLights settings={settings} />
+      <CityEnergyOverlay chronotype={chronotype} settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />
       {!explorationMode && <CityCelestial settings={settings} />}
