@@ -7,6 +7,7 @@
 - **Episode video model picker** — the pipeline's Episode Video stage now lets you choose which video model renders each scene, alongside the aspect-ratio and quality controls. Leave it on "Default model" to follow your video settings, or pin a specific model; the choice is remembered when you restart a render.
 - **[issue-732] Multi-reference editing on Flux 2 Klein 9B (bf16)** — the full-quality bf16 Flux 2 Klein 9B model now accepts reference images for multi-reference editing. When you supply references it loads the `FLUX.2-klein-9B-kv` repo (tuned for reference editing) instead of the base 9B; plain text and image-to-image renders stay on the base repo. Needs ~64+ GB RAM and the FLUX.2-klein license accepted on Hugging Face.
 - **[issue-705] CyberCity activity timeline** — the CyberCity intel panel gains a TIMELINE tab: a ten-minute activity-density bar over time-bucketed events (just now, last 5 minutes, last 15 minutes, earlier), so you can see at a glance when bursts of system activity happened instead of scrolling a flat log.
+- **[issue-705] CyberCity agents leave motion trails** — active agents in CyberCity now orbit their building and trail a glowing comet tail that fades behind them, so a busy building reads as moving energy at a glance instead of a static marker. The trail's length follows the graphics quality dial and turns off on the lowest setting.
 
 ## Changed
 
