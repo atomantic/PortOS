@@ -1,4 +1,5 @@
 import { join } from 'path';
+import { EventEmitter } from 'events';
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
@@ -12,6 +13,14 @@ import { ServerError } from '../lib/errorHandler.js';
 // (which strips `secrets`) keeps them off the wire.
 
 const scryptAsync = promisify(scrypt);
+
+// Event bus so the Socket.IO layer can react to auth-state changes (first-time
+// enable, password rotation, full disable) without coupling the auth service
+// to `io`. Consumers should kick every currently-connected socket and let
+// clients re-handshake — the gate then re-validates each one against the
+// fresh session store.
+export const authEvents = new EventEmitter();
+authEvents.setMaxListeners(50);
 
 const SESSIONS_FILE = join(PATHS.data, 'auth-sessions.json');
 const TOKEN_BYTES = 32;
@@ -204,6 +213,11 @@ export const revokeAllSessions = async () => {
   await ensureLoaded();
   sessions.clear();
   await writeSessions();
+  // Notify the socket layer so connections established before the revoke
+  // (e.g. a tab open before auth was enabled, or before a password rotation)
+  // get kicked. Otherwise they'd keep emitting privileged events on the
+  // already-accepted handshake until the page reloads.
+  authEvents.emit('sessions:revoked-all');
 };
 
 // Parse the `Cookie` header for our token. Express doesn't ship a cookie

@@ -155,4 +155,15 @@ describe('auth service', () => {
     expect(raw).not.toContain(token);
     expect(raw).toContain('tokenHash');
   });
+
+  it('emits sessions:revoked-all on every auth-state change so the socket layer can kick connections', async () => {
+    const auth = await import('./auth.js');
+    const events = [];
+    auth.authEvents.on('sessions:revoked-all', () => events.push('event'));
+    await auth.setPassword({ newPassword: 'correct-horse' });             // first-time enable
+    await auth.setPassword({ newPassword: 'new-horse', currentPassword: 'correct-horse' }); // rotate
+    await auth.clearPassword({ currentPassword: 'new-horse' });           // disable
+    // setPassword/clearPassword both call revokeAllSessions internally.
+    expect(events.length).toBe(3);
+  });
 });

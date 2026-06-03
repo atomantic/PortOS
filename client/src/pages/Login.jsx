@@ -1,6 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getAuthStatus, loginWithPassword } from '../services/api';
+
+// Constrain the `?next=` redirect target to a same-origin in-app path.
+// Reject absolute URLs (`https://attacker.example`), protocol-relative
+// (`//attacker.example`), and non-http schemes (`javascript:alert(1)`).
+// Anything else falls back to `/` — a crafted login link can't bounce the
+// user off-origin after sign-in, and can't execute script via the
+// auth-disabled auto-redirect branch in the effect below. Exported for
+// unit tests.
+export const sanitizeNext = (raw) => {
+  if (typeof raw !== 'string' || raw.length === 0) return '/';
+  if (!raw.startsWith('/')) return '/';
+  if (raw.startsWith('//')) return '/';        // protocol-relative URL
+  if (raw.startsWith('/\\')) return '/';       // some browsers normalize `\\` → `//`
+  return raw;
+};
 
 // Single-password sign-in. Shown when settings.secrets.auth.enabled is true
 // and the request has no valid session token. When auth is off, the page
@@ -8,7 +23,7 @@ import { getAuthStatus, loginWithPassword } from '../services/api';
 // become a dead end.
 export default function Login() {
   const [search] = useSearchParams();
-  const next = search.get('next') || '/';
+  const next = useMemo(() => sanitizeNext(search.get('next')), [search]);
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
