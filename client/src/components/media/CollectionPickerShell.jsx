@@ -60,8 +60,19 @@ export default function CollectionPickerShell({
   const {
     popoverRef: menuRef,
     style,
-    reposition,
-  } = usePopoverPosition({ open, width, minWidth, gap: MENU_GAP, position: 'above', anchorRef });
+  } = usePopoverPosition({
+    open,
+    width,
+    minWidth,
+    gap: MENU_GAP,
+    position: 'above',
+    anchorRef,
+    // The popover height changes as the user filters/searches or the list loads;
+    // the hook re-measures synchronously (pre-paint) when these change. `filtered`
+    // is a pure function of these plus `excludeId`, so they cover its height
+    // effect without forward-referencing it.
+    contentDeps: [collectionsState, query, excludeId],
+  });
 
   // Parents may pass inline arrow handlers — read through a ref so the
   // event-listener effect doesn't tear down on every parent render.
@@ -103,14 +114,6 @@ export default function CollectionPickerShell({
     const q = query.trim().toLowerCase();
     return q ? base.filter((c) => c.name.toLowerCase().includes(q)) : base;
   }, [collectionsState, query, excludeId]);
-
-  // The popover height changes as the user filters/searches or the list loads,
-  // so re-measure on those content changes (the hook already re-flows on
-  // scroll/resize). reposition is stable while the anchor/sizing props hold.
-  useEffect(() => {
-    if (!open) return;
-    reposition();
-  }, [open, reposition, filtered, query, collectionsState]);
 
   // Close on outside-click / Escape — placement and scroll/resize reflow are
   // owned by usePopoverPosition; this effect only handles dismissal.

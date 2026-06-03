@@ -120,6 +120,29 @@ describe('usePopoverPosition', () => {
     expect(result.current.style.top).toBe('194px');
   });
 
+  it('re-measures synchronously when a contentDep changes', () => {
+    const popover = fakeEl({ height: 200, width: 288 });
+    const { result, rerender } = renderHook(
+      ({ dep }) => usePopoverPosition({ open: true, width: 288, gap: 8, contentDeps: [dep] }),
+      { initialProps: { dep: 'a' } },
+    );
+    act(() => {
+      result.current.triggerRef.current = fakeEl({ top: 400, bottom: 430, left: 500, right: 600, height: 30 });
+      result.current.popoverRef.current = popover;
+      result.current.reposition();
+    });
+    // top = 400 - 200 - 8 = 192.
+    expect(result.current.style.top).toBe('192px');
+    // The rendered content grew taller; change the dep and let the hook's
+    // layout effect re-measure off the new popover height (300).
+    act(() => {
+      popover.getBoundingClientRect = () => ({ height: 300, width: 288 });
+      rerender({ dep: 'b' });
+    });
+    // top = 400 - 300 - 8 = 92.
+    expect(result.current.style.top).toBe('92px');
+  });
+
   it('re-measures on window resize while open', () => {
     const { result } = renderHook(() => usePopoverPosition({ open: true, width: 288, gap: 8 }));
     act(() => {

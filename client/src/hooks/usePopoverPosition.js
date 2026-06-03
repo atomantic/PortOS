@@ -23,6 +23,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 //   - reposition → force a re-measure (e.g. after the popover's content height
 //     changes from filtering/search) without waiting for a scroll/resize event.
 //
+// `contentDeps` is a dependency array of values whose change alters the
+// popover's rendered height (search query, filtered list, load state). The
+// hook re-measures synchronously (in useLayoutEffect, before paint) whenever
+// any of them change, so a content-height change can't paint one frame at the
+// stale position before correcting.
+//
 // Placement: `position: 'above'` prefers opening above the trigger and flips
 // below only when there isn't room above; `'below'` does the inverse. Both
 // clamp into the viewport with VIEWPORT_PADDING on every edge.
@@ -43,6 +49,7 @@ export default function usePopoverPosition({
   gap = 8,
   position = 'above',
   anchorRef = null,
+  contentDeps = [],
 } = {}) {
   const ownTriggerRef = useRef(null);
   // Follow a parent-owned anchor when one is supplied; otherwise place this
@@ -95,15 +102,19 @@ export default function usePopoverPosition({
     });
   }, [triggerRef, width, minWidth, gap, position]);
 
-  // Measure synchronously on open so the popover paints in place; clear on close
-  // so the next open re-measures (and renders hidden until it does).
+  // Measure synchronously on open (and on any content-height change) so the
+  // popover paints in place; clear on close so the next open re-measures (and
+  // renders hidden until it does). The content-change re-measure stays in
+  // useLayoutEffect — moving it to useEffect would paint one frame at the stale
+  // height before correcting when the rendered content grows/shrinks.
   useLayoutEffect(() => {
     if (!open) {
       setStyle(null);
       return;
     }
     reposition();
-  }, [open, reposition]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, reposition, ...contentDeps]);
 
   useEffect(() => {
     if (!open) return undefined;
