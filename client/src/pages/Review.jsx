@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ClipboardList,
   AlertTriangle,
@@ -15,12 +16,36 @@ import {
   Minimize2,
   Eye,
   Clock3,
-  BellRing
+  BellRing,
+  Inbox,
+  ArrowRight,
+  Brain as BrainIcon,
+  MessageCircle,
+  Mail,
+  Activity,
+  DatabaseBackup
 } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
+import { timeAgo } from '../utils/formatters';
 import * as api from '../services/api';
 import socket from '../services/socket';
+
+// Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
+const QUEUE_SOURCE_CONFIG = {
+  brain: { icon: BrainIcon, color: 'text-purple-400' },
+  ask: { icon: MessageCircle, color: 'text-port-accent' },
+  cos: { icon: Crown, color: 'text-port-accent' },
+  drafts: { icon: Mail, color: 'text-blue-400' },
+  health: { icon: Activity, color: 'text-port-warning' },
+  backup: { icon: DatabaseBackup, color: 'text-port-error' }
+};
+
+const QUEUE_SEVERITY_STYLE = {
+  critical: 'border-port-error/40',
+  high: 'border-port-warning/40',
+  normal: 'border-port-border'
+};
 
 const TYPE_CONFIG = {
   alert: { label: 'Alerts', icon: AlertTriangle, color: 'text-port-warning' },
@@ -40,6 +65,7 @@ function isActionableItem(item) {
 }
 
 export default function Review() {
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [briefing, setBriefing] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,6 +73,12 @@ export default function Review() {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
+
+  // Cross-domain live queue (M42 P5). These rows are derived live from each
+  // producer, not stored, so "dismiss" is a per-session client-side hide rather
+  // than a server mutation — accept/promote actions are a follow-up.
+  const [queue, setQueue] = useState(null);
+  const [dismissedQueueIds, setDismissedQueueIds] = useState(() => new Set());
 
   const fetchItems = useCallback(async () => {
     const params = filter === 'all' ? {} : { status: filter };
@@ -60,10 +92,17 @@ export default function Review() {
     setBriefing(data);
   }, []);
 
+  const fetchQueue = useCallback(async () => {
+    // Owns its own fallback, so silence the helper's default error toast.
+    const data = await api.getReviewQueue({ silent: true }).catch(() => null);
+    setQueue(data);
+  }, []);
+
   useEffect(() => {
     fetchItems();
     fetchBriefing();
-  }, [fetchItems, fetchBriefing]);
+    fetchQueue();
+  }, [fetchItems, fetchBriefing, fetchQueue]);
 
   useEffect(() => {
     const handleCreated = (item) => {
@@ -117,6 +156,19 @@ export default function Review() {
   const handleMarkAllRead = () => api.bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
   const handleCompleteAll = () => api.bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
 
+  const handleQueueDismiss = (id) => {
+    setDismissedQueueIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+
+  const handleQueueDrill = (item) => {
+    handleQueueDismiss(item.id);
+    if (item.drillTo) navigate(item.drillTo);
+  };
+
   const grouped = items.reduce((acc, item) => {
     if (!acc[item.type]) acc[item.type] = [];
     acc[item.type].push(item);
@@ -130,6 +182,9 @@ export default function Review() {
       </div>
     );
   }
+
+  const queueItems = (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id));
+  const queueSourceErrors = Object.entries(queue?.sources || {}).filter(([, s]) => s.error);
 
   const pendingItems = items.filter(i => i.status === 'pending');
   const pendingCount = pendingItems.length;
@@ -196,6 +251,38 @@ export default function Review() {
           <SummaryPill icon={Crown} label="CoS" value={pendingCos.length} tone="text-port-accent" />
           <SummaryPill icon={ClipboardList} label="Todos" value={pendingTodos.length} tone="text-port-success" />
         </section>
+
+        {/* Cross-domain "Needs Attention" queue (M42 P5) — live-pulled from
+            Brain, Ask, CoS, Messages, Health, and Backups. Shown whenever there
+            are items OR a source failed to load (so the degraded-source notice
+            isn't hidden behind an otherwise-empty queue). */}
+        {(queueItems.length > 0 || queueSourceErrors.length > 0) && (
+          <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Inbox size={16} className="text-port-accent" />
+                Needs Attention
+              </h3>
+              {queueItems.length > 0 && (
+                <span className="text-xs rounded-full px-2 py-0.5 bg-port-accent/10 text-port-accent border border-port-accent/20">
+                  {queueItems.length} across domains
+                </span>
+              )}
+            </div>
+            {queueItems.length > 0 && (
+              <div className="space-y-2">
+                {queueItems.map(item => (
+                  <QueueRow key={item.id} item={item} onDrill={handleQueueDrill} onDismiss={handleQueueDismiss} />
+                ))}
+              </div>
+            )}
+            {queueSourceErrors.length > 0 && (
+              <p className="text-xs text-gray-600">
+                Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
+              </p>
+            )}
+          </section>
+        )}
 
         {/* Quick Add */}
         <form onSubmit={handleCreateTodo} className="flex gap-2">
@@ -322,6 +409,53 @@ export default function Review() {
             <p className="text-sm mt-1">This hub will fill up as agents surface alerts, actions, and briefing context.</p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function QueueRow({ item, onDrill, onDismiss }) {
+  const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
+  const Icon = config.icon;
+  const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
+
+  return (
+    <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
+      <div className={`mt-0.5 shrink-0 ${config.color}`}>
+        <Icon size={18} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm font-medium text-white">{item.title}</p>
+          <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border border-current/20 ${config.color}`}>
+            {item.sourceLabel}
+          </span>
+        </div>
+        {item.summary && (
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{item.summary}</p>
+        )}
+        {item.timestamp && (
+          <p className="text-xs text-gray-600 mt-1 flex items-center gap-1">
+            <Clock3 size={12} />
+            {timeAgo(item.timestamp)}
+          </p>
+        )}
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={() => onDrill(item)}
+          className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"
+          title="Open"
+        >
+          <ArrowRight size={16} />
+        </button>
+        <button
+          onClick={() => onDismiss(item.id)}
+          className="p-1.5 text-gray-500 hover:text-port-warning transition-colors"
+          title="Dismiss from queue (this session)"
+        >
+          <X size={16} />
+        </button>
       </div>
     </div>
   );

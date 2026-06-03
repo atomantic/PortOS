@@ -10,6 +10,8 @@ export const getReviewItems = (params) => {
 };
 export const getReviewCounts = () => request('/review/counts');
 export const getReviewBriefing = () => request('/review/briefing');
+// Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups)
+export const getReviewQueue = (options = {}) => request('/review/queue', options);
 export const createReviewTodo = (data) => request('/review/todo', {
   method: 'POST',
   body: JSON.stringify(data)

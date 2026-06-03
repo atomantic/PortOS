@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
+import { buildQueue } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -38,6 +39,13 @@ router.get('/counts', asyncHandler(async (req, res) => {
 router.get('/briefing', asyncHandler(async (req, res) => {
   const briefing = await reviewService.getBriefing();
   res.json(briefing);
+}));
+
+// GET /api/review/queue — cross-domain live aggregator of items needing
+// attention (brain inbox, ask answers, CoS approvals, drafts, health, backups)
+router.get('/queue', asyncHandler(async (req, res) => {
+  const queue = await buildQueue();
+  res.json(queue);
 }));
 
 // POST /api/review/todo — create a user todo
