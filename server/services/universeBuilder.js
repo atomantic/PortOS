@@ -778,8 +778,11 @@ const sanitizeTemplate = (raw) => {
     // Base "style probe" renders — images generated from the raw style preset
     // (influences embrace/avoid + styleNotes) with NO subject, so the user can
     // see the world's base visual emphasis. Additive + regenerable; sanitized
-    // like canon imageRefs (dedupe + cap). Not wire-version-gated (low-stakes,
-    // one-click to regenerate if an older peer round-trips and strips it).
+    // like canon imageRefs (dedupe + cap). WIRE-LOCAL: stripped from every
+    // universe payload by sanitizeRecordForWire (so an older peer can't
+    // drop-then-LWW-strip it off a newer one) and excluded from the
+    // conflict-journal content hash (which reuses that projection). Per-peer +
+    // one-click to regenerate, so no schema-version gate is needed.
     styleImageRefs: sanitizeEntryImageRefs(raw.styleImageRefs),
     locked,
     characters,
@@ -1504,6 +1507,15 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
       const localTs = local.updatedAt || '';
       const remoteTs = sanitized.updatedAt || '';
       if (remoteTs > localTs) {
+        // `styleImageRefs` is WIRE-LOCAL — sanitizeRecordForWire strips it, so an
+        // inbound payload never carries it and sanitizeTemplate defaulted it to []
+        // above. The local value is authoritative for THIS peer's probe renders;
+        // without restoring it, this remote-wins LWW write would clobber the local
+        // refs to []. Preserve it onto the sanitized record before it's journaled
+        // or written (the conflict hash excludes the field, so this restore can't
+        // shift the journal's divergence verdict). Mirror of the ephemeral
+        // local-only contract above.
+        sanitized.styleImageRefs = local.styleImageRefs ?? [];
         // Non-blocking conflict journal: archive the about-to-be-lost local
         // version when BOTH sides diverged from the last synced base. Always
         // advances the base hash (clean or conflict) so the next snapshot

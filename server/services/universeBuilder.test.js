@@ -908,6 +908,32 @@ describe("universeBuilder service", () => {
         // Receiver scrubs the field — record is normal-syncable.
         expect(inbound.ephemeral).toBeUndefined();
       });
+
+      it("preserves local styleImageRefs across a remote-wins LWW edit (wire-local probe renders)", async () => {
+        // styleImageRefs is stripped from the wire, so an inbound payload never
+        // carries it. Without the receive-side restore, sanitizeTemplate would
+        // default the missing field to [] and a remote-wins LWW write would
+        // clobber this peer's locally-rendered probe images. The local value
+        // is authoritative — a peer's edit to OTHER fields must not wipe it.
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, { styleImageRefs: ["probe-1.png", "probe-2.png"] });
+        const localBefore = await svc.getUniverse(w.id);
+        expect(localBefore.styleImageRefs).toEqual(["probe-1.png", "probe-2.png"]);
+        // Inbound edit (newer updatedAt, no styleImageRefs — wire-stripped) wins LWW.
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          name: "Remote Edited Name",
+          styleImageRefs: undefined, // mirror the wire form (field absent)
+          updatedAt: editTs,
+        }]);
+        expect(r.applied).toBe(true);
+        const after = await svc.getUniverse(w.id);
+        // Remote name landed…
+        expect(after.name).toBe("Remote Edited Name");
+        // …but local probe renders survived.
+        expect(after.styleImageRefs).toEqual(["probe-1.png", "probe-2.png"]);
+      });
     });
 
     describe("pruneTombstonedUniverses", () => {

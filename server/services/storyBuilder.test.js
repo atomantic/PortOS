@@ -57,7 +57,7 @@ describe('storyBuilder — CRUD', () => {
     expect(series.premise).toBe('a foundry city goes silent');
   });
 
-  it('import mode does not mint shells and marks all steps ready', async () => {
+  it('import mode does not mint shells and marks only importer-filled steps ready', async () => {
     const universe = await universeSvc.createUniverse({ name: 'U' });
     const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
     const s = await sb.createStorySession({
@@ -65,8 +65,17 @@ describe('storyBuilder — CRUD', () => {
     });
     expect(s.universeId).toBe(universe.id);
     expect(s.seriesId).toBe(series.id);
-    expect(s.steps.idea.status).toBe('ready');
-    expect(s.steps.readerMap.status).toBe('ready');
+    // Steps the importer populates open "ready" for review.
+    for (const id of sb.IMPORT_READY_STEPS) {
+      expect(s.steps[id].status).toBe('ready');
+    }
+    expect(sb.IMPORT_READY_STEPS).toEqual(['idea', 'plotArc', 'characters', 'issues']);
+    // The importer never extracts an aesthetic or a reader map, and production
+    // is the downstream render step — they must stay pending, not show empty
+    // content under a misleading "Ready" badge (#728).
+    expect(s.steps.universeAesthetic.status).toBe('pending');
+    expect(s.steps.readerMap.status).toBe('pending');
+    expect(s.steps.production.status).toBe('pending');
   });
 
   it('rejects a blank title', async () => {

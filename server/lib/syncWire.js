@@ -123,6 +123,23 @@ export function sanitizeRecordForWire(kind, record) {
         }
         return { ...minimized, ...sanitizeSoftDeleteFields(record) };
       }
+      // `styleImageRefs` (universe base "style probe" renders) is WIRE-LOCAL:
+      // per-peer, regenerable, and NOT a restorable conflict field
+      // (RESTORABLE_FIELDS.universe omits it). Strip it from every universe
+      // payload so (1) an older peer that lacks the field in its sanitizer
+      // can't drop-then-LWW-strip it back off a newer peer on round-trip, and
+      // (2) it never feeds the conflict-journal content hash (contentHashForRecord
+      // reuses this projection) — a probe render alone would otherwise register a
+      // phantom 3-way divergence whose diff can't mention the field. Stripping
+      // here (rather than bumping the `universes` schema version) keeps universe
+      // sync flowing to not-yet-upgraded peers: a whole-category gate would
+      // 412-reject ALL universe transfers over a low-stakes, one-click-regenerable
+      // field. The strip is byte-stable against pre-field peers — they never sent
+      // it, so the wire/hash form is unchanged for them.
+      if (kind === 'universe') {
+        const { styleImageRefs: _styleImageRefs, ...universeRest } = rest;
+        return { ...universeRest, ...sanitizeSoftDeleteFields(record) };
+      }
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'mediaCollection': {

@@ -56,6 +56,17 @@ describe('conflictJournal', () => {
     expect(cj.contentHashForRecord('universe', uni({ ephemeral: true }))).toBeNull();
   });
 
+  it('contentHashForRecord ignores styleImageRefs (probe renders never feed conflict detection)', () => {
+    // styleImageRefs is stripped from the wire projection contentHashForRecord
+    // reuses, so a base style-probe render that only adds/changes those refs
+    // must NOT shift the content hash — otherwise a render alone could register
+    // a phantom 3-way divergence whose conflict diff can't even mention the
+    // field (RESTORABLE_FIELDS.universe omits it).
+    const base = cj.contentHashForRecord('universe', uni());
+    expect(cj.contentHashForRecord('universe', uni({ styleImageRefs: ['probe-1.png'] }))).toBe(base);
+    expect(cj.contentHashForRecord('universe', uni({ styleImageRefs: ['probe-1.png', 'probe-2.png'] }))).toBe(base);
+  });
+
   it('no base → treated as clean (no journal), base seeded for next time', async () => {
     const local = uni({ starterPrompt: 'local', updatedAt: '2026-05-01T00:00:00Z' });
     const remote = uni({ starterPrompt: 'remote', updatedAt: '2026-05-02T00:00:00Z' });
