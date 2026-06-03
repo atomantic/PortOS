@@ -42,6 +42,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-continue": {
+      "name": "Writers Room — Live Continuation",
+      "description": "Live Creative Director feedback: from the prose around the cursor, propose 2–4 short optional continuation beats, prose snippets, or dialogue lines the writer can accept. Drives the opt-in live-mode side panel in the editor.",
+      "model": "quick",
+      "returnsJson": true,
+      "variables": []
+    },
     "catalog-ideas-scenes-concepts": {
       "name": "Catalog Ingest — Ideas / Scenes / Concepts",
       "description": "Extract reusable narrative fragments — ideas (premises), scenes (dramatic beats), and concepts (lore, magic systems, factions) — from a raw user-pasted scrap into the Creative Ingredients Catalog. Runs alongside the character/place/object writers-room passes during catalog ingest.",
