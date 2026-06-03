@@ -170,7 +170,12 @@ export const useCityData = () => {
     // Backup vault landmark: mark in-flight on start (so the seal pulses blue), then
     // refetch on completion to pick up the fresh lastRun/status and clear `running`.
     const handleBackupStarted = () => setBackupStatus(prev => ({ ...(prev || {}), running: true }));
-    const handleBackupCompleted = () => fetchBackup();
+    // Clear `running` optimistically so the seal stops pulsing blue even if the
+    // refetch fails, then pull authoritative lastRun/status from the server.
+    const handleBackupCompleted = () => {
+      setBackupStatus(prev => (prev?.running ? { ...prev, running: false } : prev));
+      fetchBackup();
+    };
     socket.on('backup:started', handleBackupStarted);
     socket.on('backup:completed', handleBackupCompleted);
 
