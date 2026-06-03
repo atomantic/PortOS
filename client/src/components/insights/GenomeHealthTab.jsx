@@ -5,7 +5,7 @@ import { getGenomeHealthCorrelations } from '../../services/api';
 import InsightCard from './InsightCard';
 import ConfidenceBadge from './ConfidenceBadge';
 import ProvenancePanel from './ProvenancePanel';
-import EmptyState from './EmptyState';
+import EmptyState from '../EmptyState';
 
 // Map string icon names from server to Lucide components
 const ICON_MAP = {
@@ -220,9 +220,9 @@ export default function GenomeHealthTab() {
   if (!data?.available) {
     return (
       <EmptyState
-        message="No genome data uploaded yet. Upload your 23andMe or similar raw genome file to see health correlations."
-        linkTo="/meatspace/genome"
-        linkLabel="Upload Genome"
+        message="Add your birth date and upload a raw genome file (23andMe or similar) to unlock longevity estimates and health correlations."
+        actionTo="/meatspace/genome"
+        actionLabel="Upload Genome"
       />
     );
   }

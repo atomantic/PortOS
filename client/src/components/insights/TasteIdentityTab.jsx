@@ -3,7 +3,7 @@ import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getInsightThemes, refreshInsightThemes } from '../../services/api';
 import InsightCard from './InsightCard';
 import ConfidenceBadge from './ConfidenceBadge';
-import EmptyState from './EmptyState';
+import EmptyState from '../EmptyState';
 import { timeAgo } from '../../utils/formatters';
 
 // Map theme strength to confidence level
@@ -101,8 +101,8 @@ export default function TasteIdentityTab() {
       return (
         <EmptyState
           message="No taste profile completed yet. Complete the taste questionnaire to generate identity themes."
-          linkTo="/digital-twin/taste"
-          linkLabel="Complete Taste Profile"
+          actionTo="/digital-twin/taste"
+          actionLabel="Complete Taste Profile"
         />
       );
     }
