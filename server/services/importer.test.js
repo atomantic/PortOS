@@ -1751,7 +1751,7 @@ describe('reconcile draft parent universe (issue #851)', () => {
     expect(after.importDraft).not.toBe(true);
   });
 
-  it('leaves a non-draft universe untouched (no spurious write) when a committed series links to it', async () => {
+  it('leaves a non-draft universe untouched when a committed series links to it', async () => {
     const normalUni = await universeSvc.createUniverse({ name: 'Normal' });
     const realUni = await universeSvc.createUniverse({ name: 'Origin' });
     const series = await seriesSvc.createSeries({ name: 'Moving Series', universeId: realUni.id });
@@ -1761,5 +1761,24 @@ describe('reconcile draft parent universe (issue #851)', () => {
     const after = await universeSvc.getUniverse(normalUni.id);
     expect(after.importDraft).not.toBe(true);
     expect(after.ephemeral).not.toBe(true);
+  });
+
+  it('does NOT promote a draft universe when an EPHEMERAL (private, non-draft) series is linked', async () => {
+    // An ephemeral series is the user signaling "keep this local" — it carries
+    // no syncing work, so promoting (un-privatizing) its parent would push
+    // peers a universe whose only child never syncs. Only a series that itself
+    // reaches peers should pull its draft parent into sync.
+    const draftUni = await universeSvc.createUniverse({
+      name: 'Draft Parent 3', ephemeral: true, importDraft: true,
+    });
+    const privateSeries = await seriesSvc.createSeries({
+      name: 'Private Committed', universeId: draftUni.id, ephemeral: true,
+    });
+    expect(privateSeries.importDraft).not.toBe(true);
+    expect(privateSeries.ephemeral).toBe(true);
+
+    const after = await universeSvc.getUniverse(draftUni.id);
+    expect(after.importDraft).toBe(true);
+    expect(after.ephemeral).toBe(true);
   });
 });
