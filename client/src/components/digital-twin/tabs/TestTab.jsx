@@ -58,7 +58,7 @@ export default function TestTab({ onRefresh }) {
       api.getProviders().catch(() => ({ providers: [] })),
       api.getDigitalTwinTestHistory(5).catch(() => []),
       api.getBehavioralFeedbackStats().catch(() => null),
-      api.getDigitalTwinPersonas().catch(() => [])
+      api.getDigitalTwinPersonas({ silent: true }).catch(() => [])
     ]);
 
     setTests(testsData);

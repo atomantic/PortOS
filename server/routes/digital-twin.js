@@ -52,6 +52,18 @@ import { UUID_RE } from '../lib/fileUtils.js';
 
 const router = Router();
 
+/**
+ * Assert a persona id (when supplied) resolves to a stored persona, throwing
+ * 404 otherwise. A test run with a stale/deleted personaId would otherwise
+ * silently fall back to the base twin, mislabeling the result; this makes the
+ * contract explicit — mirroring the same guard on PUT /personas/active.
+ */
+async function assertPersonaExists(personaId) {
+  if (personaId && !(await digitalTwinService.getPersonaById(personaId))) {
+    throw new ServerError('Persona not found', { status: 404, code: 'NOT_FOUND' });
+  }
+}
+
 // =============================================================================
 // STATUS & SUMMARY
 // =============================================================================
@@ -144,6 +156,7 @@ router.get('/tests', asyncHandler(async (req, res) => {
  */
 router.post('/tests/run', asyncHandler(async (req, res) => {
   const { providerId, model, testIds, personaId } = validateRequest(runTestsInputSchema, req.body);
+  await assertPersonaExists(personaId);
   const result = await digitalTwinService.runTests(providerId, model, testIds, personaId);
   res.json(result);
 }));
@@ -154,6 +167,7 @@ router.post('/tests/run', asyncHandler(async (req, res) => {
  */
 router.post('/tests/run-multi', asyncHandler(async (req, res) => {
   const { providers, testIds, personaId } = validateRequest(runMultiTestsInputSchema, req.body);
+  await assertPersonaExists(personaId);
   const io = req.app.get('io');
 
   // Run tests for each provider in parallel
@@ -207,6 +221,7 @@ router.get('/values-tests', asyncHandler(async (req, res) => {
  */
 router.post('/values-tests/run', asyncHandler(async (req, res) => {
   const { providerId, model, testIds, personaId } = validateRequest(runTestsInputSchema, req.body);
+  await assertPersonaExists(personaId);
   const result = await digitalTwinService.runValuesAlignmentTests(providerId, model, testIds, personaId);
   res.json(result);
 }));

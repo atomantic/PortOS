@@ -3,10 +3,9 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict } from './digital-twin-helpers.js';
+import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
-import { resolveTestPersona } from './digital-twin-helpers.js';
 
 export async function parseTestSuite() {
   if (cache.tests.data && (Date.now() - cache.tests.timestamp) < CACHE_TTL_MS) {
