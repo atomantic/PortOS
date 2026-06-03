@@ -1,6 +1,6 @@
-import { spawn } from 'child_process';
 import { join } from 'path';
 import { access } from 'fs/promises';
+import { bufferedSpawn, needsShell } from '../lib/bufferedSpawn.js';
 
 /** Async equivalent of existsSync — returns true if the path is accessible */
 const pathExists = (p) => access(p).then(() => true).catch(() => false);
@@ -15,12 +15,6 @@ export const ALLOWED_BUILD_CMDS = new Set([
   'cargo'       // Rust
 ]);
 
-const IS_WIN32 = process.platform === 'win32';
-// npm/npx are .cmd shims on Windows — enable shell only for these so cmd.exe
-// can resolve them, without enabling shell metacharacter interpretation for
-// native binaries (xcodebuild, swift, make, cargo).
-const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
-const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
 // Actual cmd.exe metacharacters (& | < > ^ % ! and grouping parens).
 // Validated only when shell is active (needsShell guard at call site).
 const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
@@ -30,18 +24,8 @@ const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
  * (the `needsShell` gate that actually applies it stays at the call site).
  */
 export const hasShellUnsafeArg = (args) => args.some(a => SHELL_UNSAFE_RE.test(a));
-// On Windows, SIGTERM kills cmd.exe but orphans its child (npm). Use taskkill
-// /T /F to terminate the whole process tree.
-const killProc = (child) => {
-  if (IS_WIN32 && child.pid) {
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
-  } else {
-    child.kill('SIGTERM');
-  }
-};
 const INSTALL_TIMEOUT_MS = 3 * 60 * 1000;
 const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_BUILD_COMMAND = 'npm run build';
 
 /**
@@ -75,65 +59,33 @@ export function parseBuildCommand(buildCommand) {
  * Run `npm install` in a single directory.
  * @returns {Promise<{success, exitCode, output}>} — resolves (never rejects).
  */
-function runNpmInstall(subDir) {
-  return new Promise((resolve) => {
-    const child = spawn('npm', ['install'], { cwd: subDir, windowsHide: true, shell: needsShell('npm') });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; killProc(child); resolve({ success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
-    }, INSTALL_TIMEOUT_MS);
-    child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES); });
-    child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES); });
-    child.on('close', exitCode => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: exitCode === 0, exitCode, output: (stderr.trim() || stdout.trim()).slice(-1024) }); } });
-    child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, exitCode: -1, output: err.message }); } });
-  });
+async function runNpmInstall(subDir) {
+  const result = await bufferedSpawn('npm', ['install'], { cwd: subDir, timeoutMs: INSTALL_TIMEOUT_MS });
+  if (result.timedOut) {
+    return { success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` };
+  }
+  if (result.error) {
+    return { success: false, exitCode: -1, output: result.error.message };
+  }
+  return { success: result.success, exitCode: result.code, output: (result.stderr.trim() || result.stdout.trim()).slice(-1024) };
 }
 
 /**
  * Run the build command in `repoPath`.
  * @returns {Promise<{success, stdout, stderr, code, signal, output}>} — resolves (never rejects).
  */
-function runBuild(cmd, args, repoPath) {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: repoPath, windowsHide: true, shell: needsShell(cmd) });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        killProc(child);
-        const timeoutMsg = `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`;
-        const tail = (stderr.trim() || stdout.trim()).slice(-512);
-        resolve({ success: false, stderr: timeoutMsg, code: -1, output: tail ? `${timeoutMsg} — last output: ${tail}` : timeoutMsg });
-      }
-    }, BUILD_TIMEOUT_MS);
-    child.stdout.on('data', d => {
-      stdout += d;
-      if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES);
-    });
-    child.stderr.on('data', d => {
-      stderr += d;
-      if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES);
-    });
-    child.on('close', (code, signal) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        const output = (stderr.trim() || stdout.trim()).slice(-1024);
-        resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code, signal, output });
-      }
-    });
-    child.on('error', err => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve({ success: false, stderr: err.message, code: -1, signal: null, output: err.message });
-      }
-    });
-  });
+async function runBuild(cmd, args, repoPath) {
+  const result = await bufferedSpawn(cmd, args, { cwd: repoPath, timeoutMs: BUILD_TIMEOUT_MS });
+  if (result.timedOut) {
+    const timeoutMsg = `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`;
+    const tail = (result.stderr.trim() || result.stdout.trim()).slice(-512);
+    return { success: false, stderr: timeoutMsg, code: -1, output: tail ? `${timeoutMsg} — last output: ${tail}` : timeoutMsg };
+  }
+  if (result.error) {
+    return { success: false, stderr: result.error.message, code: -1, signal: null, output: result.error.message };
+  }
+  const output = (result.stderr.trim() || result.stdout.trim()).slice(-1024);
+  return { success: result.success, stdout: result.stdout.trim(), stderr: result.stderr.trim(), code: result.code, signal: result.signal, output };
 }
 
 /**

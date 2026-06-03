@@ -98,6 +98,7 @@ export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
 
 // === Process execution ===
+export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';

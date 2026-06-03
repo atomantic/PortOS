@@ -110,6 +110,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `bufferedSpawn.js` | `bufferedSpawn(cmd, args, opts)` (structured non-throwing result) + `bufferedSpawnOrThrow` (throwing adapter), plus `killProcessTree`, `needsShell`, `IS_WIN32`, `WIN_CMD_SHIMS`, `MAX_OUTPUT_BYTES` — shared buffered-spawn machinery with capped stdout/stderr, timeout-kill, and Windows `taskkill /T /F` tree-kill. Used by `appBuilder.js` and `appUpdater.js`. |
 | `commandSecurity.js` | Allowlist of safe shell commands. |
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
 | `ffmpeg.js` | Shared ffmpeg helpers (videoGen + videoTimeline). |
