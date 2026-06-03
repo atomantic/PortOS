@@ -14,6 +14,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
+import PersonaBadge from '../PersonaBadge';
 import { VALUES_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -289,11 +290,7 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
                       <div>
                         <div className="text-sm text-white flex items-center gap-2">
                           {run.model}
-                          {run.personaName && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">
-                              {run.personaName}
-                            </span>
-                          )}
+                          <PersonaBadge name={run.personaName} />
                         </div>
                         <div className="text-xs text-gray-500">
                           {run.aligned}/{run.total} aligned • {timeAgo(run.timestamp)}

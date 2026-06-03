@@ -17,6 +17,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
 import ValuesAlignmentPanel from './ValuesAlignmentPanel';
+import PersonaBadge from '../PersonaBadge';
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -66,8 +67,10 @@ export default function TestTab({ onRefresh }) {
     setHistory(historyData);
     if (fbStats) setFeedbackStats(fbStats);
     setPersonas(Array.isArray(personaData) ? personaData : []);
-    // Drop the persona selection if it no longer exists (e.g. deleted elsewhere)
-    setSelectedPersonaId(prev => (prev && (personaData || []).some(p => p.id === prev) ? prev : ''));
+    // Drop the persona selection if it no longer exists (e.g. deleted elsewhere).
+    // A falsy prev ('' = base twin) fails the .some() check and falls back to '',
+    // so no extra guard is needed.
+    setSelectedPersonaId(prev => ((personaData || []).some(p => p.id === prev) ? prev : ''));
 
     // Default: select all tests
     setSelectedTests(testsData.map(t => t.testId));
@@ -598,11 +601,7 @@ export default function TestTab({ onRefresh }) {
                   <div>
                     <div className="text-sm text-white flex items-center gap-2">
                       {run.model}
-                      {run.personaName && (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">
-                          {run.personaName}
-                        </span>
-                      )}
+                      <PersonaBadge name={run.personaName} />
                     </div>
                     <div className="text-xs text-gray-500">
                       {run.passed}/{run.total} passed • {timeAgo(run.timestamp)}
