@@ -14,6 +14,7 @@ import CityBillboards from './CityBillboards';
 import CityShootingStars from './CityShootingStars';
 import CityVolumetricLights from './CityVolumetricLights';
 import CitySkyline from './CitySkyline';
+import CityFederationHorizon from './CityFederationHorizon';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
@@ -72,6 +73,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityShootingStars playSfx={playSfx} settings={settings} />
       {!explorationMode && <CityCelestial settings={settings} />}
       <CitySkyline />
+      <CityFederationHorizon instances={instances} settings={settings} />
       <CityGround settings={settings} />
 
       <BuildingCluster
