@@ -41,6 +41,7 @@ export default function InitImagePicker({
               onClick={onClear}
               disabled={disabled}
               className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+              aria-label="Remove init image"
               title="Remove init image"
             >
               <X className="w-3 h-3" />
