@@ -1,63 +1,24 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Palette } from 'lucide-react';
 import { useThemeContext } from './ThemeContext';
 import { getFamilyIcon } from '../themes/familyIcons';
+import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
 
 const MENU_WIDTH = 288;
-const MENU_GAP = 8;
-const VIEWPORT_PADDING = 8;
 
 export default function ThemeSwitcher({ position = 'above', className = '' }) {
   const { themeId, theme, themeList, setTheme } = useThemeContext();
   const [open, setOpen] = useState(false);
-  const [menuStyle, setMenuStyle] = useState(null);
   const containerRef = useRef(null);
-  const triggerRef = useRef(null);
-  const menuRef = useRef(null);
+  const {
+    triggerRef,
+    popoverRef: menuRef,
+    style: menuStyle,
+  } = usePopoverPosition({ open, width: MENU_WIDTH, minWidth: 180, gap: 8, position });
 
-  const updateMenuPosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    const menu = menuRef.current;
-    if (!trigger || !menu) return;
-
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const width = Math.min(MENU_WIDTH, Math.max(180, viewportWidth - VIEWPORT_PADDING * 2));
-
-    // Apply width before measuring height — narrow viewports may wrap content
-    // and grow the menu's height. Measuring at the wrong width produces a
-    // top value that under-clamps and lets the portal overflow.
-    menu.style.width = `${width}px`;
-
-    const triggerRect = trigger.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    const maxLeft = viewportWidth - width - VIEWPORT_PADDING;
-    const left = Math.min(
-      Math.max(triggerRect.right - width, VIEWPORT_PADDING),
-      Math.max(VIEWPORT_PADDING, maxLeft)
-    );
-
-    const aboveTop = triggerRect.top - menuRect.height - MENU_GAP;
-    const belowTop = triggerRect.bottom + MENU_GAP;
-    const wouldOverflowTop = aboveTop < VIEWPORT_PADDING;
-    const wouldOverflowBottom = belowTop + menuRect.height > viewportHeight - VIEWPORT_PADDING;
-
-    let top = position === 'above'
-      ? (wouldOverflowTop ? belowTop : aboveTop)
-      : (wouldOverflowBottom ? aboveTop : belowTop);
-
-    const maxTop = Math.max(VIEWPORT_PADDING, viewportHeight - menuRect.height - VIEWPORT_PADDING);
-    top = Math.min(Math.max(top, VIEWPORT_PADDING), maxTop);
-
-    setMenuStyle(prev => {
-      if (prev && prev.left === `${left}px` && prev.top === `${top}px` && prev.width === `${width}px`) {
-        return prev;
-      }
-      return { left: `${left}px`, top: `${top}px`, width: `${width}px` };
-    });
-  }, [position]);
-
+  // Close on outside-click / Escape — the popover-position hook owns placement
+  // and reflow; this component still owns its own dismiss semantics.
   useEffect(() => {
     if (!open) return undefined;
 
@@ -71,36 +32,14 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
       if (e.key === 'Escape') setOpen(false);
     };
 
-    let rafId = null;
-    const onReposition = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        updateMenuPosition();
-      });
-    };
-
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
-    window.addEventListener('resize', onReposition);
-    window.addEventListener('scroll', onReposition, true);
 
     return () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('resize', onReposition);
-      window.removeEventListener('scroll', onReposition, true);
     };
-  }, [open, updateMenuPosition]);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMenuStyle(null);
-      return;
-    }
-    updateMenuPosition();
-  }, [open, updateMenuPosition]);
+  }, [open, menuRef]);
 
   return (
     <div ref={containerRef} className={`relative ${className}`}>

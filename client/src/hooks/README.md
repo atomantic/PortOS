@@ -89,6 +89,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useKeyboardControls` | Keyboard binding for CyberCity mode toggle. | CyberCity-specific. |
 | `useKeyboardHelp` | Esc closes, even from inputs/textareas. | Help/cheatsheet modals. |
 | `useLockToggle` | Optimistic-PATCH lock toggle. | New "lock this field/stage/arc" button — use this, do not re-implement. |
+| `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
 | `useScrollLock` | Body-scroll lock with ref-count. | Modals, drawers, lightboxes. |
 | `useSwipeNav` | Horizontal swipe prev/next. | Mobile swipe between siblings. |
 | `useAsyncAction` | `running` state + toast-on-error. | Buttons that await an async action. |

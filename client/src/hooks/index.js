@@ -23,6 +23,7 @@ export { default as useMoltworldWs } from './useMoltworldWs.js';
 export { default as useMounted } from './useMounted.js';
 export { default as useNextEvalCountdown } from './useNextEvalCountdown.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
+export { default as usePopoverPosition } from './usePopoverPosition.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderModels } from './useProviderModels.js';
 export { default as useRowDraft } from './useRowDraft.js';
