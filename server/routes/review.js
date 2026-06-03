@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
-import { buildQueue, resolveQueueItem } from '../services/reviewQueue.js';
+import { buildQueue, resolveQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -60,6 +60,22 @@ const resolveQueueSchema = z.object({
 router.post('/queue/resolve', asyncHandler(async (req, res) => {
   const { id } = validateRequest(resolveQueueSchema, req.body);
   const result = await resolveQueueItem(id);
+  res.json(result);
+}));
+
+const promoteAskQueueSchema = z.object({
+  id: z.string().min(1).max(500),
+  target: z.enum(['brain', 'task'])
+});
+
+// POST /api/review/queue/promote-ask — promote an Ask row's latest assistant
+// answer into Brain or a CoS task, in place, without leaving the Review Hub.
+// The `id` is the row's `ask:<conversationId>`; the service finds the latest
+// assistant turn so the client doesn't track turn ids. Goal targets stay a
+// drill-down (they need a goalId choice the queue row can't supply).
+router.post('/queue/promote-ask', asyncHandler(async (req, res) => {
+  const { id, target } = validateRequest(promoteAskQueueSchema, req.body);
+  const result = await promoteAskQueueItem(id, target);
   res.json(result);
 }));
 
