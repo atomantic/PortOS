@@ -76,9 +76,13 @@ export default function Review() {
 
   // Cross-domain live queue (M42 P5). These rows are derived live from each
   // producer, not stored, so "dismiss" is a per-session client-side hide rather
-  // than a server mutation — accept/promote actions are a follow-up.
+  // than a server mutation. Rows whose producer declares an inline action also
+  // get a server-backed accept/promote that resolves the underlying record.
   const [queue, setQueue] = useState(null);
   const [dismissedQueueIds, setDismissedQueueIds] = useState(() => new Set());
+  // Rows with an inline accept/promote in flight — disables the button so a
+  // double-tap can't double-resolve while the request is pending.
+  const [resolvingQueueIds, setResolvingQueueIds] = useState(() => new Set());
 
   const fetchItems = useCallback(async () => {
     const params = filter === 'all' ? {} : { status: filter };
@@ -167,6 +171,20 @@ export default function Review() {
   const handleQueueDrill = (item) => {
     handleQueueDismiss(item.id);
     if (item.drillTo) navigate(item.drillTo);
+  };
+
+  const handleQueueResolve = async (item) => {
+    if (resolvingQueueIds.has(item.id)) return;
+    setResolvingQueueIds(prev => new Set(prev).add(item.id));
+    // The helper toasts on failure (default), so don't add a custom catch toast.
+    const ok = await api.resolveReviewQueueItem(item.id).then(() => true).catch(() => false);
+    setResolvingQueueIds(prev => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
+    // Reactive removal — drop the resolved row in place rather than refetching.
+    if (ok) handleQueueDismiss(item.id);
   };
 
   const grouped = items.reduce((acc, item) => {
@@ -272,7 +290,14 @@ export default function Review() {
             {queueItems.length > 0 && (
               <div className="space-y-2">
                 {queueItems.map(item => (
-                  <QueueRow key={item.id} item={item} onDrill={handleQueueDrill} onDismiss={handleQueueDismiss} />
+                  <QueueRow
+                    key={item.id}
+                    item={item}
+                    onDrill={handleQueueDrill}
+                    onDismiss={handleQueueDismiss}
+                    onResolve={handleQueueResolve}
+                    resolving={resolvingQueueIds.has(item.id)}
+                  />
                 ))}
               </div>
             )}
@@ -414,7 +439,7 @@ export default function Review() {
   );
 }
 
-function QueueRow({ item, onDrill, onDismiss }) {
+function QueueRow({ item, onDrill, onDismiss, onResolve, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
@@ -442,6 +467,17 @@ function QueueRow({ item, onDrill, onDismiss }) {
         )}
       </div>
       <div className="flex items-center gap-1 shrink-0">
+        {item.action && onResolve && (
+          <button
+            onClick={() => onResolve(item)}
+            disabled={resolving}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-success bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title={`${item.action} this item in place`}
+          >
+            <Check size={14} />
+            {item.action}
+          </button>
+        )}
         <button
           onClick={() => onDrill(item)}
           className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"

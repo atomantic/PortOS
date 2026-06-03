@@ -4,6 +4,7 @@ import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import DeathClockCountdown from '../../DeathClockCountdown';
+import ProvenanceChip from '../../ui/ProvenanceChip';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
@@ -39,6 +40,11 @@ function CompactCountdown({ deathDate, lifeExpectancy, percentComplete, lev }) {
     <div>
       <div className="flex items-baseline gap-2 mb-2">
         <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Time Remaining</h3>
+        <ProvenanceChip
+          level="inferred"
+          explainer="Estimated from an actuarial baseline, then adjusted by your genome and lifestyle data — a model, not a fixed date."
+          whatWouldChange="New genome, lifestyle, or body-metric data shifts the projection; the actuarial baseline updates with your age."
+        />
         <span className="text-xs text-gray-500">
           ({new Date(deathDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })})
           {lev?.onTrack && <span className="text-port-success font-medium"> +LEV</span>}
@@ -88,6 +94,11 @@ function CompactLEV({ lev }) {
       <div className="flex items-center gap-2 mb-3">
         <Rocket size={14} className="text-port-accent" />
         <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">LEV Tracker</h3>
+        <ProvenanceChip
+          level="speculative"
+          explainer="Longevity Escape Velocity assumes medical progress outpaces aging by ~2045 — a forward-looking bet on the future, not a measurement."
+          whatWouldChange="The pace of longevity research and your adjusted life expectancy moving the on-track/at-risk margin."
+        />
       </div>
 
       <div className="mb-3">

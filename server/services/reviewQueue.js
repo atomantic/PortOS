@@ -14,8 +14,14 @@
  *   { id, source, sourceLabel, title, summary, timestamp, severity, drillTo }
  *
  * `drillTo` is a client route the UI deep-links to so "drill-down" works without
- * the queue needing to know how to render each domain. v1 is read + drill-down;
- * per-source accept/promote actions are a follow-up (see issue #709).
+ * the queue needing to know how to render each domain.
+ *
+ * A producer may also declare an inline `action` (a verb label) + `resolve(rawId)`
+ * primitive, in which case the row carries `action` and `resolveQueueItem()` can
+ * accept/promote it in place without leaving the Review Hub (issue #709 follow-up
+ * to the v1 read-only aggregator). Sources with no clean local resolve (health
+ * alerts are live-computed and clear when the condition does; a failed backup
+ * retries by re-running with settings) stay drill-down + session-dismiss only.
  */
 
 import * as brain from './brain.js';
@@ -24,6 +30,7 @@ import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import * as proactiveAlerts from './proactiveAlerts.js';
 import * as backup from './backup.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // Per-source cap so one noisy producer can't flood the queue; the UI shows a
 // "+N more in <domain>" affordance via the per-source `total` vs `items.length`.
@@ -59,6 +66,11 @@ const PRODUCERS = [
     source: 'brain',
     label: 'Brain inbox',
     drillTo: '/brain/inbox',
+    // Marking the entry done clears it from the needs-review queue.
+    action: 'Done',
+    async resolve(id) {
+      return brain.markInboxDone(id);
+    },
     async gather() {
       // Inbox entries the auto-classifier couldn't place — they need a human
       // to pick a destination.
@@ -80,6 +92,11 @@ const PRODUCERS = [
     source: 'ask',
     label: 'Ask answers',
     drillTo: '/ask',
+    // No inline action: "promote" for an Ask answer means saving a specific turn
+    // into Brain/Task/Goal (askConversations.promoteAskTurn), which needs the
+    // user to pick a target — so it can't be one-click. (setPromoted only *pins*
+    // the conversation against expiry, which the Ask UI labels "Pin", not the
+    // promote-to-target the queue title implies.) Drill into /ask to promote.
     async gather() {
       // Conversations with content that haven't been promoted to brain/task/goal.
       const convs = await askConversations.listConversations({ limit: PER_SOURCE_LIMIT * 2 });
@@ -100,6 +117,14 @@ const PRODUCERS = [
     source: 'cos',
     label: 'CoS approvals',
     drillTo: '/cos/tasks',
+    action: 'Approve',
+    // approveTask resolves to an `{ error }` object (not a throw) when the task
+    // can't be approved; surface that as a failed resolve.
+    async resolve(id) {
+      const result = await cosTaskStore.approveTask(id);
+      if (result && result.error) throw new ServerError(result.error, { status: 409, code: 'CONFLICT' });
+      return result;
+    },
     async gather() {
       // Internal CoS tasks parked awaiting the user's approval before they run.
       const { awaitingApproval = [] } = await cosTaskStore.getCosTasks();
@@ -120,6 +145,12 @@ const PRODUCERS = [
     source: 'drafts',
     label: 'Message drafts',
     drillTo: '/messages/drafts',
+    // Approve (not send) — clears it from the awaiting-review queue without an
+    // outward side effect; the user still triggers the actual send from /messages.
+    action: 'Approve',
+    async resolve(id) {
+      return messageDrafts.approveDraft(id);
+    },
     async gather() {
       // Drafts the user (or an AI) prepared that haven't been sent yet. Today
       // messageDrafts only emits 'draft' (vs 'approved'); 'pending_review' is
@@ -130,7 +161,9 @@ const PRODUCERS = [
     },
     map(draft) {
       return {
-        id: `draft:${draft.id}`,
+        // Prefix matches `source` ('drafts') so resolveQueueItem's
+        // split-on-first-colon dispatch lands on this producer.
+        id: `drafts:${draft.id}`,
         title: draft.status === 'pending_review' ? 'Draft awaiting review' : 'Unsent message draft',
         summary: draft.subject || (draft.body || '').slice(0, 120) || '(no subject)',
         timestamp: draft.updatedAt || draft.createdAt || null,
@@ -198,9 +231,39 @@ async function gatherProducer(producer) {
   const items = list.slice(0, PER_SOURCE_LIMIT).map((item, index) => ({
     source: producer.source,
     sourceLabel: producer.label,
-    ...producer.map(item, index)
+    ...producer.map(item, index),
+    // Inline-action verb when the producer declares one resolve primitive; the
+    // UI shows an accept/promote button only for rows that carry it.
+    ...(producer.action && producer.resolve ? { action: producer.action } : {})
   }));
   return { items, total: list.length };
+}
+
+const PRODUCERS_BY_SOURCE = Object.fromEntries(PRODUCERS.map(p => [p.source, p]));
+
+/**
+ * Accept/promote a single queue row in place. `queueItemId` is the row's
+ * normalized id (`<source>:<rawId>`); we split on the FIRST colon so raw ids
+ * that themselves contain colons survive. Throws a 4xx ServerError when the
+ * source is unknown, has no inline resolve, or the underlying primitive can't
+ * find the record — so the route surfaces a clean status instead of a 500.
+ */
+export async function resolveQueueItem(queueItemId) {
+  const sep = String(queueItemId).indexOf(':');
+  const source = sep === -1 ? queueItemId : queueItemId.slice(0, sep);
+  const rawId = sep === -1 ? '' : queueItemId.slice(sep + 1);
+
+  const producer = PRODUCERS_BY_SOURCE[source];
+  if (!producer || !producer.resolve) {
+    throw new ServerError(`No inline action for source "${source}"`, { status: 400, code: 'BAD_REQUEST' });
+  }
+
+  const result = await producer.resolve(rawId);
+  // Most resolve primitives return null when the record is already gone.
+  if (result == null) {
+    throw new ServerError(`${producer.label} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
+  }
+  return { source, id: queueItemId, resolved: true };
 }
 
 /**

@@ -12,6 +12,12 @@ export const getReviewCounts = () => request('/review/counts');
 export const getReviewBriefing = () => request('/review/briefing');
 // Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups)
 export const getReviewQueue = (options = {}) => request('/review/queue', options);
+// Accept/promote a single queue row in place (id is `<source>:<rawId>`)
+export const resolveReviewQueueItem = (id, options = {}) => request('/review/queue/resolve', {
+  method: 'POST',
+  body: JSON.stringify({ id }),
+  ...options
+});
 export const createReviewTodo = (data) => request('/review/todo', {
   method: 'POST',
   body: JSON.stringify(data)

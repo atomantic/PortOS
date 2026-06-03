@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock every producer service the aggregator pulls from, so the test exercises
 // only the normalization / sort / cap / degrade-on-failure logic.
-const brain = { getInboxLog: vi.fn() };
+const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
-const cosTaskStore = { getCosTasks: vi.fn() };
-const messageDrafts = { listDrafts: vi.fn() };
+const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
+const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateAlerts: vi.fn() };
 const backup = { getState: vi.fn() };
 
@@ -16,7 +16,7 @@ vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
 vi.mock('./backup.js', () => backup);
 
-const { buildQueue, __resetAlertsCache } = await import('./reviewQueue.js');
+const { buildQueue, resolveQueueItem, __resetAlertsCache } = await import('./reviewQueue.js');
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
@@ -88,7 +88,7 @@ describe('reviewQueue.buildQueue', () => {
     expect(queue.items.find(i => i.id === 'cos:sys-1')).toMatchObject({ severity: 'high', drillTo: '/cos/tasks' });
     const draftRows = queue.items.filter(i => i.source === 'drafts');
     expect(draftRows).toHaveLength(1);
-    expect(draftRows[0].id).toBe('draft:d1');
+    expect(draftRows[0].id).toBe('drafts:d1');
   });
 
   it('only surfaces critical/high health alerts and a failed backup', async () => {
@@ -151,5 +151,64 @@ describe('reviewQueue.buildQueue', () => {
     expect(brainRows).toHaveLength(25);
     expect(queue.sources.brain.total).toBe(40);
     expect(queue.sources.brain.shown).toBe(25);
+  });
+
+  it('tags resolvable rows with an inline action verb, leaves no-clean-resolve sources without one', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }] });
+    backup.getState.mockResolvedValue({ status: 'error', error: 'disk full' });
+    const queue = await buildQueue();
+    expect(queue.items.find(i => i.source === 'brain').action).toBe('Done');
+    expect(queue.items.find(i => i.source === 'cos').action).toBe('Approve');
+    // Ask "promote" needs a per-turn target choice (drill-down), and health
+    // (live-computed) / backup (settings-driven retry) have no clean local
+    // resolve — none of them carry an inline action.
+    expect(queue.items.find(i => i.source === 'ask').action).toBeUndefined();
+    expect(queue.items.find(i => i.source === 'health').action).toBeUndefined();
+    expect(queue.items.find(i => i.source === 'backup').action).toBeUndefined();
+  });
+});
+
+describe('reviewQueue.resolveQueueItem', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('dispatches brain rows to markInboxDone', async () => {
+    brain.markInboxDone.mockResolvedValue({ id: 'b1', status: 'done' });
+    const result = await resolveQueueItem('brain:b1');
+    expect(brain.markInboxDone).toHaveBeenCalledWith('b1');
+    expect(result).toMatchObject({ source: 'brain', id: 'brain:b1', resolved: true });
+  });
+
+  it('dispatches draft rows to approveDraft', async () => {
+    messageDrafts.approveDraft.mockResolvedValue({ id: 'd1', status: 'approved' });
+    await resolveQueueItem('drafts:d1');
+    expect(messageDrafts.approveDraft).toHaveBeenCalledWith('d1');
+  });
+
+  it('preserves colons in the raw id (splits on the first only)', async () => {
+    brain.markInboxDone.mockResolvedValue({ id: 'b:1:2', status: 'done' });
+    await resolveQueueItem('brain:b:1:2');
+    expect(brain.markInboxDone).toHaveBeenCalledWith('b:1:2');
+  });
+
+  it('rejects sources without an inline resolve (ask/health/backup) and unknown sources with a 400', async () => {
+    await expect(resolveQueueItem('ask:a1')).rejects.toMatchObject({ status: 400 });
+    await expect(resolveQueueItem('health:x')).rejects.toMatchObject({ status: 400 });
+    await expect(resolveQueueItem('backup:last-run')).rejects.toMatchObject({ status: 400 });
+    await expect(resolveQueueItem('nope:x')).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('surfaces a 404 when the primitive returns null (record gone)', async () => {
+    brain.markInboxDone.mockResolvedValue(null);
+    await expect(resolveQueueItem('brain:missing')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('maps a CoS approve {error} result to a 409', async () => {
+    cosTaskStore.approveTask.mockResolvedValue({ error: 'Task does not require approval' });
+    await expect(resolveQueueItem('cos:sys-1')).rejects.toMatchObject({ status: 409 });
   });
 });
