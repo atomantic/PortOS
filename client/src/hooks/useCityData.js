@@ -18,6 +18,7 @@ export const useCityData = () => {
   const [instances, setInstances] = useState({ self: null, peers: [], syncStatus: null });
   const [systemHealth, setSystemHealth] = useState(null);
   const [notificationCounts, setNotificationCounts] = useState({ unread: 0 });
+  const [backupStatus, setBackupStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const logIdRef = useRef(0);
 
@@ -31,7 +32,7 @@ export const useCityData = () => {
     // /notifications/count returns the lightweight { count } payload — the HUD
     // and Attention pane only need unread, and notifications:count socket
     // events keep it fresh after this initial fetch.
-    const [appsData, agents, cosAgentsData, status, reviewData, instanceData, health, notif] = await Promise.all([
+    const [appsData, agents, cosAgentsData, status, reviewData, instanceData, health, notif, backup] = await Promise.all([
       api.getApps().catch(() => []),
       api.getRunningAgents().catch(() => []),
       api.getCosAgents().catch(() => []),
@@ -40,6 +41,7 @@ export const useCityData = () => {
       api.getInstances().catch(() => ({ self: null, peers: [], syncStatus: null })),
       api.getSystemHealth({ silent: true }).catch(() => null),
       api.getNotificationCount().catch(() => ({ count: 0 })),
+      api.getBackupStatus({ silent: true }).catch(() => null),
     ]);
 
     setApps(appsData);
@@ -50,7 +52,15 @@ export const useCityData = () => {
     setInstances(instanceData);
     setSystemHealth(health);
     setNotificationCounts({ unread: notif?.count ?? 0 });
+    setBackupStatus(backup);
     setLoading(false);
+  }, []);
+
+  // Pull a fresh backup snapshot status — used after backup:completed so the vault
+  // landmark reflects the new lastRun/status without a full fetchAll.
+  const fetchBackup = useCallback(async () => {
+    const backup = await api.getBackupStatus({ silent: true }).catch(() => null);
+    if (backup) setBackupStatus(backup);
   }, []);
 
   const healthInFlightRef = useRef(false);
@@ -157,6 +167,18 @@ export const useCityData = () => {
     socket.on('notifications:count', handleNotifCount);
     socket.on('notifications:cleared', handleNotifCleared);
 
+    // Backup vault landmark: mark in-flight on start (so the seal pulses blue), then
+    // refetch on completion to pick up the fresh lastRun/status and clear `running`.
+    const handleBackupStarted = () => setBackupStatus(prev => ({ ...(prev || {}), running: true }));
+    // Clear `running` optimistically so the seal stops pulsing blue even if the
+    // refetch fails, then pull authoritative lastRun/status from the server.
+    const handleBackupCompleted = () => {
+      setBackupStatus(prev => (prev?.running ? { ...prev, running: false } : prev));
+      fetchBackup();
+    };
+    socket.on('backup:started', handleBackupStarted);
+    socket.on('backup:completed', handleBackupCompleted);
+
     // Subscribe but do NOT unsubscribe on cleanup. The cos:* and notifications:*
     // namespaces are shared (useNotifications in Layout, useAgentFeedbackToast).
     // Server uses a per-socket Set, so unsubscribing here would yank the
@@ -172,8 +194,10 @@ export const useCityData = () => {
       socket.off('cos:status', handleCosStatus);
       socket.off('notifications:count', handleNotifCount);
       socket.off('notifications:cleared', handleNotifCleared);
+      socket.off('backup:started', handleBackupStarted);
+      socket.off('backup:completed', handleBackupCompleted);
     };
-  }, [fetchAll, fetchApps]);
+  }, [fetchAll, fetchApps, fetchBackup]);
 
   return {
     apps,
@@ -186,6 +210,7 @@ export const useCityData = () => {
     instances,
     systemHealth,
     notificationCounts,
+    backupStatus,
     loading,
     connected: socket.connected,
   };

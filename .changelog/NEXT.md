@@ -11,6 +11,7 @@
 - **[issue-705] CyberCity agents leave motion trails** — active agents in CyberCity now orbit their building and trail a glowing comet tail that fades behind them, so a busy building reads as moving energy at a glance instead of a static marker. The trail's length follows the graphics quality dial and turns off on the lowest setting.
 - **[issue-705] CyberCity flow lines follow real activity** — the data streams between buildings now trace your live system instead of being random decoration: they only connect buildings that are running, and a link glows brighter and carries more, faster packets when either end has a working agent — so at a glance you can see where work is actually flowing.
 - **[issue-705] CyberCity federation horizon** — your sync peers now appear as distant towers on the city's horizon: each lights up brighter when it's reachable and dims when it goes offline, with a link line reaching toward the city that's solid while syncing and dashed when the connection drops. A "VOID" marker for the primary instance is always there, so the horizon stays meaningful even when you run a single machine.
+- **[issue-705] CyberCity backup vault** — a vault landmark now stands west of downtown and tells you your backup health at a glance: its seal glows green when a recent snapshot is protecting you, ambers as it ages, and turns red and reads "STALE" once a backup is overdue — pulsing blue while one is running. The label shows how long it's been since the last snapshot.
 
 ## Changed
 

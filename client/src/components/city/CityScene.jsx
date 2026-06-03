@@ -15,6 +15,7 @@ import CityShootingStars from './CityShootingStars';
 import CityVolumetricLights from './CityVolumetricLights';
 import CitySkyline from './CitySkyline';
 import CityFederationHorizon from './CityFederationHorizon';
+import CityBackupVault from './CityBackupVault';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
@@ -25,7 +26,7 @@ import CitySky from './CitySky';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, productivityData, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, productivityData, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -74,6 +75,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       {!explorationMode && <CityCelestial settings={settings} />}
       <CitySkyline />
       <CityFederationHorizon instances={instances} settings={settings} />
+      <CityBackupVault backupStatus={backupStatus} settings={settings} />
       <CityGround settings={settings} />
 
       <BuildingCluster
