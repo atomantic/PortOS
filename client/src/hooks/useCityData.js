@@ -3,6 +3,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { useAutoRefetch } from './useAutoRefetch';
 import { METRICS as HEALTH_TOWER_METRICS } from '../utils/cityHealthTower';
+import { applyAiStatusEvent } from '../utils/cityAiCore';
 
 // Metric keys the vitals-tower landmark renders — fetched as the latest-value snapshot.
 const HEALTH_METRIC_KEYS = HEALTH_TOWER_METRICS.map(m => m.key);
@@ -29,6 +30,10 @@ export const useCityData = () => {
   // `live` driven by the per-socket voice:* events (idle | listening | dictating | error).
   const [voiceState, setVoiceState] = useState(null);
   const [character, setCharacter] = useState(null);
+  // AI Core landmark: in-flight `ai:status` ops keyed by id + the last op-start timestamp
+  // (for the flare). Purely event-driven — there's no GET for in-flight ops, so it starts
+  // empty and the socket handler below maintains it.
+  const [aiActivity, setAiActivity] = useState({ ops: {}, lastStartTs: 0 });
   const [loading, setLoading] = useState(true);
   const logIdRef = useRef(0);
 
@@ -235,6 +240,16 @@ export const useCityData = () => {
     socket.on('voice:error', handleVoiceError);
     socket.on('voice:idle', handleVoiceIdle);
 
+    // AI Core landmark: every LLM/model call broadcasts phase-tagged `ai:status` events
+    // (start → model:loading → model:loaded → complete/error) globally. Track the in-flight
+    // set so the central spire glows/beams with live model activity; the pure reducer adds
+    // on non-terminal phases, drops on complete/error, and prunes stale ops.
+    const handleAiStatus = (event) => setAiActivity(prev => ({
+      ops: applyAiStatusEvent(prev.ops, event),
+      lastStartTs: event?.phase === 'start' ? Date.now() : prev.lastStartTs,
+    }));
+    socket.on('ai:status', handleAiStatus);
+
     // Subscribe but do NOT unsubscribe on cleanup. The cos:* and notifications:*
     // namespaces are shared (useNotifications in Layout, useAgentFeedbackToast).
     // Server uses a per-socket Set, so unsubscribing here would yank the
@@ -256,6 +271,7 @@ export const useCityData = () => {
       socket.off('voice:dictation', handleVoiceDictation);
       socket.off('voice:error', handleVoiceError);
       socket.off('voice:idle', handleVoiceIdle);
+      socket.off('ai:status', handleAiStatus);
     };
   }, [fetchAll, fetchApps, fetchBackup]);
 
@@ -275,6 +291,7 @@ export const useCityData = () => {
     healthMetrics,
     voiceState,
     character,
+    aiActivity,
     loading,
     connected: socket.connected,
   };
