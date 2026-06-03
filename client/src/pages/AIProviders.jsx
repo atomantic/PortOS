@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli } from '../utils/providers';
+import EmptyState from '../components/EmptyState';
 import {
   formatDurationMs,
   parseTimeoutMs,
@@ -549,9 +550,12 @@ export default function AIProviders() {
         ))}
 
         {providers.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            No providers configured. Add a provider to get started.
-          </div>
+          <EmptyState
+            title="No providers configured"
+            message="Configure at least one API provider to enable autonomous CoS, voice, and AI-assisted features across PortOS."
+            actionLabel="Add Provider"
+            onAction={() => { setEditingProvider(null); setShowForm(true); }}
+          />
         )}
       </div>
 

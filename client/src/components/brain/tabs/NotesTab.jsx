@@ -391,8 +391,8 @@ export default function NotesTab({ onRefresh }) {
               <BrailleSpinner /> Scanning vault...
             </div>
           ) : displayNotes.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
-              {searchResults ? 'No matches found' : 'No notes yet'}
+            <div className="flex items-center justify-center h-32 px-4 text-center text-gray-500 text-sm">
+              {searchResults ? 'No matches found' : 'No notes yet — capture notes in your vault to enrich Ask Yourself and your digital twin.'}
             </div>
           ) : (
             <div className="divide-y divide-port-border/50">

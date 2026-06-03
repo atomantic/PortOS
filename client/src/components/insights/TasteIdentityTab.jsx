@@ -3,7 +3,7 @@ import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getInsightThemes, refreshInsightThemes } from '../../services/api';
 import InsightCard from './InsightCard';
 import ConfidenceBadge from './ConfidenceBadge';
-import EmptyState from './EmptyState';
+import EmptyState from '../EmptyState';
 import { timeAgo } from '../../utils/formatters';
 
 // Map theme strength to confidence level
