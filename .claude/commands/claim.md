@@ -16,6 +16,8 @@ Claim the next unclaimed `- [ ]` item from PLAN.md via the slug-ID system — or
 
 The two sources never mix in one run. In issues mode, treat `issue-<num>` as the "slug" everywhere the PLAN.md flow says `<slug>` — the worktree (`claim-issue-<num>`), branch (`claim/issue-<num>`), commit/PR-title prefix (`[issue-<num>]`), and in-flight scan all work unchanged because `issue-<num>` is a `/`-segment in the branch name just like a PLAN slug.
 
+**Cross-machine claim marker (issues mode).** A PLAN.md slug becomes a claim the moment the `claim/<slug>` branch exists, but that branch is only *local* until Phase 6 pushes it — so on its own it does NOT protect against a `/claim --issues` running on a **different machine** (a common setup: one user, several federated machines). To close that gap, issues mode marks the claim on GitHub itself, immediately in Phase 2, by **assigning the issue to `@me`** (and adding an `in-progress` label for human visibility). The assignee is visible to every machine the instant it's set, and Phase 1's in-flight scan already treats an assigned issue as taken — so the marker and the reader are two halves of the same mechanism. This is best-effort, not a distributed lock (two machines that pick in the same sub-second window can still collide); it narrows the race to the moment of claiming rather than the whole implementation. Releasing an abandoned claim (Phase 3 skip / Phase 7 abort) removes the assignee so the issue returns to the queue; a successfully merged issue is closed (Phase 6/7) and so is no longer a candidate regardless of assignee.
+
 **How the claim works.** Every PLAN.md checkbox carries a `[<slug>]` ID (see [lib/slashdo/lib/plan-id-format.md](../../lib/slashdo/lib/plan-id-format.md)). A slug is "in flight" when it appears as a `/`-separated segment in any local or remote branch (`git branch -a`) or any open PR head ref (`gh pr list --state open`). This command picks the first `- [ ]` whose slug is NOT in flight and creates a `claim/<slug>` branch — that branch name becomes the claim, visible to every other agent and human running this command.
 
 **Arguments.** Parse `$ARGUMENTS` by splitting on whitespace — tokens starting with `--` are flags, the first remaining non-flag token is the slug. A flag that takes a value accepts **either** form: glued with `=` (`--review-with=codex`) **or** as the next whitespace-separated token (`--review-with codex`) — in the space form, consume the following token as the flag's value (and don't mistake it for the slug). Order is free: `auth-bug --review-with=codex`, `--review-with codex auth-bug`, and `--review-with=codex auth-bug` are all equivalent.
@@ -65,7 +67,7 @@ For every ref in the combined output, split on `/` and collect every segment —
    ```
 3. **Determine in-flight issues.** An issue number `N` is in flight if EITHER:
    - `issue-N` appears in the raw in-flight set (a `claim/issue-N` branch or PR head exists), OR
-   - the issue already has an assignee (someone — human or agent — has taken it).
+   - the issue already has an assignee (someone — human or agent, on this machine or another — has taken it via the Phase 2 marker below). This assignee check is the cross-machine half of the claim mechanism: a local-only `claim/issue-N` branch on a sibling machine is invisible here, but its assignee is not — so an already-assigned issue must be treated as taken even when no matching branch/PR shows up in the fetch.
 4. **Pick the target issue:**
    - **With argument**: the non-flag token is the issue number (strip a leading `#`). Verify it is open, authored by `$CREATOR`, and NOT in flight. If any check fails, print why and stop. (If the user explicitly named an in-flight issue, that's an error — don't silently re-claim it.)
    - **Without argument**: pick the FIRST (oldest) candidate issue that is NOT in flight and does NOT carry a blocking label (`blocked`, `needs-input`, `wontfix`, `discussion`, or any label the repo uses to park issues — skip these and note the skip).
@@ -104,6 +106,21 @@ pwd
 
 Stash the absolute worktree path; you'll need it for Phase 7 cleanup.
 
+### Phase 2 — mark the issue in progress (issues mode only)
+
+Immediately after the worktree is verified, claim the issue **on GitHub** so a `/claim --issues` on any other machine sees it as taken (the Phase 1 assignee check is the reader for this marker). Do this before writing any code — it's the cross-machine half of the claim and the window you're narrowing is "picked but not yet marked":
+
+```bash
+# Required: assign to yourself — this is the signal Phase 1 reads on every machine.
+gh issue edit "$ISSUE_NUM" --add-assignee @me
+
+# Optional human-visibility: add an `in-progress` label, creating it if the repo lacks one.
+gh label create in-progress --color FFA500 --description "Claimed and being worked" 2>/dev/null || true
+gh issue edit "$ISSUE_NUM" --add-label in-progress 2>/dev/null || true
+```
+
+The assignee is the load-bearing marker; the label is a convenience for the GitHub UI and may be skipped if `gh label`/`gh issue edit --add-label` is unavailable (the `|| true` keeps a label failure from aborting the claim). **If a step in this phase fails such that you must stop (e.g. worktree creation failed, or `--add-assignee` reported the issue was assigned out from under you by a sibling machine in the race window), release the marker before stopping** — `gh issue edit "$ISSUE_NUM" --remove-assignee @me --remove-label in-progress 2>/dev/null || true` — so a half-claimed issue doesn't get stranded as permanently "taken."
+
 ## Phase 3: Verify still valid
 
 Before writing any code, sanity-check that executing the item as worded won't regress newer work. **Ask the user before proceeding if ANY of these are true:**
@@ -116,7 +133,11 @@ Before writing any code, sanity-check that executing the item as worded won't re
 - The item depends on a predecessor that hasn't shipped (e.g. "Phase B work" when Phase B isn't done).
 - The work would require touching files outside the inferred scope (>5 unrelated files), suggesting the item is bigger than originally estimated.
 
-If you ask the user and they confirm "proceed", continue. If they say "skip", remove the worktree+branch (Phase 7 cleanup) and re-run Phase 1 to pick the next item.
+If you ask the user and they confirm "proceed", continue. If they say "skip", remove the worktree+branch (Phase 7 cleanup) and re-run Phase 1 to pick the next item. **In issues mode, also release the in-progress marker** so the abandoned issue returns to the queue for the next picker (here or on another machine):
+
+```bash
+gh issue edit "$ISSUE_NUM" --remove-assignee @me --remove-label in-progress 2>/dev/null || true
+```
 
 ## Phase 4: Implement
 
@@ -246,10 +267,10 @@ When `/simplify` is deferred but an external review will run, run `/simplify` fi
         --body "<PR body>"   # issues mode: include a "Closes #<num>" line so merge auto-closes the issue
       ```
       Capture the PR number as `PR_NUM`.
-   3. **Pick the CLI invocation per requested reviewer** (run each one when several are requested). **Pass the whole prompt — including the inlined diff — as the prompt ARGUMENT, never via stdin.** `agy -p` (`--print`) and `claude -p` take the prompt as the positional argument right after the flag; piping into them (`… | agy -p`, `agy -p < file`) fails with `agy --print takes the prompt as an argument, not stdin` and wastes an invocation. Build the prompt once with `PROMPT="$(cat /tmp/claim-${SLUG}-prompt.md)"` and pass `"$PROMPT"` as the argument:
+   3. **Pick the CLI invocation per requested reviewer** (run each one when several are requested). **Pass the whole prompt — including the inlined diff — as the prompt ARGUMENT, never via stdin.** `agy -p` (`--print`) and `claude -p` take the prompt as the positional argument right after the flag; piping into them (`… | agy -p`, `agy -p < file`) fails with `agy --print takes the prompt as an argument, not stdin` and wastes an invocation. Build the prompt once with `PROMPT="$(cat /tmp/claim-${SLUG}-prompt.md)"` and pass `"$PROMPT"` as the argument. `codex exec` still *opens* stdin even when the prompt is an argument and will block forever waiting on it, so its row redirects `< /dev/null`:
       | reviewer | Command |
       |---|---|
-      | `codex`  | `codex --sandbox danger-full-access exec "$PROMPT"` |
+      | `codex`  | `codex --sandbox danger-full-access exec "$PROMPT" < /dev/null` |
       | `agy`    | `agy --dangerously-skip-permissions -p "$PROMPT"` |
       | `claude` | `claude -p "$PROMPT" --dangerously-skip-permissions` |
    4. **Review-and-fix loop — converge to mutual agreement, no iteration cap.** Loop until the main agent AND every requested review CLI agree the PR is ready to merge. The agent (you) decides when the review is producing real value vs. nit-grade churn; each review CLI decides when nothing actionable remains for it. With multiple reviewers, gather all of their findings each iteration, dedup, and converge only when they are all CLEAN. Each iteration:
@@ -318,7 +339,13 @@ git pull --rebase --autostash
 
 (`git branch -d` is safe-delete; only fall back to `-D` if you've confirmed there's no unmerged work. `git pull --rebase --autostash` brings the merge commit into local main.)
 
-**Issues mode — confirm the issue is closed.** If the PR body carried `Closes #<num>`, the merge already closed it. Verify with `gh issue view <num> --json state -q .state` (expect `CLOSED`); if it's still `OPEN` (e.g. the keyword was missing or the PR merged to a non-default base), close it explicitly: `gh issue close <num> --comment "Shipped in PR #<num>."`.
+**Issues mode — confirm the issue is closed, then clear the in-progress marker.** If the PR body carried `Closes #<num>`, the merge already closed it (the `Closes`/`Fixes` keyword auto-closes only on a merge to the **default branch** — PortOS merges `claim/*` into `main`, the default, so this fires; a non-default base or a missing keyword does not). Verify with `gh issue view <num> --json state -q .state` (expect `CLOSED`); if it's still `OPEN`, close it explicitly: `gh issue close <num> --comment "Shipped in PR #<num>."`. Then drop the now-stale label so a closed issue doesn't keep advertising itself as in progress:
+
+```bash
+gh issue edit "$ISSUE_NUM" --remove-label in-progress 2>/dev/null || true
+```
+
+(Leave the assignee on the closed issue — it's a useful record of who shipped it, and a closed issue is never a Phase 1 candidate regardless.)
 
 Print a one-line summary:
 
@@ -336,4 +363,5 @@ Shipped issue #<num> "<Title>". PR #<PR_NUM>. Issue closed. Worktree + branch cl
 - **CoS sub-agent coexistence.** CoS scheduled `feature-ideas` and `plan-task` jobs use the branch pattern `cos/<task>/<slug>/<agent>`. The `claim/<slug>` pattern from this command is visible to CoS's `findInProgressIds` scan (and vice versa), so they coexist without locking out each other.
 - **Empty pick is not a failure mode.** If every `- [ ]` is in flight, drifted, or NEEDS_INPUT (PLAN.md mode), or every creator-authored issue is in flight / assigned / blocked-labelled (issues mode), that's a healthy queue — exit clean and let the user know.
 - **No new PLAN.md items.** This command never adds work to its *own* queue from thin air; it only consumes. New PLAN.md items come from `/do:replan` (Phase 3 suggestions), `feature-ideas` brainstorm (when the plan is empty), or human edits. The exception in both modes is *discovered* work split out of the current item (Phase 4/6): PLAN.md mode files it as a new PLAN item, issues mode files it as a new GitHub issue.
+- **Issues mode — the in-progress marker is the cross-machine claim.** Phase 2 assigns the issue to `@me` (and labels it `in-progress`) the instant the worktree is verified; Phase 1 on every machine treats an assigned issue as in flight. This is what stops a `/claim --issues` on a *second machine* from grabbing an issue this machine is already working — the local `claim/issue-<num>` branch alone can't, since it isn't pushed until Phase 6. The marker is best-effort (two machines picking within the same sub-second window can still both assign), not a distributed lock; it shrinks the collision window to the moment of claiming. Abandoned claims release the marker (Phase 3/7); shipped issues close (Phase 6/7).
 - **Issues mode — creator-only is a hard filter.** Auto-pick and the explicit-`#num` path both reject issues NOT authored by the repo owner (`gh repo view --json owner -q .owner.login`). This keeps `/claim --issues` from acting on community/bot-filed issues without a human triaging them first — those are surfaced by `/do:replan`, not auto-claimed.
