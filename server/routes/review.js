@@ -52,9 +52,10 @@ const resolveQueueSchema = z.object({
   id: z.string().min(1).max(500)
 });
 
-// POST /api/review/queue/resolve — accept/promote a single cross-domain queue
-// row in place (mark a brain inbox item done, promote an Ask answer, approve a
-// CoS task or message draft) without leaving the Review Hub. The `id` is the
+// POST /api/review/queue/resolve — accept a single cross-domain queue row in
+// place (mark a Brain inbox item done, approve a CoS task or message draft)
+// without leaving the Review Hub. Sources with no clean one-click resolve
+// (Ask, health, backup) have no inline action and 400 here. The `id` is the
 // row's `<source>:<rawId>` — the service dispatches to that source's primitive.
 router.post('/queue/resolve', asyncHandler(async (req, res) => {
   const { id } = validateRequest(resolveQueueSchema, req.body);
