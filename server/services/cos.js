@@ -5,18 +5,16 @@
  * spawns sub-agents, and orchestrates task completion.
  *
  * Decomposed modules:
- * - cosState.js    — shared state management (loadState, saveState, config, mutex)
- * - cosAgents.js   — agent lifecycle (register, complete, archive, feedback)
- * - cosReports.js  — reports, briefings, and activity tracking
- * - cosEvents.js   — event emitter and logging
+ * - cosState.js          — shared state management (loadState, saveState, config, mutex)
+ * - cosAgents.js         — agent lifecycle (register, complete, archive, feedback)
+ * - cosReports.js        — reports, briefings, and activity tracking
+ * - cosEvents.js         — event emitter and logging
+ * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
  */
 
 import { readFile, writeFile, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { exec, execFile } from 'child_process';
-import { execPm2 } from './pm2.js';
-import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
@@ -43,7 +41,6 @@ import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '../lib/timezone.js';
 import { PORTOS_UI_URL } from '../lib/ports.js';
-import { getMemoryStats } from '../lib/memoryStats.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -57,6 +54,11 @@ export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
 export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
+
+// Health monitoring (imported for internal use by start()/init() and re-exported
+// for backward compat with `import * as cos` and the cos route handlers)
+import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
+export { runHealthCheck, getHealthStatus };
 
 const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
@@ -74,11 +76,6 @@ const RECENT_COMPLETION_GRACE_MS = 60_000;
 // are flattened to a single line by generateTasksMarkdown, so the comparison
 // must normalize on the first line to match multi-line inputs.
 export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
-
-const _execAsync = promisify(exec);
-const _execFileAsync = promisify(execFile);
-const execAsync = (cmd, opts) => _execAsync(cmd, { ...opts, windowsHide: true });
-const execFileAsync = (cmd, args, opts) => _execFileAsync(cmd, args, { ...opts, windowsHide: true });
 
 // MAX_TOTAL_SPAWNS imported from validation.js (shared with subAgentSpawner.js)
 
@@ -2173,132 +2170,6 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
   };
 
   return task;
-}
-
-/**
- * Run system health check
- */
-export async function runHealthCheck() {
-  if (!isDaemonRunning()) return;
-
-  const state = await loadState();
-  const issues = [];
-  const metrics = {
-    timestamp: new Date().toISOString(),
-    pm2: null,
-    memory: null,
-    ports: null
-  };
-
-  // Check PM2 processes
-  const pm2Result = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
-  // pm2 jlist may output ANSI codes and warnings before JSON, extract the JSON array
-  // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
-  const pm2Output = pm2Result.stdout || '[]';
-  let jsonStart = pm2Output.indexOf('[{');
-  if (jsonStart < 0) {
-    // Check for empty array - find '[]' that's not part of ANSI codes
-    const emptyMatch = pm2Output.match(/\[\](?![0-9])/);
-    jsonStart = emptyMatch ? pm2Output.indexOf(emptyMatch[0]) : -1;
-  }
-  const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
-  const pm2Processes = safeJSONParse(pm2Json, [], { logError: true, context: 'pm2 process list' });
-
-  metrics.pm2 = {
-    total: pm2Processes.length,
-    online: pm2Processes.filter(p => p.pm2_env?.status === 'online').length,
-    errored: pm2Processes.filter(p => p.pm2_env?.status === 'errored').length,
-    stopped: pm2Processes.filter(p => p.pm2_env?.status === 'stopped').length
-  };
-
-  // Check for runaway processes (too many)
-  if (pm2Processes.length > state.config.maxTotalProcesses) {
-    issues.push({
-      type: 'warning',
-      category: 'processes',
-      message: `High process count: ${pm2Processes.length} PM2 processes (limit: ${state.config.maxTotalProcesses})`
-    });
-  }
-
-  // Check for errored processes and auto-restart them
-  const erroredProcesses = pm2Processes.filter(p => p.pm2_env?.status === 'errored');
-  if (erroredProcesses.length > 0) {
-    const names = erroredProcesses.map(p => p.name);
-    emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
-
-    const restartResults = await Promise.all(names.map(async (name) => {
-      const result = await execFileAsync('pm2', ['restart', name], { shell: process.platform === 'win32' }).catch(e => ({ stdout: '', stderr: e.message }));
-      const failed = result.stderr && !result.stdout;
-      if (failed) {
-        emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);
-      } else {
-        emitLog('success', `✅ Auto-restarted errored process: ${name}`);
-      }
-      return { name, success: !failed };
-    }));
-
-    const failedRestarts = restartResults.filter(r => !r.success);
-    if (failedRestarts.length > 0) {
-      issues.push({
-        type: 'error',
-        category: 'processes',
-        message: `${failedRestarts.length} errored PM2 process(es) failed to auto-restart: ${failedRestarts.map(r => r.name).join(', ')}`
-      });
-    }
-
-    const succeededRestarts = restartResults.filter(r => r.success);
-    if (succeededRestarts.length > 0) {
-      issues.push({
-        type: 'warning',
-        category: 'processes',
-        message: `Auto-restarted ${succeededRestarts.length} errored PM2 process(es): ${succeededRestarts.map(r => r.name).join(', ')}`
-      });
-    }
-  }
-
-  // Check memory usage per process
-  const highMemoryProcesses = pm2Processes.filter(p => {
-    const memMb = (p.monit?.memory || 0) / (1024 * 1024);
-    return memMb > state.config.maxProcessMemoryMb;
-  });
-
-  if (highMemoryProcesses.length > 0) {
-    issues.push({
-      type: 'warning',
-      category: 'memory',
-      message: `High memory usage in: ${highMemoryProcesses.map(p => `${p.name} (${Math.round((p.monit?.memory || 0) / (1024 * 1024))}MB)`).join(', ')}`
-    });
-  }
-
-  metrics.memory = await getMemoryStats();
-
-  // Store health check result with lock to prevent race conditions
-  await withStateLock(async () => {
-    const freshState = await loadState();
-    freshState.stats.lastHealthCheck = metrics.timestamp;
-    freshState.stats.healthIssues = issues;
-    await saveState(freshState);
-  });
-
-  cosEvents.emit('health:check', { metrics, issues });
-
-  // If there are critical issues, emit for potential automated response
-  if (issues.filter(i => i.type === 'error').length > 0) {
-    cosEvents.emit('health:critical', issues.filter(i => i.type === 'error'));
-  }
-
-  return { metrics, issues };
-}
-
-/**
- * Get latest health status
- */
-export async function getHealthStatus() {
-  const state = await loadState();
-  return {
-    lastCheck: state.stats.lastHealthCheck,
-    issues: state.stats.healthIssues || []
-  };
 }
 
 /**
