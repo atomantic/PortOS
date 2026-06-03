@@ -132,6 +132,11 @@ describe('auth service', () => {
     expect(insecure).not.toContain('Secure');
     const clear = auth.buildClearCookie();
     expect(clear).toContain('Max-Age=0');
+    expect(clear).not.toContain('Secure');
+    // Mirrors the live cookie's Secure flag so HTTPS deletion conforms
+    // to RFC 6265bis attribute matching.
+    const secureClear = auth.buildClearCookie({ secure: true });
+    expect(secureClear).toContain('Secure');
   });
 
   it('persists sessions across reloads of the module', async () => {
@@ -165,5 +170,18 @@ describe('auth service', () => {
     await auth.clearPassword({ currentPassword: 'new-horse' });           // disable
     // setPassword/clearPassword both call revokeAllSessions internally.
     expect(events.length).toBe(3);
+  });
+
+  it('emits sessions:revoked-all on single-token logout too (kicks the tab\'s sockets)', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { token } = await auth.createSession();
+    const events = [];
+    auth.authEvents.on('sessions:revoked-all', () => events.push('event'));
+    await auth.revokeSession(token);
+    expect(events.length).toBe(1);
+    // Revoking an unknown token must NOT fire — no state changed.
+    await auth.revokeSession('not-a-real-token');
+    expect(events.length).toBe(1);
   });
 });

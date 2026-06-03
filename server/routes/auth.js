@@ -71,7 +71,7 @@ router.post('/login', asyncHandler(async (req, res) => {
 router.post('/logout', asyncHandler(async (req, res) => {
   const token = extractToken(req);
   if (token) await revokeSession(token);
-  res.setHeader('Set-Cookie', buildClearCookie());
+  res.setHeader('Set-Cookie', buildClearCookie({ secure: isSecure(req) }));
   res.json({ ok: true });
 }));
 
@@ -99,7 +99,7 @@ router.post('/password', asyncHandler(async (req, res) => {
 router.delete('/password', asyncHandler(async (req, res) => {
   const { currentPassword } = validateRequest(clearPasswordSchema, req.body || {});
   await clearPassword({ currentPassword });
-  res.setHeader('Set-Cookie', buildClearCookie());
+  res.setHeader('Set-Cookie', buildClearCookie({ secure: isSecure(req) }));
   res.json({ enabled: false });
 }));
 

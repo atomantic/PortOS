@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings } from './settings.js';
+import { getSettings, settingsEvents, updateSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Auth gates the PortOS UI + API behind a single user-set password. PortOS is
@@ -59,14 +59,12 @@ const readSessions = async () => {
   if (!Array.isArray(parsed.tokens)) return;
   const cutoff = now();
   for (const entry of parsed.tokens) {
-    // Records carry `tokenHash` (sha256 hex) — accept the legacy `token` key
-    // too so a pre-hash install upgrading on the spot doesn't sign every
-    // session out at boot (the in-memory + at-rest representation rewrites
-    // on the next mutation).
-    const stored = entry?.tokenHash ?? entry?.token;
-    if (typeof stored !== 'string' || typeof entry.expiresAt !== 'number') continue;
+    // Records carry `tokenHash` (sha256 hex). Records without it are
+    // skipped — the feature ships with hashed storage from day one, so
+    // a record missing `tokenHash` is corrupted, not legacy.
+    if (typeof entry?.tokenHash !== 'string' || typeof entry.expiresAt !== 'number') continue;
     if (entry.expiresAt <= cutoff) continue;
-    sessions.set(stored, { expiresAt: entry.expiresAt });
+    sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt });
   }
 };
 
@@ -103,9 +101,22 @@ const readAuthConfig = async () => {
   return settings?.secrets?.auth ?? null;
 };
 
+// isAuthEnabled is called on EVERY gated request and every socket event.
+// Re-reading + parsing + stripping settings.json each time is a measurable
+// I/O multiplier on active pages and high-frequency socket streams (shell
+// input, voice frames). Cache the boolean and refresh it via the
+// settings:updated event the settings service already emits on every
+// updateSettings write.
+let enabledCache = null;
+const recomputeEnabledCache = (settings) => {
+  const a = settings?.secrets?.auth;
+  enabledCache = !!(a?.enabled && a?.passwordHash && a?.salt);
+};
+settingsEvents.on('settings:updated', recomputeEnabledCache);
+
 export const isAuthEnabled = async () => {
-  const auth = await readAuthConfig();
-  return !!(auth?.enabled && auth?.passwordHash && auth?.salt);
+  if (enabledCache === null) recomputeEnabledCache(await getSettings());
+  return enabledCache;
 };
 
 export const getAuthStatus = async () => {
@@ -206,6 +217,10 @@ export const revokeSession = async (token) => {
   await ensureLoaded();
   if (sessions.delete(hashToken(token))) {
     await writeSessions();
+    // Logging-out one tab kicks every connected socket too — the
+    // single-user model means broadcast events shouldn't keep streaming
+    // to a tab whose cookie was just cleared.
+    authEvents.emit('sessions:revoked-all');
   }
 };
 
@@ -274,5 +289,19 @@ export const buildSessionCookie = (token, { secure = false } = {}) => {
   return parts.join('; ');
 };
 
-export const buildClearCookie = () =>
-  `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export const buildClearCookie = ({ secure = false } = {}) => {
+  // Mirror the `Secure` attribute on the clear so RFC 6265bis-conformant
+  // browsers can match-and-delete by full attribute set. Today most
+  // browsers still clear by name+path+domain alone; Chrome has been
+  // tightening this, and a future change could leave the cookie
+  // un-deletable on HTTPS sessions if we drop the attribute here.
+  const parts = [
+    `${COOKIE_NAME}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+};

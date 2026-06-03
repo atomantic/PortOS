@@ -105,11 +105,20 @@ export function initSocket(io) {
     // socket without the `use` middleware hook.
     if (typeof socket.use === 'function') {
       socket.use(async ([_event, ..._args], next) => {
-        if (!(await isAuthEnabled())) return next();
-        const token = extractToken({ headers: socket.handshake?.headers || {} });
-        if (await verifySession(token)) return next();
-        socket.disconnect(true);
-        // Don't call next — the event is dropped along with the connection.
+        // Fail closed: if isAuthEnabled / verifySession throw (e.g. a
+        // transient settings.json read error) we MUST disconnect rather
+        // than skip the check by neither calling next nor disconnecting,
+        // which would silently stall the event and leave the socket
+        // attached on stale credentials.
+        try {
+          if (!(await isAuthEnabled())) return next();
+          const token = extractToken({ headers: socket.handshake?.headers || {} });
+          if (await verifySession(token)) return next();
+          socket.disconnect(true);
+        } catch (err) {
+          console.error(`❌ Socket auth middleware error: ${err?.message ?? err}`);
+          socket.disconnect(true);
+        }
       });
     }
     registerVoiceHandlers(socket);
