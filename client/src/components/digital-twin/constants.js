@@ -156,6 +156,26 @@ export const ADVERSARIAL_STATUS = {
   }
 };
 
+// Multi-turn conversation result states (M34 P6)
+export const MULTI_TURN_STATUS = {
+  consistent: {
+    label: 'Consistent',
+    color: 'bg-green-500/20 text-green-400 border-green-500/30'
+  },
+  partial: {
+    label: 'Partial',
+    color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+  },
+  inconsistent: {
+    label: 'Inconsistent',
+    color: 'bg-red-500/20 text-red-400 border-red-500/30'
+  },
+  pending: {
+    label: 'Pending',
+    color: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+  }
+};
+
 // Enrichment category configurations
 export const ENRICHMENT_CATEGORIES = {
   core_memories: {
@@ -318,5 +338,14 @@ export function getHealthLabel(score) {
   if (score >= HEALTH_THRESHOLDS.good) return 'Good';
   if (score >= HEALTH_THRESHOLDS.fair) return 'Fair';
   return 'Needs Work';
+}
+
+// Shared 0–1 test-run score → Tailwind text color, used by the values-alignment,
+// adversarial-boundary, and multi-turn test panels so their score readouts stay
+// visually consistent (green ≥80%, yellow ≥50%, red below).
+export function scoreToColor(score) {
+  if (score >= 0.8) return 'text-green-400';
+  if (score >= 0.5) return 'text-yellow-400';
+  return 'text-red-400';
 }
 

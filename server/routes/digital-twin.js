@@ -272,6 +272,41 @@ router.get('/adversarial-tests/history', asyncHandler(async (req, res) => {
 }));
 
 // =============================================================================
+// MULTI-TURN CONVERSATION TESTING (M34 P6)
+// =============================================================================
+
+/**
+ * GET /api/digital-twin/multi-turn-tests
+ * Get the multi-turn conversation suite (parsed from MULTI_TURN_SUITE.md)
+ */
+router.get('/multi-turn-tests', asyncHandler(async (req, res) => {
+  const scenarios = await digitalTwinService.parseMultiTurnSuite();
+  res.json(scenarios);
+}));
+
+/**
+ * POST /api/digital-twin/multi-turn-tests/run
+ * Run multi-turn conversation scenarios against a single provider/model, scoring
+ * whether the embodied twin stayed consistent across each conversation
+ */
+router.post('/multi-turn-tests/run', asyncHandler(async (req, res) => {
+  const { providerId, model, testIds, personaId } = validateRequest(runTestsInputSchema, req.body);
+  await assertPersonaExists(personaId);
+  const result = await digitalTwinService.runMultiTurnTests(providerId, model, testIds, personaId);
+  res.json(result);
+}));
+
+/**
+ * GET /api/digital-twin/multi-turn-tests/history
+ * Get multi-turn conversation run history
+ */
+router.get('/multi-turn-tests/history', asyncHandler(async (req, res) => {
+  const data = validateRequest(testHistoryQuerySchema, req.query);
+  const history = await digitalTwinService.getMultiTurnTestHistory(data.limit);
+  res.json(history);
+}));
+
+// =============================================================================
 // ENRICHMENT
 // =============================================================================
 

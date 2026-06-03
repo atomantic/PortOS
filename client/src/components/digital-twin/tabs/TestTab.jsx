@@ -18,6 +18,7 @@ import toast from '../../ui/Toast';
 
 import ValuesAlignmentPanel from './ValuesAlignmentPanel';
 import AdversarialBoundaryPanel from './AdversarialBoundaryPanel';
+import MultiTurnPanel from './MultiTurnPanel';
 import PersonaBadge from '../PersonaBadge';
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
@@ -692,6 +693,9 @@ export default function TestTab({ onRefresh }) {
 
       {/* Adversarial Boundary Tests (M34 P6) — shares the provider + persona selection above */}
       <AdversarialBoundaryPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
+
+      {/* Multi-Turn Conversation Tests (M34 P6) — shares the provider + persona selection above */}
+      <MultiTurnPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
     </div>
   );
 }

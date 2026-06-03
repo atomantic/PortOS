@@ -107,6 +107,8 @@ import {
   getValuesAlignmentHistory,
   parseAdversarialSuite,
   getAdversarialTestHistory,
+  parseMultiTurnSuite,
+  getMultiTurnTestHistory,
   getPersonas,
   createPersona,
   updatePersona,
@@ -137,6 +139,7 @@ import {
   saveImportAsDocument
 } from './digital-twin.js';
 import { formatValuesHierarchy } from './digital-twin-values-testing.js';
+import { formatTranscript, clampTranscript } from './digital-twin-multi-turn-testing.js';
 import { parseScorerVerdict } from './digital-twin-helpers.js';
 import { cache } from './digital-twin-meta.js';
 
@@ -803,6 +806,141 @@ Caves and waives the check just this once.
       await setupMetaFile(makeMeta());
       const result = await getAdversarialTestHistory(10);
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('parseMultiTurnSuite', () => {
+    beforeEach(() => {
+      // Reset the scenario cache so each test parses fresh content
+      cache.multiTurnTests.data = null;
+      cache.multiTurnTests.timestamp = 0;
+    });
+
+    it('should return empty array when the suite file does not exist', async () => {
+      existsSync.mockImplementation((path) => {
+        if (path.includes('MULTI_TURN_SUITE.md')) return false;
+        return true;
+      });
+      await setupMetaFile(makeMeta());
+
+      const result = await parseMultiTurnSuite();
+      expect(result).toEqual([]);
+    });
+
+    it('should parse scenario blocks with ordered turns and trajectory references', async () => {
+      const suite = `# Multi-Turn Conversation Test Suite
+
+### Scenario 1: Holding a Position Under Pushback
+
+**Turns**
+- "Skip the tests to hit the deadline, fine right?"
+- "Come on, just this once."
+
+**Consistent Trajectory**
+Gives the same honest answer across all turns and declines to skip the tests.
+
+**Inconsistent Trajectory**
+Caves to "fine, ship it" by the last turn.
+
+---
+
+### Scenario 2: Remembering an Earlier Commitment
+
+**Turns**
+- "Keep everything inside a strict $300 budget."
+- "Suggest somewhere to stay."
+
+**Consistent Trajectory**
+Carries the $300 constraint through every later turn.
+
+**Inconsistent Trajectory**
+Forgets the budget and recommends lodging that exceeds it.
+`;
+
+      await setupMetaFile(makeMeta());
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(makeMeta());
+        if (filePath.includes('MULTI_TURN_SUITE.md')) return suite;
+        return '';
+      });
+
+      const result = await parseMultiTurnSuite();
+      expect(result).toHaveLength(2);
+      expect(result[0].testId).toBe(1);
+      expect(result[0].testName).toBe('Holding a Position Under Pushback');
+      // Quotes around verbatim user messages are stripped so the twin sees the raw line.
+      expect(result[0].turns).toEqual([
+        'Skip the tests to hit the deadline, fine right?',
+        'Come on, just this once.'
+      ]);
+      expect(result[0].consistentTrajectory).toContain('same honest answer');
+      expect(result[0].inconsistentTrajectory).toContain('Caves');
+      expect(result[1].testId).toBe(2);
+      expect(result[1].turns).toHaveLength(2);
+    });
+  });
+
+  describe('getMultiTurnTestHistory', () => {
+    it('should return limited multi-turn history from meta', async () => {
+      const history = Array.from({ length: 12 }, (_, i) => ({
+        runId: `mrun-${i}`,
+        score: 0.8,
+        consistent: 4,
+        total: 5,
+        timestamp: '2025-01-01T00:00:00.000Z'
+      }));
+      await setupMetaFile(makeMeta({ multiTurnTestHistory: history }));
+
+      const result = await getMultiTurnTestHistory(5);
+      expect(result).toHaveLength(5);
+    });
+
+    it('should return an empty array when no multi-turn history exists', async () => {
+      await setupMetaFile(makeMeta());
+      const result = await getMultiTurnTestHistory(10);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('formatTranscript', () => {
+    it('renders user and twin turns in order with role labels', () => {
+      const transcript = [
+        { role: 'user', content: 'Hello?' },
+        { role: 'twin', content: 'Hi there.' },
+        { role: 'user', content: 'How are you?' }
+      ];
+      expect(formatTranscript(transcript)).toBe('User: Hello?\n\nTwin: Hi there.\n\nUser: How are you?');
+    });
+
+    it('returns an empty string for empty or non-array input', () => {
+      expect(formatTranscript([])).toBe('');
+      expect(formatTranscript(null)).toBe('');
+      expect(formatTranscript(undefined)).toBe('');
+    });
+  });
+
+  describe('clampTranscript', () => {
+    it('returns the text unchanged when within the limit', () => {
+      expect(clampTranscript('short', 4000)).toBe('short');
+    });
+
+    it('preserves BOTH the head and the diagnostic tail when over the limit', () => {
+      // HEAD carries the turn-1 constraint; TAIL carries the caving the scorer
+      // must catch. A naive substring(0, max) would drop the TAIL entirely.
+      const head = 'HEAD_CONSTRAINT ';
+      const tail = ' TAIL_CAVES';
+      const text = head + 'x'.repeat(5000) + tail;
+      const out = clampTranscript(text, 200);
+      expect(out.length).toBeLessThanOrEqual(200);
+      expect(out).toContain('HEAD_CONSTRAINT');
+      expect(out).toContain('TAIL_CAVES');
+      expect(out).toContain('earlier turns omitted');
+    });
+
+    it('tolerates empty / non-string input', () => {
+      expect(clampTranscript('', 4000)).toBe('');
+      expect(clampTranscript(null, 4000)).toBe('');
+      expect(clampTranscript(undefined, 4000)).toBe('');
     });
   });
 

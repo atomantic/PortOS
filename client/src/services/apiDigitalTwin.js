@@ -46,6 +46,15 @@ export const runAdversarialTests = (providerId, model, testIds = null, personaId
 });
 export const getAdversarialTestHistory = (limit = 10, options = {}) => request(`/digital-twin/adversarial-tests/history?limit=${limit}`, options);
 
+// Digital Twin - Multi-Turn Conversation Testing (M34 P6)
+export const getMultiTurnTests = (options = {}) => request('/digital-twin/multi-turn-tests', options);
+export const runMultiTurnTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/multi-turn-tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds, personaId }),
+  ...options
+});
+export const getMultiTurnTestHistory = (limit = 10, options = {}) => request(`/digital-twin/multi-turn-tests/history?limit=${limit}`, options);
+
 // Digital Twin - Enrichment
 export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enrich/categories');
 export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');

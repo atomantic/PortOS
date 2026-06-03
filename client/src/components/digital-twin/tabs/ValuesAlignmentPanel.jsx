@@ -15,7 +15,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
 import PersonaBadge from '../PersonaBadge';
-import { VALUES_STATUS } from '../constants';
+import { VALUES_STATUS, scoreToColor } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
 /**
@@ -88,9 +88,6 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
     }
     onRefresh?.();
   };
-
-  const scoreColor = (score) =>
-    score >= 0.8 ? 'text-green-400' : score >= 0.5 ? 'text-yellow-400' : 'text-red-400';
 
   const getResultIcon = (result) => {
     switch (result) {
@@ -208,7 +205,7 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
                           <span className="text-sm text-red-400">{r.error}</span>
                         ) : (
                           <>
-                            <span className={`text-lg font-bold ${scoreColor(r.score || 0)}`}>
+                            <span className={`text-lg font-bold ${scoreToColor(r.score || 0)}`}>
                               {Math.round((r.score || 0) * 100)}%
                             </span>
                             <span className="text-sm text-gray-500 ml-2">
@@ -292,7 +289,7 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
                 {history.map(run => (
                   <div key={run.runId} className="flex items-center justify-between p-3 rounded bg-port-bg">
                     <div className="flex items-center gap-4">
-                      <span className={`text-xl font-bold ${scoreColor(run.score)}`}>
+                      <span className={`text-xl font-bold ${scoreToColor(run.score)}`}>
                         {Math.round(run.score * 100)}%
                       </span>
                       <div>

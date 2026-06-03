@@ -9,6 +9,7 @@
  *   digital-twin-testing.js    — parseTestSuite, runTests, getTestHistory
  *   digital-twin-values-testing.js — parseValuesAlignmentSuite, runValuesAlignmentTests, getValuesAlignmentHistory
  *   digital-twin-adversarial-testing.js — parseAdversarialSuite, runAdversarialTests, getAdversarialTestHistory
+ *   digital-twin-multi-turn-testing.js — parseMultiTurnSuite, runMultiTurnTests, getMultiTurnTestHistory
  *   digital-twin-personas.js   — getPersonas, createPersona, updatePersona, deletePersona, setActivePersona, getActivePersona
  *   digital-twin-enrichment.js — getEnrichmentCategories, generateEnrichmentQuestion, processEnrichmentAnswer, …
  *   digital-twin-export.js     — getExportFormats, exportDigitalTwin, exportSoul
@@ -53,6 +54,12 @@ export {
   runAdversarialTests,
   getAdversarialTestHistory
 } from './digital-twin-adversarial-testing.js';
+
+export {
+  parseMultiTurnSuite,
+  runMultiTurnTests,
+  getMultiTurnTestHistory
+} from './digital-twin-multi-turn-testing.js';
 
 export {
   getPersonas,

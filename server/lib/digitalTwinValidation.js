@@ -103,6 +103,21 @@ export const adversarialTestHistoryEntrySchema = z.object({
   timestamp: z.string().datetime()
 });
 
+// Multi-turn conversation run history entry (M34 P6). Same persona fields as above.
+export const multiTurnTestHistoryEntrySchema = z.object({
+  runId: z.string().uuid(),
+  providerId: z.string(),
+  model: z.string(),
+  personaId: z.string().uuid().optional(),
+  personaName: z.string().optional(),
+  score: z.number().min(0).max(1),
+  consistent: z.number().int().min(0),
+  partial: z.number().int().min(0),
+  inconsistent: z.number().int().min(0),
+  total: z.number().int().min(0),
+  timestamp: z.string().datetime()
+});
+
 // Individual test result schema
 export const testResultSchema = z.object({
   testId: z.number().int().min(1),
@@ -234,6 +249,7 @@ export const digitalTwinMetaSchema = z.object({
   testHistory: z.array(testHistoryEntrySchema).default([]),
   valuesTestHistory: z.array(valuesTestHistoryEntrySchema).default([]),
   adversarialTestHistory: z.array(adversarialTestHistoryEntrySchema).default([]),
+  multiTurnTestHistory: z.array(multiTurnTestHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
   settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
   personas: z.array(personaSchema).default([]),

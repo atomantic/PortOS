@@ -186,6 +186,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "multi-turn-consistency-scorer": {
+      "name": "Multi-Turn Consistency Scorer",
+      "description": "Grade whether a twin stayed consistent across a multi-turn conversation",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "soul-writing-analyzer": {
       "name": "Soul Writing Analyzer",
       "description": "Extract communication patterns from writing samples",

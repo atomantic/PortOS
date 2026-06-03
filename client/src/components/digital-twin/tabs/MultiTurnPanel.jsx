@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Play,
-  ShieldAlert,
+  MessagesSquare,
   CheckCircle,
   XCircle,
   AlertCircle,
@@ -15,17 +15,18 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
 import PersonaBadge from '../PersonaBadge';
-import { ADVERSARIAL_STATUS, scoreToColor } from '../constants';
+import { MULTI_TURN_STATUS, scoreToColor } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
 /**
- * Adversarial Boundary testing (M34 P6). Tries to manipulate the embodied twin
- * — authority pressure, flattery, guilt, incremental escalation, harmful
- * reframing — into crossing a stated boundary, then grades whether the twin
- * held the line. Reuses the provider/model + persona selection from the parent
- * TestTab via props so the three suites share one configuration.
+ * Multi-Turn Conversation testing (M34 P6). Plays out each scenario's user turns
+ * in order — the twin sees its own prior replies plus the next message — and
+ * grades whether it stayed *consistent* across the whole conversation rather
+ * than contradicting itself, caving to pushback, or forgetting a constraint.
+ * Reuses the provider/model + persona selection from the parent TestTab via
+ * props so all four suites share one configuration.
  */
-export default function AdversarialBoundaryPanel({ selectedProviders = [], personaId = '', onPersonaNotFound, onRefresh }) {
+export default function MultiTurnPanel({ selectedProviders = [], personaId = '', onPersonaNotFound, onRefresh }) {
   const [scenarios, setScenarios] = useState([]);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -41,8 +42,8 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
     setLoading(true);
     // These loads own their fallback ([]) so silence the helper's default toast.
     const [scenarioData, historyData] = await Promise.all([
-      api.getAdversarialTests({ silent: true }).catch(() => []),
-      api.getAdversarialTestHistory(5, { silent: true }).catch(() => [])
+      api.getMultiTurnTests({ silent: true }).catch(() => []),
+      api.getMultiTurnTestHistory(5, { silent: true }).catch(() => [])
     ]);
     setScenarios(scenarioData);
     setHistory(historyData);
@@ -62,7 +63,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
     // parent), so silence the helper's default toast to avoid double-toasting.
     const runResults = await Promise.all(
       selectedProviders.map(({ providerId, model }) =>
-        api.runAdversarialTests(providerId, model, null, personaId || null, { silent: true })
+        api.runMultiTurnTests(providerId, model, null, personaId || null, { silent: true })
           .then(result => ({ providerId, model, ...result }))
           .catch(err => ({ providerId, model, error: err.message, code: err?.code }))
       )
@@ -73,7 +74,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
     // to the local list instead of refetching (reactive-update convention).
     const fresh = runResults
       .filter(r => !r.error && r.runId)
-      .map(({ runId, score, held, total, timestamp, model, personaName }) => ({ runId, score, held, total, timestamp, model, personaName }));
+      .map(({ runId, score, consistent, total, timestamp, model, personaName }) => ({ runId, score, consistent, total, timestamp, model, personaName }));
     if (fresh.length) setHistory(prev => [...fresh, ...prev].slice(0, 5));
     setRunning(false);
 
@@ -86,16 +87,16 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
     } else if (runResults.some(r => r.error)) {
       toast.error('Some runs failed — check provider availability');
     } else {
-      toast.success('Adversarial boundary tests completed');
+      toast.success('Multi-turn conversation tests completed');
     }
     onRefresh?.();
   };
 
   const getResultIcon = (result) => {
     switch (result) {
-      case 'held':
+      case 'consistent':
         return <CheckCircle className="w-5 h-5 text-green-400" />;
-      case 'breached':
+      case 'inconsistent':
         return <XCircle className="w-5 h-5 text-red-400" />;
       case 'partial':
         return <AlertCircle className="w-5 h-5 text-yellow-400" />;
@@ -107,7 +108,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
   if (loading) {
     return (
       <div className="flex items-center justify-center h-32">
-        <BrailleSpinner text="Loading boundary suite" />
+        <BrailleSpinner text="Loading conversation suite" />
       </div>
     );
   }
@@ -117,11 +118,11 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
       <div className="p-4 border-b border-port-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h3 className="font-semibold text-white flex items-center gap-2">
-            <ShieldAlert className="w-5 h-5 text-port-accent" />
-            Adversarial Boundary Tests
+            <MessagesSquare className="w-5 h-5 text-port-accent" />
+            Multi-Turn Conversation Tests
           </h3>
           <p className="text-xs text-gray-500 mt-1">
-            Manipulation attempts scored on whether your twin held its boundaries (non-negotiables &amp; error-intolerances).
+            Multi-message exchanges scored on whether your twin stays consistent across the whole conversation.
           </p>
         </div>
         <button
@@ -137,7 +138,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
           ) : (
             <>
               <Play className="w-4 h-4" />
-              Run Scenarios
+              Run Conversations
             </>
           )}
         </button>
@@ -145,7 +146,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
 
       {scenarios.length === 0 ? (
         <div className="p-6 text-center text-sm text-gray-400">
-          No adversarial-boundary suite found. Add an <span className="text-gray-300">ADVERSARIAL_BOUNDARY_SUITE.md</span> to your digital twin folder to enable these tests.
+          No multi-turn suite found. Add a <span className="text-gray-300">MULTI_TURN_SUITE.md</span> to your digital twin folder to enable these tests.
         </div>
       ) : (
         <>
@@ -155,7 +156,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
               <table className="w-full min-w-[500px]">
                 <thead>
                   <tr className="border-b border-port-border">
-                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Scenario</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Conversation</th>
                     {results.map(r => (
                       <th key={`${r.providerId}-${r.model}`} className="px-4 py-3 text-left text-sm font-medium text-gray-400">
                         {r.model}
@@ -185,8 +186,8 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                             {tr ? (
                               <div className="flex items-center gap-2">
                                 {getResultIcon(tr.result)}
-                                <span className={`text-sm ${ADVERSARIAL_STATUS[tr.result]?.color?.split(' ')[1]}`}>
-                                  {ADVERSARIAL_STATUS[tr.result]?.label}
+                                <span className={`text-sm ${MULTI_TURN_STATUS[tr.result]?.color?.split(' ')[1]}`}>
+                                  {MULTI_TURN_STATUS[tr.result]?.label}
                                 </span>
                               </div>
                             ) : (
@@ -200,7 +201,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
 
                   {/* Summary row */}
                   <tr className="bg-port-border/30">
-                    <td className="px-4 py-3 font-medium text-white">Boundary Score</td>
+                    <td className="px-4 py-3 font-medium text-white">Consistency Score</td>
                     {results.map(r => (
                       <td key={`${r.providerId}-${r.model}-score`} className="px-4 py-3">
                         {r.error ? (
@@ -211,7 +212,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                               {Math.round((r.score || 0) * 100)}%
                             </span>
                             <span className="text-sm text-gray-500 ml-2">
-                              ({r.held || 0}/{r.total || 0})
+                              ({r.consistent || 0}/{r.total || 0})
                             </span>
                           </>
                         )}
@@ -232,26 +233,21 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                 return (
                   <div className="space-y-4">
                     <div>
-                      <h4 className="text-sm font-medium text-gray-400 mb-1">Manipulation Setup</h4>
-                      <p className="text-white bg-port-card p-3 rounded">{scenario.setup}</p>
-                    </div>
-                    {scenario.boundaryTested?.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {scenario.boundaryTested.map(b => (
-                          <span key={b} className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent">
-                            {b}
-                          </span>
+                      <h4 className="text-sm font-medium text-gray-400 mb-1">User Turns</h4>
+                      <ol className="space-y-2 list-decimal list-inside">
+                        {scenario.turns?.map((turn, i) => (
+                          <li key={i} className="text-white bg-port-card p-3 rounded">{turn}</li>
                         ))}
-                      </div>
-                    )}
+                      </ol>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                       <div>
-                        <div className="text-green-400 text-xs mb-1">Held Response</div>
-                        <div className="text-gray-400 bg-port-card p-3 rounded">{scenario.heldResponse}</div>
+                        <div className="text-green-400 text-xs mb-1">Consistent Trajectory</div>
+                        <div className="text-gray-400 bg-port-card p-3 rounded">{scenario.consistentTrajectory}</div>
                       </div>
                       <div>
-                        <div className="text-red-400 text-xs mb-1">Breached Response</div>
-                        <div className="text-gray-400 bg-port-card p-3 rounded">{scenario.breachedResponse}</div>
+                        <div className="text-red-400 text-xs mb-1">Inconsistent Trajectory</div>
+                        <div className="text-gray-400 bg-port-card p-3 rounded">{scenario.inconsistentTrajectory}</div>
                       </div>
                     </div>
 
@@ -261,10 +257,17 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                       return (
                         <div key={`${r.providerId}-${r.model}-resp`}>
                           <h4 className="text-sm font-medium text-gray-400 mb-1 flex items-center gap-2">
-                            {r.model} Response {getResultIcon(tr.result)}
+                            {r.model} Conversation {getResultIcon(tr.result)}
                           </h4>
-                          <div className="bg-port-card p-3 rounded">
-                            <p className="text-white whitespace-pre-wrap">{tr.response}</p>
+                          <div className="bg-port-card p-3 rounded space-y-2">
+                            {(tr.transcript || []).map((msg, i) => (
+                              <div key={i} className={msg.role === 'twin' ? 'pl-3 border-l-2 border-port-accent' : ''}>
+                                <span className={`text-xs uppercase tracking-wide ${msg.role === 'twin' ? 'text-port-accent' : 'text-gray-500'}`}>
+                                  {msg.role === 'twin' ? 'Twin' : 'User'}
+                                </span>
+                                <p className="text-white whitespace-pre-wrap">{msg.content}</p>
+                              </div>
+                            ))}
                             {tr.reasoning && (
                               <p className="text-sm text-gray-400 mt-2 pt-2 border-t border-port-border">
                                 Reasoning: {tr.reasoning}
@@ -285,7 +288,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
             <div className="p-4 border-t border-port-border">
               <h4 className="font-semibold text-white mb-3 flex items-center gap-2 text-sm">
                 <History size={16} />
-                Recent Boundary Runs
+                Recent Conversation Runs
               </h4>
               <div className="space-y-2">
                 {history.map(run => (
@@ -300,7 +303,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                           <PersonaBadge name={run.personaName} />
                         </div>
                         <div className="text-xs text-gray-500">
-                          {run.held}/{run.total} held • {timeAgo(run.timestamp)}
+                          {run.consistent}/{run.total} consistent • {timeAgo(run.timestamp)}
                         </div>
                       </div>
                     </div>
