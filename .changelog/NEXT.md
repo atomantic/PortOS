@@ -8,6 +8,7 @@
 ## Changed
 
 - **[issue-748]** Extracted the pure command-arg builders and output parsers from `server/services/git.js` into focused `server/lib/git*` modules. Internal refactor with no behavior difference.
+- **[issue-750]** Split `server/services/memory.js` into a `memoryStore.js` persistence/cache layer plus a pure `server/lib/memoryQuery.js` (index projection, filter/sort, search/hybrid meta filters, RRF fusion); `memory.js` re-exports so import sites are unchanged. Internal refactor with no behavior difference.
 - **[issue-718]** The duplicated optimistic canon-patch handler in the universe canon and Nouns stage editors now lives in one shared `useCanonPatch` hook. Internal refactor with no behavior difference.
 - **[issue-721]** Goal detail badges now use the shared pill component, keeping their look consistent with the rest of the app. Internal maintenance change with no behavior difference.
 - **[issue-759]** The autofixer UI's large inline HTML document moved out of `autofixer/ui.js` into a sibling `ui.template.html`, leaving the route handler as logic only. Internal refactor with no behavior difference.
