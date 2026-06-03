@@ -43,6 +43,7 @@ export const ORPHAN_SHELL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 let sweepTimer = null;
+let initialSweepTimer = null;
 
 const ageMs = (record, now) => {
   const ts = Date.parse(record?.updatedAt || record?.createdAt || '');
@@ -76,9 +77,9 @@ export async function sweepOrphanShells({ now = Date.now(), maxAgeMs = ORPHAN_SH
   // --- Pass 1: ephemeral, empty, aged-out series ---
   const allSeries = await listSeries();
   // Track which series survive so the universe pass can tell whether a
-  // universe still has live series WITHOUT a second listSeries() read that
-  // wouldn't reflect the deletes we just did (the store soft-deletes, so a
-  // re-list would still return them within the same tick on some backends).
+  // universe still has live series — built from the in-memory list rather than
+  // a second listSeries() after the deletes below, which would just re-read
+  // the same data we already have in hand.
   const survivingSeriesByUniverse = new Map();
   const noteSurvivor = (s) => {
     const key = s.universeId || '';
@@ -143,14 +144,20 @@ export function startOrphanShellGc() {
   };
 
   // Initial pass ~5 min after boot — outside the startup hot path, but soon
-  // enough that a restart doesn't reset the cleanup clock.
-  setTimeout(runSweep, 5 * 60 * 1000).unref?.();
+  // enough that a restart doesn't reset the cleanup clock. Keep the handle so
+  // stopOrphanShellGc() can cancel it if shutdown lands inside the 5-min window.
+  initialSweepTimer = setTimeout(() => { initialSweepTimer = null; runSweep(); }, 5 * 60 * 1000);
+  initialSweepTimer.unref?.();
   sweepTimer = setInterval(runSweep, SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
 }
 
 /** Stop the periodic sweep (used by tests / graceful shutdown). */
 export function stopOrphanShellGc() {
+  if (initialSweepTimer) {
+    clearTimeout(initialSweepTimer);
+    initialSweepTimer = null;
+  }
   if (sweepTimer) {
     clearInterval(sweepTimer);
     sweepTimer = null;
