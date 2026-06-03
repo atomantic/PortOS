@@ -182,7 +182,7 @@ export default function Apps() {
             {showArchived ? 'No archived apps' : 'No apps registered'}
           </h3>
           <p className="text-gray-500 mb-6">
-            {showArchived ? 'Archived apps will appear here' : 'Add your first app to get started'}
+            {showArchived ? 'Archived apps will appear here' : 'Register your first app to monitor its health, restart it, and surface it on your dashboard.'}
           </p>
           {!showArchived && (
             <Link

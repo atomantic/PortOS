@@ -7,6 +7,7 @@ import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDragg
 import * as api from '../../services/api';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
 import { applyOrganizationSuggestion } from './applyOrganization';
+import EmptyState from '../EmptyState';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { enabledApiProviderFilter } from '../../utils/providers';
@@ -445,9 +446,19 @@ export default function GoalsListView({ data, onRefresh }) {
           <div className="flex-1 overflow-y-auto">
             <RootDropZone />
             {filteredRoots.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-                {searchQuery ? 'No matching goals found.' : 'No goals yet. Add a root goal to get started.'}
-              </div>
+              searchQuery ? (
+                <div className="flex items-center justify-center h-full text-gray-500 text-sm">
+                  No matching goals found.
+                </div>
+              ) : (
+                <EmptyState
+                  icon={Crown}
+                  title="No goals yet"
+                  message="Add a root goal above to get started — or connect your calendar to unlock schedule-aware goals."
+                  actionTo="/calendar/config"
+                  actionLabel="Connect Calendar"
+                />
+              )
             ) : (
               filteredRoots.map(root => (
                 <GoalRow

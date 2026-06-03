@@ -39,6 +39,7 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPos
             neonBrightness={settings?.neonBrightness ?? 1.2}
             isProximity={proximityAppId === app.id}
             dimmed={dimmedAppIds?.has?.(app.id) || false}
+            settings={settings}
           />
         );
       })}

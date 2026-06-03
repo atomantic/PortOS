@@ -30,6 +30,10 @@ import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
 import RuntimeInstallModal from '../components/videoGen/RuntimeInstallModal';
+import FramePanel from '../components/videoGen/FramePanel';
+import KeyframePanel from '../components/videoGen/KeyframePanel';
+import AudioPanel from '../components/videoGen/AudioPanel';
+import ExtendPanel from '../components/videoGen/ExtendPanel';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
@@ -37,7 +41,7 @@ import { normalizeVideo } from '../components/media/normalize';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus, Music,
+  Dice5, X, Type, Image as ImageIcon, GitBranch, ListPlus, Music,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -122,13 +126,6 @@ const isModelAllowedForMode = (model, mode) => {
   if (mode === 'a2v') return model.runtime === 'ltx2';
   return true;
 };
-
-const ImagePreview = ({ src, alt, label }) => (
-  <div className="space-y-1">
-    <img src={src} alt={alt} className="w-full max-h-48 object-contain rounded border border-port-border bg-port-bg" />
-    <div className="text-[11px] text-gray-500 truncate">{label}</div>
-  </div>
-);
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1148,84 +1145,6 @@ export default function VideoGen() {
   const notConnected = !!status && status.connected === false && !needsByovProbe;
   const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked && !keyframesBlocked;
 
-  // Symmetric frame picker for the FFLF + image modes. Each slot accepts
-  // EITHER a gallery filename OR a fresh upload; the preview renders
-  // whichever is currently set, and clearing either one snaps the slot back
-  // to the dual upload+gallery picker. Defined inline because it closes
-  // over imageGallery and the per-slot state — extracting it as a real
-  // component would mean prop-drilling 6+ values for no real reuse.
-  const renderFramePanel = ({
-    label,
-    file,
-    upload,
-    uploadUrl,
-    onPickGallery,
-    onUpload,
-    onClear,
-    alt,
-    advisoryNote,
-    hint,
-  }) => {
-    // Clear button shows as soon as the user picks anything (state-only).
-    // Preview gates on `uploadUrl` instead of the raw `upload` File because
-    // the object URL is generated in a useEffect — without this, the render
-    // between "user picked a file" and "useEffect ran" would mount an
-    // <img src={null}> for one frame.
-    const hasSelection = !!(file || upload);
-    const canPreview = !!(file || uploadUrl);
-    return (
-      <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-medium text-gray-400">{label}</span>
-          {hasSelection && (
-            <button type="button" onClick={onClear} className="text-[11px] text-port-error hover:underline">Clear</button>
-          )}
-        </div>
-        {canPreview ? (
-          <ImagePreview
-            src={file ? `/data/images/${file}` : uploadUrl}
-            alt={alt}
-            label={file || upload?.name}
-          />
-        ) : (
-          <div className="space-y-1.5">
-            <select
-              value=""
-              onChange={(e) => onPickGallery(e.target.value || null)}
-              aria-label={`${label} — pick from gallery`}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-            >
-              <option value="">Pick from gallery…</option>
-              {visibleGallery.map((img) => (
-                <option key={img.filename} value={img.filename}>{img.filename}</option>
-              ))}
-            </select>
-            <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
-              <Upload className="w-3.5 h-3.5" />
-              <span className="truncate">Upload an image</span>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => onUpload(e.target.files?.[0] || null)}
-                className="hidden"
-              />
-            </label>
-          </div>
-        )}
-        {advisoryNote && (
-          <p className="text-[10px] text-gray-500 leading-snug" title={advisoryNote.title}>
-            {advisoryNote.text}
-          </p>
-        )}
-        {hint && (
-          <p className="text-[10px] text-port-accent/80 leading-snug" title={hint.title}>
-            {hint.text}
-          </p>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 text-xs">
@@ -1367,93 +1286,29 @@ export default function VideoGen() {
           </div>
 
           {mode === 'fflf' && keyframesSupported && (
-            <div className="border border-port-border/50 rounded-lg p-2 space-y-2">
-              <label htmlFor="keyframes-mode" className="flex items-center justify-between gap-2 cursor-pointer">
-                <span className="text-[11px] font-medium text-gray-400">
-                  Multi-keyframe interpolation
-                  <span className="block text-[10px] text-gray-500 font-normal">Anchor 2–8 gallery frames at frame indices (LTX-2)</span>
-                </span>
-                <input
-                  id="keyframes-mode"
-                  type="checkbox"
-                  checked={keyframesMode}
-                  onChange={toggleKeyframesMode}
-                  className="w-4 h-4 accent-port-accent cursor-pointer"
-                />
-              </label>
-              {keyframesActive && (
-                <div className="space-y-2">
-                  {keyframes.map((kf, i) => (
-                    <div key={i} className="flex items-start gap-2">
-                      <div className="flex-1 space-y-1">
-                        <label htmlFor={`kf-file-${i}`} className="sr-only">{`Keyframe ${i + 1} gallery image`}</label>
-                        <select
-                          id={`kf-file-${i}`}
-                          value={kf.file}
-                          onChange={(e) => updateKeyframe(i, { file: e.target.value })}
-                          className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent"
-                        >
-                          <option value="">Pick from gallery…</option>
-                          {visibleGallery.map((img) => (
-                            <option key={img.filename} value={img.filename}>{img.filename}</option>
-                          ))}
-                        </select>
-                        {kf.file && (
-                          <ImagePreview src={`/data/images/${kf.file}`} alt={`Keyframe ${i + 1}`} label={kf.file} />
-                        )}
-                      </div>
-                      <div className="flex flex-col items-center gap-1">
-                        <label htmlFor={`kf-index-${i}`} className="text-[10px] text-gray-500">frame</label>
-                        <input
-                          id={`kf-index-${i}`}
-                          type="number"
-                          min={0}
-                          max={numFrames - 1}
-                          value={kf.index}
-                          onChange={(e) => updateKeyframe(i, { index: e.target.value === '' ? '' : Number(e.target.value) })}
-                          aria-label={`Keyframe ${i + 1} frame index`}
-                          className="w-16 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeKeyframe(i)}
-                        disabled={keyframes.length <= 2}
-                        aria-label={`Remove keyframe ${i + 1}`}
-                        className="mt-5 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                  <div className="flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={addKeyframe}
-                      disabled={keyframes.length >= 8}
-                      className="flex items-center gap-1.5 text-[11px] text-port-accent hover:text-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <ListPlus className="w-3.5 h-3.5" /> Add keyframe
-                    </button>
-                    <span className="text-[10px] text-gray-500">{keyframes.length}/8</span>
-                  </div>
-                  {keyframesError && <p className="text-[10px] text-port-error leading-snug">{keyframesError}</p>}
-                  <p className="text-[10px] text-gray-500 leading-snug">
-                    Keyframes pull from your gallery only. Indices must be strictly ascending and below numFrames ({numFrames}).
-                  </p>
-                </div>
-              )}
-            </div>
+            <KeyframePanel
+              keyframesMode={keyframesMode}
+              keyframesActive={keyframesActive}
+              keyframes={keyframes}
+              numFrames={numFrames}
+              visibleGallery={visibleGallery}
+              keyframesError={keyframesError}
+              onToggleMode={toggleKeyframesMode}
+              onAddKeyframe={addKeyframe}
+              onUpdateKeyframe={updateKeyframe}
+              onRemoveKeyframe={removeKeyframe}
+            />
           )}
 
           {(mode === 'image' || (mode === 'fflf' && !keyframesActive)) && (
             <div className={`grid gap-2 ${mode === 'fflf' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
-              {renderFramePanel({
-                label: mode === 'fflf' ? 'First frame' : 'Source image',
-                file: sourceImageFile,
-                upload: sourceImageUpload,
-                uploadUrl: sourceUploadUrl,
-                onPickGallery: (filename) => {
+              <FramePanel
+                label={mode === 'fflf' ? 'First frame' : 'Source image'}
+                file={sourceImageFile}
+                upload={sourceImageUpload}
+                uploadUrl={sourceUploadUrl}
+                visibleGallery={visibleGallery}
+                onPickGallery={(filename) => {
                   // Switching to a gallery pick must drop any pending upload
                   // and the deep-link URL param; otherwise the next render
                   // would still POST the stale upload (req.files wins) while
@@ -1465,116 +1320,66 @@ export default function VideoGen() {
                     setSearchParams(next, { replace: true });
                   }
                   setSourceImageFile(filename);
-                },
-                onUpload: (file) => {
+                }}
+                onUpload={(file) => {
                   // Clear any gallery pick + URL param when an upload is
                   // chosen — otherwise the preview keeps rendering the old
                   // gallery image while the POST sends the upload.
                   if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
                   setSourceImageUpload(file);
-                },
-                onClear: clearSourceImage,
-                alt: 'Source',
-              })}
-              {mode === 'fflf' && renderFramePanel({
-                label: 'Last frame',
-                file: lastImageFile,
-                upload: lastImageUpload,
-                uploadUrl: lastUploadUrl,
-                onPickGallery: (filename) => {
-                  setLastImageUpload(null);
-                  setLastImageFile(filename);
-                },
-                onUpload: (file) => {
-                  if (file && lastImageFile) setLastImageFile(null);
-                  setLastImageUpload(file);
-                },
-                onClear: clearLastImage,
-                alt: 'End frame',
-                advisoryNote: {
-                  text: 'Experimental — last frame is advisory.',
-                  title: 'FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.',
-                },
-                hint: {
-                  text: 'Tip: use keyframes that share scene geometry — same camera, same subject. The model interpolates between them; unrelated images produce a visual cut.',
-                  title: 'FFLF works best when the two frames depict the same scene with continuous geometry. Both runtimes (notapalindrome and dgrauet) benefit from this.',
-                },
-              })}
+                }}
+                onClear={clearSourceImage}
+                alt="Source"
+              />
+              {mode === 'fflf' && (
+                <FramePanel
+                  label="Last frame"
+                  file={lastImageFile}
+                  upload={lastImageUpload}
+                  uploadUrl={lastUploadUrl}
+                  visibleGallery={visibleGallery}
+                  onPickGallery={(filename) => {
+                    setLastImageUpload(null);
+                    setLastImageFile(filename);
+                  }}
+                  onUpload={(file) => {
+                    if (file && lastImageFile) setLastImageFile(null);
+                    setLastImageUpload(file);
+                  }}
+                  onClear={clearLastImage}
+                  alt="End frame"
+                  advisoryNote={{
+                    text: 'Experimental — last frame is advisory.',
+                    title: 'FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.',
+                  }}
+                  hint={{
+                    text: 'Tip: use keyframes that share scene geometry — same camera, same subject. The model interpolates between them; unrelated images produce a visual cut.',
+                    title: 'FFLF works best when the two frames depict the same scene with continuous geometry. Both runtimes (notapalindrome and dgrauet) benefit from this.',
+                  }}
+                />
+              )}
             </div>
           )}
 
           {mode === 'a2v' && (
-            <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-gray-400">Audio (drives motion + sync)</span>
-                {audioFile && (
-                  <button type="button" onClick={() => setAudioFile(null)} className="text-[11px] text-port-error hover:underline">Clear</button>
-                )}
-              </div>
-              {audioFile ? (
-                <div className="flex items-center gap-2 text-[11px] text-gray-300">
-                  <Music className="w-3.5 h-3.5 text-port-accent" />
-                  <span className="truncate" title={audioFile.name}>{audioFile.name}</span>
-                  <span className="text-gray-500">{(audioFile.size / 1024 / 1024).toFixed(2)} MB</span>
-                </div>
-              ) : (
-                <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span className="truncate">Upload audio (WAV / MP3 / M4A)</span>
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
-                    className="hidden"
-                  />
-                </label>
-              )}
-              <p className="text-[10px] text-gray-500 leading-snug">
-                Audio length should match {`${(numFrames / fps).toFixed(1)}s`} (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.
-              </p>
-              {visibleModels.length === 0 && (
-                <p className="text-[11px] text-port-warning">
-                  a2v requires an ltx2-runtime model, but none are installed. Add a dgrauet entry to{' '}
-                  <code>data/media-models.json</code> (or restore <code>ltx23_dgrauet_q4</code> / <code>_q8</code>{' '}
-                  from the built-in defaults), then provision the runtime via{' '}
-                  <code>INSTALL_LTX2=1 bash scripts/setup-image-video.sh</code>.
-                </p>
-              )}
-            </div>
+            <AudioPanel
+              audioFile={audioFile}
+              numFrames={numFrames}
+              fps={fps}
+              hasCompatibleModel={visibleModels.length > 0}
+              onPick={setAudioFile}
+              onClear={() => setAudioFile(null)}
+            />
           )}
 
           {mode === 'extend' && (
-            <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-gray-400">Continue from a prior render</span>
-                {extendFromVideoId && (
-                  <button type="button" onClick={() => handleExtendPick('')} className="text-[11px] text-port-error hover:underline">Clear</button>
-                )}
-              </div>
-              <select
-                value={extendFromVideoId}
-                disabled={extendingFrame}
-                onChange={(e) => handleExtendPick(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              >
-                <option value="">Pick a previous video…</option>
-                {visibleHistory.slice(0, 50).map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {(v.prompt || v.filename || v.id).slice(0, 80)}
-                  </option>
-                ))}
-              </select>
-              {extendingFrame && (
-                <span className="text-[11px] text-gray-500">Extracting last frame…</span>
-              )}
-              {sourceImageFile && extendFromVideoId && !extendingFrame && (
-                <ImagePreview
-                  src={`/data/images/${sourceImageFile}`}
-                  alt="Last frame"
-                  label={`Starts from: ${sourceImageFile}`}
-                />
-              )}
-            </div>
+            <ExtendPanel
+              extendFromVideoId={extendFromVideoId}
+              extendingFrame={extendingFrame}
+              sourceImageFile={sourceImageFile}
+              visibleHistory={visibleHistory}
+              onPick={handleExtendPick}
+            />
           )}
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
