@@ -84,13 +84,13 @@ export async function suggestContinuation(workId, { before = '', after = '', sel
   });
   const options = shapeOptions(content);
 
-  // Only spend budget on a call that actually produced something — a parse
-  // that yields zero options shouldn't burn the writer's daily allowance.
-  // recordLiveModeUsage returns the full resolved config; we surface just the
-  // usage sub-object so the response shape is identical on both branches.
-  const usage = options.length > 0
-    ? (await recordLiveModeUsage(workId)).usage
-    : live.usage;
+  // Charge the budget for every call that reached the LLM — the provider cost
+  // is incurred whether or not the response parsed into usable options. Only
+  // sparing a zero-option call would let a model that reliably returns garbage
+  // (or a prompt that always parses empty) run unbounded calls and never hit
+  // the 429 cap. recordLiveModeUsage returns the full resolved config; we
+  // surface just the usage sub-object.
+  const usage = (await recordLiveModeUsage(workId)).usage;
 
   return {
     options,

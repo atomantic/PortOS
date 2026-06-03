@@ -34,22 +34,32 @@ export default function LiveContinuationPanel({
   useEffect(() => { setUsage(liveMode?.usage || null); }, [liveMode?.usage]);
   const [notice, setNotice] = useState(null);
   const mountedRef = useMounted();
-  // Guard against overlapping suggest calls: a fast typist can trigger a second
-  // debounce-fire before the first response lands. Ignore the request while one
-  // is in flight (the next pause re-triggers anyway).
+  // Overlapping-call control. A fast typist can re-trigger the debounce before
+  // the first response lands; rather than dropping the newer request and then
+  // applying the OLDER (now-stale) response against a moved cursor, we:
+  //   - tag every request with a monotonic generation and ignore a response
+  //     whose generation is no longer current (staleness guard), and
+  //   - remember that a re-run was requested mid-flight and fire it once the
+  //     current call settles, so the latest cursor context always wins.
   const inFlightRef = useRef(false);
+  const genRef = useRef(0);
+  const rerunPendingRef = useRef(false);
 
   const requestSuggest = useCallback(async () => {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current) { rerunPendingRef.current = true; return; }
     const ctx = getCursorContext?.();
     if (!ctx || (!ctx.before?.trim() && !ctx.after?.trim() && !ctx.selection?.trim())) return;
+    const gen = ++genRef.current;
     inFlightRef.current = true;
     setLoading(true);
     setNotice(null);
+    // Drop stale options up front — a new request against a moved cursor must
+    // not leave the previous suggestions visible/insertable while it runs.
+    setOptions([]);
     const res = await suggestWritersRoomContinuation(workId, ctx, { silent: true }).catch((err) => {
       // 429 budget / 409 off are expected control-flow, not crashes — show them
       // inline rather than as a red toast.
-      if (mountedRef.current) {
+      if (mountedRef.current && gen === genRef.current) {
         if (err?.status === 429) setNotice('Daily suggestion budget reached — resets at UTC midnight.');
         else if (err?.status === 409) setNotice('Live mode is off for this work.');
         else toast.error(`Suggestion failed: ${err.message}`);
@@ -57,7 +67,14 @@ export default function LiveContinuationPanel({
       return null;
     });
     inFlightRef.current = false;
-    if (!mountedRef.current) return;
+    // A newer request arrived while this one was in flight — discard this
+    // (stale) result and re-run with the latest cursor context.
+    const superseded = gen !== genRef.current || rerunPendingRef.current;
+    if (rerunPendingRef.current) {
+      rerunPendingRef.current = false;
+      if (mountedRef.current) requestSuggest();
+    }
+    if (!mountedRef.current || superseded) return;
     setLoading(false);
     if (!res) return;
     setOptions(res.options || []);

@@ -58,14 +58,17 @@ describe('suggestContinuation', () => {
     expect(runStagedLLM).toHaveBeenCalledOnce();
   });
 
-  it('does not spend budget when the model returns zero usable options', async () => {
+  it('charges budget even when the model returns zero usable options', async () => {
+    // The LLM cost is incurred regardless of whether the response parsed into
+    // usable options — sparing zero-option calls would open an unbounded-call
+    // hole that never reaches the 429 cap.
     runStagedLLM.mockResolvedValue({ content: { options: [] } });
     const work = await createWork({ title: 'Empty' });
     await updateWork(work.id, { liveMode: { enabled: true } });
 
     const res = await suggestContinuation(work.id, { before: 'Nothing comes of this.' });
     expect(res.options).toHaveLength(0);
-    expect(res.usage.count).toBe(0); // counter untouched
+    expect(res.usage.count).toBe(1); // call reached the LLM → budget charged
   });
 
   it('enforces the daily budget and rejects with BUDGET_EXCEEDED once spent', async () => {

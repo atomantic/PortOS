@@ -463,10 +463,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     const start = ta.selectionStart ?? body.length;
     const end = ta.selectionEnd ?? start;
     const WINDOW = 4000;
+    // Clamp each slice to the server's per-field caps (before/after 12k,
+    // selection 8k) so a huge selection can't 400 the request — the schema
+    // would reject it and surface as a red toast instead of a graceful notice.
     return {
       before: body.slice(Math.max(0, start - WINDOW), start),
       after: body.slice(end, end + WINDOW),
-      selection: body.slice(start, end),
+      selection: body.slice(start, end).slice(0, 8000),
     };
   }, [body]);
 
