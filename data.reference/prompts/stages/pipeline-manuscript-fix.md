@@ -31,6 +31,19 @@ You are a developmental editor making **one or more surgical edits** to a drafte
 ~~~~~~~~
 {{/finding.anchorQuote}}
 
+## How to read the suggested fix
+
+{{#finding.isFullPage}}
+This finding's suggested fix is a **complete replacement** for a malformed comic page — the page dumped its scene content into the page-level description instead of discrete panels. The suggested fix above is the full panel-by-panel rewrite that the page should become.
+
+- Set `find` to the malformed page block (use the anchor above to locate it) — copied verbatim from the manuscript.
+- Set `replace` to the suggested fix's panel breakdown, in the manuscript's existing formatting. Do not paraphrase, summarize, or re-derive it; substitute it as the page's new content, lightly adjusting only formatting markers so it matches the surrounding script style.
+- Return exactly one edit for the page, unless the anchor spans more than one malformed page.
+{{/finding.isFullPage}}
+{{^finding.isFullPage}}
+The suggested fix above is **advice**, not literal replacement text — it describes the smallest addition that closes the gap. Synthesize the actual edit yourself in the author's voice, following the guidance under "What to do" below.
+{{/finding.isFullPage}}
+
 ## Edit scope
 
 {{scope}}
@@ -79,7 +92,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
 
 - `edits` may contain one edit or several edits. Use several only when the finding genuinely requires more than one insertion/revision.
 - `issueNumber` MUST identify the issue section containing that edit's `find`.
-- `find` MUST be copied **character-for-character** from the matching issue's manuscript text above (including punctuation, line breaks, and formatting markers). Keep it as **small as possible** while still being uniquely locatable — a sentence, page/panel block, or short paragraph, not a whole page. The system locates your edit by an exact substring match on `find`, so any paraphrase will fail.
-- `replace` is `find` rewritten to incorporate the fix. To **insert** new material without deleting anything, set `replace` to the original `find` text followed by the new content.
+- `find` MUST be copied **character-for-character** from the matching issue's manuscript text above (including punctuation, line breaks, and formatting markers). The system locates your edit by an exact substring match on `find`, so any paraphrase will fail. Keep it as **small as possible** while still being uniquely locatable — a sentence, page/panel block, or short paragraph, not a whole page. **Exception (full-page replacement):** when "How to read the suggested fix" above says this is a full-page replacement, `find` IS the entire malformed page block the anchor points at — the whole page is what you are replacing.
+- `replace` is `find` rewritten to incorporate the fix. To **insert** new material without deleting anything, set `replace` to the original `find` text followed by the new content. **Exception (full-page replacement):** `replace` is the suggested fix's complete panel-by-panel breakdown — the page's new content, not the old text lightly revised.
 - If the gap is a pure absence at the very end (e.g. a missing ending), set `find` to the manuscript's final sentence and append the new ending in `replace`.
 - Keep the edit tight and in-voice. Do not rewrite unrelated passages.

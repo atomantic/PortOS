@@ -85,6 +85,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "anchorQuote": "a short verbatim excerpt copied EXACTLY from the manuscript above, at the spot the gap occurs",
       "location": "Issue 2, around the castle-escape page",
       "problem": "string (what is missing or under-developed, with specific evidence from the script)",
+      "replacementStrategy": "delta",
       "suggestion": "string (the smallest concrete addition — a beat, a page, a scene, a line of motivation — that closes the gap)"
     }
   ]
@@ -92,12 +93,15 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
 ```
 
 - `issueNumber` must be the integer `N` from the `# Issue N` header of the issue the gap belongs to (omit or use `null` if the gap spans the whole series and no single issue applies).
+- `replacementStrategy` declares how `suggestion` should be read so the downstream fix step knows whether to synthesize an edit or substitute the text directly. Use one of:
+  - **`delta`** *(default — every narrative category)* — `suggestion` is **advice**: the smallest concrete addition that closes the gap. The fix step locates the spot and writes the change.
+  - **`full-page`** *(comic-structure only)* — `suggestion` is the **complete replacement text** for the page (a full panel-by-panel breakdown), directly substitutable for the malformed page description.
 - `anchorQuote` must be a short excerpt (one sentence or a few words, ≤ 400 chars) **copied verbatim** from the manuscript text above, marking where the gap is — the exact spot a transition is missing, where a payoff should land, etc. Copy it character-for-character so an editor can locate it; do not paraphrase. Use the empty string only when the gap is an absence with no nearby text to point at (e.g. a missing ending after the final line — then quote that final line).
 - `category` must be one of `missing-content` / `arc-gap` / `character-gap` / `pacing` / `continuity` / `comic-structure`.
 - `severity` must be one of `high` / `medium` / `low`:
   - **`high`** — the draft cannot be considered finished without this (a missing climax, an unresolved central arc, or any `comic-structure` violation — pages with no panels cannot be rendered).
   - **`medium`** — the story works but feels incomplete or thin here (an under-built relationship, a skipped transition).
   - **`low`** — an opportunity to enrich (a theme that could land harder, a minor character that could carry more).
-- **For `comic-structure` findings:** `severity` is always `high`. The `suggestion` must be the **complete restructured page content** — a full `Panel 1 / Description: … / Caption: … / Dialogue: … / SFX: …` breakdown for every panel the page should have, not prose advice. The fix is applied as a find-and-replace using `anchorQuote` as the search target, so the suggestion must be directly substitutable. Distribute the prose content from the page description into appropriately sequenced panels (4–6 panels typical for a story page; use your judgment for pacing). Set `anchorQuote` to the opening text of the malformed page description block so the editor can locate it precisely.
+- **For `comic-structure` findings:** `severity` is always `high` and `replacementStrategy` is always `full-page`. The `suggestion` must be the **complete restructured page content** — a full `Panel 1 / Description: … / Caption: … / Dialogue: … / SFX: …` breakdown for every panel the page should have, not prose advice — because the fix step substitutes it directly for the malformed page rather than synthesizing an edit. Distribute the prose content from the page description into appropriately sequenced panels (4–6 panels typical for a story page; use your judgment for pacing). Set `anchorQuote` to the opening text of the malformed page description block so the editor can locate it precisely.
 
 Return `{ "issues": [] }` only if the manuscript is genuinely complete. Do NOT pad with low-confidence entries.

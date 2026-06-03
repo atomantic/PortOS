@@ -22,15 +22,20 @@
 
 import { makePromptReplaceMigration } from './_lib.js';
 
-// Pre-change shipped hash (five-category, anchorQuote findings from migration 056).
+// Pre-change shipped hash (five-category, anchorQuote findings from migration
+// 056), plus this migration's own six-category output ('1ee5ac…') as an
+// accepted-old entry — migration 066 (replacementStrategy) further updated the
+// file, so a copy still at the 057 body is auto-upgradable to the current shape.
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79'],
+  'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79', '1ee5ac936fbf1d365e0eaea99bcf1e77'],
 };
 
-// Post-change shipped hash (six-category with comic-structure).
-// Mirror this into setup-data.js's drift table.
+// Current shipped hash — migration 066 further updated this file (added the
+// replacementStrategy contract), so this hash reflects the post-066 body.
+// The idempotent-rerun and drift-catch tests require it to match the live
+// data.reference body, not 057's own output.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': '1ee5ac936fbf1d365e0eaea99bcf1e77',
+  'pipeline-manuscript-completeness.md': 'cec8faeb75dfff74e41b8221145c2e92',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
