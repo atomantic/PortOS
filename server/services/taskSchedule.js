@@ -27,17 +27,20 @@ import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
 // Prompt catalog + getters were extracted to taskPromptService.js (issue #744).
 // loadSchedule()/getScheduleStatus() below still consume the prompt-version
 // machinery (DEFAULT_TASK_PROMPTS / PROMPT_VERSIONS / PREVIOUS_DEFAULT_PROMPTS)
-// for the auto-upgrade path, so import those here. The public prompt API is
-// re-exported below so existing importers of taskSchedule.js are unaffected.
+// for the auto-upgrade path, so import those here. PROMPT_VERSIONS is part of
+// taskSchedule.js's public API (consumers import it from here), so it's
+// re-exported below alongside the prompt getters; DEFAULT_TASK_PROMPTS and
+// PREVIOUS_DEFAULT_PROMPTS stay internal, matching their pre-split visibility.
 import {
   DEFAULT_TASK_PROMPTS,
   PROMPT_VERSIONS,
   PREVIOUS_DEFAULT_PROMPTS
 } from './taskPromptService.js';
 
+// Re-export the public prompt API so existing importers of taskSchedule.js are
+// unaffected by the split (PROMPT_VERSIONS is exported via its local binding above).
+export { PROMPT_VERSIONS };
 export {
-  DEFAULT_TASK_PROMPTS,
-  PROMPT_VERSIONS,
   REFERENCE_WATCH_AUDITED_VERSION,
   getDefaultPrompt,
   getTaskPrompt,
