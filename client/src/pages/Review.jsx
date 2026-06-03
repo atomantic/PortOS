@@ -28,8 +28,27 @@ import {
 import BrailleSpinner from '../components/BrailleSpinner';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import { timeAgo } from '../utils/formatters';
+import { coalesce } from '../utils/coalesce';
 import * as api from '../services/api';
 import socket from '../services/socket';
+
+// Producer-domain socket events that change what the cross-domain "Needs
+// Attention" queue (GET /api/review/queue) would return. The queue is derived
+// live from each producer, so when any of these fire — a draft sent, an inbox
+// item classified, a CoS task resolved, a backup finishing — we re-pull the
+// queue (debounced) instead of waiting for a manual reload. Ask is omitted
+// (no socket emit) and proactive alerts are live-computed (no event).
+const QUEUE_INVALIDATION_EVENTS = [
+  'brain:classified',          // inbox item classified / re-reviewed
+  'cos:tasks:user:changed',    // CoS user-task list changed
+  'cos:tasks:cos:changed',     // CoS internal-task list changed
+  'messages:changed',          // draft approved/deleted/status changed
+  'messages:draft:created',    // new draft awaiting review
+  'messages:draft:sent',       // draft sent (resolves a drafts row)
+  'backup:started',            // backup state transitioning
+  'backup:completed',          // backup succeeded (clears a failed-backup row)
+  'backup:failed'              // backup errored (surfaces a failed-backup row)
+];
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
@@ -132,6 +151,20 @@ export default function Review() {
       socket.off('review:item:deleted', handleDeleted);
     };
   }, []);
+
+  // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
+  // a draft sent fires both messages:draft:sent and messages:changed) coalesces
+  // into a single refetch on the trailing edge. dismissedQueueIds still filters
+  // the result, so a row the user dismissed this session won't pop back; a
+  // re-resolved item simply isn't returned by the server anymore.
+  useEffect(() => {
+    const refetch = coalesce(() => fetchQueue(), 400);
+    for (const evt of QUEUE_INVALIDATION_EVENTS) socket.on(evt, refetch);
+    return () => {
+      for (const evt of QUEUE_INVALIDATION_EVENTS) socket.off(evt, refetch);
+      refetch.cancel();
+    };
+  }, [fetchQueue]);
 
   const handleCreateTodo = async (e) => {
     e.preventDefault();

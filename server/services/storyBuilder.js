@@ -21,7 +21,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { isStr, trimTo } from '../lib/storyBible.js';
+import { isStr, trimTo, pickPromptFields, BIBLE_KIND } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
@@ -295,14 +295,38 @@ function projectArc(series) {
     shape: arc.shape || null,
   };
 }
+// Project the SEMANTIC content of each canon character — the same prompt-field
+// whitelist the bible extractor / evaluator use (`physicalDescription`,
+// `personality`, `role`, etc.), which excludes ids/timestamps/source churn by
+// construction. A bare `{ name, descriptor }` would only change on add / remove
+// / rename — canon characters carry no `descriptor` field, so editing a locked
+// character's body fields out-of-band (the #731 case) would never flag stale.
 function projectCast(universe) {
   return (Array.isArray(universe?.characters) ? universe.characters : [])
-    .map((c) => ({ name: c?.name || '', descriptor: c?.descriptor ?? null }));
+    .map((c) => pickPromptFields(BIBLE_KIND.CHARACTER, c));
+}
+// The plotArc step generates AND persists the season breakdown, so a locked
+// plotArc must fingerprint the seasons' editorial content alongside the arc
+// core — editing a season title/logline/synopsis/episode-count out-of-band
+// otherwise leaves the lock un-flagged. Excludes render slots (cover/backCover)
+// and operational churn (id/status/timestamps) — only the editorial fields the
+// step produces and the user reviews.
+function projectSeasons(series) {
+  return (Array.isArray(series?.seasons) ? series.seasons : []).map((s) => ({
+    number: s?.number ?? 0,
+    title: s?.title || '',
+    logline: s?.logline || '',
+    synopsis: s?.synopsis || '',
+    episodeCountTarget: s?.episodeCountTarget ?? 0,
+    themes: Array.isArray(s?.themes) ? s.themes : [],
+    endingHook: s?.endingHook || '',
+  }));
 }
 
 function buildUpstreamInputs(session, universe, series) {
   const aesthetic = projectAesthetic(universe);
   const arc = projectArc(series);
+  const seasons = projectSeasons(series);
   const readerMap = series?.arc?.readerMap || null;
   const cast = projectCast(universe);
   // The idea step expands seedIdea into universe.starterPrompt + series
@@ -317,12 +341,21 @@ function buildUpstreamInputs(session, universe, series) {
     seriesLogline: series?.logline || '',
     seriesPremise: series?.premise || '',
   };
+  // Each step's hash folds in its OWN outputs (`ownOutputs`) alongside its
+  // upstream inputs. The session lock only gates the wizard UI — the underlying
+  // universe/series records stay editable in Universe Builder, Arc Planner, etc.
+  // Fingerprinting a step's own output means an out-of-band edit to that content
+  // (e.g. changing universe.logline directly while the aesthetic step is locked)
+  // flags the locked step stale, not just edits to an earlier step's inputs
+  // (#731). The `issues`/`production` steps carry no `ownOutputs` — their output
+  // lives in large child-record collections already covered by their upstream
+  // inputs, and hashing every child issue/page would be needless churn.
   return {
-    idea: { intakeMode: session.intakeMode, seedIdea: session.seedIdea || '' },
-    universeAesthetic: { seedIdea: session.seedIdea || '', ideaOutputs },
-    plotArc: { aesthetic, seedIdea: session.seedIdea || '', ideaOutputs },
-    readerMap: { arc },
-    characters: { readerMap, arcSummary: arc.summary, aesthetic },
+    idea: { intakeMode: session.intakeMode, seedIdea: session.seedIdea || '', ownOutputs: ideaOutputs },
+    universeAesthetic: { seedIdea: session.seedIdea || '', ideaOutputs, ownOutputs: aesthetic },
+    plotArc: { aesthetic, seedIdea: session.seedIdea || '', ideaOutputs, ownOutputs: { arc, seasons } },
+    readerMap: { arc, ownOutputs: readerMap },
+    characters: { readerMap, arcSummary: arc.summary, aesthetic, ownOutputs: cast },
     issues: { arc, readerMap, cast },
     production: { arc, readerMap, cast },
   };
