@@ -9,8 +9,9 @@
 
 import { REFERENCE_RANGES, getBloodValueStatus } from '../components/meatspace/constants.js';
 
-// Blood-marker category grouping — mirrors BloodTestCard's getCategoryForKey so
-// the printed report sections match the on-screen tab grouping.
+// Blood-marker category grouping — canonical source for the marker→category map.
+// BloodTestCard imports getCategoryForKey from here so the on-screen tab grouping
+// and the printed report stay in sync.
 const CATEGORY_KEYS = {
   'Metabolic Panel': [
     'glucose', 'bun', 'creatinine', 'egfr', 'na', 'k', 'ci', 'co2',
@@ -152,6 +153,12 @@ export function buildClinicianReport({ tests = [], config = null, generatedAt = 
   };
 }
 
+// Escape values for a markdown table cell so free-text fields (e.g. a chronic
+// condition containing `|` or a newline) can't break the table layout.
+function mdCell(value) {
+  return String(value ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
 /** Serialize a report model to clipboard-friendly markdown. */
 export function reportToMarkdown(report) {
   if (!report) return '';
@@ -168,7 +175,7 @@ export function reportToMarkdown(report) {
   lines.push('| Factor | Value | Note |');
   lines.push('| --- | --- | --- |');
   for (const row of report.lifestyle) {
-    lines.push(`| ${row.label} | ${row.value} | ${row.note || ''} |`);
+    lines.push(`| ${mdCell(row.label)} | ${mdCell(row.value)} | ${mdCell(row.note || '')} |`);
   }
   lines.push('');
 
@@ -195,7 +202,7 @@ export function reportToMarkdown(report) {
       lines.push('| --- | --- | --- | --- |');
       for (const m of markers) {
         const value = `${m.value}${m.unit ? ` ${m.unit}` : ''}`;
-        lines.push(`| ${m.label} | ${value} | ${formatRange(m.range)} | ${STATUS_LABELS[m.status]} |`);
+        lines.push(`| ${mdCell(m.label)} | ${mdCell(value)} | ${formatRange(m.range)} | ${STATUS_LABELS[m.status]} |`);
       }
       lines.push('');
     }

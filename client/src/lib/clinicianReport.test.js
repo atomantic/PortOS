@@ -137,4 +137,16 @@ describe('buildClinicianReport + reportToMarkdown', () => {
   it('returns empty string for a null report', () => {
     expect(reportToMarkdown(null)).toBe('');
   });
+
+  it('escapes pipes and newlines in free-text cells so the table stays intact', () => {
+    const md = reportToMarkdown(buildClinicianReport({
+      tests: [],
+      config: { lifestyle: { chronicConditions: ['asthma | mild', 'line1\nline2'] } },
+    }));
+    const conditionRow = md.split('\n').find(l => l.startsWith('| Chronic conditions'));
+    expect(conditionRow).toContain('asthma \\| mild');
+    expect(conditionRow).not.toMatch(/\n/);
+    // The escaped row still has exactly the 3-column table shape (leading + trailing pipe + 2 separators).
+    expect(conditionRow.match(/(?<!\\)\|/g)).toHaveLength(4);
+  });
 });
