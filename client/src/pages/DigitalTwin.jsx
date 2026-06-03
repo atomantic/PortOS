@@ -17,6 +17,7 @@ import TasteTab from '../components/digital-twin/tabs/TasteTab';
 import AccountsTab from '../components/digital-twin/tabs/AccountsTab';
 import InterviewTab from '../components/digital-twin/tabs/InterviewTab';
 import IdentityTab from '../components/digital-twin/tabs/IdentityTab';
+import PersonasTab from '../components/digital-twin/tabs/PersonasTab';
 import GoalsTab from '../components/digital-twin/tabs/GoalsTab';
 import AutobiographyTab from '../components/digital-twin/tabs/AutobiographyTab';
 import ImportTab from '../components/digital-twin/tabs/ImportTab';
@@ -65,6 +66,8 @@ export default function DigitalTwin() {
         return <AccountsTab />;
       case 'identity':
         return <IdentityTab onRefresh={refetch} />;
+      case 'personas':
+        return <PersonasTab onRefresh={refetch} />;
       case 'goals':
         return <GoalsTab onRefresh={refetch} />;
       case 'interview':

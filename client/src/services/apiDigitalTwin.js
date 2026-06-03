@@ -62,6 +62,22 @@ export const updateDigitalTwinSettings = (settings) => request('/digital-twin/se
   body: JSON.stringify(settings)
 });
 
+// Digital Twin - Personas (M34 P7)
+export const getDigitalTwinPersonas = () => request('/digital-twin/personas');
+export const createDigitalTwinPersona = (data) => request('/digital-twin/personas', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateDigitalTwinPersona = (id, data) => request(`/digital-twin/personas/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteDigitalTwinPersona = (id) => request(`/digital-twin/personas/${id}`, { method: 'DELETE' });
+export const setActiveDigitalTwinPersona = (personaId) => request('/digital-twin/personas/active', {
+  method: 'PUT',
+  body: JSON.stringify({ personaId })
+});
+
 // Digital Twin - Validation & Analysis
 export const getDigitalTwinCompleteness = () => request('/digital-twin/validate/completeness');
 export const detectDigitalTwinContradictions = (providerId, model) => request('/digital-twin/validate/contradictions', {

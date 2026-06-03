@@ -25,7 +25,8 @@ import {
   Globe,
   PenLine,
   Target,
-  Archive
+  Archive,
+  Drama
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -37,6 +38,7 @@ export const TABS = [
   { id: 'taste', label: 'Taste', icon: Palette },
   { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'identity', label: 'Identity', icon: Fingerprint },
+  { id: 'personas', label: 'Personas', icon: Drama },
   { id: 'goals', label: 'Goals', icon: Target },
   { id: 'interview', label: 'Interview', icon: MessageSquare },
   { id: 'autobiography', label: 'Autobiography', icon: PenLine },

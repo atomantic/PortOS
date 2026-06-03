@@ -105,6 +105,12 @@ import {
   getTestHistory,
   parseValuesAlignmentSuite,
   getValuesAlignmentHistory,
+  getPersonas,
+  createPersona,
+  updatePersona,
+  deletePersona,
+  setActivePersona,
+  getActivePersona,
   getEnrichmentCategories,
   generateEnrichmentQuestion,
   processEnrichmentAnswer,
@@ -141,6 +147,7 @@ const DEFAULT_META = {
   documents: [],
   testHistory: [],
   valuesTestHistory: [],
+  personas: [],
   enrichment: { completedCategories: [], lastSession: null },
   settings: { autoInjectToCoS: true, maxContextTokens: 4000 }
 };
@@ -148,6 +155,9 @@ const DEFAULT_META = {
 const makeMeta = (overrides = {}) => ({
   ...DEFAULT_META,
   ...overrides,
+  // Fresh array so in-place mutation (e.g. createPersona's push) can't bleed
+  // across tests via the shared DEFAULT_META.personas reference.
+  personas: overrides.personas ? overrides.personas : [],
   enrichment: { ...DEFAULT_META.enrichment, ...(overrides.enrichment || {}) },
   settings: { ...DEFAULT_META.settings, ...(overrides.settings || {}) }
 });
@@ -1175,6 +1185,109 @@ Quietly keeps the savings.
       const highIdx = result.indexOf('HIGH_WEIGHT_CONTENT');
       const lowIdx = result.indexOf('LOW_WEIGHT_CONTENT');
       expect(highIdx).toBeLessThan(lowIdx);
+    });
+
+    it('prepends the active persona preamble when personaId is "active"', async () => {
+      const persona = {
+        id: 'p1', name: 'Professional', instructions: 'Be concise and formal.',
+        createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z'
+      };
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 })],
+        personas: [persona],
+        settings: { autoInjectToCoS: true, maxContextTokens: 4000, activePersonaId: 'p1' }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        if (filePath.includes('SOUL.md')) return 'Soul content';
+        return '';
+      });
+
+      const result = await getDigitalTwinForPrompt({ personaId: 'active' });
+      expect(result).toContain('# Active Persona: Professional');
+      expect(result).toContain('Be concise and formal.');
+      expect(result).toContain('Soul content');
+    });
+
+    it('omits the persona preamble when no personaId is passed', async () => {
+      const persona = {
+        id: 'p1', name: 'Professional', instructions: 'Be concise and formal.',
+        createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z'
+      };
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 })],
+        personas: [persona],
+        settings: { autoInjectToCoS: true, maxContextTokens: 4000, activePersonaId: 'p1' }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        if (filePath.includes('SOUL.md')) return 'Soul content';
+        return '';
+      });
+
+      const result = await getDigitalTwinForPrompt();
+      expect(result).not.toContain('Active Persona');
+      expect(result).toContain('Soul content');
+    });
+  });
+
+  // ==========================================================================
+  // Personas (M34 P7)
+  // ==========================================================================
+
+  describe('personas', () => {
+    it('creates a persona with timestamps and lists it', async () => {
+      await setupMetaFile(makeMeta());
+      const persona = await createPersona({ name: 'Professional', description: 'Work voice', instructions: 'Be concise.' });
+      expect(persona.id).toBeTruthy();
+      expect(persona.name).toBe('Professional');
+      expect(persona.description).toBe('Work voice');
+      expect(persona.createdAt).toBeTruthy();
+      expect(persona.updatedAt).toBeTruthy();
+      expect(await getPersonas()).toHaveLength(1);
+    });
+
+    it('omits description when not provided', async () => {
+      await setupMetaFile(makeMeta());
+      const persona = await createPersona({ name: 'Casual', instructions: 'Relax.' });
+      expect(persona.description).toBeUndefined();
+    });
+
+    it('updates only the fields provided', async () => {
+      await setupMetaFile(makeMeta());
+      const persona = await createPersona({ name: 'A', instructions: 'one' });
+      const updated = await updatePersona(persona.id, { instructions: 'two' });
+      expect(updated.name).toBe('A');
+      expect(updated.instructions).toBe('two');
+    });
+
+    it('throws when updating a missing persona', async () => {
+      await setupMetaFile(makeMeta());
+      await expect(updatePersona('does-not-exist', { name: 'x' })).rejects.toThrow();
+    });
+
+    it('sets and reads back the active persona', async () => {
+      await setupMetaFile(makeMeta());
+      const persona = await createPersona({ name: 'A', instructions: 'one' });
+      await setActivePersona(persona.id);
+      const active = await getActivePersona();
+      expect(active.id).toBe(persona.id);
+    });
+
+    it('rejects activating a non-existent persona', async () => {
+      await setupMetaFile(makeMeta());
+      await expect(setActivePersona('missing')).rejects.toThrow();
+    });
+
+    it('clears the active pointer when the active persona is deleted', async () => {
+      await setupMetaFile(makeMeta());
+      const persona = await createPersona({ name: 'A', instructions: 'one' });
+      await setActivePersona(persona.id);
+      await deletePersona(persona.id);
+      expect(await getActivePersona()).toBeNull();
+      expect(await getPersonas()).toHaveLength(0);
     });
   });
 

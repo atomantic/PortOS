@@ -112,6 +112,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.identity', path: '/digital-twin/identity', label: 'Identity', section: 'Digital Twin', aliases: ['twin-identity', 'identity'] },
   { id: 'nav.twin.import', path: '/digital-twin/import', label: 'Import', section: 'Digital Twin', aliases: ['twin-import'] },
   { id: 'nav.twin.interview', path: '/digital-twin/interview', label: 'Interview', section: 'Digital Twin', aliases: ['twin-interview'] },
+  { id: 'nav.twin.personas', path: '/digital-twin/personas', label: 'Personas', section: 'Digital Twin', aliases: ['twin-personas', 'personas', 'persona'], keywords: ['context', 'professional', 'casual', 'voice', 'mode'] },
   { id: 'nav.twin.taste', path: '/digital-twin/taste', label: 'Taste', section: 'Digital Twin', aliases: ['twin-taste'] },
   { id: 'nav.twin.test', path: '/digital-twin/test', label: 'Test', section: 'Digital Twin', aliases: ['twin-test'] },
   { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Digital Twin', aliases: ['time-capsule', 'twin-time-capsule', 'capsule'], keywords: ['legacy', 'archive', 'snapshot'] },
