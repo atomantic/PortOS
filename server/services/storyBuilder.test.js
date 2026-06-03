@@ -258,19 +258,63 @@ describe('storyBuilder — integrity / staleness', () => {
     expect(view.staleSteps).toContain('plotArc');
   });
 
-  it('flags a locked characters step stale when the cast is edited out-of-band (#731)', async () => {
+  it('flags a locked characters step stale when a character is added out-of-band (#731)', async () => {
     const s = await sb.createStorySession({ title: 'X' });
     await universeSvc.updateUniverse(s.universeId, {
-      characters: [{ name: 'Ada', descriptor: 'the foundry forewoman' }],
+      characters: [{ name: 'Ada', physicalDescription: 'the foundry forewoman' }],
     });
     await sb.lockStep(s.id, 'characters');
     let view = await sb.getStorySessionView(s.id);
     expect(view.staleSteps).not.toContain('characters');
     await universeSvc.updateUniverse(s.universeId, {
-      characters: [{ name: 'Ada', descriptor: 'the foundry forewoman' }, { name: 'Rook', descriptor: 'the rival' }],
+      characters: [
+        { name: 'Ada', physicalDescription: 'the foundry forewoman' },
+        { name: 'Rook', physicalDescription: 'the rival' },
+      ],
     });
     view = await sb.getStorySessionView(s.id);
     expect(view.staleSteps).toContain('characters');
+  });
+
+  it('flags a locked characters step stale when a character body field is edited out-of-band (#731)', async () => {
+    // The cast fingerprint must track the canon body fields (physicalDescription,
+    // personality, role, …), not just name — editing a locked character's
+    // description in Universe Builder is exactly the out-of-band case #731 targets.
+    const s = await sb.createStorySession({ title: 'X' });
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'tall, soot-streaked', personality: 'guarded' }],
+    });
+    await sb.lockStep(s.id, 'characters');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('characters');
+    // Same name + count, only the body changes.
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'CHANGED — gaunt, grease-stained', personality: 'guarded' }],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('characters');
+  });
+
+  it('flags a locked plotArc step stale when a season is edited out-of-band (#731)', async () => {
+    // The plotArc step persists the season breakdown, so editing a season's
+    // editorial content (here its synopsis) must flag the locked step stale even
+    // though the arc core fields are untouched.
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum' },
+      seasons: [{ number: 1, title: 'Vol 1', synopsis: 'the foundry goes silent' }],
+    });
+    await sb.lockStep(s.id, 'plotArc');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Edit only the season synopsis (arc core unchanged); the arc lock that
+    // lockStep set is cleared so updateSeries accepts the season edit.
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum' }, locked: {},
+      seasons: [{ number: 1, title: 'Vol 1', synopsis: 'CHANGED — the foundry roars back to life' }],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
   });
 });
 
