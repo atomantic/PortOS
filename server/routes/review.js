@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
-import { buildQueue } from '../services/reviewQueue.js';
+import { buildQueue, resolveQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -46,6 +46,21 @@ router.get('/briefing', asyncHandler(async (req, res) => {
 router.get('/queue', asyncHandler(async (req, res) => {
   const queue = await buildQueue();
   res.json(queue);
+}));
+
+const resolveQueueSchema = z.object({
+  id: z.string().min(1).max(500)
+});
+
+// POST /api/review/queue/resolve — accept a single cross-domain queue row in
+// place (mark a Brain inbox item done, approve a CoS task or message draft)
+// without leaving the Review Hub. Sources with no clean one-click resolve
+// (Ask, health, backup) have no inline action and 400 here. The `id` is the
+// row's `<source>:<rawId>` — the service dispatches to that source's primitive.
+router.post('/queue/resolve', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(resolveQueueSchema, req.body);
+  const result = await resolveQueueItem(id);
+  res.json(result);
 }));
 
 // POST /api/review/todo — create a user todo
