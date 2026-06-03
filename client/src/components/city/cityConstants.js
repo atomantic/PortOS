@@ -1,3 +1,5 @@
+import { hashString } from '../../utils/hashString';
+
 // Geist Pixel Square font URL for drei <Text> in 3D scene (TTF required, troika doesn't support woff2)
 export const PIXEL_FONT_URL = '/fonts/GeistPixel-Square.ttf';
 
@@ -233,16 +235,6 @@ export const BUILDING_PARAMS = {
 export const DISTRICT_PARAMS = {
   warehouseOffset: 18,
   gap: 4,
-};
-
-// Simple string hash for consistent per-app randomness
-const hashString = (str) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
 };
 
 export const getBuildingColor = (status, archived) => {

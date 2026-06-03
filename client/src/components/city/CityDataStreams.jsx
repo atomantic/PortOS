@@ -1,7 +1,7 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { computeFlowConnections } from '../../utils/cityFlowLines';
 
 // A single animated data packet traveling along a path
 function DataPacket({ start, end, color, speed, offset, size = 0.08 }) {
@@ -20,6 +20,10 @@ function DataPacket({ start, end, color, speed, offset, size = 0.08 }) {
     );
     return new THREE.BufferGeometry().setFromPoints(curve.getPoints(20));
   }, [start, end]);
+
+  // Dispose the connection-line geometry's GPU buffers when the endpoints change
+  // (topology shifts as buildings go on/offline) or on unmount.
+  useEffect(() => () => trailGeom.dispose(), [trailGeom]);
 
   useFrame(({ clock }) => {
     if (!meshRef.current) return;
@@ -56,51 +60,21 @@ function DataPacket({ start, end, color, speed, offset, size = 0.08 }) {
   );
 }
 
-export default function CityDataStreams({ positions }) {
-  // Build connections between nearby active buildings
+export default function CityDataStreams({ positions, apps, agentMap }) {
+  // Derive the real operational state the flow topology is built from: which
+  // buildings are online (flow sources) and which currently have running agents
+  // (hot links). The pure helper turns that into the connection set so this
+  // component stays presentation-only.
   const connections = useMemo(() => {
-    if (!positions || positions.size < 2) return [];
-
-    const entries = [];
-    positions.forEach((pos, id) => {
-      if (pos.district === 'downtown') entries.push({ id, ...pos });
+    const activeIds = new Set(
+      (apps || []).filter(a => !a.archived && a.overallStatus === 'online').map(a => a.id)
+    );
+    const agentIds = new Set();
+    agentMap?.forEach((entry, id) => {
+      if (entry?.agents?.length) agentIds.add(id);
     });
-
-    const conns = [];
-    const colors = CITY_COLORS.neonAccents;
-
-    // Connect each building to its nearest 1-2 neighbors
-    for (let i = 0; i < entries.length; i++) {
-      const a = entries[i];
-      const distances = [];
-
-      for (let j = 0; j < entries.length; j++) {
-        if (i === j) continue;
-        const b = entries[j];
-        const dist = Math.sqrt((a.x - b.x) ** 2 + (a.z - b.z) ** 2);
-        distances.push({ index: j, dist });
-      }
-
-      distances.sort((d1, d2) => d1.dist - d2.dist);
-      const neighborCount = Math.min(1, distances.length);
-
-      for (let n = 0; n < neighborCount; n++) {
-        const b = entries[distances[n].index];
-        // Avoid duplicate connections
-        const key = [a.id, b.id].sort().join('-');
-        if (!conns.find(c => c.key === key)) {
-          conns.push({
-            key,
-            start: [a.x, 0.5, a.z],
-            end: [b.x, 0.5, b.z],
-            color: colors[(i + n) % colors.length],
-          });
-        }
-      }
-    }
-
-    return conns;
-  }, [positions]);
+    return computeFlowConnections({ positions, activeIds, agentIds });
+  }, [positions, apps, agentMap]);
 
   if (connections.length === 0) return null;
 
@@ -108,21 +82,27 @@ export default function CityDataStreams({ positions }) {
     <group>
       {connections.map((conn) => (
         <group key={conn.key}>
-          {/* Two packets going each direction at different speeds */}
-          <DataPacket
-            start={conn.start}
-            end={conn.end}
-            color={conn.color}
-            speed={0.15 + Math.random() * 0.1}
-            offset={0}
-          />
-          <DataPacket
-            start={conn.end}
-            end={conn.start}
-            color={conn.color}
-            speed={0.12 + Math.random() * 0.1}
-            offset={0.5}
-          />
+          {/* Packets travel both directions; a hotter link carries more of them. */}
+          {Array.from({ length: conn.packets }).map((_, k) => (
+            <DataPacket
+              key={`fwd-${k}`}
+              start={conn.start}
+              end={conn.end}
+              color={conn.color}
+              speed={conn.speed}
+              offset={k / conn.packets}
+            />
+          ))}
+          {Array.from({ length: conn.packets }).map((_, k) => (
+            <DataPacket
+              key={`rev-${k}`}
+              start={conn.end}
+              end={conn.start}
+              color={conn.color}
+              speed={conn.speed}
+              offset={k / conn.packets + 0.5}
+            />
+          ))}
         </group>
       ))}
     </group>
