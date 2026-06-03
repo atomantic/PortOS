@@ -595,7 +595,7 @@ export default function UniverseCanonSection({
   // edits). Optimistic — UI updates before the server roundtrip so chip
   // clicks feel instant.
   const { patchEntry: handlePatchEntry } = useCanonPatch({
-    universe, universeId, apply: onUniverseChange, mountedRef,
+    universe, apply: onUniverseChange, mountedRef,
   });
 
   if (!universe) return null;

@@ -376,7 +376,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
   // setting intExt + timeOfDay chips). Optimistic — UI updates before the
   // server roundtrip so chip clicks feel instant.
   const { patchEntry: handlePatchEntry } = useCanonPatch({
-    universe, universeId: series?.universeId, apply: setUniverse, mountedRef,
+    universe, apply: setUniverse, mountedRef,
   });
 
   const handleRefFailed = useCallback((entryId, errMsg) => {

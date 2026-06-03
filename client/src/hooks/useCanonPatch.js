@@ -11,20 +11,26 @@ import { updateUniverse } from '../services/apiUniverseBuilder';
 // `universe` via `useUniverse`) or `onUniverseChange` (when a parent owns the
 // draft). It's called with the full next universe object.
 //
-// Staleness guard: the captured `universeId` is compared against the live id on
-// completion, so a slow PATCH from a previous universe can't repopulate state
-// after the caller navigates to a different world.
+// The PATCH targets and is staleness-guarded on the LOADED record's `id`
+// (`universe.id`), NOT a separately-passed prop. NounsStage drives `universe`
+// from `useUniverse(series.universeId)`, which can briefly expose the previous
+// universe while a series/universe switch is in flight — keying off the record
+// we actually built the list from means we never send one universe's canon to
+// another's id, and a re-apply that lands after the loaded universe swapped (or
+// cleared) is dropped instead of resurrecting stale state.
 //
 // Usage:
-//   const { patchEntry } = useCanonPatch({ universe, universeId, apply: setUniverse, mountedRef });
+//   const { patchEntry } = useCanonPatch({ universe, apply: setUniverse, mountedRef });
 //   <Card onPatchEntry={(entryId, patch) => patchEntry(kind, entryId, patch)} />
-export function useCanonPatch({ universe, universeId, apply, mountedRef }) {
-  const currentUniverseIdRef = useRef(universeId);
-  useEffect(() => { currentUniverseIdRef.current = universeId; }, [universeId]);
+export function useCanonPatch({ universe, apply, mountedRef }) {
+  // Live mirror of the loaded universe's id so a PATCH that resolves after the
+  // record swapped can compare against the current id and bow out.
+  const currentUniverseIdRef = useRef(universe?.id);
+  useEffect(() => { currentUniverseIdRef.current = universe?.id; }, [universe?.id]);
 
   const patchEntry = useCallback(async (kind, entryId, patch) => {
     if (!universe || !patch || typeof patch !== 'object') return;
-    const capturedId = universeId;
+    const capturedId = universe.id;
     const kindKey = kind.key;
     const list = (universe[kindKey] || []).map((e) =>
       e.id === entryId ? { ...e, ...patch } : e
@@ -33,12 +39,12 @@ export function useCanonPatch({ universe, universeId, apply, mountedRef }) {
     // `{ silent: true }` because the .catch below owns the failure toast —
     // without it the apiCore request() helper fires a second, duplicate one
     // (CLAUDE.md "Custom catch ⇒ silent: true").
-    const updated = await updateUniverse(universeId, { [kindKey]: list }, { silent: true })
+    const updated = await updateUniverse(capturedId, { [kindKey]: list }, { silent: true })
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
     if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) {
       apply(updated);
     }
-  }, [universe, universeId, apply, mountedRef]);
+  }, [universe, apply, mountedRef]);
 
   return { patchEntry };
 }

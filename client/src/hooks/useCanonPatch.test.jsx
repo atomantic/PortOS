@@ -24,7 +24,6 @@ function setup(overrides = {}) {
   const mountedRef = { current: true };
   const props = {
     universe: baseUniverse,
-    universeId: 'u1',
     apply,
     mountedRef,
     ...overrides,
@@ -108,18 +107,21 @@ describe('useCanonPatch', () => {
     expect(apply).toHaveBeenCalledTimes(1); // server copy NOT re-applied
   });
 
-  it('does not re-apply when the universe id changed mid-flight', async () => {
+  it('PATCHes the loaded record id and drops a re-apply after the loaded universe swaps', async () => {
     let resolveUpdate;
     updateUniverse.mockReturnValue(new Promise((res) => { resolveUpdate = res; }));
     const apply = vi.fn();
     const mountedRef = { current: true };
-    const props = { universe: baseUniverse, universeId: 'u1', apply, mountedRef };
+    const props = { universe: baseUniverse, apply, mountedRef };
     const { result, rerender } = renderHook((p) => useCanonPatch(p), { initialProps: props });
 
     let pending;
     act(() => { pending = result.current.patchEntry(KIND, 'c1', { intExt: 'EXT' }); });
-    // Navigate to a different world before the PATCH settles.
-    rerender({ ...props, universeId: 'u2' });
+    // PATCH targets the loaded record's id, not a separately-passed prop.
+    expect(updateUniverse).toHaveBeenCalledWith('u1', expect.any(Object), { silent: true });
+    // The loaded universe swaps to a different world before the PATCH settles
+    // (e.g. useUniverse refetched for a new series.universeId).
+    rerender({ ...props, universe: { id: 'u2', characters: [] } });
     await waitFor(() => {}); // flush the id-sync effect
     await act(async () => { resolveUpdate({ id: 'u1', characters: [] }); await pending; });
     expect(apply).toHaveBeenCalledTimes(1); // stale server copy dropped
