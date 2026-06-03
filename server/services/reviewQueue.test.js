@@ -16,7 +16,7 @@ vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
 vi.mock('./backup.js', () => backup);
 
-const { buildQueue } = await import('./reviewQueue.js');
+const { buildQueue, __resetAlertsCache } = await import('./reviewQueue.js');
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
@@ -32,6 +32,9 @@ describe('reviewQueue.buildQueue', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetEmpty();
+    // The alerts sweep is cached with a TTL; clear it so each case sees its
+    // own generateAlerts mock rather than a prior case's cached result.
+    __resetAlertsCache();
   });
 
   it('returns an empty queue when nothing needs attention', async () => {
@@ -101,6 +104,15 @@ describe('reviewQueue.buildQueue', () => {
     // critical alert sorts ahead of the (newer) normal brain item
     expect(queue.items[0].severity).toBe('critical');
     expect(queue.counts.critical).toBe(1);
+  });
+
+  it('treats a producer returning null/non-array as empty', async () => {
+    brain.getInboxLog.mockResolvedValue(null);
+    askConversations.listConversations.mockResolvedValue(undefined);
+    const queue = await buildQueue();
+    expect(queue.items).toEqual([]);
+    expect(queue.sources.brain.total).toBe(0);
+    expect(queue.sources.brain.error).toBeNull();
   });
 
   it('degrades a failing producer to empty without sinking the queue', async () => {

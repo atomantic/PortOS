@@ -29,6 +29,26 @@ import * as backup from './backup.js';
 // "+N more in <domain>" affordance via the per-source `total` vs `items.length`.
 const PER_SOURCE_LIMIT = 25;
 
+// generateAlerts() runs a full system-health sweep (CPU/disk/PM2/goals/usage),
+// so cache it briefly — the Review Hub can be polled, and a stale-by-seconds
+// alert list is fine here (the dedicated health views read it live).
+const ALERTS_TTL_MS = 30_000;
+let alertsCache = { data: null, timestamp: 0 };
+
+async function getAlertsCached() {
+  if (alertsCache.data && (Date.now() - alertsCache.timestamp) < ALERTS_TTL_MS) {
+    return alertsCache.data;
+  }
+  const result = await proactiveAlerts.generateAlerts();
+  alertsCache = { data: result, timestamp: Date.now() };
+  return result;
+}
+
+// Test seam: drop the alerts cache so a suite can assert fresh per-case data.
+export function __resetAlertsCache() {
+  alertsCache = { data: null, timestamp: 0 };
+}
+
 /**
  * Producer registry. Each entry knows how to gather its raw items and map one
  * into the normalized queue shape. `gather` returns the raw list (already
@@ -123,7 +143,7 @@ const PRODUCERS = [
     drillTo: '/system-health',
     async gather() {
       // System/health alerts; only surface the ones worth interrupting for.
-      const { alerts = [] } = await proactiveAlerts.generateAlerts();
+      const { alerts = [] } = await getAlertsCached();
       return alerts.filter(a => a.severity === 'critical' || a.severity === 'high');
     },
     map(alert) {
@@ -207,13 +227,15 @@ export async function buildQueue() {
     sources[r.source] = { label: r.label, total: r.total, shown: r.items.length, error: r.error };
   }
 
+  const counts = { total: items.length, critical: 0, high: 0 };
+  for (const i of items) {
+    if (i.severity === 'critical') counts.critical++;
+    else if (i.severity === 'high') counts.high++;
+  }
+
   return {
     items,
-    counts: {
-      total: items.length,
-      critical: items.filter(i => i.severity === 'critical').length,
-      high: items.filter(i => i.severity === 'high').length
-    },
+    counts,
     sources,
     generatedAt: new Date().toISOString()
   };
