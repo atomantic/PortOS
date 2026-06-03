@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Dna, Calendar, Pencil, Check, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ProvenanceChip from '../../ui/ProvenanceChip';
 
 function BirthDateSection({ birthDate, onUpdate }) {
   const [editing, setEditing] = useState(false);
@@ -68,7 +69,14 @@ function BirthDateSection({ birthDate, onUpdate }) {
           <div>
             <p className="text-2xl font-mono font-bold text-white">{birthDate}</p>
             {age != null && (
-              <p className="text-sm text-gray-500 mt-1">Chronological age: {age} years</p>
+              <div className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+                <span>Chronological age: {age} years</span>
+                <ProvenanceChip
+                  level="data-backed"
+                  explainer="Counted directly from the birth date on record — a fact, not an estimate."
+                  whatWouldChange="Correcting the birth date above."
+                />
+              </div>
             )}
           </div>
           <button
@@ -135,6 +143,11 @@ export default function AgeTab() {
           <div className="flex items-center gap-2 mb-4">
             <Dna size={18} className="text-purple-400" />
             <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Epigenetic Age</h3>
+            <ProvenanceChip
+              level="experimental"
+              explainer="From a DNA-methylation aging clock — a measured lab result, but one based on methods still maturing toward clinical standard."
+              whatWouldChange="Re-testing over time, and the methylation-clock science continuing to validate."
+            />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>

@@ -22,6 +22,7 @@ import {
   Columns3,
   Film,
   ExternalLink,
+  Zap,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ProseEditor from '../ui/ProseEditor';
@@ -43,6 +44,7 @@ import { listCatalogIngredientsForRef } from '../../services/apiCatalog';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
+import LiveContinuationPanel from './LiveContinuationPanel';
 import AnalysisHistory from './AnalysisHistory';
 import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
@@ -140,6 +142,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     stopAll: queueStopAll,
     stopOne: queueStopOne,
   } = useImageGenQueue();
+
+  // Phase 5 live mode — opt-in, per-work Creative Director continuation
+  // suggestions. Optimistic mirror of work.liveMode so the toggle flips
+  // instantly; re-synced from the prop. `liveTriggerRef` holds the panel's
+  // imperative suggest fn; `liveTimerRef` is the post-typing debounce.
+  const [liveMode, setLiveMode] = useState(work.liveMode || null);
+  useEffect(() => { setLiveMode(work.liveMode || null); }, [work.liveMode]);
+  const liveTriggerRef = useRef(null);
+  const liveTimerRef = useRef(null);
+  const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
 
   // View mode (Edit | Read | Review) is URL-driven so it deep-links and
   // survives reloads. ?view=read → ProseReader; ?view=review → SyncedReview
@@ -436,6 +448,85 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       toast.success(next.presetId === 'none' ? 'World style cleared' : 'World style saved');
     }
   };
+
+  // --- Phase 5 live mode ---
+
+  const liveEnabled = liveMode?.enabled === true;
+  const liveDebounceMs = Number.isInteger(liveMode?.debounceMs) ? liveMode.debounceMs : 2500;
+
+  // Snapshot the prose window around the caret for the live-suggest call. We
+  // send a bounded window (not the whole manuscript) — enough context for the
+  // director without shipping a long body on every pause.
+  const getCursorContext = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return null;
+    const start = ta.selectionStart ?? body.length;
+    const end = ta.selectionEnd ?? start;
+    const WINDOW = 4000;
+    // Clamp each slice to the server's per-field caps (before/after 12k,
+    // selection 8k) so a huge selection can't 400 the request — the schema
+    // would reject it and surface as a red toast instead of a graceful notice.
+    return {
+      before: body.slice(Math.max(0, start - WINDOW), start),
+      after: body.slice(end, end + WINDOW),
+      selection: body.slice(start, end).slice(0, 8000),
+    };
+  }, [body]);
+
+  // Insert a suggested snippet at the caret (replacing any selection), then
+  // restore focus + caret after the inserted text so the writer keeps flowing.
+  const insertAtCursor = useCallback((opt) => {
+    const ta = textareaRef.current;
+    const snippet = opt?.text || '';
+    if (!snippet) return;
+    const start = ta?.selectionStart ?? body.length;
+    const end = ta?.selectionEnd ?? start;
+    // Space-pad so an inserted snippet doesn't weld onto the preceding word.
+    const needsLeadingSpace = start > 0 && !/\s$/.test(body.slice(0, start));
+    const piece = (needsLeadingSpace ? ' ' : '') + snippet;
+    const next = body.slice(0, start) + piece + body.slice(end);
+    setBody(next);
+    const caret = start + piece.length;
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(caret, caret);
+    });
+    toast('Inserted — save to persist', { icon: '✍️' });
+  }, [body]);
+
+  // Debounce a suggest after the writer pauses typing. Only arms while live
+  // mode is on and we're in the edit textarea; cleared on every keystroke and
+  // on unmount so a deferred fire can't hit a dead/closed editor.
+  const scheduleLiveSuggest = useCallback(() => {
+    if (!liveEnabled || viewMode !== 'edit') return;
+    if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+    liveTimerRef.current = setTimeout(() => {
+      liveTimerRef.current = null;
+      if (mountedRef.current) liveTriggerRef.current?.();
+    }, liveDebounceMs);
+  }, [liveEnabled, viewMode, liveDebounceMs, mountedRef]);
+
+  useEffect(() => () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); }, []);
+
+  const toggleLiveMode = useCallback(async () => {
+    const nextEnabled = !liveEnabled;
+    // Optimistic flip; the PATCH returns the persisted liveMode (with defaults
+    // filled in for a first opt-in) which we fold back through onChange.
+    setLiveMode((prev) => ({ ...(prev || {}), enabled: nextEnabled }));
+    const updated = await updateWritersRoomWork(work.id, { liveMode: { enabled: nextEnabled } }).catch((err) => {
+      if (mountedRef.current) {
+        toast.error(`Live mode save failed: ${err.message}`);
+        setLiveMode(work.liveMode || null);
+      }
+      return null;
+    });
+    if (!updated || !mountedRef.current) return;
+    setLiveMode(updated.liveMode || null);
+    onChange?.({ ...updated, activeDraftBody: body });
+    toast.success(nextEnabled ? 'Live director on' : 'Live director off');
+  }, [liveEnabled, work.id, work.liveMode, body, onChange, mountedRef]);
 
   const commitStatus = async (next) => {
     if (next === status) return;
@@ -742,6 +833,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
                 <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
+                <MenuItem icon={Zap} label={liveEnabled ? 'Disable live director' : 'Enable live director'} active={liveEnabled} onClick={closeOverflowAnd(toggleLiveMode)} />
               </MenuSection>
               <MenuSection label="Open">
                 <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VERSIONS))} />
@@ -828,7 +920,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             <ProseEditor
               ref={textareaRef}
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => { setBody(e.target.value); scheduleLiveSuggest(); }}
               readingTheme={readingTheme}
               className="w-full h-full resize-none px-6 py-6 text-base focus:outline-none"
             />
@@ -868,6 +960,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             mobileTab === MOBILE_TAB.WRITING ? 'hidden lg:flex' : 'flex'
           }`}
         >
+          {liveEnabled && viewMode === 'edit' && (
+            <div className="shrink-0 max-h-[40%] min-h-0 border-b border-port-border overflow-hidden flex flex-col">
+              <LiveContinuationPanel
+                workId={work.id}
+                liveMode={liveMode}
+                getCursorContext={getCursorContext}
+                onInsert={insertAtCursor}
+                registerTrigger={registerLiveTrigger}
+              />
+            </div>
+          )}
           <StoryboardPanel
             work={work}
             characters={characters}

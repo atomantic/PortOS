@@ -16,6 +16,7 @@ import {
   writersRoomExerciseCreateSchema,
   writersRoomExerciseFinishSchema,
   writersRoomAnalysisCreateSchema,
+  writersRoomLiveSuggestSchema,
   writersRoomCharacterCreateSchema,
   writersRoomCharacterUpdateSchema,
   writersRoomPlaceCreateSchema,
@@ -34,6 +35,7 @@ import {
   runAnalysis, listAnalyses, getAnalysis, attachSceneImage,
 } from '../services/writersRoom/evaluator.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
+import { suggestContinuation } from '../services/writersRoom/liveDirector.js';
 import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
@@ -187,6 +189,17 @@ router.post('/works/:id/analysis', asyncHandler(async (req, res) => {
 
 router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
   res.json(await getAnalysis(req.params.id, req.params.analysisId));
+}));
+
+// ---------- live continuation (Phase 5: opt-in Creative Director feedback) ----------
+
+// Throttled, opt-in live suggestions from the cursor context. The service
+// enforces both the per-work opt-in (409 if off) and the daily budget (429 if
+// spent) — the editor debounce is a convenience, not the gate. Stateless apart
+// from the daily budget counter the service bumps on a productive call.
+router.post('/works/:id/live-suggest', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomLiveSuggestSchema, req.body || {});
+  res.json(await suggestContinuation(req.params.id, data));
 }));
 
 // ---------- synced review (Phase 4: prose ↔ script ↔ media) ----------

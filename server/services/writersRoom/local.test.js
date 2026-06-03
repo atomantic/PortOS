@@ -18,6 +18,7 @@ const {
   listWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
+  resolveLiveMode, recordLiveModeUsage, DEFAULT_LIVE_MODE,
 } = local;
 
 beforeEach(() => {
@@ -354,5 +355,53 @@ describe('exercise sessions', () => {
     expect(await listExercises({ workId: w1.id })).toHaveLength(1);
     expect(await listExercises({ workId: w2.id })).toHaveLength(1);
     expect(await listExercises()).toHaveLength(3);
+  });
+});
+
+describe('live mode (Phase 5)', () => {
+  it('resolveLiveMode falls back to defaults for a work that never opted in', async () => {
+    const work = await createWork({ title: 'Fresh' });
+    const live = resolveLiveMode(work);
+    expect(live.enabled).toBe(false);
+    expect(live.debounceMs).toBe(DEFAULT_LIVE_MODE.debounceMs);
+    expect(live.dailyCallBudget).toBe(DEFAULT_LIVE_MODE.dailyCallBudget);
+    expect(live.usage).toEqual({ date: null, count: 0 });
+  });
+
+  it('updateWork partial-merges liveMode knobs without clobbering siblings', async () => {
+    const work = await createWork({ title: 'Live' });
+    const a = await updateWork(work.id, { liveMode: { enabled: true } });
+    expect(a.liveMode.enabled).toBe(true);
+    expect(a.liveMode.debounceMs).toBe(DEFAULT_LIVE_MODE.debounceMs);
+
+    const b = await updateWork(work.id, { liveMode: { debounceMs: 5000 } });
+    expect(b.liveMode.enabled).toBe(true); // preserved
+    expect(b.liveMode.debounceMs).toBe(5000);
+  });
+
+  it('updateWork strips a client-supplied usage counter (server-owned)', async () => {
+    const work = await createWork({ title: 'Guard' });
+    await recordLiveModeUsage(work.id); // count -> 1 today
+    const tampered = await updateWork(work.id, {
+      liveMode: { enabled: true, usage: { date: '1999-01-01', count: 9999 } },
+    });
+    // The crafted usage is dropped — the real counter is preserved.
+    expect(tampered.liveMode.usage.count).toBe(1);
+    expect(tampered.liveMode.usage.date).not.toBe('1999-01-01');
+  });
+
+  it('recordLiveModeUsage increments within a day and rolls over on a new UTC day', async () => {
+    const work = await createWork({ title: 'Budget' });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T10:00:00Z'));
+    const u1 = await recordLiveModeUsage(work.id);
+    expect(u1.usage).toEqual({ date: '2026-06-03', count: 1 });
+    const u2 = await recordLiveModeUsage(work.id);
+    expect(u2.usage).toEqual({ date: '2026-06-03', count: 2 });
+
+    // New UTC day resets the counter to 1.
+    vi.setSystemTime(new Date('2026-06-04T00:05:00Z'));
+    const u3 = await recordLiveModeUsage(work.id);
+    expect(u3.usage).toEqual({ date: '2026-06-04', count: 1 });
   });
 });
