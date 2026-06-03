@@ -24,7 +24,10 @@ const imgUrl = (ref) => `/data/images/${ref}`;
 // rather than scrollIntoView, which walks every scrollable ancestor).
 function scrollPaneTo(container, syncId) {
   if (!container || !syncId || typeof container.scrollTo !== 'function') return;
-  const el = container.querySelector(`[data-sync-id="${CSS.escape(syncId)}"]`);
+  // CSS.escape guards against ids with regex/selector metachars; fall back to a
+  // raw match on the off chance the runtime lacks it (older WebViews).
+  const sel = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(syncId) : syncId;
+  const el = container.querySelector(`[data-sync-id="${sel}"]`);
   if (!el) return;
   const top = el.offsetTop - container.offsetTop - 12;
   container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
