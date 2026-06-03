@@ -3,11 +3,14 @@ import { z } from 'zod';
 import {
   buildClearCookie,
   buildSessionCookie,
+  clearLoginFailures,
   clearPassword,
   createSession,
   extractToken,
   getAuthStatus,
   isAuthEnabled,
+  isLoginRateLimited,
+  recordLoginFailure,
   revokeSession,
   setPassword,
   verifyPassword,
@@ -58,9 +61,23 @@ router.post('/login', asyncHandler(async (req, res) => {
   if (!(await isAuthEnabled())) {
     throw new ServerError('Authentication is not enabled', { status: 400, code: 'AUTH_NOT_ENABLED' });
   }
+  // Throttle check runs BEFORE scrypt so a sidecar can't pin the CPU by
+  // looping bad guesses. The IP comes from Express's `req.ip` (we don't
+  // sit behind a reverse proxy in normal PortOS deployments).
+  const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (isLoginRateLimited(clientIp)) {
+    throw new ServerError('Too many login attempts — try again in a minute', {
+      status: 429,
+      code: 'AUTH_RATE_LIMITED',
+    });
+  }
   if (!(await verifyPassword(password))) {
+    recordLoginFailure(clientIp);
     throw new ServerError('Invalid password', { status: 401, code: 'AUTH_BAD_PASSWORD' });
   }
+  // Success clears the throttle so a user who mistyped a few times then got
+  // it right isn't kept locked out.
+  clearLoginFailures(clientIp);
   const { token } = await createSession();
   res.setHeader('Set-Cookie', buildSessionCookie(token, { secure: isSecure(req) }));
   res.json({ authenticated: true });

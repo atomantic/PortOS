@@ -69,6 +69,23 @@ describe('auth routes', () => {
     expect(res.body.code).toBe('AUTH_NOT_ENABLED');
   });
 
+  it('POST /api/auth/login throttles after the failure-window cap', async () => {
+    let app = await buildApp();
+    await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+
+    app = await buildApp();
+    // Burn through the 10-failure window with bad passwords from one IP.
+    for (let i = 0; i < 10; i++) {
+      await request(app).post('/api/auth/login').send({ password: `wrong-${i}` });
+    }
+    // Next attempt should be throttled with 429 — and crucially WITHOUT
+    // running scrypt (we can't easily assert that here, but the status
+    // code confirms the throttle path fired).
+    const throttled = await request(app).post('/api/auth/login').send({ password: 'correct-horse' });
+    expect(throttled.status).toBe(429);
+    expect(throttled.body.code).toBe('AUTH_RATE_LIMITED');
+  });
+
   it('POST /api/auth/login rejects bad passwords and accepts correct ones', async () => {
     let app = await buildApp();
     await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });

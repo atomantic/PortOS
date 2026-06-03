@@ -170,8 +170,26 @@ describe('auth service', () => {
     await auth.clearPassword({ currentPassword: 'new-horse' });           // disable
     // The emit is deferred via setImmediate so the response cookie can
     // flush first — let the event loop tick before asserting.
-    await new Promise((resolve) => setImmediate(resolve));
+    // Kick event is deferred ~500ms so the response cookie can flush first.
+    await new Promise((resolve) => setTimeout(resolve, 600));
     expect(events.length).toBe(3);
+  });
+
+  it('rate-limits login attempts per IP after a burst of failures', async () => {
+    const auth = await import('./auth.js');
+    const ip = '100.64.0.5';
+    // First 10 attempts are NOT rate-limited (matches LOGIN_MAX_ATTEMPTS).
+    for (let i = 0; i < 10; i++) {
+      expect(auth.isLoginRateLimited(ip)).toBe(false);
+      auth.recordLoginFailure(ip);
+    }
+    // 11th attempt is throttled.
+    expect(auth.isLoginRateLimited(ip)).toBe(true);
+    // A different IP is unaffected.
+    expect(auth.isLoginRateLimited('100.64.0.6')).toBe(false);
+    // Clearing wipes the window for that IP.
+    auth.clearLoginFailures(ip);
+    expect(auth.isLoginRateLimited(ip)).toBe(false);
   });
 
   it('coalesces concurrent verifySession calls so a burst right after restart sees the loaded sessions', async () => {
@@ -206,14 +224,19 @@ describe('auth service', () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
     const { token } = await auth.createSession();
+    // Drain the setPassword's deferred-kick timer before we attach the
+    // listener so it doesn't get counted against this test's expectation.
+    await new Promise((resolve) => setTimeout(resolve, 600));
     const events = [];
     auth.authEvents.on('sessions:revoked-all', () => events.push('event'));
     await auth.revokeSession(token);
-    await new Promise((resolve) => setImmediate(resolve));
+    // Kick event is deferred ~500ms so the response cookie can flush first.
+    await new Promise((resolve) => setTimeout(resolve, 600));
     expect(events.length).toBe(1);
     // Revoking an unknown token must NOT fire — no state changed.
     await auth.revokeSession('not-a-real-token');
-    await new Promise((resolve) => setImmediate(resolve));
+    // Kick event is deferred ~500ms so the response cookie can flush first.
+    await new Promise((resolve) => setTimeout(resolve, 600));
     expect(events.length).toBe(1);
   });
 });

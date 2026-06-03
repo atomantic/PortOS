@@ -28,6 +28,12 @@ const SALT_BYTES = 16;
 const HASH_BYTES = 64;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const COOKIE_NAME = 'portos_auth';
+// Login throttle — auth is normally tailnet-only so this is defense in depth
+// against a sidecar burning server CPU on scrypt verifications. Per-IP
+// sliding window: at most LOGIN_MAX_ATTEMPTS failed POSTs in
+// LOGIN_WINDOW_MS, then 401s with no scrypt work until the window clears.
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 60 * 1000;
 // scrypt cost parameters per OWASP 2023 password-storage guidance for
 // interactive logins. PortOS has no rate limiting and the password hash +
 // salt persist in `settings.json` (single-user trust model — local
@@ -38,6 +44,15 @@ const COOKIE_NAME = 'portos_auth';
 // more headroom than the canonical 128·N·r working set (≈128 MiB for these
 // params), so allocate 256 MiB.
 const SCRYPT_PARAMS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+
+// Delay before kicking sockets on auth-state change. `setImmediate` fires in
+// the same tick as the HTTP response flush — close enough that the
+// disconnect frame can reach the browser before the new Set-Cookie header
+// has been processed, bouncing the initiating tab to /login mid-change. A
+// half-second tradeoff: long enough for the response round-trip + cookie
+// application on a tailnet (typically <50ms), short enough to not feel
+// laggy when a sibling tab needs to log out.
+const KICK_DELAY_MS = 500;
 
 // In-memory session store. Keyed by `sha256(token)` → { expiresAt }. Persisted
 // to disk on every mutation so tokens survive server restarts (handy when PM2
@@ -233,7 +248,7 @@ export const revokeSession = async (token) => {
     // single-user model means broadcast events shouldn't keep streaming
     // to a tab whose cookie was just cleared. Deferred so the logout
     // response's clear-cookie reaches the browser first.
-    setImmediate(() => authEvents.emit('sessions:revoked-all'));
+    setTimeout(() => authEvents.emit('sessions:revoked-all'), KICK_DELAY_MS);
   }
 };
 
@@ -246,13 +261,47 @@ export const revokeAllSessions = async () => {
   // get kicked. Otherwise they'd keep emitting privileged events on the
   // already-accepted handshake until the page reloads.
   //
-  // Defer with `setImmediate` so the HTTP response that triggered this
-  // revoke (POST /api/auth/password) has time to flush its new Set-Cookie
-  // header before we kick the requesting tab's socket. Without the defer,
-  // the user's own password-change request kicks their own socket, which
-  // reconnects with the OLD cookie (the new one hasn't arrived yet) and
-  // bounces them to /login mid-change.
-  setImmediate(() => authEvents.emit('sessions:revoked-all'));
+  // Defer the kick so the HTTP response that triggered this revoke (POST
+  // /api/auth/password) has time to flush its new Set-Cookie header and
+  // round-trip to the browser BEFORE we kick the requesting tab's socket.
+  // Without the defer, the user's own password-change request kicks their
+  // own socket, which reconnects with the OLD cookie (the new one hasn't
+  // arrived yet) and bounces them to /login mid-change.
+  setTimeout(() => authEvents.emit('sessions:revoked-all'), KICK_DELAY_MS);
+};
+
+// Sliding-window login-throttle map. Keys are client IPs; values are arrays
+// of recent failed-attempt timestamps. Trimmed lazily on each call so it
+// never grows unbounded. In-memory only (a sidecar restart resets the
+// counters — acceptable for a defense-in-depth control on a single-user
+// install, not the primary auth boundary).
+const loginAttempts = new Map();
+
+const trimLoginWindow = (timestamps, cutoff) => {
+  let i = 0;
+  while (i < timestamps.length && timestamps[i] < cutoff) i++;
+  return i === 0 ? timestamps : timestamps.slice(i);
+};
+
+export const isLoginRateLimited = (ip) => {
+  if (typeof ip !== 'string' || ip.length === 0) return false;
+  const cutoff = now() - LOGIN_WINDOW_MS;
+  const recent = trimLoginWindow(loginAttempts.get(ip) || [], cutoff);
+  if (recent.length === 0) loginAttempts.delete(ip);
+  else loginAttempts.set(ip, recent);
+  return recent.length >= LOGIN_MAX_ATTEMPTS;
+};
+
+export const recordLoginFailure = (ip) => {
+  if (typeof ip !== 'string' || ip.length === 0) return;
+  const cutoff = now() - LOGIN_WINDOW_MS;
+  const recent = trimLoginWindow(loginAttempts.get(ip) || [], cutoff);
+  recent.push(now());
+  loginAttempts.set(ip, recent);
+};
+
+export const clearLoginFailures = (ip) => {
+  if (typeof ip === 'string') loginAttempts.delete(ip);
 };
 
 // Parse the `Cookie` header for our token. Express doesn't ship a cookie

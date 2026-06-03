@@ -374,19 +374,23 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-// Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
-// so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
-app.use(express.json({ limit: '55mb' }));
-app.use(express.urlencoded({ limit: '55mb', extended: true }));
-
 // Make io available to routes
 app.set('io', io);
 
-// Auth gate runs before any /api/* or /sdapi/* route. When
+// Auth gate runs BEFORE the body parsers so unauthenticated requests to
+// gated routes are rejected from the headers alone, without forcing the
+// server to read and parse a 55 MB JSON body first (DoS surface).
+// Public routes (login, status, health) still need a parsed body / no body,
+// and they flow through to the parsers below normally. When
 // settings.secrets.auth.enabled is true the gate returns 401 for everything
 // except the small public set in lib/authGate.js (auth status/whoami/login/
 // logout + /api/system/health). No-op when auth is off.
 app.use(authGate);
+
+// Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
+// so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
+app.use(express.json({ limit: '55mb' }));
+app.use(express.urlencoded({ limit: '55mb', extended: true }));
 
 // API Routes
 app.use('/api/auth', authRoutes);
