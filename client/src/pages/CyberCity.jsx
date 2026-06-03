@@ -120,6 +120,7 @@ function CyberCityInner() {
         aiActivity={aiActivity}
         productivityData={productivityData}
         goals={goalsData}
+        character={character}
         settings={settings}
         playSfx={playSfx}
         keysRef={keysRef}
