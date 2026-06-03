@@ -17,6 +17,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
 import ValuesAlignmentPanel from './ValuesAlignmentPanel';
+import AdversarialBoundaryPanel from './AdversarialBoundaryPanel';
 import PersonaBadge from '../PersonaBadge';
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
@@ -688,6 +689,9 @@ export default function TestTab({ onRefresh }) {
 
       {/* Values-Alignment Tests (M34 P6) — shares the provider + persona selection above */}
       <ValuesAlignmentPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
+
+      {/* Adversarial Boundary Tests (M34 P6) — shares the provider + persona selection above */}
+      <AdversarialBoundaryPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
     </div>
   );
 }

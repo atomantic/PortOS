@@ -109,9 +109,9 @@ traits: {
 
 ### Phase 6: Advanced Behavioral Testing
 - Complex multi-turn conversation scenarios
-- Ethical dilemma tests aligned with stated values
+- Ethical dilemma tests aligned with stated values — **done**: the Test tab's values-alignment suite poses dilemmas and grades each answer against the user's ranked values hierarchy
 - Quantitative scoring of communication style match
-- Adversarial testing of boundaries
+- Adversarial testing of boundaries — **done**: the Test tab's adversarial-boundary suite (`ADVERSARIAL_BOUNDARY_SUITE.md`) tries to manipulate the embodied twin (authority pressure, flattery, guilt, incremental escalation, harmful reframing) into crossing a stated boundary, and grades each response held / partial / breached
 
 ### Phase 7: Twin Personas & Context Switching
 - Named personas (Professional, Casual, Family, Creative)

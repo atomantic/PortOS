@@ -39,10 +39,13 @@ export function extractJSON(response, context = 'response') {
  * test scorers.
  */
 export function parseScorerVerdict(response, verdicts, fallback = 'partial') {
-  const lower = response.toLowerCase();
   let result = fallback;
   for (const v of verdicts) {
-    if (lower.includes(`"result": "${v}"`) || lower.includes(`result: ${v}`)) {
+    // Anchor on `result:` so a verdict word appearing inside the reasoning
+    // doesn't false-match, but tolerate the whitespace/quote variations LLMs
+    // actually emit — `"result": "held"`, `"result":"held"`, `result: held`,
+    // pretty-printed or compact JSON all parse the same.
+    if (new RegExp(`result"?\\s*:\\s*"?${v}\\b`, 'i').test(response)) {
       result = v;
       break;
     }
@@ -50,6 +53,18 @@ export function parseScorerVerdict(response, verdicts, fallback = 'partial') {
   const reasoningMatch = response.match(/"reasoning":\s*"([^"]+)"/);
   const reasoning = reasoningMatch ? reasoningMatch[1] : response.substring(0, 200);
   return { result, reasoning };
+}
+
+/**
+ * Parse a markdown bullet list (`- item` / `* item`) into a trimmed string
+ * array, dropping blanks. Shared by the values-alignment and adversarial-
+ * boundary suite parsers (the "Values at Stake" / "Boundary Tested" blocks).
+ */
+export function parseBulletList(block) {
+  return (block || '')
+    .split('\n')
+    .map(line => line.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean);
 }
 
 /**

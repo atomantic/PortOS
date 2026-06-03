@@ -16,7 +16,8 @@ const cache = {
   meta: { data: null, timestamp: 0 },
   documents: { data: null, timestamp: 0 },
   tests: { data: null, timestamp: 0 },
-  valuesTests: { data: null, timestamp: 0 }
+  valuesTests: { data: null, timestamp: 0 },
+  adversarialTests: { data: null, timestamp: 0 }
 };
 export const CACHE_TTL_MS = 5000;
 
@@ -29,6 +30,7 @@ export const DEFAULT_META = {
   documents: [],
   testHistory: [],
   valuesTestHistory: [],
+  adversarialTestHistory: [],
   personas: [],
   enrichment: { completedCategories: [], lastSession: null },
   settings: { autoInjectToCoS: true, maxContextTokens: 4000 }

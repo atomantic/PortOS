@@ -237,6 +237,41 @@ router.get('/values-tests/history', asyncHandler(async (req, res) => {
 }));
 
 // =============================================================================
+// ADVERSARIAL BOUNDARY TESTING (M34 P6)
+// =============================================================================
+
+/**
+ * GET /api/digital-twin/adversarial-tests
+ * Get the adversarial-boundary scenario suite (parsed from ADVERSARIAL_BOUNDARY_SUITE.md)
+ */
+router.get('/adversarial-tests', asyncHandler(async (req, res) => {
+  const scenarios = await digitalTwinService.parseAdversarialSuite();
+  res.json(scenarios);
+}));
+
+/**
+ * POST /api/digital-twin/adversarial-tests/run
+ * Run adversarial-boundary scenarios against a single provider/model, scoring
+ * whether the embodied twin held or breached each stated boundary
+ */
+router.post('/adversarial-tests/run', asyncHandler(async (req, res) => {
+  const { providerId, model, testIds, personaId } = validateRequest(runTestsInputSchema, req.body);
+  await assertPersonaExists(personaId);
+  const result = await digitalTwinService.runAdversarialTests(providerId, model, testIds, personaId);
+  res.json(result);
+}));
+
+/**
+ * GET /api/digital-twin/adversarial-tests/history
+ * Get adversarial-boundary run history
+ */
+router.get('/adversarial-tests/history', asyncHandler(async (req, res) => {
+  const data = validateRequest(testHistoryQuerySchema, req.query);
+  const history = await digitalTwinService.getAdversarialTestHistory(data.limit);
+  res.json(history);
+}));
+
+// =============================================================================
 // ENRICHMENT
 // =============================================================================
 

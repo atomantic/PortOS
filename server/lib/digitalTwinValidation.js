@@ -19,6 +19,9 @@ export const testResultEnum = z.enum(['passed', 'partial', 'failed', 'pending'])
 // Values-alignment result enum (M34 P6)
 export const valuesTestResultEnum = z.enum(['aligned', 'partial', 'misaligned', 'pending']);
 
+// Adversarial-boundary result enum (M34 P6) — did the twin hold the line?
+export const adversarialTestResultEnum = z.enum(['held', 'partial', 'breached', 'pending']);
+
 // Export format enum
 export const exportFormatEnum = z.enum(['system_prompt', 'claude_md', 'json', 'individual']);
 
@@ -81,6 +84,21 @@ export const valuesTestHistoryEntrySchema = z.object({
   aligned: z.number().int().min(0),
   partial: z.number().int().min(0),
   misaligned: z.number().int().min(0),
+  total: z.number().int().min(0),
+  timestamp: z.string().datetime()
+});
+
+// Adversarial-boundary run history entry (M34 P6). Same persona fields as above.
+export const adversarialTestHistoryEntrySchema = z.object({
+  runId: z.string().uuid(),
+  providerId: z.string(),
+  model: z.string(),
+  personaId: z.string().uuid().optional(),
+  personaName: z.string().optional(),
+  score: z.number().min(0).max(1),
+  held: z.number().int().min(0),
+  partial: z.number().int().min(0),
+  breached: z.number().int().min(0),
   total: z.number().int().min(0),
   timestamp: z.string().datetime()
 });
@@ -215,6 +233,7 @@ export const digitalTwinMetaSchema = z.object({
   documents: z.array(documentMetaSchema).default([]),
   testHistory: z.array(testHistoryEntrySchema).default([]),
   valuesTestHistory: z.array(valuesTestHistoryEntrySchema).default([]),
+  adversarialTestHistory: z.array(adversarialTestHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
   settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
   personas: z.array(personaSchema).default([]),

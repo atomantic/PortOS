@@ -37,6 +37,15 @@ export const runValuesAlignmentTests = (providerId, model, testIds = null, perso
 });
 export const getValuesAlignmentTestHistory = (limit = 10) => request(`/digital-twin/values-tests/history?limit=${limit}`);
 
+// Digital Twin - Adversarial Boundary Testing (M34 P6)
+export const getAdversarialTests = (options = {}) => request('/digital-twin/adversarial-tests', options);
+export const runAdversarialTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/adversarial-tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds, personaId }),
+  ...options
+});
+export const getAdversarialTestHistory = (limit = 10, options = {}) => request(`/digital-twin/adversarial-tests/history?limit=${limit}`, options);
+
 // Digital Twin - Enrichment
 export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enrich/categories');
 export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');

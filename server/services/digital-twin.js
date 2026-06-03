@@ -8,6 +8,7 @@
  *   digital-twin-documents.js  — getDocuments, getDocumentById, createDocument, updateDocument, deleteDocument
  *   digital-twin-testing.js    — parseTestSuite, runTests, getTestHistory
  *   digital-twin-values-testing.js — parseValuesAlignmentSuite, runValuesAlignmentTests, getValuesAlignmentHistory
+ *   digital-twin-adversarial-testing.js — parseAdversarialSuite, runAdversarialTests, getAdversarialTestHistory
  *   digital-twin-personas.js   — getPersonas, createPersona, updatePersona, deletePersona, setActivePersona, getActivePersona
  *   digital-twin-enrichment.js — getEnrichmentCategories, generateEnrichmentQuestion, processEnrichmentAnswer, …
  *   digital-twin-export.js     — getExportFormats, exportDigitalTwin, exportSoul
@@ -46,6 +47,12 @@ export {
   runValuesAlignmentTests,
   getValuesAlignmentHistory
 } from './digital-twin-values-testing.js';
+
+export {
+  parseAdversarialSuite,
+  runAdversarialTests,
+  getAdversarialTestHistory
+} from './digital-twin-adversarial-testing.js';
 
 export {
   getPersonas,
