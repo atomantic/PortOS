@@ -11,7 +11,7 @@ import { computeEasterEggs, EGGS } from '../../utils/cityEasterEggs';
 // featured district. Each egg is a small glowing icosahedron with a tiny glyph label; they bob
 // (each on its own phase offset) gated on the quality dial (mirrors CityArtifacts).
 function Egg({ egg, animate }) {
-  const { color, label, position, phase } = egg;
+  const { color, label, hint, position, phase } = egg;
   const s = EGGS.size;
   const ref = useRef();
 
@@ -37,6 +37,12 @@ function Egg({ egg, animate }) {
         {/* Tiny glyph so the egg hints at what it is without spelling it out. */}
         <Text position={[0, s + 0.5, 0]} fontSize={0.45} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={6}>
           {label}
+        </Text>
+
+        {/* A muted hint sits below the glyph — the discovery payoff up close, kept small and dim
+            so eggs still read as "hidden" from across the city. */}
+        <Text position={[0, s - 0.4, 0]} fontSize={0.28} color="#64748b" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={8}>
+          {hint}
         </Text>
       </group>
     </group>
