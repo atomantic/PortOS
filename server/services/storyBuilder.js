@@ -67,6 +67,16 @@ export const TITLE_MAX = 200;
 export const SEED_MAX = 4000;
 export const INTAKE_MODES = Object.freeze(['seed', 'import']);
 
+// Steps the importer actually pre-fills, so they open "ready" for review on an
+// import-mode session. `idea` (universe + series exist), `plotArc` (arc +
+// seasons), `characters` (extracted canon), and `issues` (the issue split) are
+// populated by `analyzeImport` → `commitImport`. Steps NOT listed here —
+// `universeAesthetic` (logline/premise/styleNotes/influences are never written
+// on import), `readerMap` (no reader-map extraction pass), and `production`
+// (the downstream render step) — fall through to the default "pending" status
+// so they don't show an empty step under a misleading "Ready" badge (#728).
+export const IMPORT_READY_STEPS = Object.freeze(['idea', 'plotArc', 'characters', 'issues']);
+
 // The universe aesthetic step freezes these universe lock keys.
 export const AESTHETIC_LOCK_FIELDS = Object.freeze([
   'logline', 'premise', 'styleNotes', 'influencesEmbrace', 'influencesAvoid',
@@ -214,9 +224,19 @@ export async function createStorySession(input = {}) {
     llm: input.llm || null,
     createdAt: now,
     updatedAt: now,
-    // Import mode pre-fills content before review — mark every step "ready" so
-    // the user walks through reviewing + locking each, rather than generating.
-    ...(intakeMode === 'import' ? { steps: Object.fromEntries(STEP_IDS.map((id) => [id, { status: 'ready' }])) } : {}),
+    // Import mode pre-fills SOME content before review — mark only the steps the
+    // importer actually populates "ready" so the user reviews + locks those. The
+    // importer (`analyzeImport` → `commitImport`) fills: the idea (universe +
+    // series exist), the plot arc + seasons, the cast (canon characters), and the
+    // issue split. It does NOT extract a universe aesthetic
+    // (logline/premise/styleNotes/influences are never written) nor a reader map,
+    // and production is the downstream render step. Those start "pending" so the
+    // user generates them — leaving them "ready" showed an empty step under a
+    // misleading "Ready" badge (issue #728). The default-pending fall-through in
+    // sanitizeSteps covers every step omitted here.
+    ...(intakeMode === 'import'
+      ? { steps: Object.fromEntries(IMPORT_READY_STEPS.map((id) => [id, { status: 'ready' }])) }
+      : {}),
   });
   await store().saveOne(created.id, created);
   return created;
