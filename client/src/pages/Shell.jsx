@@ -24,13 +24,16 @@ const QUICK_COMMANDS = [
 ];
 
 // Hot buttons for arrow / Enter entry — handy on touch devices and for driving TUI
-// apps or scrolling shell history without a hardware keyboard. Values are the ANSI
-// escape sequences a terminal emits for these keys.
+// apps or scrolling shell history without a hardware keyboard. Arrow keys carry the
+// final char only: the CSI (`\x1b[`) vs SS3 (`\x1bO`) prefix is chosen at send time
+// from the terminal's application-cursor-key mode (DECCKM) so the button matches what
+// a real arrow keypress emits — many full-screen TUIs (vim, htop) set DECCKM and expect
+// the SS3 form. Enter is a literal carriage return, unaffected by cursor mode.
 const NAV_KEYS = [
-  { label: 'Up', Icon: ArrowUp, seq: '\x1b[A' },
-  { label: 'Down', Icon: ArrowDown, seq: '\x1b[B' },
-  { label: 'Left', Icon: ArrowLeft, seq: '\x1b[D' },
-  { label: 'Right', Icon: ArrowRight, seq: '\x1b[C' },
+  { label: 'Up', Icon: ArrowUp, code: 'A' },
+  { label: 'Down', Icon: ArrowDown, code: 'B' },
+  { label: 'Left', Icon: ArrowLeft, code: 'D' },
+  { label: 'Right', Icon: ArrowRight, code: 'C' },
   { label: 'Enter', Icon: CornerDownLeft, seq: '\r' },
 ];
 
@@ -162,6 +165,13 @@ export default function Shell() {
 
   const sendCommand = useCallback((cmd) => emitShellInput(cmd + '\n'), [emitShellInput]);
   const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);
+  // Arrow keys send CSI or SS3 based on the terminal's DECCKM state (see NAV_KEYS);
+  // Enter and any other literal-`seq` keys pass through unchanged.
+  const sendNavKey = useCallback((key) => {
+    if (key.seq != null) { emitShellInput(key.seq); return; }
+    const appCursor = termInstanceRef.current?.modes?.applicationCursorKeysMode;
+    emitShellInput(`\x1b${appCursor ? 'O' : '['}${key.code}`);
+  }, [emitShellInput]);
   const handlePaste = useCallback(async () => {
     const text = await readClipboard();
     if (text == null) { setShowPasteInput(true); return; }
@@ -847,15 +857,15 @@ export default function Shell() {
           )}
           <div className="w-px h-6 bg-port-border" />
           {/* Arrow / Enter hot buttons — touch-friendly TUI nav + shell history */}
-          {NAV_KEYS.map(({ label, Icon, seq }) => (
+          {NAV_KEYS.map((key) => (
             <button
-              key={label}
-              onClick={() => emitShellInput(seq)}
+              key={key.label}
+              onClick={() => sendNavKey(key)}
               className="flex items-center justify-center px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs font-mono transition-colors border border-port-border min-h-[40px] min-w-[40px]"
-              title={`Send ${label} key`}
-              aria-label={`Send ${label} key`}
+              title={`Send ${key.label} key`}
+              aria-label={`Send ${key.label} key`}
             >
-              <Icon size={14} />
+              <key.Icon size={14} />
             </button>
           ))}
           <div className="w-px h-6 bg-port-border" />
