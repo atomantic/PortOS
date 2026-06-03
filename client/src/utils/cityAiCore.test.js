@@ -9,6 +9,7 @@ import {
   beamThickness,
   computeAiCoreBeams,
   pruneAiOps,
+  tierColor,
 } from './cityAiCore';
 
 const NOW = 1_000_000;
@@ -316,6 +317,19 @@ describe('computeAiCoreBeams', () => {
     const ops = { a: { id: 'a', appId: 'app-1', ts: NOW } };
     const beams = computeAiCoreBeams(ops, positions, apps, AI_CORE.apexY, '#fff', NOW + AI_CORE.opMaxAgeMs + 1);
     expect(beams).toHaveLength(0);
+  });
+
+  it('colors each beam by its own tier, falling back to the passed color when tier is absent', () => {
+    const ops = {
+      a: { id: 'a', appId: 'app-1', tier: 'heavy', ts: NOW },
+      b: { id: 'b', tier: 'light', ts: NOW }, // radial
+      c: { id: 'c', ts: NOW }, // no tier → fallback color
+    };
+    const beams = computeAiCoreBeams(ops, positions, apps, AI_CORE.apexY, '#fallback', NOW);
+    const byKey = Object.fromEntries(beams.map(b => [b.key, b]));
+    expect(byKey.a.color).toBe(tierColor('heavy'));
+    expect(byKey.b.color).toBe(tierColor('light'));
+    expect(byKey.c.color).toBe('#fallback');
   });
 
   it('draws a done afterglow op with its measured thickness, then drops it after afterglowMs', () => {

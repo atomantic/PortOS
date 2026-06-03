@@ -227,7 +227,7 @@ export function computeAiCore(ops, lastStartTs = 0, now = Date.now()) {
 //   positions — Map<appId, { x, z }> of building world positions (CityScene's layout)
 //   apps      — app records (for workspacePath → app resolution)
 //   apexY     — world Y of the spire apex (beams originate here)
-//   color     — the core's active-tier color
+//   color     — fallback color when an op has no tier (e.g. the core's active-tier color)
 //   now       — injected for determinism
 //
 // Returns up to AI_CORE.maxBeams descriptors. Pure.
@@ -250,6 +250,9 @@ export function computeAiCoreBeams(ops, positions, apps = [], apexY = AI_CORE.ap
     const appId = resolveOpAppId(op, apps);
     const pos = getPos(appId);
     const thickness = beamThickness(op.tokensPerSec);
+    // Color by the op's own tier so a `done` afterglow beam keeps its tier color even when
+    // the core has gone idle (no in-flight op left to set the core color).
+    const beamColor = op.tier ? tierColor(op.tier) : color;
     if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
       // Apex-local target: building roof-ish height so the beam arcs down to the building.
       return {
@@ -259,7 +262,7 @@ export function computeAiCoreBeams(ops, positions, apps = [], apexY = AI_CORE.ap
         // Vector from the apex (group origin) to the building, in apex-local space.
         target: [pos.x, -apexY + 4, pos.z],
         thickness,
-        color,
+        color: beamColor,
       };
     }
     return {
@@ -268,7 +271,7 @@ export function computeAiCoreBeams(ops, positions, apps = [], apexY = AI_CORE.ap
       angle: (i / total) * Math.PI * 2,
       length: AI_CORE.radialLength,
       thickness,
-      color,
+      color: beamColor,
     };
   });
 }
