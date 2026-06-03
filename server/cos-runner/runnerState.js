@@ -2,14 +2,14 @@
  * CoS Runner — State persistence layer
  *
  * Owns the on-disk runner-state.json: atomic writes, serialized saves, and
- * loads. Kept self-contained (only fs + the shared fileUtils helper) so the
+ * loads. Kept self-contained (only fs + the shared fileUtils helpers) so the
  * isolated `portos-cos` PM2 process stays standalone.
  */
 
-import { join, dirname } from 'path';
-import { writeFile, readFile, rename } from 'fs/promises';
+import { join } from 'path';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS } from '../lib/fileUtils.js';
 
 export const STATE_FILE = join(PATHS.cos, 'runner-state.json');
 
@@ -19,15 +19,6 @@ const freshState = () => ({ ...DEFAULT_STATE, agents: {}, stats: { ...DEFAULT_ST
 
 // Serializes saves so concurrent writes can't interleave and corrupt the file.
 let stateLock = Promise.resolve();
-
-/**
- * Write state atomically using temp file + rename to prevent partial-write corruption
- */
-export async function atomicWrite(filePath, data) {
-  const tmpPath = `${filePath}.tmp.${process.pid}`;
-  await writeFile(tmpPath, data);
-  await rename(tmpPath, filePath);
-}
 
 /**
  * Load runner state from disk
@@ -42,13 +33,11 @@ export async function loadState() {
 }
 
 /**
- * Save runner state to disk (serialized with atomic writes to prevent corruption)
+ * Save runner state to disk (serialized with atomic writes to prevent corruption).
+ * Delegates the temp-file-and-rename dance to the shared fileUtils.atomicWrite,
+ * which also handles ensureDir, JSON stringification, and the Windows rename fallback.
  */
 export function saveState(state) {
-  stateLock = stateLock.then(async () => {
-    const dir = dirname(STATE_FILE);
-    if (!existsSync(dir)) await ensureDir(dir);
-    await atomicWrite(STATE_FILE, JSON.stringify(state, null, 2));
-  });
+  stateLock = stateLock.then(() => atomicWrite(STATE_FILE, state));
   return stateLock;
 }
