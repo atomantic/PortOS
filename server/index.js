@@ -145,6 +145,7 @@ import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
+import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
@@ -515,6 +516,9 @@ initBrainMemoryBridge();
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Periodically GC orphan zero-issue/zero-canon importer shells left by an
+// abandoned analyze (issue #727).
+startOrphanShellGc();
 // Warm the catalog user-type registry from settings before any catalog request
 // can land, so user-defined types validate + mint ids immediately on boot.
 // Refresh on every settings write (the Settings → Catalog tab persists through

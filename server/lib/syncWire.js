@@ -87,7 +87,14 @@ export function sanitizeRecordForWire(kind, record) {
       // invariant for the tombstone-cross-wire case above: a deleted record
       // that carried `ephemeral: true` on disk MUST hash identically against
       // a pre-flag peer's tombstone for the same record.
-      const { deleted: _deleted, deletedAt: _deletedAt, ephemeral: _ephemeral, ...rest } = record;
+      // `importDraft` (issue #727) is a local-only importer-orphan GC marker,
+      // analogous to `ephemeral` — strip it here too so it never appears in the
+      // serialized wire form and the checksum stays byte-stable against peers
+      // that predate the flag. In practice an import-draft record is always
+      // `ephemeral: true` and already short-circuits at the top, but stripping
+      // unconditionally keeps the invariant robust if the two flags ever
+      // diverge.
+      const { deleted: _deleted, deletedAt: _deletedAt, ephemeral: _ephemeral, importDraft: _importDraft, ...rest } = record;
       // EPHEMERAL TOMBSTONES — minimize the payload. If a record was
       // created ephemeral and never shared, deleting it would otherwise
       // ship the full content to peers that never had it (just because

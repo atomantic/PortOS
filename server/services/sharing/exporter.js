@@ -335,8 +335,14 @@ function collectCollectionAssets(collection) {
 
 /** Stamp the outgoing record with origin metadata. */
 function stampOrigin(record, { bucket, source, sourceBio, manifestId }) {
+  // `importDraft` (issue #727) is a LOCAL-only importer-orphan GC marker — it
+  // must never travel in a share bucket, or an importing peer could inherit it
+  // and have its copy swept by the orphan GC. Strip it here so the exported
+  // record honors the local-only contract (the importer also strips inbound,
+  // belt-and-suspenders). In practice only universes/series ever carry it.
+  const { importDraft: _importDraft, ...rest } = record;
   return {
-    ...record,
+    ...rest,
     origin: {
       bucketId: bucket.id,
       bucketName: bucket.name,

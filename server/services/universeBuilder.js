@@ -802,6 +802,13 @@ const sanitizeTemplate = (raw) => {
     // sanitizeRecordForWire). Mark a scratch universe ephemeral to keep it
     // off the federation; test fixtures stamp this too.
     ...(raw.ephemeral === true ? { ephemeral: true } : {}),
+    // Importer-orphan marker (issue #727). Stamped only by analyzeImport on a
+    // brand-new shell so the orphan-shell GC can distinguish an abandoned
+    // analyze from a user's deliberately-private empty universe (which is also
+    // `ephemeral`). commitImport clears it on promotion. Server-set only —
+    // never accepted from a route body — and persisted only when true so the
+    // on-disk shape and wire checksum stay stable for every other record.
+    ...(raw.importDraft === true ? { importDraft: true } : {}),
   };
 };
 
@@ -943,6 +950,8 @@ export async function createUniverse(input = {}) {
       // (snapshot loop + per-record push) skips this universe (see
       // sanitizeRecordForWire) and the auto-subscribe below short-circuits.
       ephemeral: input.ephemeral === true,
+      // Importer-orphan marker (issue #727) — see sanitizeTemplate.
+      importDraft: input.importDraft === true,
     });
     // Write through the store — we're inside the per-id queue so use
     // atomicWrite directly to avoid re-queueing on the same id.
@@ -1150,6 +1159,10 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       // not the goal — protecting "you can't accidentally truthy your way
       // into ephemeral and never sync again" is.
       'ephemeral',
+      // Importer-orphan marker (issue #727). commitImport clears it on
+      // promotion via `{ importDraft: false }`; the sanitizer drops every
+      // non-`true` value back to absent, mirroring `ephemeral`.
+      'importDraft',
     ];
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
@@ -1481,6 +1494,9 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
     // permanently un-syncable. The on-disk-only contract is enforced on
     // the receive boundary.
     if ('ephemeral' in sanitized) delete sanitized.ephemeral;
+    // `importDraft` (issue #727) is likewise LOCAL-only — never trust an
+    // inbound value, or a peer could mark our records GC-eligible.
+    if ('importDraft' in sanitized) delete sanitized.importDraft;
     writeTasks.push(s.queueRecordWrite(sanitized.id, async () => {
       const local = await s.loadOne(sanitized.id);
       if (!local) {

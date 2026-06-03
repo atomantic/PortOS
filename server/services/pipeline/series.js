@@ -179,6 +179,12 @@ const sanitizeSeries = (raw) => {
     // existing series keep their on-disk + wire-checksum shape. See
     // syncWire.sanitizeRecordForWire for the wire-side enforcement.
     ...(raw.ephemeral === true ? { ephemeral: true } : {}),
+    // Importer-orphan marker (issue #727). Stamped only by analyzeImport on a
+    // brand-new shell so the orphan-shell GC can tell an abandoned analyze from
+    // a user's deliberately-private empty series (also `ephemeral`).
+    // commitImport clears it. Server-set only — never from a route body — and
+    // persisted only when true so every other record's shape stays stable.
+    ...(raw.importDraft === true ? { importDraft: true } : {}),
   };
 };
 
@@ -220,6 +226,8 @@ export async function createSeries(input = {}) {
     createdAt: now,
     updatedAt: now,
     ephemeral: input.ephemeral === true,
+    // Importer-orphan marker (issue #727) — see sanitizeSeries.
+    importDraft: input.importDraft === true,
   });
   await store().saveOne(created.id, created);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
@@ -330,6 +338,9 @@ export async function updateSeries(id, patch = {}) {
       // Local-only "don't sync" marker — sanitizer normalizes anything
       // non-true back to absent.
       ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
+      // Importer-orphan marker (issue #727) — commitImport clears it via
+      // `{ importDraft: false }`; sanitizer normalizes non-true back to absent.
+      ...('importDraft' in patch ? { importDraft: patch.importDraft } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
@@ -516,6 +527,9 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
       if (!sanitized) return;
       // Strip inbound `ephemeral` — see mergeUniversesFromSync.
       if ('ephemeral' in sanitized) delete sanitized.ephemeral;
+      // Strip inbound `importDraft` (issue #727) — local-only GC marker; a peer
+      // must not be able to mark our records GC-eligible.
+      if ('importDraft' in sanitized) delete sanitized.importDraft;
       const local = await store().loadOne(sanitized.id);
       if (!local) {
         // See universeBuilder.mergeUniversesFromSync — no local means no

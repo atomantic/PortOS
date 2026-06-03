@@ -404,6 +404,15 @@ async function readReferencedRecords(bucketPath, manifest) {
   };
   const resolved = await Promise.all((manifest.recordIds || []).map(resolveOne));
   for (const r of resolved) {
+    // `importDraft` (issue #727) is a LOCAL-only importer-orphan GC marker —
+    // never trust an inbound value from a share bucket, or a crafted/stale
+    // record could mark a local universe/series GC-eligible. The service
+    // sanitizers persist a literal `importDraft: true`, so strip it at this
+    // boundary (mirrors the peer-sync merge strip in mergeUniversesFromSync /
+    // mergeSeriesFromSync). Only universes + series carry the marker.
+    if (r.record && typeof r.record === 'object' && 'importDraft' in r.record) {
+      delete r.record.importDraft;
+    }
     if (r.kind === 'missing') missing.push(r.id);
     else if (r.kind === 'series') records.series.push(r.record);
     else if (r.kind === 'issues') records.issues.push(r.record);

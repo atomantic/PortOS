@@ -124,6 +124,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.meatspace.nicotine', path: '/meatspace/nicotine', label: 'Nicotine', section: 'MeatSpace', aliases: ['meatspace-nicotine', 'nicotine'] },
   { id: 'nav.meatspace.age', path: '/meatspace/age', label: 'Age', section: 'MeatSpace', aliases: ['meatspace-age'] },
   { id: 'nav.meatspace.blood', path: '/meatspace/blood', label: 'Blood', section: 'MeatSpace', aliases: ['meatspace-blood', 'blood'] },
+  { id: 'nav.meatspace.export', path: '/meatspace/export', label: 'Export', section: 'MeatSpace', aliases: ['meatspace-export', 'clinician-export', 'health-export'], keywords: ['clinician', 'doctor', 'print', 'pdf', 'summary', 'report', 'blood', 'lifestyle'] },
   { id: 'nav.meatspace.genome', path: '/meatspace/genome', label: 'Genome', section: 'MeatSpace', aliases: ['meatspace-genome', 'genome'] },
   { id: 'nav.meatspace.lifestyle', path: '/meatspace/lifestyle', label: 'Lifestyle', section: 'MeatSpace', aliases: ['meatspace-lifestyle', 'lifestyle'] },
   { id: 'nav.meatspace.settings', path: '/meatspace/settings', label: 'Settings', section: 'MeatSpace', aliases: ['meatspace-settings'] },

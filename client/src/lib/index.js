@@ -33,6 +33,7 @@ export * from './graphSimulation.js';
 // === Generic UI / collection utilities ===
 export * from './audioRecorder.js';
 export * from './clientErrorReporter.js';
+export * from './clinicianReport.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';
 export * from './genUtils.js';

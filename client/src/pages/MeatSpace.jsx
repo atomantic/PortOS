@@ -9,6 +9,7 @@ import AgeTab from '../components/meatspace/tabs/AgeTab';
 import AlcoholTab from '../components/meatspace/tabs/AlcoholTab';
 import BloodTab from '../components/meatspace/tabs/BloodTab';
 import BodyTab from '../components/meatspace/tabs/BodyTab';
+import ExportTab from '../components/meatspace/tabs/ExportTab';
 import GenomeTab from '../components/meatspace/tabs/GenomeTab';
 import HealthTab from '../components/meatspace/tabs/HealthTab';
 import SettingsTab from '../components/meatspace/tabs/SettingsTab';
@@ -36,6 +37,8 @@ export default function MeatSpace() {
         return <BloodTab />;
       case 'body':
         return <BodyTab />;
+      case 'export':
+        return <ExportTab />;
       case 'genome':
         return <GenomeTab />;
       case 'health':
@@ -53,10 +56,12 @@ export default function MeatSpace() {
 
   return (
     <div className="flex flex-col h-full">
-      <MortalLoomBanner section="Meatspace health data" />
+      <div className="print:hidden">
+        <MortalLoomBanner section="Meatspace health data" />
+      </div>
 
       {/* Header */}
-      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border">
+      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border print:hidden">
         <div className="flex items-center gap-3 mb-4">
           <Skull size={24} className="text-port-error" />
           <h1 className="text-2xl font-bold text-white">MeatSpace</h1>
@@ -83,7 +88,7 @@ export default function MeatSpace() {
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-6 print:overflow-visible print:p-0">
         {renderTabContent()}
       </div>
     </div>

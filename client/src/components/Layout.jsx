@@ -258,6 +258,7 @@ const navItems = [
       { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
       { to: '/meatspace/blood', label: 'Blood', icon: HeartPulse },
       { to: '/meatspace/body', label: 'Body', icon: Scale },
+      { to: '/meatspace/export', label: 'Export', icon: FileText },
       { to: '/meatspace/genome', label: 'Genome', icon: Dna },
       { to: '/meatspace/health', label: 'Body Health', icon: Heart },
       { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
@@ -843,7 +844,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 h-screen
+          fixed inset-y-0 left-0 z-50 h-screen print:hidden
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
@@ -1004,10 +1005,10 @@ export default function Layout() {
         );
       })()}
 
-      {/* Main area */}
-      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
+      {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
+      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
-        <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card">
+        <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
           <button
             onClick={() => setMobileOpen(true)}
             className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-1 rounded-lg text-gray-400 hover:text-white"
@@ -1081,7 +1082,7 @@ export default function Layout() {
             location.pathname.startsWith('/city') ||
             /^\/apps\/[^/]+/.test(location.pathname);
           return (
-            <main id="main-content" className={`flex-1 min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
+            <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
             </main>
           );
