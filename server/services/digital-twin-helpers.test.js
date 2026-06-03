@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveTestPersona } from './digital-twin-helpers.js';
+import { resolveTestPersona, parseBulletList } from './digital-twin-helpers.js';
 
 // resolveTestPersona maps a persona id (as passed to a test runner) into the
 // `{ personaId, personaName }` fields stamped on a run-history entry, so a run
@@ -28,5 +28,26 @@ describe('resolveTestPersona', () => {
   it('tolerates a missing/non-array personas list', () => {
     expect(resolveTestPersona(undefined, 'p1')).toEqual({});
     expect(resolveTestPersona(null, 'p1')).toEqual({});
+  });
+});
+
+// parseBulletList turns a markdown bullet block (the "Values at Stake" /
+// "Boundary Tested" sections of a suite) into a trimmed string array. Shared by
+// the values-alignment and adversarial-boundary suite parsers.
+describe('parseBulletList', () => {
+  it('parses dash and asterisk bullets, trimming each item', () => {
+    expect(parseBulletList('- integrity\n* craftsmanship\n-  reliability ')).toEqual([
+      'integrity', 'craftsmanship', 'reliability'
+    ]);
+  });
+
+  it('drops blank lines', () => {
+    expect(parseBulletList('- a\n\n- b\n')).toEqual(['a', 'b']);
+  });
+
+  it('returns an empty array for empty or non-string input', () => {
+    expect(parseBulletList('')).toEqual([]);
+    expect(parseBulletList(null)).toEqual([]);
+    expect(parseBulletList(undefined)).toEqual([]);
   });
 });

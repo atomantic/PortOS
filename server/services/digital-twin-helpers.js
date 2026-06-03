@@ -53,6 +53,18 @@ export function parseScorerVerdict(response, verdicts, fallback = 'partial') {
 }
 
 /**
+ * Parse a markdown bullet list (`- item` / `* item`) into a trimmed string
+ * array, dropping blanks. Shared by the values-alignment and adversarial-
+ * boundary suite parsers (the "Values at Stake" / "Boundary Tested" blocks).
+ */
+export function parseBulletList(block) {
+  return (block || '')
+    .split('\n')
+    .map(line => line.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean);
+}
+
+/**
  * Resolve a persona id (as passed to a test runner) into the fields stamped on
  * a test-history entry, so a run can be attributed to the persona it embodied.
  * Returns `{}` when no persona id is given or it doesn't match a stored persona
