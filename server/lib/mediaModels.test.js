@@ -490,6 +490,20 @@ describe('mediaModels registry', () => {
     expect(bf16.kvRepo).toBe('');
   });
 
+  it('does NOT inject kvRepo when repo points at a fork (fork-preservation, mirrors migration 064)', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'my-fork/FLUX.2-klein-9B', steps: 20, guidance: 3.5 },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+    }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const bf16 = getImageModels().find((m) => m.id === 'flux2-klein-9b-bf16');
+    expect('kvRepo' in bf16).toBe(false);
+  });
+
   it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.

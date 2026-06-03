@@ -386,14 +386,23 @@ const backfillEditOnly = (list) => {
 };
 
 // Multi-reference editing on the bf16 path loads the `-kv` sibling repo. Map
-// each id to the kv repo it should use. Existing installs stored their
-// `flux2-klein-9b-bf16` entry before `kvRepo` existed, so backfill it at load
-// (same pattern as cfgDisabled/editOnly) AND ship migration 064 for installs
-// that have already persisted the registry. Mirrored in
-// data.reference/media-models.json. A user-set `kvRepo` (any value, including
-// '') wins — `'kvRepo' in entry` is the override signal.
+// each id to the base repo it shipped with and the kv repo it should pair
+// with. Existing installs stored their `flux2-klein-9b-bf16` entry before
+// `kvRepo` existed, so backfill it at load (same pattern as
+// cfgDisabled/editOnly) AND ship migration 064 for installs that have already
+// persisted the registry. Mirrored in data.reference/media-models.json.
+//
+// Fork-preservation: only backfill when the entry's `repo` still matches the
+// shipped base repo. A user who pointed `repo` at a fork must NOT get the
+// upstream kv sibling silently injected (reference renders would mix a custom
+// base with the upstream KV repo) — this mirrors migration 064's guard. A
+// user-set `kvRepo` (any value, including '') always wins: `'kvRepo' in entry`
+// is the override signal.
 const KV_REPO_BY_ID = {
-  'flux2-klein-9b-bf16': 'black-forest-labs/FLUX.2-klein-9B-kv',
+  'flux2-klein-9b-bf16': {
+    shippedRepo: 'black-forest-labs/FLUX.2-klein-9B',
+    kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
+  },
 };
 
 const backfillKvRepo = (list) => {
@@ -401,9 +410,9 @@ const backfillKvRepo = (list) => {
   return list.map((entry) => {
     if (!isPlainObject(entry) || typeof entry.id !== 'string') return entry;
     if ('kvRepo' in entry) return entry; // user override wins
-    const kvRepo = KV_REPO_BY_ID[entry.id];
-    if (!kvRepo) return entry;
-    return { ...entry, kvRepo };
+    const spec = KV_REPO_BY_ID[entry.id];
+    if (!spec || entry.repo !== spec.shippedRepo) return entry; // unknown id or forked repo
+    return { ...entry, kvRepo: spec.kvRepo };
   });
 };
 
