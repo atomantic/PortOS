@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { useAutoRefetch } from './useAutoRefetch';
+import { METRICS as HEALTH_TOWER_METRICS } from '../utils/cityHealthTower';
+
+// Metric keys the vitals-tower landmark renders — fetched as the latest-value snapshot.
+const HEALTH_METRIC_KEYS = HEALTH_TOWER_METRICS.map(m => m.key);
 
 const healthSignature = (h) => {
   const warnings = (h?.warnings || []).map(w => `${w.type}:${w.message}`).join(';');
@@ -20,6 +24,10 @@ export const useCityData = () => {
   const [notificationCounts, setNotificationCounts] = useState({ unread: 0 });
   const [backupStatus, setBackupStatus] = useState(null);
   const [cosTasks, setCosTasks] = useState([]);
+  const [healthMetrics, setHealthMetrics] = useState(null);
+  // Voice-agent district marker: `enabled` from the persisted /voice/status payload,
+  // `live` driven by the per-socket voice:* events (idle | listening | dictating | error).
+  const [voiceState, setVoiceState] = useState(null);
   const [character, setCharacter] = useState(null);
   const [loading, setLoading] = useState(true);
   const logIdRef = useRef(0);
@@ -34,7 +42,7 @@ export const useCityData = () => {
     // /notifications/count returns the lightweight { count } payload — the HUD
     // and Attention pane only need unread, and notifications:count socket
     // events keep it fresh after this initial fetch.
-    const [appsData, agents, cosAgentsData, status, reviewData, instanceData, health, notif, backup, cosTasksData, characterData] = await Promise.all([
+    const [appsData, agents, cosAgentsData, status, reviewData, instanceData, health, notif, backup, cosTasksData, healthMetricsData, voice, characterData] = await Promise.all([
       api.getApps().catch(() => []),
       api.getRunningAgents().catch(() => []),
       api.getCosAgents().catch(() => []),
@@ -45,6 +53,8 @@ export const useCityData = () => {
       api.getNotificationCount().catch(() => ({ count: 0 })),
       api.getBackupStatus({ silent: true }).catch(() => null),
       api.getCosTasks({ silent: true }).catch(() => ({ tasks: [] })),
+      api.getLatestHealthMetrics(HEALTH_METRIC_KEYS, { silent: true }).catch(() => null),
+      api.getVoiceStatus({ silent: true }).catch(() => null),
       api.getCharacter({ silent: true }).catch(() => null),
     ]);
 
@@ -58,6 +68,11 @@ export const useCityData = () => {
     setNotificationCounts({ unread: notif?.count ?? 0 });
     setBackupStatus(backup);
     setCosTasks(Array.isArray(cosTasksData?.tasks) ? cosTasksData.tasks : []);
+    setHealthMetrics(healthMetricsData);
+    // Seed the marker with the persisted enabled flag; live sub-state starts idle and the
+    // voice:* socket handlers below take over. Preserve a prior `live` across refetches so
+    // a mid-turn fetchAll doesn't snap the beacon back to idle.
+    setVoiceState(prev => ({ enabled: voice?.enabled ?? false, live: prev?.live || 'idle' }));
     if (characterData) setCharacter(characterData);
     setLoading(false);
   }, []);
@@ -201,6 +216,25 @@ export const useCityData = () => {
     const handleCosTasksChanged = (data) => setCosTasks(Array.isArray(data?.tasks) ? data.tasks : []);
     socket.on('cos:tasks:cos:changed', handleCosTasksChanged);
 
+    // Voice-agent district marker: the voice pipeline emits these directly to the
+    // active socket (no subscribe gate). `voice:dictation` toggles the dictating beacon,
+    // `voice:error` lights it red, and `voice:idle` (turn complete / reset) returns it to
+    // standby — unless dictation is still on, in which case it stays green.
+    const handleVoiceDictation = (data) => setVoiceState(prev => ({
+      ...(prev || { enabled: true }),
+      enabled: prev?.enabled ?? true,
+      live: data?.enabled ? 'dictating' : 'idle',
+    }));
+    const handleVoiceError = () => setVoiceState(prev => ({ ...(prev || { enabled: true }), live: 'error' }));
+    const handleVoiceIdle = () => setVoiceState(prev => (
+      // Keep dictating lit while a dictation session is active; a turn ending mid-dictation
+      // shouldn't blink the beacon back to standby.
+      prev?.live === 'dictating' ? prev : { ...(prev || { enabled: true }), live: 'idle' }
+    ));
+    socket.on('voice:dictation', handleVoiceDictation);
+    socket.on('voice:error', handleVoiceError);
+    socket.on('voice:idle', handleVoiceIdle);
+
     // Subscribe but do NOT unsubscribe on cleanup. The cos:* and notifications:*
     // namespaces are shared (useNotifications in Layout, useAgentFeedbackToast).
     // Server uses a per-socket Set, so unsubscribing here would yank the
@@ -219,6 +253,9 @@ export const useCityData = () => {
       socket.off('backup:started', handleBackupStarted);
       socket.off('backup:completed', handleBackupCompleted);
       socket.off('cos:tasks:cos:changed', handleCosTasksChanged);
+      socket.off('voice:dictation', handleVoiceDictation);
+      socket.off('voice:error', handleVoiceError);
+      socket.off('voice:idle', handleVoiceIdle);
     };
   }, [fetchAll, fetchApps, fetchBackup]);
 
@@ -235,6 +272,8 @@ export const useCityData = () => {
     notificationCounts,
     backupStatus,
     cosTasks,
+    healthMetrics,
+    voiceState,
     character,
     loading,
     connected: socket.connected,
