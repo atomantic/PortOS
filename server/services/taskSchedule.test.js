@@ -92,7 +92,10 @@ import {
   getTaskPrompt,
   resetExecutionHistory,
   triggerOnDemandTask,
-  getScheduleStatus
+  getScheduleStatus,
+  PROMPT_VERSIONS,
+  DEFAULT_TASK_INTERVALS,
+  REFERENCE_WATCH_AUDITED_VERSION
 } from './taskSchedule.js'
 
 import { loadState } from './cosState.js'
@@ -228,6 +231,25 @@ describe('taskSchedule', () => {
       // the contract so a future "default to read-only" refactor surfaces here.
       const interval = await getTaskInterval('reference-watch')
       expect(interval.taskMetadata?.readOnly).toBe(false)
+    })
+
+    // Tripwire for issue #734: the reference-watch `readOnly` default is derived from
+    // what the prompt VERSION does. When PROMPT_VERSIONS['reference-watch'] is bumped,
+    // this test fails until someone re-audits the default and advances
+    // REFERENCE_WATCH_AUDITED_VERSION to match — so a prompt change can't silently
+    // leave the schedule default stale.
+    it('reference-watch readOnly default has been audited against the current prompt version (issue #734)', () => {
+      expect(PROMPT_VERSIONS['reference-watch']).toBe(REFERENCE_WATCH_AUDITED_VERSION)
+    })
+
+    it('reference-watch v2 prompt requires a writable default so it can append + commit PLAN.md items (issue #734)', () => {
+      // The coupling the audit anchor protects: at the audited version (v2), the prompt
+      // writes to PLAN.md, so the raw default must be writable. If a future re-audit flips
+      // REFERENCE_WATCH_AUDITED_VERSION to a propose-only version, update this expectation
+      // alongside the default and the anchor.
+      if (REFERENCE_WATCH_AUDITED_VERSION === 2) {
+        expect(DEFAULT_TASK_INTERVALS['reference-watch'].taskMetadata.readOnly).toBe(false)
+      }
     })
   })
 

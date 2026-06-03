@@ -1208,7 +1208,7 @@ Repository: {repoPath}
 
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
-const PROMPT_VERSIONS = {
+export const PROMPT_VERSIONS = {
   'feature-ideas': 9,  // v9: drop DONE.md reads — use `.changelog/` + `git log` (last 50) as the completed-work signal
   'plan-task': 8,      // v8: Phase-6 merge fallback prefers --merge over --squash (after --auto), matching the /do:pr + review-loop default and PortOS's merge-only policy
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
@@ -1216,6 +1216,18 @@ const PROMPT_VERSIONS = {
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'reference-watch': 2  // v2: append slug-tagged checklist items to PLAN.md (Adopt + Maybe) instead of writing REFERENCE_REVIEW.md; security-flagged commits get no PLAN entry (mentioned only in final summary)
 };
+
+// Audit anchor for reference-watch's read/write coupling.
+// The reference-watch schedule default (`taskMetadata.readOnly` in DEFAULT_TASK_INTERVALS)
+// is derived from what the active prompt VERSION does: v2's prompt APPENDS slug-tagged
+// `[ref-watch-…]` items to PLAN.md and commits them, so the default must be `readOnly: false`.
+// A future v3 that returns to a propose-only flow would need `readOnly: true` again.
+// `REFERENCE_WATCH_AUDITED_VERSION` records the PROMPT_VERSIONS['reference-watch'] value
+// the current `readOnly` default was last audited against. A guard test in
+// taskSchedule.test.js fails when PROMPT_VERSIONS['reference-watch'] moves past this anchor —
+// forcing whoever bumps the prompt to re-confirm the default still matches the prompt's
+// behavior and then advance this anchor in the same change. See issue #734.
+export const REFERENCE_WATCH_AUDITED_VERSION = 2;
 
 // Known previous default prompts for legacy migration.
 // When a schedule has no promptVersion, we check if the stored prompt matches
@@ -2475,7 +2487,7 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
 const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true, pipeline: { stages: [{ name: 'Codebase Review', promptKey: 'code-reviewer-review', readOnly: true, providerId: null, model: null, precondition: { fileNotExists: 'REVIEW.md' } }, { name: 'Triage & Implement', promptKey: 'code-reviewer-implement', readOnly: false, providerId: null, model: null, precondition: { fileExists: 'REVIEW.md' } }] } } };
 
-const DEFAULT_TASK_INTERVALS = {
+export const DEFAULT_TASK_INTERVALS = {
   'security':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
   'code-quality':        { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'test-coverage':       { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
@@ -2521,6 +2533,9 @@ const DEFAULT_TASK_INTERVALS = {
   // accidentally clobber) and the PLAN.md write is small enough that the in-place
   // commit on the source repo is simpler than a worktree round-trip. Mirrors the
   // on-commit trigger path in referenceRepos.js#triggerReferenceAnalysis.
+  // `readOnly` is coupled to PROMPT_VERSIONS['reference-watch'] — see
+  // REFERENCE_WATCH_AUDITED_VERSION above; bumping the prompt version requires
+  // re-auditing this default (a guard test in taskSchedule.test.js enforces it).
   'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } }
 };
 
