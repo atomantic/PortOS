@@ -209,7 +209,7 @@ shared across Ask and Insights rather than diverging.
     "kind": "genome",
     "id": "genome:rs1800562",
     "title": "HFE rs1800562",
-    "href": "/health/genome"
+    "href": "/meatspace/genome"
   }
 }
 ```
@@ -269,8 +269,9 @@ A future `/claim` can pick these up in order. Each phase is independently shippa
   accepted / hide dismissed.
 
 ### Phase D — Health ↔ Goals pair (the missing INS-03)
-- `factsTable.js` builder pairing `meatspaceHealth` biometrics + `goalProgress.js`
-  (`getGoalProgressSummary`) deltas against `identity/goals.js` goals.
+- `factsTable.js` builder pairing `meatspaceHealth` biometrics +
+  `server/services/goalProgress.js` (`getGoalProgressSummary`) deltas against
+  `server/services/identity/goals.js` goals.
 - Hybrid generator: rule-based progress deltas → LLM "on track / drifting" narrative.
 - New tab or fold into Cross-Domain tab (decide at impl time based on volume).
 
