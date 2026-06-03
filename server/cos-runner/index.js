@@ -10,16 +10,18 @@
 
 import express from 'express';
 import { spawn } from 'child_process';
-import { join, dirname, basename } from 'path';
-import { writeFile, readFile, rename } from 'fs/promises';
+import { join, basename } from 'path';
+import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
+import { createStreamJsonParser } from './streamJsonParser.js';
+import { loadState, saveState } from './runnerState.js';
+import { getProcessStats, checkProcessRunning } from './processStats.js';
 
 const ROOT_DIR = PATHS.root;
-const STATE_FILE = join(PATHS.cos, 'runner-state.json');
 const AGENTS_DIR = PATHS.cosAgents;
 
 const PORT = process.env.PORT || 5558;
@@ -54,191 +56,6 @@ function isAllowedCommand(command) {
   return ALLOWED_COMMANDS.has(baseName);
 }
 
-/**
- * Summarize tool input into a concise description for display.
- */
-function summarizeToolInput(toolName, input) {
-  if (!input || typeof input !== 'object') return '';
-  const shorten = (p) => {
-    if (!p || typeof p !== 'string') return '';
-    const parts = p.split('/').filter(Boolean);
-    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : p;
-  };
-  switch (toolName) {
-    case 'Read':
-      return shorten(input.file_path);
-    case 'Edit':
-      return shorten(input.file_path);
-    case 'Write':
-      return shorten(input.file_path);
-    case 'Glob':
-      return input.pattern || '';
-    case 'Grep':
-      return `"${(input.pattern || '').substring(0, 60)}"${input.path ? ` in ${shorten(input.path)}` : ''}`;
-    case 'Bash': {
-      const cmd = input.command || input.description || '';
-      return cmd.substring(0, 80);
-    }
-    case 'Task':
-      return input.description || '';
-    case 'WebFetch':
-      return shorten(input.url || '');
-    case 'WebSearch':
-      return `"${(input.query || '').substring(0, 60)}"`;
-    case 'TodoWrite':
-      return input.todos?.length ? `${input.todos.length} items` : '';
-    case 'NotebookEdit':
-      return shorten(input.notebook_path);
-    case 'Skill':
-      return input.skill || '';
-    default:
-      return '';
-  }
-}
-
-function safeParse(str) {
-  try { return JSON.parse(str); } catch { return null; }
-}
-
-/**
- * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
- * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
- */
-function createStreamJsonParser() {
-  let lineBuffer = '';
-  let finalResult = '';
-  let textBuffer = '';
-  // Track text across all conversation turns so multi-step agents (e.g., task + /simplify)
-  // preserve all summaries instead of only the final one
-  const textSections = [];
-  let currentTextSection = '';
-  const activeTools = new Map();
-
-  // Commit accumulated text as a section (called at result events and stream end).
-  // The committed section represents an agent turn's final wrap-up.
-  const commitSection = () => {
-    const section = currentTextSection.trim();
-    if (section) {
-      textSections.push(section);
-      currentTextSection = '';
-    }
-  };
-
-  // At a tool-call boundary the accumulated text is interim narration ("Now let me…")
-  // that gets superseded by whatever the agent says after the tool returns. Discard it
-  // so only the final post-last-tool wrap-up survives into textSections.
-  const discardSection = () => { currentTextSection = ''; };
-
-  const processChunk = (rawData) => {
-    const lines = [];
-    lineBuffer += rawData;
-
-    const parts = lineBuffer.split('\n');
-    lineBuffer = parts.pop() || '';
-
-    for (const part of parts) {
-      const trimmed = part.trim();
-      if (!trimmed || !trimmed.startsWith('{')) continue;
-
-      let parsed;
-      parsed = safeParse(trimmed);
-      if (!parsed) continue;
-
-      if (parsed.type === 'stream_event') {
-        const event = parsed.event;
-        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-          const text = event.delta.text;
-          textBuffer += text;
-          currentTextSection += text;
-          const textLines = textBuffer.split('\n');
-          textBuffer = textLines.pop() || '';
-          for (const tl of textLines) {
-            lines.push(tl);
-          }
-        }
-        // Accumulate tool input JSON deltas
-        if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
-          const idx = event.index;
-          const tool = activeTools.get(idx);
-          if (tool) {
-            tool.inputJson += event.delta.partial_json || '';
-          }
-        }
-        if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-          const toolName = event.content_block.name || 'unknown';
-          const idx = event.index;
-          activeTools.set(idx, { name: toolName, inputJson: '' });
-          lines.push(`🔧 Using ${toolName}...`);
-          discardSection();
-        }
-        // Emit detailed summary when tool input is complete
-        if (event?.type === 'content_block_stop') {
-          const idx = event.index;
-          const tool = activeTools.get(idx);
-          if (tool) {
-            if (tool.inputJson) {
-              const input = safeParse(tool.inputJson);
-              if (input) {
-                const detail = summarizeToolInput(tool.name, input);
-                if (detail) {
-                  lines.push(`  → ${detail}`);
-                }
-              }
-            }
-            activeTools.delete(idx);
-          }
-        }
-      }
-
-      if (parsed.type === 'assistant') {
-        const content = parsed.message?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === 'tool_result' && typeof block.content === 'string') {
-              const firstLine = block.content.split('\n')[0]?.substring(0, 200);
-              if (firstLine) {
-                lines.push(`  ↳ ${firstLine}`);
-              }
-            }
-          }
-        }
-      }
-
-      if (parsed.type === 'result') {
-        if (textBuffer) {
-          lines.push(textBuffer);
-          textBuffer = '';
-        }
-        commitSection();
-        finalResult = parsed.result || '';
-      }
-    }
-
-    return lines;
-  };
-
-  const flush = () => {
-    const lines = [];
-    if (textBuffer) {
-      lines.push(textBuffer);
-      textBuffer = '';
-    }
-    commitSection();
-    return lines;
-  };
-
-  // Multi-section: return all text turns combined (e.g., task summary + simplify summary)
-  // Single-section: return the CLI result field (cleaner, no tool call noise)
-  const getFinalResult = () => {
-    if (textSections.length > 1) {
-      return textSections.join('\n\n');
-    }
-    return finalResult;
-  };
-
-  return { processChunk, flush, getFinalResult };
-}
-
 // Active agent processes (in memory)
 const activeAgents = new Map();
 
@@ -253,42 +70,6 @@ const server = http.createServer(app);
 const io = new SocketServer(server, {
   cors: { origin: '*' }
 });
-
-const DEFAULT_STATE = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
-let stateLock = Promise.resolve();
-
-/**
- * Write state atomically using temp file + rename to prevent partial-write corruption
- */
-async function atomicWrite(filePath, data) {
-  const tmpPath = `${filePath}.tmp.${process.pid}`;
-  await writeFile(tmpPath, data);
-  await rename(tmpPath, filePath);
-}
-
-/**
- * Load runner state from disk
- */
-async function loadState() {
-  if (!existsSync(STATE_FILE)) return { ...DEFAULT_STATE, agents: {}, stats: { ...DEFAULT_STATE.stats } };
-
-  const content = await readFile(STATE_FILE, 'utf-8');
-  if (!content || !content.trim()) return { ...DEFAULT_STATE, agents: {}, stats: { ...DEFAULT_STATE.stats } };
-
-  return JSON.parse(content);
-}
-
-/**
- * Save runner state to disk (serialized with atomic writes to prevent corruption)
- */
-function saveState(state) {
-  stateLock = stateLock.then(async () => {
-    const dir = dirname(STATE_FILE);
-    if (!existsSync(dir)) await ensureDir(dir);
-    await atomicWrite(STATE_FILE, JSON.stringify(state, null, 2));
-  });
-  return stateLock;
-}
 
 /**
  * Emit event to connected portos-server instances
@@ -318,47 +99,6 @@ app.get('/health', (req, res) => {
     uptime: process.uptime()
   });
 });
-
-/**
- * Get process stats (CPU, memory) for a PID
- */
-async function getProcessStats(pid) {
-  // Security: Ensure PID is a valid integer to prevent command injection
-  const safePid = parseInt(pid, 10);
-  if (isNaN(safePid) || safePid <= 0) {
-    return { active: false, pid, cpu: 0, memoryKb: 0, state: 'invalid' };
-  }
-
-  const { exec } = await import('child_process');
-  const { promisify } = await import('util');
-  const execAsync = promisify(exec);
-
-  // Get process stats using ps command
-  // %cpu = CPU percentage, rss = resident set size in KB
-  const psCmd = process.platform === 'win32'
-    ? `tasklist /FI "PID eq ${safePid}" /FO CSV /NH`
-    : `ps -p ${safePid} -o pid=,pcpu=,rss=,state=`;
-  const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
-  const line = result.stdout.trim();
-
-  if (!line) {
-    return { active: false, pid, cpu: 0, memoryKb: 0, state: 'dead' };
-  }
-
-  const parts = line.split(/\s+/).filter(Boolean);
-  if (parts.length >= 3) {
-    return {
-      active: true,
-      pid: parseInt(parts[0], 10),
-      cpu: parseFloat(parts[1]) || 0,
-      memoryKb: parseInt(parts[2], 10) || 0,
-      memoryMb: Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10,
-      state: parts[3] || 'unknown'
-    };
-  }
-
-  return { active: true, pid, cpu: 0, memoryKb: 0, state: 'unknown' };
-}
 
 /**
  * Get list of active agents with process stats
@@ -1052,24 +792,6 @@ async function cleanupOrphanedAgents() {
   }
 
   return orphaned;
-}
-
-/**
- * Check if a process is running by PID
- */
-async function checkProcessRunning(pid) {
-  // Security: Ensure PID is a valid integer to prevent command injection
-  const safePid = parseInt(pid, 10);
-  if (isNaN(safePid) || safePid <= 0) {
-    return false;
-  }
-
-  const { exec } = await import('child_process');
-  const { promisify } = await import('util');
-  const execAsync = promisify(exec);
-
-  const result = await execAsync(`ps -p ${safePid} -o pid=`, { windowsHide: true }).catch(() => ({ stdout: '' }));
-  return result.stdout.trim() !== '';
 }
 
 /**
