@@ -254,11 +254,53 @@ export const computeFflfSafeFrames = (width, height, numFrames, budget = resolve
   return safeLatent * 8 + 1;
 };
 
+// Env-gated LTX-2 T2V "two-stage" perf experiment (PORTOS_T2V_TWO_STAGE).
+//
+// Phosphene found that routing a plain T2V Standard render through the
+// two-stage pipeline at a fast half-res config (8 stage-1 + 3 stage-2 steps,
+// cfg 1.0) cuts ~30-35% of wall time. This DECISION has to live on the Node
+// side, not in generate_ltx2.py: buildLtx2Args always emits `--cfg-scale`
+// from model.guidance, so the Python helper can't tell a defaulted guidance
+// from one the user set on purpose. Here we still know.
+//
+// Returns the override `{ guidance, steps, stage2Steps }` only when ALL hold:
+// the runtime is ltx2, it's a no-conditioning text render, the user left
+// guidance AND steps at their defaults (so we only ever hijack the "Standard"
+// render, never a customized one), and the env knob is truthy. Otherwise null
+// (no change → existing behavior). Pure + exported so it's unit-tested
+// directly, mirroring the FFLF pixel-budget helpers above.
+export const resolveT2vTwoStageOverride = ({
+  runtime, mode, guidanceScale, steps,
+  sourceImagePath, uploadedTempPath, uploadedTempPaths,
+  keyframes, extendFromVideoPath, audioFilePath,
+  env = process.env,
+}) => {
+  const enabled = ['1', 'true', 'yes', 'on']
+    .includes(String(env.PORTOS_T2V_TWO_STAGE ?? '').trim().toLowerCase());
+  if (!enabled || runtime !== 'ltx2') return null;
+  // Only the default text mode — anything explicitly fflf/a2v/extend/image
+  // is conditioned and out of scope for the T2V Standard experiment.
+  if (mode != null && mode !== 'text') return null;
+  // Customized renders opt out — the experiment is the Standard render only.
+  const userSetGuidance = guidanceScale != null && guidanceScale !== '';
+  const userSetSteps = !!steps;
+  if (userSetGuidance || userSetSteps) return null;
+  // Any conditioning input makes this not a plain T2V. This is a strict
+  // subset of buildLtx2Args's helperMode==='text' inference — never broader —
+  // so the experiment declines rather than over-fires on an edge case.
+  const hasConditioning = !!sourceImagePath || !!uploadedTempPath
+    || (Array.isArray(uploadedTempPaths) && uploadedTempPaths.length > 0)
+    || (Array.isArray(keyframes) && keyframes.length > 0)
+    || !!extendFromVideoPath || !!audioFilePath;
+  if (hasConditioning) return null;
+  return { guidance: 1.0, steps: 8, stage2Steps: 3 };
+};
+
 // Build the spawn args for dgrauet's ltx-2-mlx runtime via our Python helper.
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
-const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
+const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
   assertByovRuntimeInstalled('ltx2');
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -366,6 +408,9 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     '--steps', String(steps),
     '--cfg-scale', String(guidance),
   ];
+  // Two-stage T2V experiment passes an explicit stage-2 step count; omitted
+  // otherwise so the pipeline keeps its own default.
+  if (stage2Steps != null) args.push('--stage2-steps', String(stage2Steps));
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (imageStrength != null) args.push('--image-strength', String(imageStrength));
   if (disableAudio) args.push('--no-audio');
@@ -474,12 +519,12 @@ const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFra
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
-    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
+    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath });
@@ -593,8 +638,23 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const w = Math.floor(Number(width) / 64) * 64;
   const h = Math.floor(Number(height) / 64) * 64;
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
-  const actualSteps = steps ? Number(steps) : model.steps;
-  const actualGuidance = guidanceScale != null && guidanceScale !== '' ? Number(guidanceScale) : model.guidance;
+  let actualSteps = steps ? Number(steps) : model.steps;
+  let actualGuidance = guidanceScale != null && guidanceScale !== '' ? Number(guidanceScale) : model.guidance;
+  // Opt-in T2V Standard two-stage perf experiment — overrides steps/guidance
+  // (and adds an explicit stage-2 step count) only for a plain default text
+  // render when PORTOS_T2V_TWO_STAGE is on. No-op otherwise.
+  let actualStage2Steps = null;
+  const t2vTwoStage = resolveT2vTwoStageOverride({
+    runtime: model.runtime, mode, guidanceScale, steps,
+    sourceImagePath, uploadedTempPath, uploadedTempPaths,
+    keyframes, extendFromVideoPath, audioFilePath,
+  });
+  if (t2vTwoStage) {
+    actualGuidance = t2vTwoStage.guidance;
+    actualSteps = t2vTwoStage.steps;
+    actualStage2Steps = t2vTwoStage.stage2Steps;
+    console.log(`🎬 PORTOS_T2V_TWO_STAGE on — T2V Standard via fast two-stage (${actualSteps}/${actualStage2Steps} steps, cfg ${actualGuidance}) [${jobId.slice(0, 8)}]`);
+  }
   // Caller may pass null/'' to use mlx_video's default (1.0 = preserve source).
   const actualImageStrength = imageStrength != null && imageStrength !== '' ? Number(imageStrength) : null;
   const actualTextEncoderRepo = getTextEncoderRepo();
@@ -724,7 +784,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';

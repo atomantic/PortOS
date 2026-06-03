@@ -83,6 +83,7 @@
 - **[issue-743]** Split the 1917-line identity service into focused submodules (shared store, genomic markers, chronotype, longevity, goals, todos, cross-insights, status) behind a thin barrel that preserves the exact public API. Internal refactor with no behavior difference.
 - **`/claim --issues` marks issues in progress while it works them** — claiming an issue now assigns it to you (and labels it `in-progress`) before any code is written, so a `/claim --issues` running on another machine sees it as taken instead of grabbing it too; the marker is released if a claim is abandoned, and the issue is closed once its PR merges. Developer tooling only — no app-facing change.
 - **`$claim` (Codex) and `/claim` (Claude Code) now share one procedure** — the Codex claim skill was collapsed to a thin adapter over the slash command's procedure, so Codex inherits `--issues` mode, the in-progress marker, and the multi-reviewer loop instead of running a stale copy that had drifted behind. Developer tooling only — no app-facing change.
+- **[issue-740] Optional faster text-to-video renders (experimental)** — an opt-in switch routes plain (no-CFG) text-to-video Standard renders through the two-stage pipeline for a predicted ~30–35% faster render, trading a touch of quality. Off by default, so your renders are unchanged unless you turn it on to A/B it.
 
 ## Fixed
 
