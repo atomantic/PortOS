@@ -9,6 +9,7 @@
 - **[issue-705] CyberCity activity timeline** — the CyberCity intel panel gains a TIMELINE tab: a ten-minute activity-density bar over time-bucketed events (just now, last 5 minutes, last 15 minutes, earlier), so you can see at a glance when bursts of system activity happened instead of scrolling a flat log.
 - **[issue-716] Empty states that show you the next step** — pages new users hit first no longer just say "Nothing here." The Providers, Goals, Genome Health, Notes, and Apps screens now explain what to do to unlock the feature — configure a provider to enable autonomous CoS, connect your calendar for schedule-aware goals, add a genome file for longevity estimates — with a button that takes you straight there.
 - **[issue-705] CyberCity agents leave motion trails** — active agents in CyberCity now orbit their building and trail a glowing comet tail that fades behind them, so a busy building reads as moving energy at a glance instead of a static marker. The trail's length follows the graphics quality dial and turns off on the lowest setting.
+- **[issue-705] CyberCity flow lines follow real activity** — the data streams between buildings now trace your live system instead of being random decoration: they only connect buildings that are running, and a link glows brighter and carries more, faster packets when either end has a working agent — so at a glance you can see where work is actually flowing.
 
 ## Changed
 

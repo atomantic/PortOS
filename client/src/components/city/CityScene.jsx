@@ -84,7 +84,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
       />
-      <CityDataStreams positions={positions} />
+      <CityDataStreams positions={positions} apps={apps} agentMap={agentMap} />
       <CityTraffic positions={positions} />
       <CityBillboards
         positions={positions}
