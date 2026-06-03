@@ -179,11 +179,24 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
   // returns the configured id unchanged when there's nothing to fall back to.
   let requestedModelId = options.modelId || null;
   const knownModels = getVideoModels();
-  if (requestedModelId && knownModels.length && !knownModels.some((m) => m.id === requestedModelId)) {
+  // `null` when the registry can't be validated (empty list) — in that case
+  // isKnown() is never consulted and every candidate id passes through.
+  const isKnown = knownModels.length ? (id) => knownModels.some((m) => m.id === id) : null;
+  if (requestedModelId && isKnown && !isKnown(requestedModelId)) {
     console.log(`⚠️ Pipeline episode video — unknown modelId "${requestedModelId}" not in registry; dropping to default`);
     requestedModelId = null;
   }
-  const modelId = requestedModelId || settings?.videoGen?.defaultModelId || getDefaultVideoModelId();
+  // Resolve the concrete model the CD renderer needs. The saved videoGen
+  // default can be just as stale as the explicit pick, so validate it the same
+  // way before trusting it — otherwise a broken settings default would still
+  // reach createCDProject and defeat the drop-to-default contract.
+  // getDefaultVideoModelId() is the final fallback and self-validates against
+  // the platform's available list.
+  const settingsDefault = settings?.videoGen?.defaultModelId || null;
+  const resolvedDefault = (settingsDefault && (!isKnown || isKnown(settingsDefault)))
+    ? settingsDefault
+    : getDefaultVideoModelId();
+  const modelId = requestedModelId || resolvedDefault;
 
   const project = await createCDProject({
     name: `Pipeline: ${(series?.name || 'Series').slice(0, 60)} — ${(issue.title || issueId).slice(0, 60)}`,

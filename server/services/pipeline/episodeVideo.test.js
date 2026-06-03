@@ -54,6 +54,7 @@ vi.mock('../settings.js', () => ({
 const svc = await import('./episodeVideo.js');
 const issuesSvc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
+const settingsMod = await import('../settings.js');
 
 async function seedSeriesAndIssue({ scenes = [] } = {}) {
   const series = await seriesSvc.createSeries({
@@ -325,6 +326,23 @@ describe('pipeline episodeVideo helper', () => {
     expect(cdCreated[0].modelId).toBe('ltx23_distilled_q4');
     // The stale choice is cleared on the stage too (null = Default), so a reload
     // doesn't keep re-submitting the dead id.
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.modelId).toBeNull();
+  });
+
+  it('startEpisodeVideoForIssue resolves a stale settings default through the registry too', async () => {
+    // The Default choice (no explicit pick) resolves the concrete model from
+    // videoGen.defaultModelId — but that saved default can be just as stale as
+    // an explicit pick. A broken settings default must not reach the CD project;
+    // it falls through to getDefaultVideoModelId() (which self-validates).
+    settingsMod.getSettings.mockResolvedValueOnce({ videoGen: { defaultModelId: 'pruned_default' } });
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    await svc.startEpisodeVideoForIssue(issue.id);
+    expect(cdCreated[0].modelId).toBe('ltx23_distilled_q4');
+    // The recorded choice is still Default (null) — the stale *setting* is the
+    // user's to fix; we only resolve a working model for this render.
     const refreshed = await issuesSvc.getIssue(issue.id);
     expect(refreshed.stages.episodeVideo.modelId).toBeNull();
   });
