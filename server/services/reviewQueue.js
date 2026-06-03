@@ -259,7 +259,7 @@ export async function resolveQueueItem(queueItemId) {
 
   const result = await producer.resolve(rawId);
   // Most resolve primitives return null when the record is already gone.
-  if (result === null || result === undefined) {
+  if (result == null) {
     throw new ServerError(`${producer.label} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
   }
   return { source, id: queueItemId, resolved: true };
