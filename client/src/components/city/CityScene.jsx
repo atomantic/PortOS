@@ -19,6 +19,8 @@ import CityBackupVault from './CityBackupVault';
 import CityTaskQueue from './CityTaskQueue';
 import CityHealthTower from './CityHealthTower';
 import CityProductivityDistrict from './CityProductivityDistrict';
+import CityActivityHeatmap from './CityActivityHeatmap';
+import CityTaskFlowRiver from './CityTaskFlowRiver';
 import CityGoalMonuments from './CityGoalMonuments';
 import CityArtifacts from './CityArtifacts';
 import CityVoiceMarker from './CityVoiceMarker';
@@ -34,7 +36,7 @@ import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, goals, character, chronotype, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -88,6 +90,8 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityTaskQueue cosTasks={cosTasks} settings={settings} />
       <CityHealthTower healthMetrics={healthMetrics} settings={settings} />
       <CityProductivityDistrict productivityData={productivityData} settings={settings} />
+      <CityActivityHeatmap calendarData={activityCalendar} settings={settings} />
+      <CityTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={settings} />
       <CityGoalMonuments goals={goals} settings={settings} />
       <CityArtifacts character={character} goals={goals} productivityData={productivityData} settings={settings} />
       <CityVoiceMarker voiceState={voiceState} settings={settings} />
