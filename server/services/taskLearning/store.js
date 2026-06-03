@@ -15,13 +15,14 @@ import { createMutex } from '../../lib/asyncMutex.js';
 
 export const withLock = createMutex();
 
-export const DATA_DIR = PATHS.cos;
-export const LEARNING_FILE = join(DATA_DIR, 'learning.json');
-export const AGENTS_DIR = join(DATA_DIR, 'agents');
-export const DISMISSED_RECS_FILE = join(DATA_DIR, 'dismissed-recommendations.json');
+const DATA_DIR = PATHS.cos;
+const LEARNING_FILE = join(DATA_DIR, 'learning.json');
+export const AGENTS_DIR = join(DATA_DIR, 'agents'); // consumed by metrics.js
+const DISMISSED_RECS_FILE = join(DATA_DIR, 'dismissed-recommendations.json');
 
-// Re-export shared infra so sibling modules import from one place.
-export { cosEvents, emitLog, ensureDir, readJSONFile, atomicWrite, tryReadFile };
+// Re-export the infra that sibling modules consume so they import from one
+// place. (ensureDir / readJSONFile / atomicWrite stay internal to this file.)
+export { cosEvents, emitLog, tryReadFile };
 
 /**
  * Calculate ETA-oriented duration stats from success-only metrics with fallback.
@@ -41,7 +42,7 @@ export function calculateDurationETA(metrics) {
 /**
  * Default learning data structure
  */
-export const DEFAULT_LEARNING_DATA = {
+const DEFAULT_LEARNING_DATA = {
   version: 1,
   lastUpdated: null,
 
