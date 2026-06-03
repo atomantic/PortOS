@@ -280,13 +280,13 @@ export async function applyPromptReplaceMigration({
   const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
   const sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
 
-  let updated = 0;
-  let alreadyCurrent = 0;
-  let skipped = 0;
-  let created = 0;
-  let retired = 0;
-
-  for (const filename of Object.keys(accepted)) {
+  // Per-file scan runs in parallel — each file's read/compare/write is
+  // independent (no cross-file shared state), so the only cost of the old
+  // serial loop was wall-clock time on a multi-file migration. Each task
+  // returns the name of the single counter it bumped (or null for a no-op);
+  // we sum them post-flight, so counter accumulation never races (it happens
+  // after every task settles, not from inside the async work).
+  const outcomes = await Promise.all(Object.keys(accepted).map(async (filename) => {
     const dataPath = join(stagesDir, filename);
     const samplePath = join(sampleDir, filename);
 
@@ -301,12 +301,11 @@ export async function applyPromptReplaceMigration({
         if (sampleContent != null) {
           await writeFile(dataPath, sampleContent);
           console.log(`📄 created ${label}: ${filename}`);
-          created++;
-          continue;
+          return 'created';
         }
       }
       console.log(`📄 ${label} ${filename}: not present in data/, will be created by setup-data.js`);
-      continue;
+      return null;
     }
 
     const existingMd5 = md5(existing);
@@ -328,21 +327,18 @@ export async function applyPromptReplaceMigration({
         if (matchesAcceptedOld || matchesCurrent) {
           await unlink(dataPath);
           console.log(`🗑️  ${label} ${filename} was renamed/retired upstream — removed unmodified copy from data/`);
-          retired++;
-        } else {
-          console.warn(
-            `⚠️  ${label} ${filename} was renamed/retired upstream but your local copy has been customized.\n` +
-            `   Check data.reference/prompts/stages/ for the replacement file and merge any custom edits manually.`,
-          );
-          skipped++;
+          return 'retired';
         }
-        continue;
+        console.warn(
+          `⚠️  ${label} ${filename} was renamed/retired upstream but your local copy has been customized.\n` +
+          `   Check data.reference/prompts/stages/ for the replacement file and merge any custom edits manually.`,
+        );
+        return 'skipped';
       }
     }
 
     if (matchesCurrent) {
-      alreadyCurrent++;
-      continue;
+      return 'alreadyCurrent';
     }
 
     if (!matchesAcceptedOld) {
@@ -350,17 +346,21 @@ export async function applyPromptReplaceMigration({
         `⚠️  ${label} ${filename} has been customized — skipping auto-update.\n` +
         customizedHint(filename),
       );
-      skipped++;
-      continue;
+      return 'skipped';
     }
 
     const sampleContent = await readFile(samplePath, 'utf-8');
     await writeFile(dataPath, sampleContent);
     console.log(`✅ updated ${label}: ${filename}`);
-    updated++;
+    return 'updated';
+  }));
+
+  const counts = { updated: 0, alreadyCurrent: 0, skipped: 0, created: 0, retired: 0 };
+  for (const outcome of outcomes) {
+    if (outcome) counts[outcome]++;
   }
 
-  return { updated, alreadyCurrent, skipped, created, retired };
+  return counts;
 }
 
 /**
