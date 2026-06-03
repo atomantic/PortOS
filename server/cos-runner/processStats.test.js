@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
 
 describe('cos-runner processStats', () => {
@@ -31,6 +31,42 @@ describe('cos-runner processStats', () => {
     });
     it('returns true for the current process', async () => {
       expect(await checkProcessRunning(process.pid)).toBe(true);
+    });
+  });
+
+  describe('checkProcessRunning Windows branch', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    });
+
+    // execAsync = promisify(exec), so the mocked exec must honor the callback
+    // convention: exec(cmd, opts, cb) → cb(err, { stdout, stderr }).
+    const loadWithMockedExec = async (stdout) => {
+      const calls = [];
+      vi.resetModules();
+      vi.doMock('child_process', () => ({
+        exec: (cmd, _opts, cb) => { calls.push(cmd); cb(null, { stdout, stderr: '' }); },
+      }));
+      vi.stubGlobal('process', { ...process, platform: 'win32' });
+      const mod = await import('./processStats.js');
+      return { checkProcessRunning: mod.checkProcessRunning, calls };
+    };
+
+    it('uses tasklist and treats a matching PID row as running', async () => {
+      const { checkProcessRunning: check, calls } = await loadWithMockedExec(
+        '"node.exe","1234","Console","1","50,000 K"\r\n'
+      );
+      expect(await check(1234)).toBe(true);
+      expect(calls[0]).toContain('tasklist');
+      expect(calls[0]).toContain('PID eq 1234');
+    });
+
+    it('treats an "INFO: No tasks" response as not running', async () => {
+      const { checkProcessRunning: check } = await loadWithMockedExec(
+        'INFO: No tasks are running which match the specified criteria.\r\n'
+      );
+      expect(await check(1234)).toBe(false);
     });
   });
 });

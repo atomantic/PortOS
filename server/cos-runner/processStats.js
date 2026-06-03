@@ -52,12 +52,21 @@ export async function getProcessStats(pid) {
 
 /**
  * Check if a process is running by PID.
+ * Uses `tasklist` on Windows and `ps` elsewhere so orphan cleanup doesn't
+ * report live agents as dead on Windows installs.
  */
 export async function checkProcessRunning(pid) {
   // Security: Ensure PID is a valid integer to prevent command injection
   const safePid = parseInt(pid, 10);
   if (isNaN(safePid) || safePid <= 0) {
     return false;
+  }
+
+  if (process.platform === 'win32') {
+    const result = await execAsync(`tasklist /FI "PID eq ${safePid}" /FO CSV /NH`, { windowsHide: true }).catch(() => ({ stdout: '' }));
+    // tasklist prints a CSV row containing the PID when the process exists;
+    // otherwise it emits an "INFO: No tasks…" line that won't contain the PID.
+    return result.stdout.includes(`"${safePid}"`);
   }
 
   const result = await execAsync(`ps -p ${safePid} -o pid=`, { windowsHide: true }).catch(() => ({ stdout: '' }));
