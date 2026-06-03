@@ -202,7 +202,10 @@ export function reportToMarkdown(report) {
       lines.push('| --- | --- | --- | --- |');
       for (const m of markers) {
         const value = `${m.value}${m.unit ? ` ${m.unit}` : ''}`;
-        lines.push(`| ${mdCell(m.label)} | ${mdCell(value)} | ${formatRange(m.range)} | ${STATUS_LABELS[m.status]} |`);
+        // Flag column matches the HTML view: blank for in-range markers, the
+        // status label only when out of range.
+        const flag = m.outOfRange ? STATUS_LABELS[m.status] : '';
+        lines.push(`| ${mdCell(m.label)} | ${mdCell(value)} | ${formatRange(m.range) || '—'} | ${flag} |`);
       }
       lines.push('');
     }
