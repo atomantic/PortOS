@@ -25,6 +25,7 @@
 
 ## Changed
 
+- **[issue-705]** CyberCity now coalesces bursts of agent spawn/complete events into a single refresh instead of refetching once per event, so a wave of agents starting no longer fans out redundant requests. Internal performance change with no behavior difference.
 - **[issue-805]** Removed ~470 lines of dead, never-called self-improvement task-generation code left behind by an earlier rewrite. Internal cleanup with no behavior difference.
 
 - **[issue-741]** Extracted the CoS daemon health monitor (PM2/memory checks and errored-process auto-restart) out of the 3300-line `cos.js` into a dedicated `cosHealthMonitor.js` behind an unchanged public API. First slice of the `cos.js` split. Internal refactor with no behavior difference.

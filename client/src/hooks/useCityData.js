@@ -4,6 +4,7 @@ import socket from '../services/socket';
 import { useAutoRefetch } from './useAutoRefetch';
 import { METRICS as HEALTH_TOWER_METRICS } from '../utils/cityHealthTower';
 import { applyAiStatusEvent } from '../utils/cityAiCore';
+import { coalesce } from '../utils/coalesce';
 
 // Metric keys the vitals-tower landmark renders — fetched as the latest-value snapshot.
 const HEALTH_METRIC_KEYS = HEALTH_TOWER_METRICS.map(m => m.key);
@@ -153,6 +154,12 @@ export const useCityData = () => {
     return map;
   }, [apps, cosAgents]);
 
+  // CoS agent spawn/complete events arrive in bursts (a wave of agents starting fires
+  // several within milliseconds), and each one triggers a full `fetchAll`. Coalesce those
+  // socket-driven refreshes into a single trailing refetch (~120ms) so a burst costs one
+  // round of requests instead of N. The mount fetch below stays immediate.
+  const coalescedFetchAll = useMemo(() => coalesce(fetchAll, 120), [fetchAll]);
+
   useEffect(() => {
     fetchAll();
 
@@ -168,7 +175,7 @@ export const useCityData = () => {
 
     const handleAgentSpawned = (data) => {
       setCosAgents(prev => [...prev, data]);
-      fetchAll();
+      coalescedFetchAll();
     };
     socket.on('cos:agent:spawned', handleAgentSpawned);
 
@@ -178,7 +185,7 @@ export const useCityData = () => {
     socket.on('cos:agent:updated', handleAgentUpdated);
 
     const handleAgentCompleted = () => {
-      fetchAll();
+      coalescedFetchAll();
     };
     socket.on('cos:agent:completed', handleAgentCompleted);
 
@@ -272,8 +279,9 @@ export const useCityData = () => {
       socket.off('voice:error', handleVoiceError);
       socket.off('voice:idle', handleVoiceIdle);
       socket.off('ai:status', handleAiStatus);
+      coalescedFetchAll.cancel(); // drop any pending trailing refetch on unmount
     };
-  }, [fetchAll, fetchApps, fetchBackup]);
+  }, [fetchAll, fetchApps, fetchBackup, coalescedFetchAll]);
 
   return {
     apps,
