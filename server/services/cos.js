@@ -17,7 +17,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
-import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
+import { parseTasksMarkdown, generateTasksMarkdown, isInternalTaskId } from '../lib/taskParser.js';
 // NOTE: `getAppActivityById` + `updateAppActivity` are deliberately NOT
 // listed here even though they're used elsewhere in this file. The two
 // other call sites (in `generateManagedAppImprovementTask` and
@@ -35,7 +35,7 @@ import { generateProactiveTasks as generateMissionTasks, getStats as getMissionS
 import { generateTaskFromJob, recordJobExecution, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
 import { ensureDir, formatDuration, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isRecoveryTask } from './recoveryTasks.js';
@@ -60,6 +60,14 @@ export { generateReport, getReport, getTodayReport, listReports, listBriefings, 
 import { runHealthCheck, getHealthStatus } from './cosHealthMonitor.js';
 export { runHealthCheck, getHealthStatus };
 
+// Task store: CRUD + queue persistence (TASKS.md / COS-TASKS.md). Imported for
+// internal use by evaluateTasks/dequeueNextTask/generators and re-exported for
+// backward compat with `import * as cos` and the cos route handlers. The store
+// emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
+// dequeueNextTask so the spawn-side logic stays here, not in the store.
+import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask } from './cosTaskStore.js';
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask };
+
 const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
 // CD recovery normally resolves in <100ms; hold start() at most this long so
@@ -71,11 +79,6 @@ const POST_STARTUP_QUEUE_DELAY_MS = 30_000;
 // A task whose agent reported completed within this window is treated as
 // "recently completed" and protected from resetOrphanedTasks's reaper.
 const RECENT_COMPLETION_GRACE_MS = 60_000;
-
-// First non-empty line of a string. Used by addTask dedup: stored descriptions
-// are flattened to a single line by generateTasksMarkdown, so the comparison
-// must normalize on the first line to match multi-line inputs.
-export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
 
 // MAX_TOTAL_SPAWNS imported from validation.js (shared with subAgentSpawner.js)
 
@@ -512,78 +515,6 @@ export async function resume() {
 export async function isPaused() {
   const state = await loadState();
   return state.paused || false;
-}
-
-/**
- * Get user tasks from TASKS.md
- */
-export async function getUserTasks(tasksFilePath = null) {
-  const state = await loadState();
-  const filePath = tasksFilePath || join(ROOT_DIR, state.config.userTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { tasks: [], grouped: groupTasksByStatus([]), file: filePath, exists: false, type: 'user' };
-  }
-
-  const content = await readFile(filePath, 'utf-8');
-  const tasks = parseTasksMarkdown(content);
-  const grouped = groupTasksByStatus(tasks);
-
-  return { tasks, grouped, file: filePath, exists: true, type: 'user' };
-}
-
-/**
- * Get CoS internal tasks from COS-TASKS.md
- */
-export async function getCosTasks(tasksFilePath = null) {
-  const state = await loadState();
-  const filePath = tasksFilePath || join(ROOT_DIR, state.config.cosTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { tasks: [], grouped: groupTasksByStatus([]), file: filePath, exists: false, type: 'internal' };
-  }
-
-  const content = await readFile(filePath, 'utf-8');
-  const tasks = parseTasksMarkdown(content);
-  const grouped = groupTasksByStatus(tasks);
-  const autoApproved = getAutoApprovedTasks(tasks);
-  const awaitingApproval = getAwaitingApprovalTasks(tasks);
-
-  return { tasks, grouped, file: filePath, exists: true, type: 'internal', autoApproved, awaitingApproval };
-}
-
-/**
- * Get all tasks (user + internal)
- */
-export async function getAllTasks() {
-  const [userTasks, cosTasks] = await Promise.all([getUserTasks(), getCosTasks()]);
-  return { user: userTasks, cos: cosTasks };
-}
-
-/**
- * Alias for backward compatibility
- */
-export const getTasks = getUserTasks;
-
-/**
- * Get a specific task by ID from any task source
- */
-export async function getTaskById(taskId) {
-  const { user: userTasks, cos: cosTasks } = await getAllTasks();
-
-  // Search user tasks
-  const userTask = userTasks.tasks?.find(t => t.id === taskId);
-  if (userTask) {
-    return { ...userTask, taskType: 'user' };
-  }
-
-  // Search CoS internal tasks
-  const cosTask = cosTasks.tasks?.find(t => t.id === taskId);
-  if (cosTask) {
-    return { ...cosTask, taskType: 'internal' };
-  }
-
-  return null;
 }
 
 /**
@@ -2228,120 +2159,6 @@ export function isRunning() {
 }
 
 /**
- * Add a new task to TASKS.md or COS-TASKS.md
- */
-export async function addTask(taskData, taskType = 'user', { raw = false } = {}) {
-  return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = taskType === 'user'
-    ? join(ROOT_DIR, state.config.userTasksFile)
-    : join(ROOT_DIR, state.config.cosTasksFile);
-
-  // Read existing tasks or start fresh
-  let tasks = [];
-  if (existsSync(filePath)) {
-    const content = await readFile(filePath, 'utf-8');
-    tasks = parseTasksMarkdown(content);
-  }
-
-  // Reject duplicate: same first-line description AND same target app already
-  // pending or in_progress. The `metadata.app` scope matters — the same
-  // description against two different apps is two different pieces of work
-  // (e.g. "fix the failing test" in PortOS vs in BookLoom), and collapsing
-  // them silently drops the second dispatch.
-  const normalizedDesc = firstLine(taskData.description).toLowerCase();
-  const targetApp = taskData.app || null;
-  const duplicate = tasks.find(t =>
-    (t.status === 'pending' || t.status === 'in_progress') &&
-    firstLine(t.description).toLowerCase() === normalizedDesc &&
-    (t.metadata?.app || null) === targetApp
-  );
-  if (duplicate) {
-    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}`);
-    return { ...duplicate, duplicate: true };
-  }
-
-  // When raw=true, use the pre-built task object directly (for on-demand/generated tasks)
-  let newTask;
-  if (raw) {
-    newTask = taskData;
-  } else {
-    // Generate a unique ID if not provided
-    const id = taskData.id || `${taskType === 'user' ? 'task' : 'sys'}-${Date.now().toString(36)}`;
-
-    // Build metadata object
-    const metadata = {};
-    if (taskData.context) metadata.context = taskData.context;
-    if (taskData.model) metadata.model = taskData.model;
-    if (taskData.provider) metadata.provider = taskData.provider;
-    if (taskData.app) metadata.app = taskData.app;
-    // Tags a task dispatched by the voice code-agent tool so the proactive
-    // speech layer can announce its completion (see voice/proactiveTriggers.js).
-    if (taskData.voiceDispatch === true) metadata.voiceDispatch = true;
-    if (taskData.isRecovery === true) metadata.isRecovery = true;
-    if (taskData.createJiraTicket) metadata.createJiraTicket = true;
-    // Boolean flags: persist both true and false so users can explicitly override defaults.
-    // The string round-trip ('false' from TASKS.md) is handled by isTruthyMeta/isFalsyMeta.
-    // undefined means "use app defaults".
-    if (taskData.useWorktree === true) metadata.useWorktree = true;
-    else if (taskData.useWorktree === false) metadata.useWorktree = false;
-    if (taskData.openPR === true) metadata.openPR = true;
-    else if (taskData.openPR === false) metadata.openPR = false;
-    if (taskData.simplify === true) metadata.simplify = true;
-    else if (taskData.simplify === false) metadata.simplify = false;
-    if (taskData.reviewLoop === true) metadata.reviewLoop = true;
-    else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
-    // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).
-    if (Array.isArray(taskData.reviewers) || (typeof taskData.reviewer === 'string' && taskData.reviewer)) {
-      metadata.reviewers = normalizeReviewers(taskData);
-    }
-    if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
-    if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;
-    else if (taskData.reviewerApplies === false) metadata.reviewerApplies = false;
-    if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
-    if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
-    if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
-    if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
-
-    // Create the new task
-    newTask = {
-      id: hasKnownPrefix(id) ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
-      status: 'pending',
-      priority: (taskData.priority || 'MEDIUM').toUpperCase(),
-      priorityValue: PRIORITY_VALUES[taskData.priority?.toUpperCase()] || 2,
-      description: taskData.description,
-      metadata,
-      approvalRequired: taskType === 'internal' && taskData.approvalRequired,
-      autoApproved: taskType === 'internal' && !taskData.approvalRequired,
-      section: 'pending'
-    };
-  }
-
-  // Add task to top or bottom based on position parameter
-  if (taskData.position === 'top') {
-    tasks.unshift(newTask);
-  } else {
-    tasks.push(newTask);
-  }
-
-  // Write back to file
-  const includeApprovalFlags = taskType === 'internal';
-  const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
-  await writeFile(filePath, markdown);
-
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'added', task: newTask });
-
-  // Immediately attempt to spawn user tasks if slots are available
-  // This avoids waiting for the next evaluation interval (which is meant for system task generation)
-  if (taskType === 'user') {
-    setImmediate(() => tryImmediateSpawn(newTask));
-  }
-
-  return newTask;
-  });
-}
-
-/**
  * Attempt to immediately spawn a newly added user task if there are available agent slots.
  * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
  */
@@ -2567,206 +2384,6 @@ async function dequeueNextTask() {
   if (spawned > 0) {
     emitLog('info', `⚡ Dequeued ${spawned} task(s)`, { spawned, availableSlots });
   }
-}
-
-const PRIORITY_VALUES = {
-  'CRITICAL': 4,
-  'HIGH': 3,
-  'MEDIUM': 2,
-  'LOW': 1
-};
-
-/**
- * Update an existing task
- */
-export async function updateTask(taskId, updates, taskType = 'user') {
-  return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = taskType === 'user'
-    ? join(ROOT_DIR, state.config.userTasksFile)
-    : join(ROOT_DIR, state.config.cosTasksFile);
-
-  if (!existsSync(filePath)) {
-    console.log(`⚠️ updateTask: file not found for ${taskId} (taskType=${taskType}, path=${filePath})`);
-    return { error: 'Task file not found' };
-  }
-
-  const content = await readFile(filePath, 'utf-8');
-  let tasks = parseTasksMarkdown(content);
-
-  const taskIndex = tasks.findIndex(t => t.id === taskId);
-  if (taskIndex === -1) {
-    console.log(`⚠️ updateTask: task ${taskId} not found in ${filePath} (taskType=${taskType}, parsed ${tasks.length} tasks, status update: ${updates.status || 'none'})`);
-    return { error: 'Task not found' };
-  }
-
-  // Build updated metadata - merge existing with any new metadata
-  const updatedMetadata = {
-    ...tasks[taskIndex].metadata,
-    ...(updates.metadata || {})
-  };
-  // Handle legacy fields that may be passed directly in updates
-  if (updates.context !== undefined) updatedMetadata.context = updates.context || undefined;
-  if (updates.model !== undefined) updatedMetadata.model = updates.model || undefined;
-  if (updates.provider !== undefined) updatedMetadata.provider = updates.provider || undefined;
-  if (updates.app !== undefined) updatedMetadata.app = updates.app || undefined;
-
-  // Clear blocked/failure metadata when transitioning out of blocked status
-  if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
-    for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt']) {
-      delete updatedMetadata[key];
-    }
-  }
-
-  // Clean undefined values from metadata
-  Object.keys(updatedMetadata).forEach(key => {
-    if (updatedMetadata[key] === undefined) delete updatedMetadata[key];
-  });
-
-  // Update the task
-  const updatedTask = {
-    ...tasks[taskIndex],
-    ...(updates.description && { description: updates.description }),
-    ...(updates.priority && {
-      priority: updates.priority.toUpperCase(),
-      priorityValue: PRIORITY_VALUES[updates.priority.toUpperCase()] || 2
-    }),
-    ...(updates.status && { status: updates.status }),
-    metadata: updatedMetadata
-  };
-
-  tasks[taskIndex] = updatedTask;
-
-  // Write back to file
-  const includeApprovalFlags = taskType === 'internal';
-  const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
-  await writeFile(filePath, markdown);
-
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'updated', task: updatedTask });
-  return updatedTask;
-  });
-}
-
-/**
- * Delete a task
- */
-export async function deleteTask(taskId, taskType = 'user') {
-  return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = taskType === 'user'
-    ? join(ROOT_DIR, state.config.userTasksFile)
-    : join(ROOT_DIR, state.config.cosTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { error: 'Task file not found' };
-  }
-
-  const content = await readFile(filePath, 'utf-8');
-  let tasks = parseTasksMarkdown(content);
-
-  const taskToDelete = tasks.find(t => t.id === taskId);
-  if (!taskToDelete) {
-    return { error: 'Task not found' };
-  }
-
-  tasks = tasks.filter(t => t.id !== taskId);
-
-  // Write back to file
-  const includeApprovalFlags = taskType === 'internal';
-  const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
-  await writeFile(filePath, markdown);
-
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'deleted', taskId });
-  return { success: true, taskId };
-  });
-}
-
-/**
- * Reorder user tasks based on an array of task IDs
- */
-export async function reorderTasks(taskIds) {
-  return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = join(ROOT_DIR, state.config.userTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { error: 'Task file not found' };
-  }
-
-  const content = await readFile(filePath, 'utf-8');
-  const tasks = parseTasksMarkdown(content);
-
-  // Create a map of tasks by ID for quick lookup. parseTasksMarkdown guarantees
-  // unique ids (it suffixes any duplicate it encounters), so this Map can't
-  // silently collapse colliding tasks and drop them on write-back.
-  const taskMap = new Map(tasks.map(t => [t.id, t]));
-
-  // Reorder based on the provided order
-  const reorderedTasks = [];
-  for (const id of taskIds) {
-    const task = taskMap.get(id);
-    if (task) {
-      reorderedTasks.push(task);
-      taskMap.delete(id);
-    }
-  }
-
-  // Append any tasks not in the provided order (shouldn't happen, but safe)
-  for (const task of taskMap.values()) {
-    reorderedTasks.push(task);
-  }
-
-  // Write back to file
-  const markdown = generateTasksMarkdown(reorderedTasks, false);
-  await writeFile(filePath, markdown);
-
-  cosEvents.emit('tasks:changed', { type: 'user', action: 'reordered' });
-  return { success: true, order: reorderedTasks.map(t => t.id) };
-  });
-}
-
-/**
- * Approve a task that requires approval (marks it as auto-approved)
- */
-export async function approveTask(taskId) {
-  return withStateLock(async () => {
-  const state = await loadState();
-  const filePath = join(ROOT_DIR, state.config.cosTasksFile);
-
-  if (!existsSync(filePath)) {
-    return { error: 'CoS task file not found' };
-  }
-
-  const content = await readFile(filePath, 'utf-8');
-  let tasks = parseTasksMarkdown(content);
-
-  const taskIndex = tasks.findIndex(t => t.id === taskId);
-  if (taskIndex === -1) {
-    return { error: 'Task not found' };
-  }
-
-  if (!tasks[taskIndex].approvalRequired) {
-    return { error: 'Task does not require approval' };
-  }
-
-  // Update approval flags
-  tasks[taskIndex] = {
-    ...tasks[taskIndex],
-    approvalRequired: false,
-    autoApproved: true
-  };
-
-  // Write back to file
-  const markdown = generateTasksMarkdown(tasks, true);
-  await writeFile(filePath, markdown);
-
-  cosEvents.emit('tasks:changed', { type: 'internal', action: 'approved', task: tasks[taskIndex] });
-
-  // Immediately attempt to spawn the newly approved task
-  setImmediate(() => dequeueNextTask());
-
-  return tasks[taskIndex];
-  });
 }
 
 /**
@@ -3138,9 +2755,21 @@ export async function init() {
     );
   });
 
-  // Event-driven triggers: task/file changes → dequeueNextTask
+  // Event-driven triggers: task/file changes → dequeueNextTask.
+  // The task store (cosTaskStore.js) persists tasks and emits this event; the
+  // spawn-side reaction lives here so the store stays free of scheduler logic.
+  // - 'added': fill open slots via dequeueNextTask, and (for user tasks) also
+  //   fire tryImmediateSpawn so the just-added task starts instantly, bypassing
+  //   the evaluation interval that's meant for system task generation.
+  // - 'approved': a newly approved internal task can now spawn — re-run dequeue.
   cosEvents.on('tasks:changed', (data) => {
-    if (isDaemonRunning() && data?.action === 'added') setImmediate(() => dequeueNextTask());
+    if (!isDaemonRunning() || !data?.action) return;
+    if (data.action === 'added') {
+      if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task));
+      setImmediate(() => dequeueNextTask());
+    } else if (data.action === 'approved') {
+      setImmediate(() => dequeueNextTask());
+    }
   });
 
   cosEvents.on('tasks:user:added', () => {
