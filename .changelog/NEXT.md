@@ -14,6 +14,7 @@
 
 ## Changed
 
+- **[issue-744]** Extracted the scheduled-task prompt catalog and prompt getters out of the 3500-line `taskSchedule.js` into a dedicated `taskPromptService.js`; the prompt defaults and auto-upgrade machinery are moved verbatim and re-exported, so behavior is unchanged. Internal refactor with no behavior difference.
 - **[issue-790]** Unified the duplicated buffered-spawn and Windows kill-tree logic shared by the app build and update flows into one helper. Internal refactor with no behavior difference.
 - **[issue-751]** Collapsed the repeated AppleScript builders in `server/services/xcodeScripts.js` into a shared `xcodeScriptBuilders.js`; the emitted `take_screenshots_macos.sh` is byte-for-byte unchanged. Internal refactor with no behavior difference.
 - **[issue-748]** Extracted the pure command-arg builders and output parsers from `server/services/git.js` into focused `server/lib/git*` modules. Internal refactor with no behavior difference.
