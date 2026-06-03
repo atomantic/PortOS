@@ -33,11 +33,12 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getTaskTypeConfidence } from './taskLearning.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
+import { PORTOS_UI_URL } from '../lib/ports.js';
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
  */
-async function blockIfExceedsMaxSpawns(task, taskType) {
+export async function blockIfExceedsMaxSpawns(task, taskType) {
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns < MAX_TOTAL_SPAWNS) return false;
   emitLog('info', `🚫 Blocking task ${task.id} — exceeded max spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, { taskId: task.id });
@@ -141,7 +142,7 @@ The scheduler has reserved PLAN.md item \`[${planId}]\` for you. You MUST work o
  * Count running agents grouped by project (app ID).
  * Agents without an app (self-improvement, PortOS tasks) are grouped under '_self'.
  */
-function countRunningAgentsByProject(agents) {
+export function countRunningAgentsByProject(agents) {
   const counts = {};
   for (const agent of Object.values(agents)) {
     if (agent.status !== 'running') continue;
@@ -155,7 +156,7 @@ function countRunningAgentsByProject(agents) {
  * Check if a task would exceed the per-project concurrency limit.
  * Returns true if the task can be spawned (within limit), false otherwise.
  */
-function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
+export function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
   const project = task.metadata?.app || '_self';
   const current = agentsByProject[project] || 0;
   return current < perProjectLimit;
@@ -529,7 +530,7 @@ export async function evaluateTasks(options) {
  * @param {Object} state - Current CoS state
  * @returns {Object|null} Generated task or null if nothing to do
  */
-async function generateIdleReviewTask(state) {
+export async function generateIdleReviewTask(state) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
     return null;
@@ -568,7 +569,7 @@ async function generateIdleReviewTask(state) {
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
-async function queueEligibleImprovementTasks(state, cosTaskData) {
+export async function queueEligibleImprovementTasks(state, cosTaskData) {
   const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
   if (!isImprovementEnabled(state)) return;
@@ -904,7 +905,7 @@ async function resolveConfidenceApproval(state, taskTypeKey, logLabel) {
  * Helper function to generate a self-improvement task for a specific type
  * Used by both normal rotation and on-demand task requests
  */
-async function generateSelfImprovementTaskForType(taskType, state, taskDescriptions = null) {
+export async function generateSelfImprovementTaskForType(taskType, state, taskDescriptions = null) {
   const taskSchedule = await import('./taskSchedule.js');
   const interval = await taskSchedule.getTaskInterval(taskType);
 
@@ -1488,7 +1489,7 @@ async function generateManagedAppImprovementTask(app, state) {
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
-async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
+export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
