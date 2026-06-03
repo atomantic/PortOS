@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import CityIntelPane from './CityIntelPane';
 import CityAgentBar from './CityAgentBar';
 import CityFilterBar from './CityFilterBar';
+import CityXpBadge from './CityXpBadge';
 
 // WASD controls hint shown briefly on first exploration entry
 function ControlsHint({ visible }) {
@@ -160,7 +161,7 @@ function HealthBar({ value, max, color }) {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [time, setTime] = useState(new Date());
@@ -420,6 +421,9 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
       {/* Bottom: Agent status bar */}
       <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
+
+      {/* Bottom-right: character level / XP HUD badge (roadmap 2.11) */}
+      <CityXpBadge character={character} />
 
       {/* Center crosshair in exploration mode */}
       {explorationMode && (

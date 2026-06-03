@@ -55,7 +55,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiRuns.js` | Agent run history. |
 | `apiScaffold.js` | App scaffolding templates. |
 | `apiSchedules.js` | Automation schedules. |
-| `apiSystem.js` | System info (CPU/memory/ports/alerts). |
+| `apiSystem.js` | System info (CPU/memory/ports/alerts) + D&D-style character sheet getter. |
 | `apiLoops.js` | Scheduled loops. |
 
 ## Personal data / identity

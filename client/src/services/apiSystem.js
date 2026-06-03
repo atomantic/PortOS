@@ -3,6 +3,9 @@ import { request } from './apiCore.js';
 // Alerts
 export const getAlertsSummary = (options) => request('/alerts/summary', options);
 
+// Character sheet (D&D-style XP / level / HP — powers the CyberCity XP HUD badge)
+export const getCharacter = (options) => request('/character', options);
+
 // Health
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);
