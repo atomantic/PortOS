@@ -4,6 +4,7 @@ import { Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from '../cos/constants';
 import {
+  AGENT_MOTION,
   computeAgentOrbit,
   computeAgentTrailPoints,
   computeTrailColors,
@@ -43,10 +44,6 @@ export default function AgentEntity({ agent, position, index = 0, settings }) {
     return geom;
   }, [color, trailSamples]);
 
-  // The group sits at the building anchor; the agent body orbits within it so
-  // its motion trail samples in anchor-relative space.
-  const anchor = [position[0], position[1], position[2]];
-
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     const p = computeAgentOrbit(t, { index });
@@ -59,15 +56,17 @@ export default function AgentEntity({ agent, position, index = 0, settings }) {
     }
 
     if (trailRef.current && trailSamples > 0) {
-      const pts = computeAgentTrailPoints(t, { index }, trailSamples);
       const attr = trailRef.current.geometry.getAttribute('position');
-      attr.array.set(pts);
+      // Fill the geometry buffer in place — no per-frame allocation.
+      computeAgentTrailPoints(t, { index }, trailSamples, AGENT_MOTION.trailSeconds, attr.array);
       attr.needsUpdate = true;
     }
   });
 
+  // The group sits at the building anchor; the agent body orbits within it so
+  // its motion trail samples in anchor-relative space.
   return (
-    <group position={anchor}>
+    <group position={position}>
       {trailSamples > 0 && (
         <line ref={trailRef} geometry={trailGeom}>
           <lineBasicMaterial

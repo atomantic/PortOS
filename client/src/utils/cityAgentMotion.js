@@ -40,16 +40,20 @@ export function resolveTrailSamples(particleDensity = 1, maxSamples = AGENT_MOTI
 }
 
 // Sample the orbit path backwards from time `t` into `samples` points, newest
-// first. Returns a flat [x0,y0,z0, x1,y1,z1, ...] array of offsets relative to
-// the anchor — the caller adds the anchor position when placing the trail.
+// first. Writes a flat [x0,y0,z0, x1,y1,z1, ...] of offsets relative to the
+// anchor — the caller adds the anchor position when placing the trail. Pass a
+// pre-allocated `out` array (e.g. the geometry's Float32Array) to fill it in
+// place and avoid a per-frame allocation on the render hot path; otherwise a
+// fresh Array is allocated and returned.
 export function computeAgentTrailPoints(
   t,
   opts = {},
   samples = AGENT_MOTION.trailSamples,
   trailSeconds = AGENT_MOTION.trailSeconds,
+  out = null,
 ) {
   const n = Math.max(2, samples);
-  const pts = new Array(n * 3);
+  const pts = out || new Array(n * 3);
   for (let i = 0; i < n; i++) {
     const dt = (i / (n - 1)) * trailSeconds; // 0 at head (newest), trailSeconds at tail
     const p = computeAgentOrbit(t - dt, opts);

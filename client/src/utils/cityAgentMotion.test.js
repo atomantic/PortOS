@@ -103,6 +103,16 @@ describe('computeAgentTrailPoints', () => {
   it('clamps to a minimum of 2 points', () => {
     expect(computeAgentTrailPoints(0, {}, 1)).toHaveLength(6);
   });
+
+  it('fills a pre-allocated out buffer in place and returns it (no allocation)', () => {
+    const out = new Float32Array(8 * 3);
+    const ret = computeAgentTrailPoints(2.5, { index: 1 }, 8, AGENT_MOTION.trailSeconds, out);
+    expect(ret).toBe(out);
+    const fresh = computeAgentTrailPoints(2.5, { index: 1 }, 8);
+    for (let i = 0; i < fresh.length; i++) {
+      expect(out[i]).toBeCloseTo(fresh[i], 5);
+    }
+  });
 });
 
 describe('computeTrailColors', () => {
