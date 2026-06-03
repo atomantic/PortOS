@@ -7,6 +7,7 @@ import {
   CalendarX, RefreshCw, ChevronDown, ChevronRight, ClipboardCheck
 } from 'lucide-react';
 import * as api from '../../services/api';
+import Pill from '../ui/Pill';
 
 const CATEGORY_CONFIG = {
   creative: { label: 'Creative', icon: Lightbulb, color: 'text-purple-400', bg: 'bg-purple-500/20', hex: '#a855f7' },
@@ -381,6 +382,8 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           </div>
           <span className="text-sm font-medium text-white truncate">{goal.title}</span>
           {goal.goalType && goal.goalType !== 'standard' && (
+            // Not <Pill>: text-xs + px-1.5 is a size combo Pill doesn't carry, and
+            // its sm/xs padding would override the className, shifting this badge.
             <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${GOAL_TYPE_CONFIG[goal.goalType]?.bg} ${GOAL_TYPE_CONFIG[goal.goalType]?.color}`}>
               {GOAL_TYPE_CONFIG[goal.goalType]?.label}
             </span>
@@ -525,12 +528,12 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             <label className="text-xs text-gray-500">Tags</label>
             <div className="flex flex-wrap gap-1 mt-1 mb-2">
               {form.tags.map(tag => (
-                <span key={tag} className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-accent/20 text-port-accent text-xs">
+                <Pill key={tag} tone="bare" bordered={false} className="bg-port-accent/20 text-port-accent">
                   {tag}
                   <button onClick={() => removeTag(tag)} className="hover:text-white">
                     <X className="w-3 h-3" />
                   </button>
-                </span>
+                </Pill>
               ))}
             </div>
             <div className="flex gap-1">
@@ -568,19 +571,18 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           )}
 
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className={`px-2 py-0.5 rounded ${cat.bg} ${cat.color}`}>{cat.label}</span>
-            <span className="px-2 py-0.5 rounded bg-gray-700 text-gray-300">
+            <Pill tone="bare" bordered={false} className={`${cat.bg} ${cat.color}`}>{cat.label}</Pill>
+            <Pill tone="bare" bordered={false} className="bg-gray-700 text-gray-300">
               {HORIZON_OPTIONS.find(h => h.value === goal.horizon)?.label}
-            </span>
+            </Pill>
             {goal.urgency != null && (
-              <span className={`flex items-center gap-1 px-2 py-0.5 rounded bg-gray-700 ${urgencyColor(goal.urgency)}`}>
-                {goal.urgency >= 0.7 && <AlertTriangle className="w-3 h-3" />}
+              <Pill tone="bare" bordered={false} icon={goal.urgency >= 0.7 ? AlertTriangle : undefined} className={`bg-gray-700 ${urgencyColor(goal.urgency)}`}>
                 {Math.round(goal.urgency * 100)}% urgency
-              </span>
+              </Pill>
             )}
-            <span className="px-2 py-0.5 rounded bg-gray-700 text-gray-400">
+            <Pill tone="bare" bordered={false} className="bg-gray-700 text-gray-400">
               {goal.status}
-            </span>
+            </Pill>
           </div>
 
           {/* Progress Bar */}
@@ -614,6 +616,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
                     <span className={`flex-1 ${todo.status === 'done' ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
                       {todo.title}
                     </span>
+                    {/* Not <Pill>: px-1 is tighter than Pill's xs (px-1.5) and would be overridden. */}
                     <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${
                       todo.priority === 'high' ? 'bg-red-500/20 text-red-400' :
                       todo.priority === 'low' ? 'bg-gray-700 text-gray-500' :
@@ -704,10 +707,9 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           {goal.tags?.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {goal.tags.map(tag => (
-                <span key={tag} className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-accent/20 text-port-accent text-xs">
-                  <Tag className="w-3 h-3" />
+                <Pill key={tag} tone="bare" bordered={false} icon={Tag} className="bg-port-accent/20 text-port-accent">
                   {tag}
-                </span>
+                </Pill>
               ))}
             </div>
           )}
@@ -990,7 +992,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
                     <div key={ci.id} className="p-2 rounded bg-port-bg border border-port-border space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] text-gray-500">{new Date(ci.date + 'T00:00:00').toLocaleDateString()}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${sc.bg} ${sc.color}`}>{sc.label}</span>
+                        <Pill tone="bare" size="xs" bordered={false} className={`${sc.bg} ${sc.color}`}>{sc.label}</Pill>
                       </div>
                       <div className="text-[10px] text-gray-500">
                         Progress: {ci.actualProgress}%{ci.expectedProgress != null && ` / ${ci.expectedProgress}% expected`}

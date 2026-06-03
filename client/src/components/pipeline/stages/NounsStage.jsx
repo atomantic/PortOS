@@ -36,6 +36,7 @@ import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
 import { universeStylePreset } from '../../../lib/universeStylePreset';
 import useMounted from '../../../hooks/useMounted';
 import useUniverse from '../../../hooks/useUniverse';
+import { useCanonPatch } from '../../../hooks/useCanonPatch';
 import usePreviewRoute from '../../../hooks/usePreviewRoute';
 import CanonCard from '../CanonCard';
 import MediaPreview from '../../media/MediaPreview';
@@ -374,17 +375,9 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
   // Inline-edit channel for canon fields the user picks directly (today:
   // setting intExt + timeOfDay chips). Optimistic — UI updates before the
   // server roundtrip so chip clicks feel instant.
-  const handlePatchEntry = useCallback(async (kind, entryId, patch) => {
-    if (!universe || !patch || typeof patch !== 'object') return;
-    const kindKey = kind.key;
-    const list = (universe[kindKey] || []).map((e) =>
-      e.id === entryId ? { ...e, ...patch } : e,
-    );
-    setUniverse((prev) => prev ? { ...prev, [kindKey]: list } : prev);
-    const updated = await updateUniverse(universe.id, { [kindKey]: list })
-      .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
-    if (updated && mountedRef.current) setUniverse(updated);
-  }, [universe, setUniverse, mountedRef]);
+  const { patchEntry: handlePatchEntry } = useCanonPatch({
+    universe, apply: setUniverse, mountedRef,
+  });
 
   const handleRefFailed = useCallback((entryId, errMsg) => {
     setRenderingJobs((prev) => {
