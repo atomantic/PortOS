@@ -60,10 +60,20 @@ vi.mock('../services/catalogExtraction.js', () => ({
   scanProseForIngredientRefs: vi.fn(async () => []),
 }));
 
+// Mock the live-director service so the suggest route doesn't reach a provider.
+vi.mock('../services/writersRoom/liveDirector.js', () => ({
+  suggestContinuation: vi.fn(async () => ({
+    options: [{ kind: 'beat', label: 'Next', text: 'A move.', rationale: '' }],
+    usage: { date: '2026-06-03', count: 1 },
+    budget: 100,
+  })),
+}));
+
 import * as svc from '../services/writersRoom/local.js';
 import * as catalogExtraction from '../services/catalogExtraction.js';
 import * as charSvc from '../services/writersRoom/characters.js';
 import * as placesSvc from '../services/writersRoom/places.js';
+import * as liveSvc from '../services/writersRoom/liveDirector.js';
 import writersRoomRoutes from './writersRoom.js';
 
 describe('writersRoom routes', () => {
@@ -369,6 +379,42 @@ describe('writersRoom routes', () => {
         .send({});
       expect(r.status).toBe(400);
       expect(r.body.error || r.body.message).toMatch(/no prose/i);
+    });
+  });
+
+  describe('live mode (Phase 5)', () => {
+    it('PATCH /works/:id accepts a partial liveMode patch', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1')
+        .send({ liveMode: { enabled: true, debounceMs: 3000 } });
+      expect(r.status).toBe(200);
+      expect(svc.updateWork).toHaveBeenCalledWith('wr-work-1', { liveMode: { enabled: true, debounceMs: 3000 } });
+    });
+
+    it('PATCH /works/:id rejects an out-of-range debounceMs', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1')
+        .send({ liveMode: { debounceMs: 10 } });
+      expect(r.status).toBe(400);
+    });
+
+    it('POST /works/:id/live-suggest forwards the cursor context and returns options', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/live-suggest')
+        .send({ before: 'The door opened.', after: '', selection: '' });
+      expect(r.status).toBe(200);
+      expect(r.body.options[0].text).toBe('A move.');
+      expect(liveSvc.suggestContinuation).toHaveBeenCalledWith('wr-work-1', {
+        before: 'The door opened.', after: '', selection: '',
+      });
+    });
+
+    it('POST /works/:id/live-suggest rejects an over-long before window', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/live-suggest')
+        .send({ before: 'x'.repeat(12_001) });
+      expect(r.status).toBe(400);
+      expect(liveSvc.suggestContinuation).not.toHaveBeenCalled();
     });
   });
 });

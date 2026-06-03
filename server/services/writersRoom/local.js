@@ -312,6 +312,30 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
   return manifest;
 }
 
+// Default Phase 5 live-mode config. Stored on the manifest only once the user
+// opts in; readers (the suggest path) fall back to this when the field is
+// absent. `usage` is the server-tracked daily budget counter — never accepted
+// from the client (updateWork strips it; only recordLiveModeUsage writes it).
+export const DEFAULT_LIVE_MODE = Object.freeze({
+  enabled: false,
+  debounceMs: 2500,
+  dailyCallBudget: 100,
+  usage: Object.freeze({ date: null, count: 0 }),
+});
+
+export function resolveLiveMode(manifest) {
+  const stored = manifest?.liveMode || {};
+  return {
+    enabled: stored.enabled === true,
+    debounceMs: Number.isInteger(stored.debounceMs) ? stored.debounceMs : DEFAULT_LIVE_MODE.debounceMs,
+    dailyCallBudget: Number.isInteger(stored.dailyCallBudget) ? stored.dailyCallBudget : DEFAULT_LIVE_MODE.dailyCallBudget,
+    usage: {
+      date: typeof stored.usage?.date === 'string' ? stored.usage.date : null,
+      count: Number.isInteger(stored.usage?.count) ? stored.usage.count : 0,
+    },
+  };
+}
+
 export async function updateWork(id, patch) {
   const manifest = await getWork(id);
   const allowed = ['title', 'folderId', 'kind', 'status', 'imageStyle'];
@@ -321,6 +345,20 @@ export async function updateWork(id, patch) {
     if (key === 'kind' && !WORK_KINDS.includes(patch.kind)) throw badRequest(`Invalid kind: ${patch.kind}`);
     if (key === 'status' && !WORK_STATUSES.includes(patch.status)) throw badRequest(`Invalid status: ${patch.status}`);
     next[key] = patch[key];
+  }
+  // liveMode is a partial merge (the UI PATCHes one knob at a time) onto the
+  // resolved current config — and the client-supplied `usage` is dropped so a
+  // crafted PATCH can't reset the server-side daily budget counter. Only the
+  // three user-editable knobs flow through.
+  if (patch.liveMode !== undefined && patch.liveMode !== null) {
+    const current = resolveLiveMode(manifest);
+    const p = patch.liveMode;
+    next.liveMode = {
+      enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,
+      debounceMs: Number.isInteger(p.debounceMs) ? p.debounceMs : current.debounceMs,
+      dailyCallBudget: Number.isInteger(p.dailyCallBudget) ? p.dailyCallBudget : current.dailyCallBudget,
+      usage: current.usage,
+    };
   }
   // Trim title and reject if it becomes empty after trim — keeps parity with
   // createWork's "title required" guard so a PATCH can't blank a title out.
@@ -355,6 +393,31 @@ export async function linkToPipeline(id, { seriesId = null, issueId = null } = {
   };
   await saveManifest(id, next);
   return next;
+}
+
+// UTC day key (YYYY-MM-DD) for the daily budget window. UTC (not local) so the
+// reset boundary is deterministic across machines a single user federates.
+// Exported so the live-director's pre-call budget check compares against the
+// same boundary recordLiveModeUsage rolls over on.
+export function utcDayKey() {
+  return nowIso().slice(0, 10);
+}
+
+/**
+ * Bump the live-mode daily usage counter for a work, rolling over to a fresh
+ * count when the stored date is not today (UTC). Set once per successful
+ * suggest call by the live-director path — distinct from `updateWork` because
+ * the counter is server-owned, not user-editable. Returns the resolved live
+ * config with the new usage so the caller can echo remaining budget.
+ */
+export async function recordLiveModeUsage(id) {
+  const manifest = await getWork(id);
+  const live = resolveLiveMode(manifest);
+  const today = utcDayKey();
+  const count = live.usage.date === today ? live.usage.count + 1 : 1;
+  const nextLive = { ...live, usage: { date: today, count } };
+  await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() });
+  return nextLive;
 }
 
 export async function deleteWork(id) {

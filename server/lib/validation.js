@@ -842,12 +842,36 @@ export const writersRoomImageStyleSchema = z.object({
   negativePrompt: z.string().max(2000).default(''),
 }).strict();
 
+// Phase 5 live-mode opt-in (per work). `enabled` gates the editor's
+// background continuation suggestions; `debounceMs` is the client's
+// idle-after-typing throttle before it asks; `dailyCallBudget` caps how many
+// suggest calls the server will run per UTC day (0 = unlimited). The
+// server-tracked `usage` counter is NOT user-editable — it's bumped by the
+// suggest path and reset on a new day — so it lives outside this update schema
+// (mirrors how `pipelineSeriesId` is set by linkToPipeline, not updateWork).
+export const writersRoomLiveModeSchema = z.object({
+  enabled: z.boolean().default(false),
+  debounceMs: z.number().int().min(800).max(30_000).default(2500),
+  dailyCallBudget: z.number().int().min(0).max(10_000).default(100),
+}).strict();
+
 export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   kind: writersRoomWorkKindSchema.optional(),
   status: writersRoomWorkStatusSchema.optional(),
   folderId: wrIdNullable.optional(),
   imageStyle: writersRoomImageStyleSchema.optional(),
+  liveMode: writersRoomLiveModeSchema.partial().optional(),
+}).strict();
+
+// Cursor-context payload for the live continuation suggest route. The three
+// prose slices are bounded so a runaway editor can't ship a multi-MB body on
+// every keystroke — the server only needs a window around the cursor, not the
+// whole manuscript.
+export const writersRoomLiveSuggestSchema = z.object({
+  before: z.string().max(12_000).optional().default(''),
+  after: z.string().max(12_000).optional().default(''),
+  selection: z.string().max(8_000).optional().default(''),
 }).strict();
 
 export const writersRoomDraftSaveSchema = z.object({

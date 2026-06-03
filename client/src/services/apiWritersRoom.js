@@ -60,6 +60,18 @@ export const runWritersRoomAnalysis = (workId, data) =>
   });
 export const getWritersRoomAnalysis = (workId, analysisId) =>
   request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`);
+
+// Live continuation (Phase 5): opt-in, debounced Creative Director feedback
+// from the prose around the cursor. Returns { options, usage, budget }. The
+// server gates on the per-work live-mode toggle (409) and daily budget (429);
+// callers own their own error UI, so pass { silent: true } to avoid a double
+// toast.
+export const suggestWritersRoomContinuation = (workId, context, options) =>
+  request(`/writers-room/works/${enc(workId)}/live-suggest`, {
+    method: 'POST',
+    body: JSON.stringify(context || {}),
+    ...(options || {}),
+  });
 export const attachWritersRoomSceneImage = (workId, analysisId, payload) =>
   request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}/scene-image`, {
     method: 'POST',
