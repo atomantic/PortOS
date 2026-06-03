@@ -9,6 +9,7 @@ import {
   Scale,
   Settings,
   Stethoscope,
+  FileText,
 } from 'lucide-react';
 
 export const TABS = [
@@ -17,6 +18,7 @@ export const TABS = [
   { id: 'alcohol', label: 'Alcohol', icon: Beer },
   { id: 'blood', label: 'Blood', icon: HeartPulse },
   { id: 'body', label: 'Body', icon: Scale },
+  { id: 'export', label: 'Export', icon: FileText },
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'health', label: 'Health', icon: Stethoscope },
   { id: 'settings', label: 'Settings', icon: Settings },

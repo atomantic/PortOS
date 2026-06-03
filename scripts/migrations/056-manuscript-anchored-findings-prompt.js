@@ -18,17 +18,19 @@
 
 import { makePromptReplaceMigration } from './_lib.js';
 
-// Pre-change shipped hash (location-only findings).
+// Pre-change shipped hash (location-only findings), plus every later shipped
+// body for this file as accepted-old: '1ee5ac…' (the post-057 comic-structure
+// shape) so a copy still at either prior version is auto-upgradable to current.
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-manuscript-completeness.md': ['e6858c74ab2cead752d388e3f428406c'],
+  'pipeline-manuscript-completeness.md': ['e6858c74ab2cead752d388e3f428406c', '1ee5ac936fbf1d365e0eaea99bcf1e77'],
 };
 
-// Current shipped hash — migration 057 further updated this file (added
-// comic-structure category), so this hash reflects the post-057 body.
-// The idempotent-rerun and drift-catch tests require it to match the live
-// data.reference body, not 056's own output.
+// Current shipped hash — migrations 057 (comic-structure) and 066
+// (replacementStrategy) further updated this file, so this hash reflects the
+// post-066 body. The idempotent-rerun and drift-catch tests require it to match
+// the live data.reference body, not 056's own output.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': '1ee5ac936fbf1d365e0eaea99bcf1e77',
+  'pipeline-manuscript-completeness.md': 'cec8faeb75dfff74e41b8221145c2e92',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

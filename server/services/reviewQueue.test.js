@@ -8,6 +8,10 @@ const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateAlerts: vi.fn() };
 const backup = { getState: vi.fn() };
+// Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
+// stack in transitively (askPromote imports all three). The promoteAskQueueItem
+// suite drives this mock directly.
+const askPromote = { promoteLatestAssistantTurn: vi.fn() };
 
 vi.mock('./brain.js', () => brain);
 vi.mock('./askConversations.js', () => askConversations);
@@ -15,8 +19,9 @@ vi.mock('./cosTaskStore.js', () => cosTaskStore);
 vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
 vi.mock('./backup.js', () => backup);
+vi.mock('./askPromote.js', () => askPromote);
 
-const { buildQueue, resolveQueueItem, __resetAlertsCache } = await import('./reviewQueue.js');
+const { buildQueue, resolveQueueItem, promoteAskQueueItem, __resetAlertsCache } = await import('./reviewQueue.js');
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
@@ -168,6 +173,80 @@ describe('reviewQueue.buildQueue', () => {
     expect(queue.items.find(i => i.source === 'ask').action).toBeUndefined();
     expect(queue.items.find(i => i.source === 'health').action).toBeUndefined();
     expect(queue.items.find(i => i.source === 'backup').action).toBeUndefined();
+  });
+
+  it('attaches source-appropriate meta chips when the raw field is present', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', source: 'voice', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4 }]);
+    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: ['boss@example.com'], sendVia: 'gmail', updatedAt: '2026-06-03T08:00:00.000Z' }]);
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }] });
+    const queue = await buildQueue();
+    expect(queue.items.find(i => i.source === 'brain').meta).toEqual({ captureSource: 'voice' });
+    expect(queue.items.find(i => i.source === 'ask').meta).toEqual({ turnCount: 4 });
+    expect(queue.items.find(i => i.source === 'cos').meta).toEqual({ priority: 'MEDIUM' });
+    expect(queue.items.find(i => i.source === 'drafts').meta).toEqual({ recipient: 'boss@example.com', channel: 'gmail' });
+    expect(queue.items.find(i => i.source === 'health').meta).toEqual({ alertType: 'system_resource' });
+  });
+
+  it('omits meta entirely when the raw fields are missing (no fabricated values)', async () => {
+    // Brain entry with no `source`, draft with no recipient/channel — meta should
+    // be absent, not an empty object.
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: [], updatedAt: '2026-06-03T08:00:00.000Z' }]);
+    const queue = await buildQueue();
+    expect(queue.items.find(i => i.source === 'brain').meta).toBeUndefined();
+    expect(queue.items.find(i => i.source === 'drafts').meta).toBeUndefined();
+  });
+
+  it('drops an out-of-range cos priority rather than badge-ing it', async () => {
+    cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'x', priority: 'URGENT', createdAt: '2026-06-03T09:00:00.000Z' }] });
+    const queue = await buildQueue();
+    expect(queue.items.find(i => i.source === 'cos').meta).toBeUndefined();
+  });
+
+  it('advertises Ask promote targets (brain/task) and no other source carries them', async () => {
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    const queue = await buildQueue();
+    expect(queue.items.find(i => i.source === 'ask').promoteTargets).toEqual(['brain', 'task']);
+    expect(queue.items.find(i => i.source === 'brain').promoteTargets).toBeUndefined();
+  });
+});
+
+describe('reviewQueue.promoteAskQueueItem', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('promotes the latest assistant turn to brain via the shared promote helper', async () => {
+    askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'brain', ref: { type: 'brain', id: 'note-1' } });
+    const result = await promoteAskQueueItem('ask:conv-1', 'brain');
+    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-1', target: 'brain' });
+    expect(result).toMatchObject({ source: 'ask', id: 'ask:conv-1', promoted: true, target: 'brain', ref: { type: 'brain', id: 'note-1' } });
+  });
+
+  it('promotes to task target', async () => {
+    askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'task', ref: { type: 'task', id: 't-1' } });
+    await promoteAskQueueItem('ask:conv-2', 'task');
+    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-2', target: 'task' });
+  });
+
+  it('rejects a non-ask row with a 400', async () => {
+    await expect(promoteAskQueueItem('brain:b1', 'brain')).rejects.toMatchObject({ status: 400 });
+    expect(askPromote.promoteLatestAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unsupported target (goal) with a 400', async () => {
+    await expect(promoteAskQueueItem('ask:conv-1', 'goal')).rejects.toMatchObject({ status: 400 });
+    expect(askPromote.promoteLatestAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it('propagates the 404 when no assistant turn exists', async () => {
+    const err = new Error('Conversation has no assistant answer to promote');
+    err.status = 404;
+    askPromote.promoteLatestAssistantTurn.mockRejectedValue(err);
+    await expect(promoteAskQueueItem('ask:conv-3', 'brain')).rejects.toMatchObject({ status: 404 });
   });
 });
 

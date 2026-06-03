@@ -16,6 +16,10 @@ vi.mock('./series.js', () => ({
 // from them, but we don't assert on those here).
 vi.mock('./arcPlanner.js', () => ({
   collectManuscriptSections: vi.fn(async () => []),
+  // sanitizeComment imports these to classify a finding's suggestion. Mirror
+  // the real (pure) implementations so the mock doesn't drop them.
+  REPLACEMENT_STRATEGIES: new Set(['delta', 'full-page']),
+  replacementStrategyForCategory: (category) => (category === 'comic-structure' ? 'full-page' : 'delta'),
 }));
 
 import { recordEvents } from '../sharing/recordEvents.js';
@@ -62,5 +66,28 @@ describe('manuscriptReview — record-event emission on write', () => {
       comments: [{ id: 'mrc-x', problem: 'remote note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
     });
     expect(updates).toEqual([]);
+  });
+
+  it('persists replacementStrategy (explicit value, derived from category, and legacy fallback)', async () => {
+    const seeded = await seedReviewFromFindings('ser-4', [
+      { category: 'comic-structure', problem: 'page is prose', suggestion: 'Panel 1 …', anchorQuote: 'PAGE 5' },
+      { category: 'missing-content', problem: 'no climax', suggestion: 'add one', anchorQuote: 'the end' },
+    ]);
+    const byProblem = Object.fromEntries(seeded.comments.map((c) => [c.problem, c]));
+    expect(byProblem['page is prose'].replacementStrategy).toBe('full-page');
+    expect(byProblem['no climax'].replacementStrategy).toBe('delta');
+
+    // A legacy/older-peer comment with no strategy field round-trips through
+    // sanitize with the field derived from its category.
+    const merged = await mergeReviewFromSync('ser-5', {
+      schemaVersion: 1,
+      comments: [
+        { id: 'mrc-cs', category: 'comic-structure', problem: 'legacy panels', status: 'open', updatedAt: '2026-06-02T00:00:00Z' },
+        { id: 'mrc-mc', category: 'missing-content', problem: 'legacy beat', status: 'open', updatedAt: '2026-06-02T00:00:00Z' },
+      ],
+    });
+    const mergedById = Object.fromEntries(merged.comments.map((c) => [c.id, c]));
+    expect(mergedById['mrc-cs'].replacementStrategy).toBe('full-page');
+    expect(mergedById['mrc-mc'].replacementStrategy).toBe('delta');
   });
 });

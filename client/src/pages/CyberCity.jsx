@@ -68,6 +68,14 @@ function CyberCityInner() {
     60_000,
   );
 
+  // Activity calendar drives the productivity district's heatmap ground tiles and feeds the
+  // task-flow river's throughput signal. Low-frequency: the daily contribution grid changes
+  // slowly. Same last-good-snapshot semantics as productivityData.
+  const { data: activityCalendar } = useAutoRefetch(
+    () => api.getCosActivityCalendar(12, { silent: true }),
+    120_000,
+  );
+
   // Life goals drive the goal-monument district. Same pattern as productivityData —
   // `useAutoRefetch` keeps the last-good snapshot on transient failures.
   const { data: goalsData } = useAutoRefetch(
@@ -127,6 +135,7 @@ function CyberCityInner() {
         voiceState={voiceState}
         aiActivity={aiActivity}
         productivityData={productivityData}
+        activityCalendar={activityCalendar}
         goals={goalsData}
         character={character}
         chronotype={chronotypeData}

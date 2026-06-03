@@ -28,8 +28,27 @@ import {
 import BrailleSpinner from '../components/BrailleSpinner';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import { timeAgo } from '../utils/formatters';
+import { coalesce } from '../utils/coalesce';
 import * as api from '../services/api';
 import socket from '../services/socket';
+
+// Producer-domain socket events that change what the cross-domain "Needs
+// Attention" queue (GET /api/review/queue) would return. The queue is derived
+// live from each producer, so when any of these fire — a draft sent, an inbox
+// item classified, a CoS task resolved, a backup finishing — we re-pull the
+// queue (debounced) instead of waiting for a manual reload. Ask is omitted
+// (no socket emit) and proactive alerts are live-computed (no event).
+const QUEUE_INVALIDATION_EVENTS = [
+  'brain:classified',          // inbox item classified / re-reviewed
+  'cos:tasks:user:changed',    // CoS user-task list changed
+  'cos:tasks:cos:changed',     // CoS internal-task list changed
+  'messages:changed',          // draft approved/deleted/status changed
+  'messages:draft:created',    // new draft awaiting review
+  'messages:draft:sent',       // draft sent (resolves a drafts row)
+  'backup:started',            // backup state transitioning
+  'backup:completed',          // backup succeeded (clears a failed-backup row)
+  'backup:failed'              // backup errored (surfaces a failed-backup row)
+];
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
@@ -133,6 +152,20 @@ export default function Review() {
     };
   }, []);
 
+  // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
+  // a draft sent fires both messages:draft:sent and messages:changed) coalesces
+  // into a single refetch on the trailing edge. dismissedQueueIds still filters
+  // the result, so a row the user dismissed this session won't pop back; a
+  // re-resolved item simply isn't returned by the server anymore.
+  useEffect(() => {
+    const refetch = coalesce(() => fetchQueue(), 400);
+    for (const evt of QUEUE_INVALIDATION_EVENTS) socket.on(evt, refetch);
+    return () => {
+      for (const evt of QUEUE_INVALIDATION_EVENTS) socket.off(evt, refetch);
+      refetch.cancel();
+    };
+  }, [fetchQueue]);
+
   const handleCreateTodo = async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
@@ -184,6 +217,20 @@ export default function Review() {
       return next;
     });
     // Reactive removal — drop the resolved row in place rather than refetching.
+    if (ok) handleQueueDismiss(item.id);
+  };
+
+  const handleQueuePromoteAsk = async (item, target) => {
+    if (resolvingQueueIds.has(item.id)) return;
+    setResolvingQueueIds(prev => new Set(prev).add(item.id));
+    // The helper toasts on failure (default), so don't add a custom catch toast.
+    const ok = await api.promoteAskReviewQueueItem(item.id, target).then(() => true).catch(() => false);
+    setResolvingQueueIds(prev => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
+    // Reactive removal — drop the promoted row in place rather than refetching.
     if (ok) handleQueueDismiss(item.id);
   };
 
@@ -296,6 +343,7 @@ export default function Review() {
                     onDrill={handleQueueDrill}
                     onDismiss={handleQueueDismiss}
                     onResolve={handleQueueResolve}
+                    onPromoteAsk={handleQueuePromoteAsk}
                     resolving={resolvingQueueIds.has(item.id)}
                   />
                 ))}
@@ -439,10 +487,73 @@ export default function Review() {
   );
 }
 
-function QueueRow({ item, onDrill, onDismiss, onResolve, resolving = false }) {
+// Priority badge tint for CoS rows so HIGH/MEDIUM/LOW read at a glance.
+const QUEUE_PRIORITY_STYLE = {
+  HIGH: 'text-port-error border-port-error/30 bg-port-error/10',
+  MEDIUM: 'text-port-warning border-port-warning/30 bg-port-warning/10',
+  LOW: 'text-gray-400 border-gray-500/30 bg-gray-500/10'
+};
+
+// Render the source-appropriate triage chips from item.meta. Each field is
+// optional — the server omits it when the underlying record lacks it, so we
+// only render the chips that are present (no fabricated values).
+function QueueMetaChips({ meta }) {
+  if (!meta) return null;
+  const chips = [];
+  if (meta.priority) {
+    chips.push(
+      <span key="priority" className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${QUEUE_PRIORITY_STYLE[meta.priority] || QUEUE_PRIORITY_STYLE.LOW}`}>
+        {meta.priority}
+      </span>
+    );
+  }
+  if (typeof meta.turnCount === 'number') {
+    chips.push(
+      <span key="turns" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
+        {meta.turnCount} turn{meta.turnCount === 1 ? '' : 's'}
+      </span>
+    );
+  }
+  if (meta.recipient) {
+    chips.push(
+      <span key="recipient" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400 max-w-[12rem] truncate" title={meta.recipient}>
+        → {meta.recipient}
+      </span>
+    );
+  }
+  if (meta.channel) {
+    chips.push(
+      <span key="channel" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
+        {meta.channel}
+      </span>
+    );
+  }
+  if (meta.captureSource) {
+    chips.push(
+      <span key="capture" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
+        {meta.captureSource}
+      </span>
+    );
+  }
+  if (meta.alertType) {
+    chips.push(
+      <span key="alert" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
+        {meta.alertType}
+      </span>
+    );
+  }
+  if (!chips.length) return null;
+  return <div className="flex items-center gap-1.5 flex-wrap mt-1">{chips}</div>;
+}
+
+// Promote-target label for the Ask picker buttons.
+const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task' };
+
+function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
+  const promoteTargets = Array.isArray(item.promoteTargets) ? item.promoteTargets : [];
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
@@ -459,6 +570,7 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, resolving = false }) {
         {item.summary && (
           <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{item.summary}</p>
         )}
+        <QueueMetaChips meta={item.meta} />
         {item.timestamp && (
           <p className="text-xs text-gray-600 mt-1 flex items-center gap-1">
             <Clock3 size={12} />
@@ -466,7 +578,7 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, resolving = false }) {
           </p>
         )}
       </div>
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
         {item.action && onResolve && (
           <button
             onClick={() => onResolve(item)}
@@ -478,6 +590,18 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, resolving = false }) {
             {item.action}
           </button>
         )}
+        {promoteTargets.length > 0 && onPromoteAsk && promoteTargets.map(target => (
+          <button
+            key={target}
+            onClick={() => onPromoteAsk(item, target)}
+            disabled={resolving}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-accent bg-port-accent/10 hover:bg-port-accent/20 border border-port-accent/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title={`Promote the latest answer to ${PROMOTE_TARGET_LABEL[target] || target}`}
+          >
+            <ArrowRight size={12} />
+            {PROMOTE_TARGET_LABEL[target] || target}
+          </button>
+        ))}
         <button
           onClick={() => onDrill(item)}
           className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"

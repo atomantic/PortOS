@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { seriesStore } from './series.js';
-import { collectManuscriptSections } from './arcPlanner.js';
+import { collectManuscriptSections, REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 
 // Storage-layout version for the review document. Bump + migrate if the
@@ -85,16 +85,24 @@ function sanitizeComment(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const problem = clampStr(raw.problem, 2000);
   if (!problem) return null;
+  const category = clampStr(raw.category, 40) || 'other';
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : `mrc-${randomUUID()}`,
     issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
     issueId: typeof raw.issueId === 'string' ? raw.issueId : null,
     stageId: typeof raw.stageId === 'string' ? raw.stageId : null,
     severity: ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium',
-    category: clampStr(raw.category, 40) || 'other',
+    category,
     location: clampStr(raw.location, 200),
     problem,
     suggestion: clampStr(raw.suggestion, 8000),
+    // How `suggestion` should be read: 'full-page' = it's a complete replacement
+    // document (comic-structure panel rewrite); 'delta' = it's advice. Trust a
+    // valid stored value, else derive from category so legacy comments (written
+    // before this field existed) and older peers still classify correctly.
+    replacementStrategy: REPLACEMENT_STRATEGIES.has(raw.replacementStrategy)
+      ? raw.replacementStrategy
+      : replacementStrategyForCategory(category),
     anchorQuote: clampStr(raw.anchorQuote, 400),
     status: STATUS_SET.has(raw.status) ? raw.status : 'open',
     fix: sanitizeFix(raw.fix),

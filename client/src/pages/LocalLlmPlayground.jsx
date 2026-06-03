@@ -5,10 +5,30 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
-import { compareLocalLlmModels, getLocalLlmStatus, testLocalLlmModel } from '../services/api';
+import { formatBytes } from '../utils/formatters';
+import { compareLocalLlmModels, getLocalLlmCatalog, getLocalLlmStatus, testLocalLlmModel } from '../services/api';
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
+const CATEGORY_LABELS = {
+  chat: 'Chat',
+  reasoning: 'Reasoning',
+  coding: 'Coding',
+  vision: 'Image Analysis',
+  embedding: 'Text Embeddings',
+  lightweight: 'Small & Fast',
+  multilingual: 'Multilingual',
+};
+const CAPABILITY_LABELS = {
+  chat: 'Chat',
+  code: 'Code',
+  reasoning: 'Reasoning',
+  vision: 'Vision',
+  embeddings: 'Embeddings',
+  tools: 'Tool use',
+  multilingual: 'Multilingual',
+  classification: 'Classification',
+};
 
 function formatMs(ms) {
   if (ms == null) return 'n/a';
@@ -19,6 +39,41 @@ function formatMs(ms) {
 function formatRate(value) {
   if (!Number.isFinite(value)) return 'n/a';
   return `${value.toFixed(value >= 10 ? 1 : 2)} chars/s`;
+}
+
+function parseSizeGb(sizeStr) {
+  const match = /([\d.]+)\s*(TB|GB|MB|KB)/i.exec(String(sizeStr || ''));
+  if (!match) return null;
+  const val = parseFloat(match[1]);
+  if (!Number.isFinite(val)) return null;
+  return val * ({ TB: 1024, GB: 1, MB: 1 / 1024, KB: 1 / (1024 * 1024) }[match[2].toUpperCase()]);
+}
+
+function recommendedRamGb(model) {
+  const gb = Number.isFinite(model?.size) ? model.size / 1024 ** 3 : parseSizeGb(model?.catalog?.size);
+  if (!gb || gb <= 0) return null;
+  return Math.max(1, Math.ceil(gb * 1.2));
+}
+
+function modelSizeLabel(model) {
+  if (Number.isFinite(model?.size)) return formatBytes(model.size);
+  return model?.catalog?.size || '';
+}
+
+function useCaseTags(model) {
+  const tags = [];
+  if (model?.catalog?.category) tags.push(CATEGORY_LABELS[model.catalog.category] || model.catalog.category);
+  for (const capability of model?.catalog?.capabilities || []) {
+    const label = CAPABILITY_LABELS[capability] || capability;
+    if (!tags.includes(label)) tags.push(label);
+  }
+  return tags;
+}
+
+function normalizeCatalogId(backend, id) {
+  const value = String(id || '').trim().toLowerCase();
+  if (backend === 'ollama') return value.replace(/:latest$/, '');
+  return value.split('/').pop().replace(/[-.]gguf$/i, '');
 }
 
 // Number inputs hold raw strings; an emptied field is '' and `Number('')` is 0,
@@ -117,6 +172,7 @@ function ResultPanel({ result }) {
 export default function LocalLlmPlayground() {
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState(null);
+  const [catalogByBackend, setCatalogByBackend] = useState({});
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [modelLoadError, setModelLoadError] = useState('');
   const [selectedTargets, setSelectedTargets] = useState(() => parseTargetsParam(searchParams));
@@ -147,9 +203,22 @@ export default function LocalLlmPlayground() {
     setLoadingStatus(true);
     setModelLoadError('');
     return getLocalLlmStatus({ silent: true })
-      .then(setStatus)
-      .catch((err) => setModelLoadError(err?.message || 'Failed to load local models'))
-      .finally(() => setLoadingStatus(false));
+      .then(async (nextStatus) => {
+        if (!mountedRef.current) return;
+        setStatus(nextStatus);
+        const backendsWithModels = ['ollama', 'lmstudio'].filter((backend) => (nextStatus?.[backend]?.models || []).length > 0);
+        const catalogs = await Promise.all(backendsWithModels.map((backend) =>
+          getLocalLlmCatalog(backend).then((result) => [backend, result?.models || []]).catch(() => [backend, []])
+        ));
+        if (!mountedRef.current) return;
+        setCatalogByBackend(Object.fromEntries(catalogs));
+      })
+      .catch((err) => {
+        if (!mountedRef.current) return;
+        setCatalogByBackend({});
+        setModelLoadError(err?.message || 'Failed to load local models');
+      })
+      .finally(() => { if (mountedRef.current) setLoadingStatus(false); });
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
@@ -157,12 +226,23 @@ export default function LocalLlmPlayground() {
   const installedTargets = useMemo(() => {
     const models = [];
     for (const backend of ['ollama', 'lmstudio']) {
+      const catalogById = new Map((catalogByBackend[backend] || []).map((entry) => [normalizeCatalogId(backend, entry.id), entry]));
       for (const model of status?.[backend]?.models || []) {
-        models.push({ backend, modelId: model.id, name: model.name || model.id, meta: model });
+        models.push({
+          backend,
+          modelId: model.id,
+          name: model.name || model.id,
+          size: model.size,
+          params: model.params,
+          quantization: model.quantization,
+          family: model.family,
+          meta: model,
+          catalog: catalogById.get(normalizeCatalogId(backend, model.id)) || null,
+        });
       }
     }
     return models;
-  }, [status]);
+  }, [catalogByBackend, status]);
 
   useEffect(() => {
     if (selectedTargets.length > 0 || installedTargets.length === 0) return;
@@ -276,18 +356,41 @@ export default function LocalLlmPlayground() {
                       <div className="text-xs text-gray-500">{BACKEND_LABEL[backend]}</div>
                       {models.map((target) => {
                         const selected = selectedKeys.has(localLlmTargetKey(target));
+                        const size = modelSizeLabel(target);
+                        const ram = recommendedRamGb(target);
+                        const tags = useCaseTags(target);
+                        const detailParts = [
+                          target.catalog?.params || target.params,
+                          size,
+                          ram ? `~${ram} GB RAM` : null,
+                        ].filter(Boolean);
                         return (
                           <button
                             key={localLlmTargetKey(target)}
                             onClick={() => toggleTarget(target)}
-                            className={`w-full min-h-12 flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${selected ? 'border-port-accent/60 bg-port-accent/10' : 'border-port-border bg-port-bg hover:border-gray-600'}`}
+                            className={`w-full min-h-12 flex items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${selected ? 'border-port-accent/60 bg-port-accent/10' : 'border-port-border bg-port-bg hover:border-gray-600'}`}
                           >
-                            <span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${selected ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-gray-600 text-transparent'}`}>
+                            <span className={`w-5 h-5 mt-0.5 rounded border flex items-center justify-center shrink-0 ${selected ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-gray-600 text-transparent'}`}>
                               <Check size={13} />
                             </span>
-                            <span className="min-w-0">
+                            <span className="min-w-0 flex-1 space-y-1">
                               <span className="block text-sm text-white truncate">{target.name}</span>
                               <span className="block text-xs text-gray-500 truncate">{target.modelId}</span>
+                              {detailParts.length > 0 && (
+                                <span className="block text-[11px] text-gray-400 truncate">{detailParts.join(' · ')}</span>
+                              )}
+                              {target.catalog?.description && (
+                                <span className="block text-[11px] leading-snug text-gray-500">{target.catalog.description}</span>
+                              )}
+                              {tags.length > 0 && (
+                                <span className="flex flex-wrap gap-1 pt-0.5">
+                                  {tags.slice(0, 5).map((tag) => (
+                                    <span key={tag} className="px-1.5 py-0.5 rounded bg-port-border/70 text-[10px] leading-none text-gray-400">
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </span>
+                              )}
                             </span>
                           </button>
                         );

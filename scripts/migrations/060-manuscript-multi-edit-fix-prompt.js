@@ -11,12 +11,20 @@
 
 import { makePromptReplaceMigration } from './_lib.js';
 
+// Pre-change shipped hash (single-edit fix prompt), plus this migration's own
+// multi-edit output ('c88a56…') as accepted-old — migration 066
+// (replacementStrategy) further updated this file, so a copy still at the 060
+// body is auto-upgradable to the current shape.
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-manuscript-fix.md': ['196625952f4a36f3cb962c729f60f0ee'],
+  'pipeline-manuscript-fix.md': ['196625952f4a36f3cb962c729f60f0ee', 'c88a56304eb5e290ae0de9dadd20b310'],
 };
 
+// Current shipped hash — migration 066 further updated this file (added the
+// replacementStrategy reading instructions), so this hash reflects the post-066
+// body. The idempotent-rerun and drift-catch tests require it to match the live
+// data.reference body, not 060's own output.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-fix.md': 'c88a56304eb5e290ae0de9dadd20b310',
+  'pipeline-manuscript-fix.md': '88199bf7b5b50155bd2e1624bd920ebd',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

@@ -680,15 +680,35 @@ const COMPLETENESS_CATEGORIES = new Set([
   'missing-content', 'arc-gap', 'character-gap', 'pacing', 'continuity', 'comic-structure', 'other',
 ]);
 
+// How a finding's `suggestion` should be read. The narrative categories use it
+// as delta advice ("the smallest concrete addition that closes the gap"); the
+// comic-structure category instead carries a COMPLETE panel-by-panel rewrite of
+// the malformed page in `suggestion` (it's directly substitutable). The strategy
+// makes that dual use explicit so the fix prompt and UI don't have to special-case
+// the category. Consumed by server/services/pipeline/manuscriptReview.js (it
+// imports both from here — single source of truth, no duplicate definition).
+export const REPLACEMENT_STRATEGIES = new Set(['delta', 'full-page']);
+// Category → default strategy. comic-structure is the only full-page category;
+// everything else (including legacy findings with no strategy field) is a delta.
+export const replacementStrategyForCategory = (category) =>
+  (category === 'comic-structure' ? 'full-page' : 'delta');
+
 function shapeCompletenessFindings(rawIssues) {
   if (!Array.isArray(rawIssues)) return [];
   const out = [];
   for (const raw of rawIssues) {
     const problem = typeof raw?.problem === 'string' ? raw.problem.trim() : '';
     if (!problem) continue;
+    const category = COMPLETENESS_CATEGORIES.has(raw?.category) ? raw.category : 'other';
     out.push({
       severity: VERIFY_SEVERITIES.has(raw?.severity) ? raw.severity : 'medium',
-      category: COMPLETENESS_CATEGORIES.has(raw?.category) ? raw.category : 'other',
+      category,
+      // 'full-page' = suggestion is a complete replacement document (comic-structure);
+      // 'delta' = suggestion is advice. Trust the model's value when valid, else derive
+      // from category so older/un-annotated runs still classify correctly.
+      replacementStrategy: REPLACEMENT_STRATEGIES.has(raw?.replacementStrategy)
+        ? raw.replacementStrategy
+        : replacementStrategyForCategory(category),
       location: typeof raw?.location === 'string' ? raw.location.trim().slice(0, 200) : '',
       problem: problem.slice(0, 2000),
       // comic-structure suggestions are full page rewrites (~4-6 panels); give them more room.

@@ -130,7 +130,22 @@ describe('storyBuilder — lock state machine + gating', () => {
     // `buildUpstreamInputs`) surfaces as a failure on this line instead of
     // silently passing a shape-only regex. A buggy impl that always stamped
     // `hashUpstream('idea', null)` would now fail.
-    const expectedHash = hashUpstream('idea', { intakeMode: 'seed', seedIdea: 'seed' });
+    // The idea step's hash now folds in its OWN outputs (#731) — the idea-expand
+    // results on the just-minted universe/series — alongside its upstream inputs.
+    // Derive the expected own-output projection from the live records so the
+    // assertion stays correct if seed-minting defaults change, while still
+    // failing loudly if the idea step's INPUT set drifts.
+    const universe = await universeSvc.getUniverse(s.universeId);
+    const series = await seriesSvc.getSeries(s.seriesId);
+    const expectedHash = hashUpstream('idea', {
+      intakeMode: 'seed',
+      seedIdea: 'seed',
+      ownOutputs: {
+        starterPrompt: universe.starterPrompt || '',
+        seriesLogline: series.logline || '',
+        seriesPremise: series.premise || '',
+      },
+    });
     expect(locked.steps.idea.upstreamHash).toBe(expectedHash);
     // Sanity: the derived hash is still the documented 64-char hex shape.
     expect(expectedHash).toMatch(/^[0-9a-f]{64}$/);
@@ -207,6 +222,99 @@ describe('storyBuilder — integrity / staleness', () => {
     await universeSvc.updateUniverse(s.universeId, { starterPrompt: 'starter v2' });
     view = await sb.getStorySessionView(s.id);
     expect(view.staleSteps).toContain('universeAesthetic');
+  });
+
+  it('flags a locked universeAesthetic stale when its OWN output is edited out-of-band (#731)', async () => {
+    // The session lock only gates the wizard — the universe record stays
+    // editable in Universe Builder. Before #731, mutating universe.logline (an
+    // aesthetic-step OUTPUT, not an upstream input) left the locked aesthetic
+    // step un-flagged because the hash only tracked upstream inputs. Now the
+    // step fingerprints its own outputs, so any post-lock edit flags it stale.
+    const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
+    await universeSvc.updateUniverse(s.universeId, {
+      logline: 'a world of salt and rust', premise: 'the foundry goes silent',
+    });
+    await sb.lockStep(s.id, 'universeAesthetic');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('universeAesthetic');
+    // Edit the locked step's own logline directly (out-of-band, e.g. Universe Builder).
+    await universeSvc.updateUniverse(s.universeId, { logline: 'a CHANGED world of salt and rust' });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('universeAesthetic');
+  });
+
+  it('flags a locked plotArc stale when the arc itself is edited out-of-band (#731)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // updateSeries respects series.locked.arc set by lockStep, but a direct edit
+    // that clears the lock + rewrites the arc still surfaces as stale on read.
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'REWRITTEN spine', summary: 'sum' }, locked: {},
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
+  });
+
+  it('flags a locked characters step stale when a character is added out-of-band (#731)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'the foundry forewoman' }],
+    });
+    await sb.lockStep(s.id, 'characters');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('characters');
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [
+        { name: 'Ada', physicalDescription: 'the foundry forewoman' },
+        { name: 'Rook', physicalDescription: 'the rival' },
+      ],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('characters');
+  });
+
+  it('flags a locked characters step stale when a character body field is edited out-of-band (#731)', async () => {
+    // The cast fingerprint must track the canon body fields (physicalDescription,
+    // personality, role, …), not just name — editing a locked character's
+    // description in Universe Builder is exactly the out-of-band case #731 targets.
+    const s = await sb.createStorySession({ title: 'X' });
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'tall, soot-streaked', personality: 'guarded' }],
+    });
+    await sb.lockStep(s.id, 'characters');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('characters');
+    // Same name + count, only the body changes.
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'CHANGED — gaunt, grease-stained', personality: 'guarded' }],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('characters');
+  });
+
+  it('flags a locked plotArc step stale when a season is edited out-of-band (#731)', async () => {
+    // The plotArc step persists the season breakdown, so editing a season's
+    // editorial content (here its synopsis) must flag the locked step stale even
+    // though the arc core fields are untouched.
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum' },
+      seasons: [{ number: 1, title: 'Vol 1', synopsis: 'the foundry goes silent' }],
+    });
+    await sb.lockStep(s.id, 'plotArc');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Edit only the season synopsis (arc core unchanged); the arc lock that
+    // lockStep set is cleared so updateSeries accepts the season edit.
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum' }, locked: {},
+      seasons: [{ number: 1, title: 'Vol 1', synopsis: 'CHANGED — the foundry roars back to life' }],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
   });
 });
 

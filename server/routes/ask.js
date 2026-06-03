@@ -25,9 +25,7 @@ import { validateRequest } from '../lib/validation.js';
 import * as convs from '../services/askConversations.js';
 import { runAsk, VALID_MODES } from '../services/askService.js';
 import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
-import * as brainService from '../services/brain.js';
-import * as cosService from '../services/cos.js';
-import * as identityService from '../services/identity.js';
+import { promoteTurnById } from '../services/askPromote.js';
 
 const router = Router();
 
@@ -72,11 +70,6 @@ const promoteTurnBodySchema = z.discriminatedUnion('target', [
   z.object({ target: z.literal('goal'), goalId: z.string().min(1).max(200) }),
 ]);
 
-// Cap promoted task descriptions so a long assistant answer doesn't bloat
-// TASKS.md — the full text is still in the conversation. CoS tasks are
-// supposed to be one-line directives, not essays.
-const TASK_DESCRIPTION_MAX = 280;
-
 router.get('/', asyncHandler(async (_req, res) => {
   const conversations = await convs.listConversations({ limit: 100 });
   res.json({ conversations });
@@ -114,57 +107,14 @@ router.post('/:id/turns/:turnId/promote', asyncHandler(async (req, res) => {
 
   const body = validateRequest(promoteTurnBodySchema, req.body ?? {});
 
-  const conv = await convs.getConversation(id);
-  if (!conv) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
-
-  const turn = (conv.turns || []).find((t) => t.id === turnId);
-  if (!turn) throw new ServerError('Turn not found', { status: 404, code: 'NOT_FOUND' });
-  // Only assistant turns carry promotable content — the user's question is
-  // already implicit in the conversation and would just bloat the brain inbox
-  // / task list with prompts, not insights.
-  if (turn.role !== 'assistant') {
-    throw new ServerError('Only assistant turns can be promoted', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const content = (turn.content || '').trim();
-  if (!content) {
-    throw new ServerError('Turn has no content to promote', { status: 400, code: 'EMPTY_CONTENT' });
-  }
-
-  let ref;
-  if (body.target === 'brain') {
-    const result = await brainService.captureThought(content);
-    ref = { type: 'brain', id: result?.inboxLog?.id };
-  } else if (body.target === 'task') {
-    // Trim the description so the line in TASKS.md stays scannable; tag
-    // the source so the user can trace a task back to where it came from.
-    const description = content.length <= TASK_DESCRIPTION_MAX
-      ? content
-      : `${content.slice(0, TASK_DESCRIPTION_MAX - 1)}…`;
-    const result = await cosService.addTask({
-      description,
-      priority: body.priority,
-      context: `Promoted from Ask Yourself conversation ${id}`,
-    }, 'user');
-    if (result?.duplicate) {
-      throw new ServerError('A task with this description is already pending', { status: 409, code: 'DUPLICATE_TASK' });
-    }
-    ref = { type: 'task', id: result?.id };
-  } else if (body.target === 'goal') {
-    const today = new Date().toISOString().slice(0, 10);
-    const entry = await identityService.addProgressEntry(body.goalId, {
-      date: today,
-      note: content,
-      durationMinutes: null,
-    });
-    if (!entry) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
-    ref = { type: 'goal', id: body.goalId, entryId: entry.id };
-  }
-
-  // Pin the conversation so anything the user has promoted survives the
-  // 30-day auto-expiry sweep — without this, a saved brain note could
-  // outlive the conversation it cites.
-  const conversation = await convs.setPromoted(id, true);
-  res.json({ ok: true, target: body.target, ref, conversation });
+  const result = await promoteTurnById({
+    conversationId: id,
+    turnId,
+    target: body.target,
+    priority: body.priority,
+    goalId: body.goalId,
+  });
+  res.json({ ok: true, ...result });
 }));
 
 // Stream a new turn over SSE. Body { conversationId?, question, mode?, ... }.
