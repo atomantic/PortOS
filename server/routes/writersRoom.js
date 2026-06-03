@@ -35,7 +35,7 @@ import {
   runAnalysis, listAnalyses, getAnalysis, attachSceneImage,
 } from '../services/writersRoom/evaluator.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
-import { suggestContinuation } from '../services/writersRoom/liveDirector.js';
+import { suggestContinuation, reserveRenderPreview } from '../services/writersRoom/liveDirector.js';
 import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
@@ -200,6 +200,14 @@ router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
 router.post('/works/:id/live-suggest', asyncHandler(async (req, res) => {
   const data = validateRequest(writersRoomLiveSuggestSchema, req.body || {});
   res.json(await suggestContinuation(req.params.id, data));
+}));
+
+// Reserve one live render preview against the per-work render budget. The
+// client kicks off the actual render via the existing /image-gen route + media
+// queue AFTER this succeeds — the service enforces opt-in (409 if off) and the
+// daily render budget (429 if spent), distinct from the text-suggest budget.
+router.post('/works/:id/live-render-preview', asyncHandler(async (req, res) => {
+  res.json(await reserveRenderPreview(req.params.id));
 }));
 
 // ---------- synced review (Phase 4: prose ↔ script ↔ media) ----------

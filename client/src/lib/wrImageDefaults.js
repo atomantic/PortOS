@@ -24,6 +24,27 @@ export const WR_IMAGE_DEFAULTS = Object.freeze({
   seed: '',
 });
 
+// Build the /image-gen/generate request body for a Writers Room scene render.
+// Folds the prompt + the per-scene imageCfg (parsing the string steps/seed
+// inputs to numbers, dropping empties so the model uses its own defaults) into
+// the payload shape both SceneCard and the live render preview send. Keeping
+// the steps/seed parsing in one place means the two render entry points can't
+// drift on what "use the model default" means.
+export function buildSceneRenderPayload({ prompt, negativePrompt = '', imageCfg = WR_IMAGE_DEFAULTS }) {
+  const stepsNum = imageCfg.steps ? Number(imageCfg.steps) : undefined;
+  const seedNum = imageCfg.seed && Number(imageCfg.seed) >= 0 ? Number(imageCfg.seed) : undefined;
+  return {
+    prompt,
+    negativePrompt,
+    modelId: imageCfg.modelId,
+    mode: imageCfg.mode,
+    width: imageCfg.width,
+    height: imageCfg.height,
+    ...(Number.isFinite(stepsNum) ? { steps: stepsNum } : {}),
+    ...(Number.isFinite(seedNum) ? { seed: seedNum } : {}),
+  };
+}
+
 // Resolve the per-scene render config. When the user hasn't pinned a Writers
 // Room mode, prefer Codex if enabled — cloud models render storyboard scenes
 // more reliably than local diffusion when both are available. If the stored

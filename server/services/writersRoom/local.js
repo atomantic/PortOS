@@ -314,14 +314,26 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
 
 // Default Phase 5 live-mode config. Stored on the manifest only once the user
 // opts in; readers (the suggest path) fall back to this when the field is
-// absent. `usage` is the server-tracked daily budget counter — never accepted
-// from the client (updateWork strips it; only recordLiveModeUsage writes it).
+// absent. `usage` is the server-tracked daily budget counter for text
+// suggestions; `renderUsage` is the distinct counter for live render previews
+// (renders cost materially more than text, so they get their own budget knob
+// `dailyRenderBudget`). Neither counter is accepted from the client (updateWork
+// strips both; only recordLiveModeUsage / recordLiveModeRenderUsage write them).
 export const DEFAULT_LIVE_MODE = Object.freeze({
   enabled: false,
   debounceMs: 2500,
   dailyCallBudget: 100,
+  dailyRenderBudget: 20,
   usage: Object.freeze({ date: null, count: 0 }),
+  renderUsage: Object.freeze({ date: null, count: 0 }),
 });
+
+function resolveUsageCounter(stored) {
+  return {
+    date: typeof stored?.date === 'string' ? stored.date : null,
+    count: Number.isInteger(stored?.count) ? stored.count : 0,
+  };
+}
 
 export function resolveLiveMode(manifest) {
   const stored = manifest?.liveMode || {};
@@ -329,10 +341,9 @@ export function resolveLiveMode(manifest) {
     enabled: stored.enabled === true,
     debounceMs: Number.isInteger(stored.debounceMs) ? stored.debounceMs : DEFAULT_LIVE_MODE.debounceMs,
     dailyCallBudget: Number.isInteger(stored.dailyCallBudget) ? stored.dailyCallBudget : DEFAULT_LIVE_MODE.dailyCallBudget,
-    usage: {
-      date: typeof stored.usage?.date === 'string' ? stored.usage.date : null,
-      count: Number.isInteger(stored.usage?.count) ? stored.usage.count : 0,
-    },
+    dailyRenderBudget: Number.isInteger(stored.dailyRenderBudget) ? stored.dailyRenderBudget : DEFAULT_LIVE_MODE.dailyRenderBudget,
+    usage: resolveUsageCounter(stored.usage),
+    renderUsage: resolveUsageCounter(stored.renderUsage),
   };
 }
 
@@ -347,9 +358,9 @@ export async function updateWork(id, patch) {
     next[key] = patch[key];
   }
   // liveMode is a partial merge (the UI PATCHes one knob at a time) onto the
-  // resolved current config — and the client-supplied `usage` is dropped so a
-  // crafted PATCH can't reset the server-side daily budget counter. Only the
-  // three user-editable knobs flow through.
+  // resolved current config — and the client-supplied usage counters are
+  // dropped so a crafted PATCH can't reset the server-side daily budgets. Only
+  // the user-editable knobs flow through; both server-owned counters carry over.
   if (patch.liveMode !== undefined && patch.liveMode !== null) {
     const current = resolveLiveMode(manifest);
     const p = patch.liveMode;
@@ -357,7 +368,9 @@ export async function updateWork(id, patch) {
       enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,
       debounceMs: Number.isInteger(p.debounceMs) ? p.debounceMs : current.debounceMs,
       dailyCallBudget: Number.isInteger(p.dailyCallBudget) ? p.dailyCallBudget : current.dailyCallBudget,
+      dailyRenderBudget: Number.isInteger(p.dailyRenderBudget) ? p.dailyRenderBudget : current.dailyRenderBudget,
       usage: current.usage,
+      renderUsage: current.renderUsage,
     };
   }
   // Trim title and reject if it becomes empty after trim — keeps parity with
@@ -416,6 +429,24 @@ export async function recordLiveModeUsage(id) {
   const today = utcDayKey();
   const count = live.usage.date === today ? live.usage.count + 1 : 1;
   const nextLive = { ...live, usage: { date: today, count } };
+  await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() });
+  return nextLive;
+}
+
+/**
+ * Bump the live-mode daily RENDER usage counter for a work, rolling over to a
+ * fresh count on a new UTC day. Distinct from `recordLiveModeUsage` because
+ * render previews carry a different cost profile and their own budget knob
+ * (`dailyRenderBudget`). Set once per reserved render-preview by the
+ * live-director path. Returns the resolved live config with the new
+ * `renderUsage` so the caller can echo remaining render budget.
+ */
+export async function recordLiveModeRenderUsage(id) {
+  const manifest = await getWork(id);
+  const live = resolveLiveMode(manifest);
+  const today = utcDayKey();
+  const count = live.renderUsage.date === today ? live.renderUsage.count + 1 : 1;
+  const nextLive = { ...live, renderUsage: { date: today, count } };
   await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() });
   return nextLive;
 }

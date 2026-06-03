@@ -15,7 +15,9 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
-import { getWork, resolveLiveMode, recordLiveModeUsage, utcDayKey } from './local.js';
+import {
+  getWork, resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, utcDayKey,
+} from './local.js';
 import { badRequest } from './_shared.js';
 
 const STAGE = 'writers-room-continue';
@@ -25,6 +27,27 @@ const MAX_OPTIONS = 4;
 // to the right HTTP status (live-mode off → 409 conflict; budget spent → 429).
 export const ERR_LIVE_MODE_OFF = 'LIVE_MODE_OFF';
 export const ERR_BUDGET_EXCEEDED = 'LIVE_BUDGET_EXCEEDED';
+
+// Shared opt-in + daily-budget gate for the live paths. Throws the coded
+// 409 (live mode off) / 429 (budget spent) ServerErrors the route maps to a
+// status. `usage` is the relevant per-day counter, `budget` its cap (0 =
+// unlimited), `label` names the budget in the 429 message. A counter whose
+// stored date isn't today counts as 0 spent-today (it rolls over on write), so
+// yesterday's count can't block today. utcDayKey() is the same boundary the
+// recordLiveMode*Usage writers roll over on, so the check can't drift.
+function assertLiveBudget(live, { usage, budget, label }) {
+  if (!live.enabled) {
+    throw new ServerError('Live mode is off for this work', { status: 409, code: ERR_LIVE_MODE_OFF });
+  }
+  const today = utcDayKey();
+  const spentToday = usage.date === today ? usage.count : 0;
+  if (budget > 0 && spentToday >= budget) {
+    throw new ServerError(
+      `Live ${label} budget reached (${budget}/day) — resets at UTC midnight`,
+      { status: 429, code: ERR_BUDGET_EXCEEDED },
+    );
+  }
+}
 
 function shapeOptions(parsed) {
   const raw = Array.isArray(parsed?.options) ? parsed.options : [];
@@ -49,25 +72,7 @@ function shapeOptions(parsed) {
 export async function suggestContinuation(workId, { before = '', after = '', selection = '' } = {}) {
   const manifest = await getWork(workId); // 404s if the work is missing
   const live = resolveLiveMode(manifest);
-
-  if (!live.enabled) {
-    throw new ServerError('Live mode is off for this work', { status: 409, code: ERR_LIVE_MODE_OFF });
-  }
-
-  // Daily budget gate. 0 means unlimited. The counter rolls over per UTC day
-  // inside recordLiveModeUsage; here we just compare today's count against the
-  // cap before spending an LLM call. Reading the resolved usage (which is not
-  // date-normalized) would let yesterday's count block today, so treat a
-  // stale-date counter as 0 spent-today. Same utcDayKey as the writer so the
-  // boundaries can't drift.
-  const today = utcDayKey();
-  const spentToday = live.usage.date === today ? live.usage.count : 0;
-  if (live.dailyCallBudget > 0 && spentToday >= live.dailyCallBudget) {
-    throw new ServerError(
-      `Live suggestion budget reached (${live.dailyCallBudget}/day) — resets at UTC midnight`,
-      { status: 429, code: ERR_BUDGET_EXCEEDED },
-    );
-  }
+  assertLiveBudget(live, { usage: live.usage, budget: live.dailyCallBudget, label: 'suggestion' });
 
   if (!before.trim() && !after.trim() && !selection.trim()) {
     throw badRequest('Need some prose around the cursor to suggest a continuation');
@@ -97,4 +102,26 @@ export async function suggestContinuation(workId, { before = '', after = '', sel
     usage,
     budget: live.dailyCallBudget,
   };
+}
+
+/**
+ * Reserve one live render preview against the per-work render budget. The
+ * actual image render reuses the existing image-gen route + media job queue on
+ * the client — this is purely the server-side opt-in + budget gate so a client
+ * that ignores the toggle still can't run unbounded renders. Throws the same
+ * coded errors as suggestContinuation (live-mode off → 409, budget spent → 429)
+ * and bumps the distinct daily render counter on success. Returns
+ * `{ renderUsage, renderBudget }` so the client can render remaining budget.
+ *
+ * Budget is charged at reservation time (before the render kicks off) rather
+ * than on completion: the GPU/provider cost is incurred the moment the job is
+ * enqueued, and a client that fires-and-forgets must still hit the cap.
+ */
+export async function reserveRenderPreview(workId) {
+  const manifest = await getWork(workId); // 404s if the work is missing
+  const live = resolveLiveMode(manifest);
+  assertLiveBudget(live, { usage: live.renderUsage, budget: live.dailyRenderBudget, label: 'render' });
+
+  const renderUsage = (await recordLiveModeRenderUsage(workId)).renderUsage;
+  return { renderUsage, renderBudget: live.dailyRenderBudget };
 }

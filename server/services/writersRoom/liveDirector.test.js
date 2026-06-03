@@ -17,7 +17,9 @@ vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLL
 
 const local = await import('./local.js');
 const { createWork, updateWork, getWork } = local;
-const { suggestContinuation, ERR_LIVE_MODE_OFF, ERR_BUDGET_EXCEEDED } = await import('./liveDirector.js');
+const {
+  suggestContinuation, reserveRenderPreview, ERR_LIVE_MODE_OFF, ERR_BUDGET_EXCEEDED,
+} = await import('./liveDirector.js');
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-live-test-'));
@@ -115,5 +117,66 @@ describe('suggestContinuation', () => {
     vi.setSystemTime(new Date('2026-06-04T00:01:00Z'));
     const res = await suggestContinuation(work.id, { before: 'day two' });
     expect(res.usage).toMatchObject({ date: '2026-06-04', count: 1 });
+  });
+});
+
+describe('reserveRenderPreview', () => {
+  it('throws LIVE_MODE_OFF when the work has not opted in', async () => {
+    const work = await createWork({ title: 'Off' });
+    await expect(reserveRenderPreview(work.id))
+      .rejects.toMatchObject({ code: ERR_LIVE_MODE_OFF, status: 409 });
+  });
+
+  it('reserves a slot and bumps the distinct render counter on success', async () => {
+    const work = await createWork({ title: 'On' });
+    await updateWork(work.id, { liveMode: { enabled: true } });
+
+    const res = await reserveRenderPreview(work.id);
+    expect(res.renderUsage.count).toBe(1);
+    expect(res.renderBudget).toBe(20); // DEFAULT_LIVE_MODE.dailyRenderBudget
+
+    // The render counter is independent of the text-suggest counter.
+    const reloaded = await getWork(work.id);
+    expect(reloaded.liveMode.usage).toMatchObject({ count: 0 });
+    expect(reloaded.liveMode.renderUsage).toMatchObject({ count: 1 });
+  });
+
+  it('enforces the daily render budget separately from the suggest budget', async () => {
+    runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
+    const work = await createWork({ title: 'Capped' });
+    await updateWork(work.id, { liveMode: { enabled: true, dailyRenderBudget: 1, dailyCallBudget: 5 } });
+
+    await reserveRenderPreview(work.id); // render count -> 1
+    await expect(reserveRenderPreview(work.id))
+      .rejects.toMatchObject({ code: ERR_BUDGET_EXCEEDED, status: 429 });
+
+    // The suggest budget is untouched by render reservations.
+    const res = await suggestContinuation(work.id, { before: 'still allowed' });
+    expect(res.usage.count).toBe(1);
+  });
+
+  it('treats dailyRenderBudget 0 as unlimited', async () => {
+    const work = await createWork({ title: 'Unlimited' });
+    await updateWork(work.id, { liveMode: { enabled: true, dailyRenderBudget: 0 } });
+
+    await reserveRenderPreview(work.id);
+    await reserveRenderPreview(work.id);
+    const res = await reserveRenderPreview(work.id);
+    expect(res.renderUsage.count).toBe(3);
+  });
+
+  it('rolls the render budget over on a new UTC day', async () => {
+    const work = await createWork({ title: 'Rollover' });
+    await updateWork(work.id, { liveMode: { enabled: true, dailyRenderBudget: 1 } });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T12:00:00Z'));
+    await reserveRenderPreview(work.id);
+    await expect(reserveRenderPreview(work.id))
+      .rejects.toMatchObject({ code: ERR_BUDGET_EXCEEDED });
+
+    vi.setSystemTime(new Date('2026-06-04T00:01:00Z'));
+    const res = await reserveRenderPreview(work.id);
+    expect(res.renderUsage).toMatchObject({ date: '2026-06-04', count: 1 });
   });
 });

@@ -45,6 +45,7 @@ import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import LiveContinuationPanel from './LiveContinuationPanel';
+import LiveRenderPanel from './LiveRenderPanel';
 import AnalysisHistory from './AnalysisHistory';
 import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
@@ -152,6 +153,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const liveTriggerRef = useRef(null);
   const liveTimerRef = useRef(null);
   const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
+  // Phase 5 live render preview — the scene/analysis/image context the storyboard
+  // surfaces, fed into LiveRenderPanel so it can render the scene at the cursor
+  // using the existing image-gen route + the shared render queue (queueRegister).
+  const [liveRenderContext, setLiveRenderContext] = useState(null);
 
   // View mode (Edit | Read | Review) is URL-driven so it deep-links and
   // survives reloads. ?view=read → ProseReader; ?view=review → SyncedReview
@@ -471,6 +476,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       after: body.slice(end, end + WINDOW),
       selection: body.slice(start, end).slice(0, 8000),
     };
+  }, [body]);
+
+  // Caret offset into the body for the live render preview's scene resolution.
+  // Falls back to end-of-body when the textarea isn't mounted (e.g. Read view).
+  const getCursorOffset = useCallback(() => {
+    const ta = textareaRef.current;
+    return ta?.selectionStart ?? body.length;
   }, [body]);
 
   // Insert a suggested snippet at the caret (replacing any selection), then
@@ -961,15 +973,26 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           }`}
         >
           {liveEnabled && viewMode === 'edit' && (
-            <div className="shrink-0 max-h-[40%] min-h-0 border-b border-port-border overflow-hidden flex flex-col">
-              <LiveContinuationPanel
+            <>
+              <LiveRenderPanel
                 workId={work.id}
                 liveMode={liveMode}
-                getCursorContext={getCursorContext}
-                onInsert={insertAtCursor}
-                registerTrigger={registerLiveTrigger}
+                getCursorOffset={getCursorOffset}
+                body={body}
+                renderContext={liveRenderContext}
+                registerQueue={queueRegister}
+                workTitle={work.title}
               />
-            </div>
+              <div className="shrink-0 max-h-[40%] min-h-0 border-b border-port-border overflow-hidden flex flex-col">
+                <LiveContinuationPanel
+                  workId={work.id}
+                  liveMode={liveMode}
+                  getCursorContext={getCursorContext}
+                  onInsert={insertAtCursor}
+                  registerTrigger={registerLiveTrigger}
+                />
+              </div>
+            </>
           )}
           <StoryboardPanel
             work={work}
@@ -981,6 +1004,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onObjectsChange={setObjects}
             onRunObjects={() => runAnalysis(ANALYSIS_KIND.OBJECTS)}
             onScenesChange={setLatestScenes}
+            onLiveRenderContextChange={setLiveRenderContext}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}

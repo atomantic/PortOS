@@ -67,6 +67,10 @@ vi.mock('../services/writersRoom/liveDirector.js', () => ({
     usage: { date: '2026-06-03', count: 1 },
     budget: 100,
   })),
+  reserveRenderPreview: vi.fn(async () => ({
+    renderUsage: { date: '2026-06-03', count: 1 },
+    renderBudget: 20,
+  })),
 }));
 
 import * as svc from '../services/writersRoom/local.js';
@@ -415,6 +419,24 @@ describe('writersRoom routes', () => {
         .send({ before: 'x'.repeat(12_001) });
       expect(r.status).toBe(400);
       expect(liveSvc.suggestContinuation).not.toHaveBeenCalled();
+    });
+
+    it('PATCH /works/:id accepts a dailyRenderBudget knob', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1')
+        .send({ liveMode: { dailyRenderBudget: 5 } });
+      expect(r.status).toBe(200);
+      expect(svc.updateWork).toHaveBeenCalledWith('wr-work-1', { liveMode: { dailyRenderBudget: 5 } });
+    });
+
+    it('POST /works/:id/live-render-preview reserves a render slot', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/live-render-preview')
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body.renderUsage.count).toBe(1);
+      expect(r.body.renderBudget).toBe(20);
+      expect(liveSvc.reserveRenderPreview).toHaveBeenCalledWith('wr-work-1');
     });
   });
 });

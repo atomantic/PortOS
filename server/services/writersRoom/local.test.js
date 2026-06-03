@@ -18,7 +18,7 @@ const {
   listWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
-  resolveLiveMode, recordLiveModeUsage, DEFAULT_LIVE_MODE,
+  resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
 } = local;
 
 beforeEach(() => {
@@ -365,7 +365,9 @@ describe('live mode (Phase 5)', () => {
     expect(live.enabled).toBe(false);
     expect(live.debounceMs).toBe(DEFAULT_LIVE_MODE.debounceMs);
     expect(live.dailyCallBudget).toBe(DEFAULT_LIVE_MODE.dailyCallBudget);
+    expect(live.dailyRenderBudget).toBe(DEFAULT_LIVE_MODE.dailyRenderBudget);
     expect(live.usage).toEqual({ date: null, count: 0 });
+    expect(live.renderUsage).toEqual({ date: null, count: 0 });
   });
 
   it('updateWork partial-merges liveMode knobs without clobbering siblings', async () => {
@@ -377,17 +379,30 @@ describe('live mode (Phase 5)', () => {
     const b = await updateWork(work.id, { liveMode: { debounceMs: 5000 } });
     expect(b.liveMode.enabled).toBe(true); // preserved
     expect(b.liveMode.debounceMs).toBe(5000);
+
+    // The distinct render budget merges independently of the suggest budget.
+    const c = await updateWork(work.id, { liveMode: { dailyRenderBudget: 7 } });
+    expect(c.liveMode.dailyRenderBudget).toBe(7);
+    expect(c.liveMode.dailyCallBudget).toBe(DEFAULT_LIVE_MODE.dailyCallBudget); // preserved
+    expect(c.liveMode.enabled).toBe(true); // preserved
   });
 
-  it('updateWork strips a client-supplied usage counter (server-owned)', async () => {
+  it('updateWork strips client-supplied usage counters (both server-owned)', async () => {
     const work = await createWork({ title: 'Guard' });
-    await recordLiveModeUsage(work.id); // count -> 1 today
+    await recordLiveModeUsage(work.id); // suggest count -> 1 today
+    await recordLiveModeRenderUsage(work.id); // render count -> 1 today
     const tampered = await updateWork(work.id, {
-      liveMode: { enabled: true, usage: { date: '1999-01-01', count: 9999 } },
+      liveMode: {
+        enabled: true,
+        usage: { date: '1999-01-01', count: 9999 },
+        renderUsage: { date: '1999-01-01', count: 9999 },
+      },
     });
-    // The crafted usage is dropped — the real counter is preserved.
+    // Both crafted counters are dropped — the real counters are preserved.
     expect(tampered.liveMode.usage.count).toBe(1);
     expect(tampered.liveMode.usage.date).not.toBe('1999-01-01');
+    expect(tampered.liveMode.renderUsage.count).toBe(1);
+    expect(tampered.liveMode.renderUsage.date).not.toBe('1999-01-01');
   });
 
   it('recordLiveModeUsage increments within a day and rolls over on a new UTC day', async () => {
@@ -403,5 +418,23 @@ describe('live mode (Phase 5)', () => {
     vi.setSystemTime(new Date('2026-06-04T00:05:00Z'));
     const u3 = await recordLiveModeUsage(work.id);
     expect(u3.usage).toEqual({ date: '2026-06-04', count: 1 });
+  });
+
+  it('recordLiveModeRenderUsage bumps a counter independent of the suggest counter', async () => {
+    const work = await createWork({ title: 'RenderBudget' });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-03T10:00:00Z'));
+    await recordLiveModeUsage(work.id); // suggest -> 1
+
+    const r1 = await recordLiveModeRenderUsage(work.id);
+    expect(r1.renderUsage).toEqual({ date: '2026-06-03', count: 1 });
+    expect(r1.usage).toEqual({ date: '2026-06-03', count: 1 }); // suggest untouched
+    const r2 = await recordLiveModeRenderUsage(work.id);
+    expect(r2.renderUsage).toEqual({ date: '2026-06-03', count: 2 });
+
+    // New UTC day resets the render counter to 1.
+    vi.setSystemTime(new Date('2026-06-04T00:05:00Z'));
+    const r3 = await recordLiveModeRenderUsage(work.id);
+    expect(r3.renderUsage).toEqual({ date: '2026-06-04', count: 1 });
   });
 });

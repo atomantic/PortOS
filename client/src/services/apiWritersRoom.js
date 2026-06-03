@@ -78,6 +78,17 @@ export const attachWritersRoomSceneImage = (workId, analysisId, payload) =>
     body: JSON.stringify(payload),
   });
 
+// Reserve one live render preview (Phase 5) against the per-work render budget.
+// Call this BEFORE kicking off the render via the existing image-gen route —
+// the server gates on the live-mode toggle (409) and the distinct daily render
+// budget (429). Returns { renderUsage, renderBudget }. Callers own their own
+// error UI, so pass { silent: true } to avoid a double toast.
+export const reserveWritersRoomRenderPreview = (workId, options) =>
+  request(`/writers-room/works/${enc(workId)}/live-render-preview`, {
+    method: 'POST',
+    ...(options || {}),
+  });
+
 // Synced review (Phase 4): a read-model that maps prose segments ↔ script
 // scenes ↔ generated media with provenance + stale detection. Derived on the
 // server from the active draft's segment index and the `script` analysis
