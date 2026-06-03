@@ -32,6 +32,7 @@
 
 ## Changed
 
+- **[issue-727] Abandoned imports no longer leave empty universes lying around** — starting an import and walking away before you commit it used to leave a blank universe and series behind in your library. Those scratch records are now hidden from sync and automatically cleaned up after a week if you never finish the import, while committing one keeps it for good.
 - **[issue-832]** The Review Hub's draft lookup now asks the data layer for just the unsent drafts it needs instead of loading every draft and filtering them in memory. Internal performance change with no behavior difference.
 - **[issue-705]** CyberCity now coalesces bursts of agent spawn/complete events into a single refresh instead of refetching once per event, so a wave of agents starting no longer fans out redundant requests. Internal performance change with no behavior difference.
 - **[issue-805]** Removed ~470 lines of dead, never-called self-improvement task-generation code left behind by an earlier rewrite. Internal cleanup with no behavior difference.

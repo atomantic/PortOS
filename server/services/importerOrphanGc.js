@@ -85,16 +85,24 @@ export async function sweepOrphanShells({ now = Date.now(), maxAgeMs = ORPHAN_SH
     survivingSeriesByUniverse.set(key, (survivingSeriesByUniverse.get(key) || 0) + 1);
   };
 
-  for (const s of allSeries) {
-    if (s.ephemeral !== true) { noteSurvivor(s); continue; }
-    if (seriesHasStoryWork(s)) { noteSurvivor(s); continue; }
+  // True only for an ephemeral, story-work-free, aged-out, zero-issue shell.
+  // Each gate runs cheapest-first (the listIssues read is reached only by a
+  // series that already passed every in-memory check).
+  const seriesIsSweepable = async (s) => {
+    if (s.ephemeral !== true || seriesHasStoryWork(s)) return false;
     const age = ageMs(s, now);
-    if (!Number.isFinite(age) || age < maxAgeMs) { noteSurvivor(s); continue; }
+    if (!Number.isFinite(age) || age < maxAgeMs) return false;
     const issues = await listIssues({ seriesId: s.id });
-    if (issues.length > 0) { noteSurvivor(s); continue; }
-    // Empty, ephemeral, aged-out, zero-issue series — sweep it.
-    await deleteSeries(s.id);
-    deletedSeries.push(s.id);
+    return issues.length === 0;
+  };
+
+  for (const s of allSeries) {
+    if (await seriesIsSweepable(s)) {
+      await deleteSeries(s.id);
+      deletedSeries.push(s.id);
+    } else {
+      noteSurvivor(s);
+    }
   }
 
   // --- Pass 2: ephemeral, empty, aged-out universes with no surviving series ---
