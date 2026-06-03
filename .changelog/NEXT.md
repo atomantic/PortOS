@@ -14,6 +14,7 @@
 
 ## Changed
 
+- **[issue-744]** Extracted the scheduled-task prompt catalog and prompt getters out of the 3500-line `taskSchedule.js` into a dedicated `taskPromptService.js`; the prompt defaults and auto-upgrade machinery are moved verbatim and re-exported, so behavior is unchanged. Internal refactor with no behavior difference.
 - **[issue-790]** Unified the duplicated buffered-spawn and Windows kill-tree logic shared by the app build and update flows into one helper. Internal refactor with no behavior difference.
 - **[issue-751]** Collapsed the repeated AppleScript builders in `server/services/xcodeScripts.js` into a shared `xcodeScriptBuilders.js`; the emitted `take_screenshots_macos.sh` is byte-for-byte unchanged. Internal refactor with no behavior difference.
 - **[issue-748]** Extracted the pure command-arg builders and output parsers from `server/services/git.js` into focused `server/lib/git*` modules. Internal refactor with no behavior difference.
@@ -34,6 +35,8 @@
 - **[issue-749]** Split the 1100-line CoS agent runner into focused state, stream-parsing, and process-stats modules, leaving the runner entrypoint to own only its IPC and agent-lifecycle wiring. Internal refactor with no behavior difference.
 - **[issue-756]** Split the 1269-line MeatSpace Life Calendar tab into a thin orchestrator over focused modules — the grid renderer, time-stats sidebar, activity and life-event panels, and a now-unit-tested pure date/grid math layer. Internal refactor with no behavior difference.
 - **[issue-746]** Split the 1611-line autonomous-jobs service into focused modules behind an unchanged public API — script handlers, default-job catalog, persistence/migration, scheduling, CRUD, skill templates, and direct script/shell execution. Internal refactor with no behavior difference.
+- **[issue-745]** Split the 1939-line task-learning service into focused modules — a shared store, metrics aggregation, heuristic routing, duration estimates, insights, prompt recommendations, and lifecycle wiring — behind a barrel that keeps every import site unchanged. Internal refactor with no behavior difference.
+- **[issue-743]** Split the 1917-line identity service into focused submodules (shared store, genomic markers, chronotype, longevity, goals, todos, cross-insights, status) behind a thin barrel that preserves the exact public API. Internal refactor with no behavior difference.
 - **`/claim --issues` marks issues in progress while it works them** — claiming an issue now assigns it to you (and labels it `in-progress`) before any code is written, so a `/claim --issues` running on another machine sees it as taken instead of grabbing it too; the marker is released if a claim is abandoned, and the issue is closed once its PR merges. Developer tooling only — no app-facing change.
 - **`$claim` (Codex) and `/claim` (Claude Code) now share one procedure** — the Codex claim skill was collapsed to a thin adapter over the slash command's procedure, so Codex inherits `--issues` mode, the in-progress marker, and the multi-reviewer loop instead of running a stale copy that had drifted behind. Developer tooling only — no app-facing change.
 
