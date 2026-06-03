@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text, Line } from '@react-three/drei';
 import { PIXEL_FONT_URL } from './cityConstants';
-import { computeGoalMonuments, computeGoalForest, MONUMENTS } from '../../utils/cityGoalMonuments';
+import { computeGoalMonuments, computeGoalForest, MONUMENTS, FOREST } from '../../utils/cityGoalMonuments';
 
 // CyberCity's goal monuments (roadmap 2.7): each life goal is a structure in a
 // northeast monument district. Active goals are construction sites — a built base topped
@@ -22,15 +22,15 @@ function MonumentBody({ monument, shimmerRef, isShimmer }) {
   const { height, width, color, opacity, intensity, built, completeness, segments } = monument;
 
   // Milestone floors: one box per milestone, solid+emissive when done, wireframe scaffold
-  // when pending. The highest done floor carries the shimmer for completed monuments.
+  // when pending. The top floor carries the shimmer — shimmer is only ever assigned to a
+  // completed (built) monument, so all its floors render solid and the topmost is the apex.
   if (segments && segments.length > 0) {
-    const lastDoneIdx = segments.reduce((acc, s, i) => (s.done ? i : acc), -1);
     return (
       <>
         {segments.map((seg, i) => {
           const doneFloor = seg.done || built;
           const floorH = Math.max(0.15, seg.segHeight * 0.86); // gap between floors
-          const carriesShimmer = isShimmer && (built ? i === segments.length - 1 : i === lastDoneIdx);
+          const carriesShimmer = isShimmer && i === segments.length - 1;
           return (
             <mesh
               key={seg.id}
@@ -109,7 +109,9 @@ function Monument({ monument, shimmerRef, isShimmer }) {
 }
 
 // Goal-tree hierarchy: root spires + child rings + apex links. Used when goals form a
-// parent→child structure; otherwise the flat row renders instead.
+// parent→child structure; otherwise the flat row renders instead. The layout shows two
+// visible levels; a child's deeper sub-tree is summarized by a "+N UNDER" badge and roots
+// past the cap fold into a "+N MORE GOALS" marker, so nothing is silently dropped.
 function GoalForest({ forest, shimmerRef, shimmerId }) {
   return (
     <group>
@@ -117,7 +119,14 @@ function GoalForest({ forest, shimmerRef, shimmerId }) {
         <group key={cluster.spire.id}>
           <Monument monument={cluster.spire} shimmerRef={shimmerRef} isShimmer={cluster.spire.id === shimmerId} />
           {cluster.children.map((child) => (
-            <Monument key={child.id} monument={child} shimmerRef={shimmerRef} isShimmer={child.id === shimmerId} />
+            <group key={child.id}>
+              <Monument monument={child} shimmerRef={shimmerRef} isShimmer={child.id === shimmerId} />
+              {child.descendantCount > 0 && (
+                <Text position={[child.position[0], child.height + 1.9, child.position[2]]} fontSize={0.42} color="#64748b" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
+                  {`+${child.descendantCount} UNDER`}
+                </Text>
+              )}
+            </group>
           ))}
           {cluster.links.map((link) => (
             <Line
@@ -136,6 +145,25 @@ function GoalForest({ forest, shimmerRef, shimmerId }) {
           )}
         </group>
       ))}
+
+      {/* Root overflow — top-level goal trees past the cap, mirroring the flat row's marker */}
+      {forest.rootOverflow > 0 && forest.clusters.length > 0 && (
+        <Text
+          position={[
+            forest.clusters[forest.clusters.length - 1].spire.position[0] + FOREST.clusterSpacing / 2,
+            MONUMENTS.minHeight + 2,
+            forest.base[2],
+          ]}
+          fontSize={0.6}
+          color="#94a3b8"
+          anchorX="center"
+          anchorY="middle"
+          font={PIXEL_FONT_URL}
+          maxWidth={12}
+        >
+          {`+${forest.rootOverflow} MORE GOALS`}
+        </Text>
+      )}
     </group>
   );
 }

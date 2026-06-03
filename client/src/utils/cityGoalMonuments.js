@@ -257,6 +257,21 @@ export function buildGoalForest(goals) {
   return { roots, byId };
 }
 
+// Total number of goals nested under a forest node (its children, grandchildren, …),
+// excluding the node itself. The forest layout renders only two visible levels (root spire
+// + child ring), so a node's deeper descendants are summarized by this count rather than
+// drawn — nothing is silently dropped. Guarded against the (server-prevented) cycle case
+// via a visited set so a hand-corrupted parentId loop can't recurse forever.
+export function countDescendants(node, seen = new Set()) {
+  if (!node || seen.has(node)) return 0;
+  seen.add(node);
+  let total = 0;
+  for (const child of node.children || []) {
+    total += 1 + countDescendants(child, seen);
+  }
+  return total;
+}
+
 // Full hierarchy view-model. Returns root spires (each a placed monument with extra
 // height) plus their child monuments arranged in a ring, and `links` joining each child
 // apex-ward to its root. Roots are ordered completed→active→stalled→abandoned (same as the
@@ -296,6 +311,9 @@ export function computeGoalForest(goals, now = Date.now()) {
       const cz = clusterZ + Math.sin(angle) * FOREST.childRadius; // +z = toward the camera/front
       const m = placeMonument(child.goal, 0, 1, now, [cx, 0, cz]);
       m.parentId = node.goal.id;
+      // Deeper descendants aren't drawn (the layout is two levels); surface their count so
+      // a grandchild-bearing sub-goal advertises its sub-tree instead of hiding it.
+      m.descendantCount = countDescendants(child);
       return m;
     });
 

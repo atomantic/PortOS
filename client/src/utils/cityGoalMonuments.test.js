@@ -11,6 +11,7 @@ import {
   isMilestoneDone,
   computeMilestoneSegments,
   buildGoalForest,
+  countDescendants,
   computeGoalForest,
 } from './cityGoalMonuments';
 
@@ -303,6 +304,38 @@ describe('buildGoalForest', () => {
     const { roots } = buildGoalForest([null, 'x', { parentId: 'p' }, goal({ id: 'ok' })]);
     expect(roots.map((r) => r.goal.id)).toEqual(['ok']);
   });
+
+  it('nests grandchildren under children (multi-level)', () => {
+    const { roots } = buildGoalForest([
+      goal({ id: 'root', parentId: null }),
+      goal({ id: 'child', parentId: 'root' }),
+      goal({ id: 'grand', parentId: 'child' }),
+    ]);
+    expect(roots).toHaveLength(1);
+    const child = roots[0].children[0];
+    expect(child.goal.id).toBe('child');
+    expect(child.children.map((g) => g.goal.id)).toEqual(['grand']);
+  });
+});
+
+describe('countDescendants', () => {
+  const forestOf = (goals) => buildGoalForest(goals).roots[0];
+
+  it('counts children and grandchildren, excluding the node itself', () => {
+    const root = forestOf([
+      goal({ id: 'root', parentId: null }),
+      goal({ id: 'c1', parentId: 'root' }),
+      goal({ id: 'c2', parentId: 'root' }),
+      goal({ id: 'g1', parentId: 'c1' }),
+      goal({ id: 'g2', parentId: 'c1' }),
+    ]);
+    expect(countDescendants(root)).toBe(4); // c1, c2, g1, g2
+  });
+
+  it('is 0 for a leaf', () => {
+    const root = forestOf([goal({ id: 'solo', parentId: null })]);
+    expect(countDescendants(root)).toBe(0);
+  });
 });
 
 describe('computeGoalForest', () => {
@@ -349,6 +382,17 @@ describe('computeGoalForest', () => {
     expect(vm.clusters).toHaveLength(FOREST.maxRoots);
     expect(vm.rootOverflow).toBe(2);
     expect(vm.rootCount).toBe(FOREST.maxRoots + 2);
+  });
+
+  it('surfaces a descendant count on a child that has its own sub-tree (no silent drop)', () => {
+    const vm = computeGoalForest([
+      goal({ id: 'apex', parentId: null }),
+      goal({ id: 'child', parentId: 'apex', progressHistory: [{ date: daysAgo(1) }] }),
+      goal({ id: 'grand1', parentId: 'child' }),
+      goal({ id: 'grand2', parentId: 'child' }),
+    ], NOW);
+    const child = vm.clusters[0].children.find((c) => c.id === 'child');
+    expect(child.descendantCount).toBe(2); // grand1 + grand2, summarized not dropped
   });
 
   it('caps children per root and reports childOverflow', () => {
