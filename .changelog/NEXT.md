@@ -7,6 +7,7 @@
 
 ## Changed
 
+- **[issue-759]** The autofixer UI's large inline HTML document moved out of `autofixer/ui.js` into a sibling `ui.template.html`, leaving the route handler as logic only. Internal refactor with no behavior difference.
 - **[issue-734]** The reference-watch scheduled task now guards its read/write default against silent drift when its prompt is revised. Internal maintenance change with no behavior difference.
 - **[issue-722]** Prompt-template migrations now scan their files concurrently, so future multi-file updates apply faster.
 - **[issue-720] Shared popover positioning** — the theme switcher and collection pickers now share one placement engine, so their pop-up menus stay anchored to their button and on-screen consistently. Internal maintenance change with no behavior difference.
