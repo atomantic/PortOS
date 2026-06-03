@@ -78,9 +78,58 @@ export function buildCompleteness(goal, status) {
   return clamp01(progress / 100);
 }
 
+// A milestone is "done" when it carries a completion timestamp (`completedAt`, the
+// server's stored field) or an explicit `completed: true` flag. Absent both, it's
+// pending. Kept tolerant so an older/foreign goal record doesn't crash the view.
+export function isMilestoneDone(milestone) {
+  if (!milestone || typeof milestone !== 'object') return false;
+  if (milestone.completed === true) return true;
+  return typeof milestone.completedAt === 'string' && milestone.completedAt.length > 0;
+}
+
+// Break a monument's height into ordered milestone segments (floors). Each segment
+// reports its vertical extent (`y0`..`y1`, centered at `cy`) and whether the milestone
+// is done — so the component can render completed floors solid and pending floors as
+// translucent scaffold rungs. `height` is the monument's built+scaffold total; segments
+// are sorted by the milestone `order` field (stable, ties keep input order) and split the
+// height evenly. A goal with no milestones returns an empty array (the caller falls back
+// to the plain built/scaffold split). Pure + deterministic — no three.js.
+export function computeMilestoneSegments(goal, height) {
+  const raw = Array.isArray(goal?.milestones) ? goal.milestones.filter((m) => m && typeof m === 'object') : [];
+  if (raw.length === 0 || !(height > 0)) return [];
+
+  // Stable order: by `order` field ascending, ties keep original index.
+  const ordered = raw
+    .map((milestone, i) => ({ milestone, i }))
+    .sort((a, b) => {
+      const oa = Number.isFinite(a.milestone.order) ? a.milestone.order : a.i;
+      const ob = Number.isFinite(b.milestone.order) ? b.milestone.order : b.i;
+      if (oa !== ob) return oa - ob;
+      return a.i - b.i;
+    });
+
+  const segHeight = height / ordered.length;
+  return ordered.map(({ milestone }, slot) => {
+    const y0 = slot * segHeight;
+    const y1 = y0 + segHeight;
+    return {
+      id: milestone.id || `ms-${slot}`,
+      title: typeof milestone.title === 'string' && milestone.title ? milestone.title : `Milestone ${slot + 1}`,
+      order: slot,
+      done: isMilestoneDone(milestone),
+      y0,
+      y1,
+      cy: (y0 + y1) / 2,
+      segHeight,
+    };
+  });
+}
+
 // Map one goal to its placed monument view-model. `index` is the slot in the row (0-based);
 // `count` is how many monuments are actually placed, so the row is centered on MONUMENTS.base.
-export function placeMonument(goal, index, count, now = Date.now()) {
+// When `position` is supplied (goal-forest layout) it overrides the centered-row placement,
+// so the same monument view-model serves both the flat row and the hierarchy spires.
+export function placeMonument(goal, index, count, now = Date.now(), position = null) {
   const status = effectiveGoalStatus(goal, now);
   const style = STATUS_STYLES[status] || DEFAULT_STYLE;
   const completeness = buildCompleteness(goal, status);
@@ -89,6 +138,7 @@ export function placeMonument(goal, index, count, now = Date.now()) {
   // Center the row: slot 0 sits at the leftmost, the middle slot aligns with base.x.
   const offset = (index - (count - 1) / 2) * MONUMENTS.spacing;
   const x = MONUMENTS.base[0] + offset;
+  const segments = computeMilestoneSegments(goal, height);
 
   return {
     id: goal?.id || `goal-${index}`,
@@ -103,7 +153,10 @@ export function placeMonument(goal, index, count, now = Date.now()) {
     built: style.built,
     height,
     width: MONUMENTS.baseWidth,
-    position: [x, 0, MONUMENTS.z],
+    segments, // ordered milestone floors (empty when the goal has no milestones)
+    milestoneTotal: segments.length,
+    milestoneDone: segments.filter((s) => s.done).length,
+    position: Array.isArray(position) ? position : [x, 0, MONUMENTS.z],
   };
 }
 
@@ -154,5 +207,113 @@ export function computeGoalMonuments(goals, now = Date.now()) {
     completedCount,
     activeCount,
     hasData: ranked.length > 0,
+  };
+}
+
+// Goal-tree (hierarchy) layout. Goals carry `parentId`; the server's getGoalsTree()
+// builds the same parent→child forest. Here we lay each ROOT goal out as a central spire
+// (taller than a flat-row monument) with its direct children clustered in a ring around
+// it and a link drawn from each child up to the parent apex — so a glance reads which
+// goals roll up under which. Multiple roots are spread along the row depth so their
+// clusters don't overlap. Pure + deterministic (no three.js): the component consumes the
+// returned positions/links directly.
+export const FOREST = {
+  base: [30, 0, -40], // shared center with the flat row's MONUMENTS.base
+  clusterSpacing: 26, // x-distance between adjacent root clusters
+  childRadius: 7.5, // ring radius of children around their root spire
+  spireBoost: 1.5, // root spires render this much taller than a flat monument
+  maxRoots: 4, // cap root clusters so the district stays legible
+  maxChildren: 6, // cap children per root (ring slots); extras fold into the root's count
+};
+
+// Build the { id -> goal, children: [...] } forest from a flat goals list using parentId.
+// Mirrors getGoalsTree()'s tree builder: a goal whose parentId points at a present goal
+// becomes that goal's child; everything else (null/dangling parentId) is a root. Cycles
+// are impossible because the server validates parentId against ancestor cycles on write,
+// but we still guard by only attaching when the parent exists and isn't the node itself.
+export function buildGoalForest(goals) {
+  const list = Array.isArray(goals) ? goals.filter((g) => g && typeof g === 'object' && g.id) : [];
+  const byId = new Map(list.map((g) => [g.id, { goal: g, children: [] }]));
+  const roots = [];
+  for (const node of byId.values()) {
+    const pid = node.goal.parentId;
+    if (pid && pid !== node.goal.id && byId.has(pid)) {
+      byId.get(pid).children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return { roots, byId };
+}
+
+// Full hierarchy view-model. Returns root spires (each a placed monument with extra
+// height) plus their child monuments arranged in a ring, and `links` joining each child
+// apex-ward to its root. Roots are ordered completed→active→stalled→abandoned (same as the
+// flat row) so finished towers lead; ties broken by id for stable layout across refetches.
+export function computeGoalForest(goals, now = Date.now()) {
+  const { roots } = buildGoalForest(goals);
+
+  const order = { completed: 0, active: 1, stalled: 2, abandoned: 3 };
+  const rankedRoots = roots
+    .map((node) => ({ node, status: effectiveGoalStatus(node.goal, now) }))
+    .sort((a, b) => {
+      const sa = order[a.status] ?? 9;
+      const sb = order[b.status] ?? 9;
+      if (sa !== sb) return sa - sb;
+      return String(a.node.goal?.id || '').localeCompare(String(b.node.goal?.id || ''));
+    });
+
+  const visibleRoots = rankedRoots.slice(0, FOREST.maxRoots);
+  const rootOverflow = Math.max(0, rankedRoots.length - visibleRoots.length);
+
+  const clusters = visibleRoots.map(({ node }, rootIndex) => {
+    // Spread root clusters along x, centered on FOREST.base.
+    const clusterX = FOREST.base[0] + (rootIndex - (visibleRoots.length - 1) / 2) * FOREST.clusterSpacing;
+    const clusterZ = FOREST.base[2];
+
+    // Root spire — a placed monument boosted in height so it visually anchors the cluster.
+    const spire = placeMonument(node.goal, 0, 1, now, [clusterX, 0, clusterZ]);
+    spire.height *= FOREST.spireBoost;
+    spire.isSpire = true;
+    // Re-segment milestones against the boosted height so floors fill the taller tower.
+    spire.segments = computeMilestoneSegments(node.goal, spire.height);
+    spire.milestoneTotal = spire.segments.length;
+    spire.milestoneDone = spire.segments.filter((s) => s.done).length;
+
+    const childNodes = node.children.slice(0, FOREST.maxChildren);
+    const childOverflow = Math.max(0, node.children.length - childNodes.length);
+
+    // Children ring around the spire. A single child sits directly in front; multiple
+    // children spread evenly across a forward-facing arc so links don't cross the spire.
+    const children = childNodes.map((child, ci) => {
+      const n = childNodes.length;
+      const angle = n === 1 ? Math.PI / 2 : (Math.PI / (n + 1)) * (ci + 1); // 0..PI forward arc
+      const cx = clusterX + Math.cos(angle) * FOREST.childRadius;
+      const cz = clusterZ + Math.sin(angle) * FOREST.childRadius; // +z = toward the camera/front
+      const m = placeMonument(child.goal, 0, 1, now, [cx, 0, cz]);
+      m.parentId = node.goal.id;
+      return m;
+    });
+
+    // Links: from each child's apex up to the root spire's apex.
+    const links = children.map((child) => ({
+      from: [child.position[0], child.height, child.position[2]],
+      to: [spire.position[0], spire.height, spire.position[2]],
+      childId: child.id,
+    }));
+
+    return { spire, children, links, childOverflow };
+  });
+
+  return {
+    base: FOREST.base,
+    clusters,
+    rootOverflow,
+    rootCount: rankedRoots.length,
+    hasData: rankedRoots.length > 0,
+    // A forest is only worth showing when at least one root actually has children;
+    // otherwise it's just the flat row with extra spacing. The component uses this to
+    // decide whether to render the hierarchy view vs. fall back to the flat row.
+    hasHierarchy: clusters.some((c) => c.children.length > 0),
   };
 }
