@@ -101,8 +101,8 @@ export default function TasteIdentityTab() {
       return (
         <EmptyState
           message="No taste profile completed yet. Complete the taste questionnaire to generate identity themes."
-          linkTo="/digital-twin/taste"
-          linkLabel="Complete Taste Profile"
+          actionTo="/digital-twin/taste"
+          actionLabel="Complete Taste Profile"
         />
       );
     }

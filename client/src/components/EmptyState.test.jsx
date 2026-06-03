@@ -34,12 +34,6 @@ describe('EmptyState', () => {
     expect(onAction).toHaveBeenCalledTimes(1);
   });
 
-  it('supports the legacy { linkTo, linkLabel } API', () => {
-    renderWithRouter(<EmptyState message="msg" linkTo="/meatspace/genome" linkLabel="Upload Genome" />);
-    const link = screen.getByText('Upload Genome').closest('a');
-    expect(link.getAttribute('href')).toBe('/meatspace/genome');
-  });
-
   it('renders no action element when only a label is given', () => {
     const { container } = renderWithRouter(<EmptyState message="msg" actionLabel="Nowhere" />);
     expect(container.querySelector('a')).toBeNull();

@@ -15,9 +15,6 @@ import { Info } from 'lucide-react';
  *   actionTo    — internal route for the call-to-action Link
  *   actionLabel — text for the call-to-action
  *   onAction    — render a <button> instead of a Link (in-page action)
- *
- * Back-compat: the original `{ message, linkTo, linkLabel }` API still works —
- * `actionTo`/`actionLabel` are preferred, `linkTo`/`linkLabel` are aliases.
  */
 export default function EmptyState({
   icon: Icon = Info,
@@ -26,11 +23,7 @@ export default function EmptyState({
   actionTo,
   actionLabel,
   onAction,
-  linkTo,
-  linkLabel,
 }) {
-  const to = actionTo ?? linkTo;
-  const label = actionLabel ?? linkLabel;
   const actionClass =
     'mt-4 px-4 py-2 rounded-lg text-sm font-medium bg-port-accent/10 text-port-accent hover:bg-port-accent/20 transition-colors';
 
@@ -39,16 +32,15 @@ export default function EmptyState({
       {Icon && <Icon size={32} className="text-gray-600 mb-3" />}
       {title && <h3 className="text-white font-semibold mb-1">{title}</h3>}
       {message && <p className="text-gray-400 text-sm max-w-xs">{message}</p>}
-      {label && onAction && (
+      {actionLabel && (onAction ? (
         <button type="button" onClick={onAction} className={actionClass}>
-          {label}
+          {actionLabel}
         </button>
-      )}
-      {label && !onAction && to && (
-        <Link to={to} className={actionClass}>
-          {label}
+      ) : actionTo ? (
+        <Link to={actionTo} className={actionClass}>
+          {actionLabel}
         </Link>
-      )}
+      ) : null)}
     </div>
   );
 }
