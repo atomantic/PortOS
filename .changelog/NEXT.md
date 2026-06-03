@@ -19,6 +19,7 @@
 - **[issue-729] Style-probe renders stay put across federated machines** — a universe's base style-probe images are now kept local to each machine, so syncing with an older peer no longer wipes them and a probe render no longer surfaces a phantom sync conflict.
 - **[issue-717] No stray React warnings when you navigate away mid-action** — buttons that run an async task (save, generate, sync) no longer log an "update on an unmounted component" warning if you leave the page before the task finishes.
 - **[issue-719] Steadier media galleries during live note/star sync** — incoming annotation broadcasts that match what a view already shows no longer trigger a needless re-render of the media cards.
+- **[issue-766] Episode Video renders cleanly when a remembered model is gone** — if the video model you previously pinned for an episode has since been removed, the render now quietly falls back to your default model instead of failing partway through.
 - **[issue-728] Imported stories no longer fake a "Ready" aesthetic or reader map** — when you start a Story Builder session from an import, only the steps the importer actually fills (idea, plot arc, characters, issues) open as "Ready" to review. The Universe Aesthetic and Reader Map steps now start "pending" instead of showing an empty step under a misleading "Ready" badge, so you generate them like you would in a from-scratch build.
 
 ## Removed
