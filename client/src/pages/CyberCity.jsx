@@ -136,6 +136,7 @@ function CyberCityInner() {
         matchCount={filterResult.matches.length}
         onToggleExploration={handleToggleExploration}
         explorationMode={settings?.explorationMode}
+        onSelectApp={handleBuildingClick}
       />
       <CityScanlines settings={settings} />
       {showSettings && <CitySettingsPanel />}
