@@ -30,6 +30,7 @@ import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import * as proactiveAlerts from './proactiveAlerts.js';
 import * as backup from './backup.js';
+import { promoteLatestAssistantTurn } from './askPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Per-source cap so one noisy producer can't flood the queue; the UI shows a
@@ -78,13 +79,20 @@ const PRODUCERS = [
     },
     map(entry) {
       const text = (entry.capturedText || '').trim();
+      // Surface where the capture came from (brain_ui / voice / a managed app)
+      // so the user can triage by origin. Absent on legacy entries — omit the
+      // field entirely rather than fabricate one (absent vs empty).
+      const captureSource = typeof entry.source === 'string' && entry.source.trim()
+        ? entry.source.trim()
+        : null;
       return {
         id: `brain:${entry.id}`,
         title: 'Inbox item needs classification',
         summary: text.slice(0, 200),
         timestamp: entry.capturedAt || entry.createdAt || null,
         severity: 'normal',
-        drillTo: '/brain/inbox'
+        drillTo: '/brain/inbox',
+        ...(captureSource ? { meta: { captureSource } } : {})
       };
     }
   },
@@ -102,14 +110,21 @@ const PRODUCERS = [
       const convs = await askConversations.listConversations({ limit: PER_SOURCE_LIMIT * 2 });
       return convs.filter(c => !c.promoted && (c.turnCount || 0) > 0);
     },
+    // Inline promote targets the UI can offer without a per-turn drill-down.
+    // The queue picks the conversation's latest assistant turn server-side, so
+    // brain/task need no extra choice; goal needs a goalId, so it stays a
+    // drill-down only.
+    promoteTargets: ['brain', 'task'],
     map(conv) {
+      const turnCount = Number.isFinite(conv.turnCount) ? conv.turnCount : null;
       return {
         id: `ask:${conv.id}`,
         title: 'Ask answer ready to promote',
         summary: conv.title || '(untitled conversation)',
         timestamp: conv.updatedAt || conv.createdAt || null,
         severity: 'normal',
-        drillTo: `/ask/${conv.id}`
+        drillTo: `/ask/${conv.id}`,
+        ...(turnCount != null ? { meta: { turnCount } } : {})
       };
     }
   },
@@ -131,13 +146,17 @@ const PRODUCERS = [
       return awaitingApproval;
     },
     map(task) {
+      // Surface the task priority as a triage badge. Only HIGH/MEDIUM/LOW are
+      // meaningful — anything else (or absent) is omitted rather than guessed.
+      const priority = ['HIGH', 'MEDIUM', 'LOW'].includes(task.priority) ? task.priority : null;
       return {
         id: `cos:${task.id}`,
         title: 'CoS task pending approval',
         summary: (task.description || '').slice(0, 200),
         timestamp: task.createdAt || null,
         severity: task.priority === 'HIGH' ? 'high' : 'normal',
-        drillTo: '/cos/tasks'
+        drillTo: '/cos/tasks',
+        ...(priority ? { meta: { priority } } : {})
       };
     }
   },
@@ -160,6 +179,18 @@ const PRODUCERS = [
       return messageDrafts.listDrafts({ status: ['draft', 'pending_review'] });
     },
     map(draft) {
+      // Show who/where the draft is headed so the user can triage without
+      // opening it: the first recipient, plus the channel it'd send through.
+      // Each is omitted when absent rather than rendered as an empty string.
+      const recipient = Array.isArray(draft.to) && typeof draft.to[0] === 'string' && draft.to[0].trim()
+        ? draft.to[0].trim()
+        : null;
+      const channel = typeof draft.sendVia === 'string' && draft.sendVia.trim()
+        ? draft.sendVia.trim()
+        : null;
+      const meta = {};
+      if (recipient) meta.recipient = recipient;
+      if (channel) meta.channel = channel;
       return {
         // Prefix matches `source` ('drafts') so resolveQueueItem's
         // split-on-first-colon dispatch lands on this producer.
@@ -168,7 +199,8 @@ const PRODUCERS = [
         summary: draft.subject || (draft.body || '').slice(0, 120) || '(no subject)',
         timestamp: draft.updatedAt || draft.createdAt || null,
         severity: 'normal',
-        drillTo: '/messages/drafts'
+        drillTo: '/messages/drafts',
+        ...(Object.keys(meta).length ? { meta } : {})
       };
     }
   },
@@ -184,13 +216,19 @@ const PRODUCERS = [
     // proactiveAlerts emits { type, severity, title, detail, link } with no
     // stable id and possibly-repeating types, so key on the array index too.
     map(alert, index) {
+      // Surface the alert category (system_resource / goal_stall / …) so the
+      // user can tell at a glance what kind of anomaly it is. Absent → omitted.
+      const alertType = typeof alert.type === 'string' && alert.type.trim()
+        ? alert.type.trim()
+        : null;
       return {
         id: `health:${alert.type || 'alert'}:${index}`,
         title: alert.title || `${alert.type || 'System'} alert`,
         summary: (alert.detail || alert.message || '').slice(0, 200),
         timestamp: alert.timestamp || null,
         severity: alert.severity === 'critical' ? 'critical' : 'high',
-        drillTo: alert.link || '/system-health'
+        drillTo: alert.link || '/system-health',
+        ...(alertType ? { meta: { alertType } } : {})
       };
     }
   },
@@ -234,7 +272,12 @@ async function gatherProducer(producer) {
     ...producer.map(item, index),
     // Inline-action verb when the producer declares one resolve primitive; the
     // UI shows an accept/promote button only for rows that carry it.
-    ...(producer.action && producer.resolve ? { action: producer.action } : {})
+    ...(producer.action && producer.resolve ? { action: producer.action } : {}),
+    // Inline promote targets (Ask rows) — the UI renders a compact target
+    // picker for rows that carry a non-empty list.
+    ...(Array.isArray(producer.promoteTargets) && producer.promoteTargets.length
+      ? { promoteTargets: producer.promoteTargets }
+      : {})
   }));
   return { items, total: list.length };
 }
@@ -264,6 +307,31 @@ export async function resolveQueueItem(queueItemId) {
     throw new ServerError(`${producer.label} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
   }
   return { source, id: queueItemId, resolved: true };
+}
+
+/**
+ * Promote an Ask queue row's latest assistant answer into a chosen target
+ * (brain/task). `queueItemId` is the row id (`ask:<conversationId>`); `target`
+ * must be one of the Ask producer's declared `promoteTargets`. The service
+ * picks the conversation's latest assistant turn so the client doesn't carry
+ * turn ids — a conversation with no assistant answer 404s. Reuses the same
+ * promote orchestration the per-turn Ask route uses (no duplication).
+ */
+export async function promoteAskQueueItem(queueItemId, target) {
+  const sep = String(queueItemId).indexOf(':');
+  const source = sep === -1 ? queueItemId : queueItemId.slice(0, sep);
+  const conversationId = sep === -1 ? '' : queueItemId.slice(sep + 1);
+
+  if (source !== 'ask') {
+    throw new ServerError(`Promote is only supported for Ask rows, got "${source}"`, { status: 400, code: 'BAD_REQUEST' });
+  }
+  const allowed = PRODUCERS_BY_SOURCE.ask.promoteTargets || [];
+  if (!allowed.includes(target)) {
+    throw new ServerError(`Unsupported promote target "${target}" for Ask`, { status: 400, code: 'BAD_REQUEST' });
+  }
+
+  const result = await promoteLatestAssistantTurn({ conversationId, target });
+  return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };
 }
 
 /**
