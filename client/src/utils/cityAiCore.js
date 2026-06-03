@@ -5,9 +5,12 @@
 // glow/beam state. No three.js / React imports so the logic is unit-testable (mirrors
 // cityBackupVault.js).
 //
-// Note: `ai:status` carries no agent/building association, so beams radiate generically
-// from the core rather than targeting the originating building — see issue note. Model
-// tier is a best-effort heuristic from the model name (the event has no explicit tier).
+// When a call originates on behalf of a managed app or CoS-agent workspace, the event
+// carries `appId` / `workspacePath`; `computeAiCoreBeams` maps that to the building's world
+// position and aims the beam there, scaling its thickness by the call's tokens/sec. Ops
+// with no building association (most PortOS-internal calls — taste summaries, embeddings)
+// keep the generic radial fan-out. Model tier is a best-effort heuristic from the model
+// name (the event has no explicit tier).
 
 export const AI_CORE = {
   position: [0, 0, 0], // city center — the spire rises above the building grid
@@ -19,6 +22,13 @@ export const AI_CORE = {
   opMaxAgeMs: 60_000,
   // How long after the last op start the core keeps its "just fired" flare.
   flareMs: 1200,
+  // Generic (un-targeted) radial beam length, in world units.
+  radialLength: 16,
+  // Beam thickness clamps (world units). Un-measured ops use `beamThicknessBase`;
+  // measured throughput scales between base and max across `beamThicknessTopTokensPerSec`.
+  beamThicknessBase: 0.18,
+  beamThicknessMax: 0.6,
+  beamThicknessTopTokensPerSec: 200,
 };
 
 const TIER_COLORS = {
@@ -48,10 +58,18 @@ export function tierColor(tier) {
 // Rank tiers so the core can pick the "loudest" active tier when several ops overlap.
 const TIER_RANK = { light: 1, medium: 2, heavy: 3 };
 
+// Coerce a finite, non-negative tokens/sec from an event; otherwise null ("unknown").
+// Keeps "the provider didn't report usage" distinct from a measured zero.
+function readTokensPerSec(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 // Apply one `ai:status` event to the in-flight op map (plain object keyed by op id),
 // returning a NEW object. Terminal phases remove the op; every other phase adds/updates
-// it with the event's model + a last-seen timestamp. Entries older than `opMaxAgeMs` are
-// pruned so a never-completed op can't wedge the core busy. Pure — `now` is injected.
+// it with the event's model, building association (`appId`/`workspacePath`), last-known
+// tokens/sec, and a last-seen timestamp. Entries older than `opMaxAgeMs` are pruned so a
+// never-completed op can't wedge the core busy. Pure — `now` is injected.
 export function applyAiStatusEvent(ops, event, now = Date.now()) {
   const next = {};
   // Prune stale ops first.
@@ -64,8 +82,49 @@ export function applyAiStatusEvent(ops, event, now = Date.now()) {
     delete next[id];
     return next;
   }
-  next[id] = { id, model: event.model || null, tier: modelTier(event.model), ts: now };
+  const prev = next[id] || {};
+  next[id] = {
+    id,
+    model: event.model || prev.model || null,
+    tier: modelTier(event.model || prev.model),
+    // Association is stamped at start; carry it forward across intermediate phases even if
+    // a later event omits it.
+    appId: event.appId ?? prev.appId ?? null,
+    workspacePath: event.workspacePath ?? prev.workspacePath ?? null,
+    // Throughput typically only arrives on later phases; keep the last measured value.
+    tokensPerSec: readTokensPerSec(event.tokensPerSec) ?? prev.tokensPerSec ?? null,
+    ts: now,
+  };
   return next;
+}
+
+// Map an op's building association to an app id. Prefers an explicit `appId`; otherwise
+// matches the longest `repoPath` prefix of the op's `workspacePath` (a CoS-agent worktree
+// lives under its app's repo). Returns null when nothing matches. Pure.
+export function resolveOpAppId(op, apps = []) {
+  if (op?.appId) return op.appId;
+  const wp = op?.workspacePath;
+  if (!wp || !Array.isArray(apps)) return null;
+  let best = null;
+  let bestLen = -1;
+  for (const app of apps) {
+    if (app?.repoPath && wp.startsWith(app.repoPath) && app.repoPath.length > bestLen) {
+      best = app.id;
+      bestLen = app.repoPath.length;
+    }
+  }
+  return best;
+}
+
+// Map measured tokens/sec to a beam thickness, clamped between base and max. A null/unknown
+// throughput renders at the base thickness so an un-instrumented call still draws a beam.
+export function beamThickness(tokensPerSec) {
+  const base = AI_CORE.beamThicknessBase;
+  const max = AI_CORE.beamThicknessMax;
+  const tps = readTokensPerSec(tokensPerSec);
+  if (tps === null) return base;
+  const frac = Math.min(tps / AI_CORE.beamThicknessTopTokensPerSec, 1);
+  return base + (max - base) * frac;
 }
 
 // Derive the core's view-model from the in-flight op map. `lastStartTs` (the timestamp of
@@ -94,4 +153,59 @@ export function computeAiCore(ops, lastStartTs = 0, now = Date.now()) {
     // Idle core breathes faintly; busy core glows; a flare spikes intensity briefly.
     intensity: busy ? 0.7 + Math.min(activeCount, 4) * 0.075 : flaring ? 0.6 : 0.25,
   };
+}
+
+// Build the per-beam descriptors the renderer draws from the apex. Each active op becomes
+// one beam: if it resolves to a building whose world position is known, the beam is
+// `targeted` and aims at that building (in apex-local space); otherwise it falls back to a
+// generic radial beam at an even angle. Thickness scales by the op's measured tokens/sec.
+//
+//   ops       — in-flight op map (from applyAiStatusEvent)
+//   positions — Map<appId, { x, z }> of building world positions (CityScene's layout)
+//   apps      — app records (for workspacePath → app resolution)
+//   apexY     — world Y of the spire apex (beams originate here)
+//   color     — the core's active-tier color
+//   now       — injected for determinism
+//
+// Returns up to AI_CORE.maxBeams descriptors. Pure.
+export function computeAiCoreBeams(ops, positions, apps = [], apexY = AI_CORE.apexY, color, now = Date.now()) {
+  const active = Object.values(ops || {})
+    .filter(op => now - op.ts <= AI_CORE.opMaxAgeMs)
+    .slice(0, AI_CORE.maxBeams);
+
+  const getPos = (id) => {
+    if (!id || !positions) return null;
+    // Tolerate both a Map and a plain object so callers can pass either.
+    return typeof positions.get === 'function' ? positions.get(id) : positions[id];
+  };
+
+  // Radial fallback angles spread evenly across however many beams we draw, so a mix of
+  // targeted + radial beams still reads as a balanced fan.
+  const total = Math.max(active.length, 1);
+
+  return active.map((op, i) => {
+    const appId = resolveOpAppId(op, apps);
+    const pos = getPos(appId);
+    const thickness = beamThickness(op.tokensPerSec);
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
+      // Apex-local target: building roof-ish height so the beam arcs down to the building.
+      return {
+        key: op.id,
+        targeted: true,
+        appId,
+        // Vector from the apex (group origin) to the building, in apex-local space.
+        target: [pos.x, -apexY + 4, pos.z],
+        thickness,
+        color,
+      };
+    }
+    return {
+      key: op.id,
+      targeted: false,
+      angle: (i / total) * Math.PI * 2,
+      length: AI_CORE.radialLength,
+      thickness,
+      color,
+    };
+  });
 }

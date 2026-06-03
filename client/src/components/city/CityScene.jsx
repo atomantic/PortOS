@@ -99,7 +99,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CitySeasonalDecor settings={settings} />
       <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={settings} />
       <CityVoiceMarker voiceState={voiceState} settings={settings} />
-      <CityAiCore aiActivity={aiActivity} settings={settings} />
+      <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={settings} />
       <CityGround settings={settings} />
 
       <BuildingCluster

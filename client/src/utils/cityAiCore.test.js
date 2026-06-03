@@ -5,6 +5,9 @@ import {
   tierColor,
   applyAiStatusEvent,
   computeAiCore,
+  resolveOpAppId,
+  beamThickness,
+  computeAiCoreBeams,
 } from './cityAiCore';
 
 const NOW = 1_000_000;
@@ -138,5 +141,107 @@ describe('computeAiCore', () => {
     const vm = computeAiCore({}, NOW, NOW + AI_CORE.flareMs + 1);
     expect(vm.flaring).toBe(false);
     expect(vm.beamCount).toBe(0);
+  });
+});
+
+describe('applyAiStatusEvent building association', () => {
+  it('stamps appId / workspacePath / tokensPerSec from the event', () => {
+    const ops = applyAiStatusEvent({}, ev('a', 'start', 'gpt-4o', { appId: 'app-1', workspacePath: '/r/x', tokensPerSec: 90 }), NOW);
+    expect(ops.a.appId).toBe('app-1');
+    expect(ops.a.workspacePath).toBe('/r/x');
+    expect(ops.a.tokensPerSec).toBe(90);
+  });
+
+  it('carries association forward when a later phase omits it', () => {
+    let ops = applyAiStatusEvent({}, ev('a', 'start', 'm', { appId: 'app-1' }), NOW);
+    ops = applyAiStatusEvent(ops, ev('a', 'model:loading', 'm'), NOW + 100);
+    expect(ops.a.appId).toBe('app-1');
+  });
+
+  it('updates tokensPerSec when a later phase reports it, keeping last-known otherwise', () => {
+    let ops = applyAiStatusEvent({}, ev('a', 'start', 'm'), NOW);
+    expect(ops.a.tokensPerSec).toBeNull();
+    ops = applyAiStatusEvent(ops, ev('a', 'provider:starting', 'm', { tokensPerSec: 150 }), NOW + 10);
+    expect(ops.a.tokensPerSec).toBe(150);
+    ops = applyAiStatusEvent(ops, ev('a', 'provider:starting', 'm'), NOW + 20);
+    expect(ops.a.tokensPerSec).toBe(150); // preserved
+  });
+});
+
+describe('resolveOpAppId', () => {
+  const apps = [
+    { id: 'outer', repoPath: '/repos/proj' },
+    { id: 'inner', repoPath: '/repos/proj/packages/web' },
+  ];
+  it('prefers an explicit appId', () => {
+    expect(resolveOpAppId({ appId: 'x', workspacePath: '/repos/proj' }, apps)).toBe('x');
+  });
+  it('matches the longest repoPath prefix of workspacePath', () => {
+    expect(resolveOpAppId({ workspacePath: '/repos/proj/packages/web/src' }, apps)).toBe('inner');
+    expect(resolveOpAppId({ workspacePath: '/repos/proj/docs' }, apps)).toBe('outer');
+  });
+  it('returns null when nothing matches', () => {
+    expect(resolveOpAppId({ workspacePath: '/elsewhere' }, apps)).toBeNull();
+    expect(resolveOpAppId({}, apps)).toBeNull();
+    expect(resolveOpAppId(null, apps)).toBeNull();
+  });
+});
+
+describe('beamThickness', () => {
+  it('renders base thickness for unknown / null throughput', () => {
+    expect(beamThickness(null)).toBe(AI_CORE.beamThicknessBase);
+    expect(beamThickness(undefined)).toBe(AI_CORE.beamThicknessBase);
+    expect(beamThickness('nope')).toBe(AI_CORE.beamThicknessBase);
+  });
+  it('scales toward max with throughput and clamps at the top', () => {
+    expect(beamThickness(0)).toBe(AI_CORE.beamThicknessBase);
+    expect(beamThickness(AI_CORE.beamThicknessTopTokensPerSec)).toBe(AI_CORE.beamThicknessMax);
+    expect(beamThickness(AI_CORE.beamThicknessTopTokensPerSec * 10)).toBe(AI_CORE.beamThicknessMax);
+    const mid = beamThickness(AI_CORE.beamThicknessTopTokensPerSec / 2);
+    expect(mid).toBeGreaterThan(AI_CORE.beamThicknessBase);
+    expect(mid).toBeLessThan(AI_CORE.beamThicknessMax);
+  });
+});
+
+describe('computeAiCoreBeams', () => {
+  const apps = [{ id: 'app-1', repoPath: '/repos/one' }];
+  const positions = new Map([['app-1', { x: 10, z: -6, district: 'downtown' }]]);
+
+  it('targets the building for an app-associated op (apex-local target vector)', () => {
+    const ops = { a: { id: 'a', appId: 'app-1', tokensPerSec: 200, ts: NOW } };
+    const beams = computeAiCoreBeams(ops, positions, apps, AI_CORE.apexY, '#fff', NOW);
+    expect(beams).toHaveLength(1);
+    expect(beams[0].targeted).toBe(true);
+    expect(beams[0].appId).toBe('app-1');
+    expect(beams[0].target).toEqual([10, -AI_CORE.apexY + 4, -6]);
+    expect(beams[0].thickness).toBe(AI_CORE.beamThicknessMax); // 200 tok/s → max
+  });
+
+  it('resolves a workspacePath op to its app building', () => {
+    const ops = { a: { id: 'a', workspacePath: '/repos/one/worktrees/x', ts: NOW } };
+    const beams = computeAiCoreBeams(ops, positions, apps, AI_CORE.apexY, '#fff', NOW);
+    expect(beams[0].targeted).toBe(true);
+    expect(beams[0].appId).toBe('app-1');
+  });
+
+  it('falls back to a radial beam when there is no building association', () => {
+    const ops = { a: { id: 'a', ts: NOW }, b: { id: 'b', appId: 'unknown', ts: NOW } };
+    const beams = computeAiCoreBeams(ops, positions, apps, AI_CORE.apexY, '#fff', NOW);
+    expect(beams).toHaveLength(2);
+    expect(beams.every(b => !b.targeted)).toBe(true);
+    expect(beams[0]).toMatchObject({ angle: 0, length: AI_CORE.radialLength });
+  });
+
+  it('accepts a plain-object position map and caps at maxBeams', () => {
+    const ops = {};
+    for (let i = 0; i < AI_CORE.maxBeams + 4; i++) ops[i] = { id: String(i), ts: NOW };
+    const beams = computeAiCoreBeams(ops, {}, apps, AI_CORE.apexY, '#fff', NOW);
+    expect(beams).toHaveLength(AI_CORE.maxBeams);
+  });
+
+  it('ignores stale ops past opMaxAgeMs', () => {
+    const ops = { a: { id: 'a', appId: 'app-1', ts: NOW } };
+    const beams = computeAiCoreBeams(ops, positions, apps, AI_CORE.apexY, '#fff', NOW + AI_CORE.opMaxAgeMs + 1);
+    expect(beams).toHaveLength(0);
   });
 });
