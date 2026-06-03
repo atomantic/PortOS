@@ -72,3 +72,6 @@ browser/package-lock.json
 client/package-lock.json
 server/package-lock.json
 __pycache__/
+
+# Runtime cache (e.g. projects.json) — regenerated, never committed
+cache/
