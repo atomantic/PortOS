@@ -429,7 +429,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
       ? Promise.resolve(null)
       : getClaudeMdContext(workspaceDir)
           .catch(err => { console.log(`⚠️ CLAUDE.md retrieval failed: ${err.message}`); return null; }),
-    getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000 })
+    getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
       .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; })
   ]);
 

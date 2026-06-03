@@ -101,9 +101,42 @@ export const enrichmentProgressSchema = z.object({
 // Digital Twin settings schema
 export const digitalTwinSettingsSchema = z.object({
   autoInjectToCoS: z.boolean().default(true),
-  maxContextTokens: z.number().int().min(1000).max(100000).default(4000)
+  maxContextTokens: z.number().int().min(1000).max(100000).default(4000),
+  // The persona currently driving the embodied-twin context (CoS agents, etc.).
+  // null/absent = no persona (base twin). Tolerate the UI sentinel for "deactivate".
+  activePersonaId: z.string().uuid().nullable().optional()
 });
 export const soulSettingsSchema = digitalTwinSettingsSchema; // Alias for backwards compatibility
+
+// --- Phase 7: Twin Personas (M34 P7) ---
+
+// A persona is a named context variant. Its instructions are prepended to the
+// twin context so the embodied twin modulates voice/behavior for a context
+// (Professional, Casual, Family, …) without forking the underlying documents.
+export const personaSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  instructions: z.string().min(1).max(5000),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const createPersonaInputSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  instructions: z.string().min(1).max(5000)
+});
+
+export const updatePersonaInputSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  instructions: z.string().min(1).max(5000).optional()
+});
+
+export const setActivePersonaInputSchema = z.object({
+  personaId: z.string().uuid().nullable()
+});
 
 // --- Phase 1: Quantitative Personality Modeling Schemas ---
 
@@ -177,6 +210,7 @@ export const digitalTwinMetaSchema = z.object({
   valuesTestHistory: z.array(valuesTestHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
   settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
+  personas: z.array(personaSchema).default([]),
   traits: traitsSchema.optional(),
   confidence: confidenceSchema.optional()
 });

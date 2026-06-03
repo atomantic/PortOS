@@ -29,6 +29,7 @@ export const DEFAULT_META = {
   documents: [],
   testHistory: [],
   valuesTestHistory: [],
+  personas: [],
   enrichment: { completedCategories: [], lastSession: null },
   settings: { autoInjectToCoS: true, maxContextTokens: 4000 }
 };
