@@ -363,7 +363,8 @@ describe('computeGoalForest', () => {
     // Children carry a parentId back-reference and one link each to the spire apex.
     expect(cluster.children.every((c) => c.parentId === 'apex')).toBe(true);
     expect(cluster.links).toHaveLength(2);
-    expect(cluster.links[0].to).toEqual([cluster.spire.position[0], cluster.spire.height, cluster.spire.position[2]]);
+    // Links join the tower tops, which sit a 0.4 plinth above the height baseline.
+    expect(cluster.links[0].to).toEqual([cluster.spire.position[0], 0.4 + cluster.spire.height, cluster.spire.position[2]]);
   });
 
   it('centers a single root cluster on FOREST.base', () => {
@@ -372,7 +373,7 @@ describe('computeGoalForest', () => {
     expect(vm.clusters[0].spire.position[2]).toBe(FOREST.base[2]);
   });
 
-  it('caps root clusters and reports the overflow', () => {
+  it('caps root clusters and reports the overflow (folded roots + their descendants)', () => {
     const goals = [];
     for (let i = 0; i < FOREST.maxRoots + 2; i++) {
       goals.push(goal({ id: `r${i}`, parentId: null }));
@@ -380,8 +381,27 @@ describe('computeGoalForest', () => {
     }
     const vm = computeGoalForest(goals, NOW);
     expect(vm.clusters).toHaveLength(FOREST.maxRoots);
-    expect(vm.rootOverflow).toBe(2);
+    // 2 overflowed roots, each with 1 child → 2 * (1 + 1) = 4 goals folded away.
+    expect(vm.rootOverflow).toBe(4);
     expect(vm.rootCount).toBe(FOREST.maxRoots + 2);
+  });
+
+  it('flips to the forest view when only an OVERFLOWED root has children', () => {
+    // First maxRoots roots are flat leaves; the next root (which overflows the cap) is the
+    // only one with a child. hasHierarchy must be derived pre-cap so the forest still shows.
+    // Status ties sort by id ascending, so the flat roots use ids that sort BEFORE the deep
+    // one ('aflat*' < 'zdeep-root') to guarantee the child-bearing root lands past the cap.
+    const goals = [];
+    for (let i = 0; i < FOREST.maxRoots; i++) goals.push(goal({ id: `aflat${i}`, parentId: null }));
+    goals.push(goal({ id: 'zdeep-root', parentId: null }));
+    goals.push(goal({ id: 'zdeep-child', parentId: 'zdeep-root' }));
+    const vm = computeGoalForest(goals, NOW);
+    // The child-bearing root is beyond FOREST.maxRoots, so it is NOT in the visible clusters…
+    expect(vm.clusters.every((c) => c.children.length === 0)).toBe(true);
+    // …yet the district must still pick the forest layout (pre-cap hierarchy detection)…
+    expect(vm.hasHierarchy).toBe(true);
+    // …and the overflowed root + its child are both counted, not silently dropped.
+    expect(vm.rootOverflow).toBe(2);
   });
 
   it('surfaces a descendant count on a child that has its own sub-tree (no silent drop)', () => {

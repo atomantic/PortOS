@@ -285,7 +285,11 @@ export function computeGoalForest(goals, now = Date.now()) {
     .sort(compareByStatusThenId);
 
   const visibleRoots = rankedRoots.slice(0, FOREST.maxRoots);
-  const rootOverflow = Math.max(0, rankedRoots.length - visibleRoots.length);
+  // Root overflow counts the folded-away root trees AND everything nested under them, so a
+  // child-bearing root past the cap isn't silently undercounted (it's `roots + descendants`).
+  const rootOverflow = rankedRoots
+    .slice(FOREST.maxRoots)
+    .reduce((sum, { node }) => sum + 1 + countDescendants(node), 0);
 
   const clusters = visibleRoots.map(({ node }, rootIndex) => {
     // Spread root clusters along x, centered on FOREST.base.
@@ -300,7 +304,11 @@ export function computeGoalForest(goals, now = Date.now()) {
     attachMilestones(spire, node.goal, spire.height);
 
     const childNodes = node.children.slice(0, FOREST.maxChildren);
-    const childOverflow = Math.max(0, node.children.length - childNodes.length);
+    // Child overflow counts the folded-away children plus their own sub-trees, mirroring
+    // the descendantCount surfaced on displayed children — nothing nested vanishes silently.
+    const childOverflow = node.children
+      .slice(FOREST.maxChildren)
+      .reduce((sum, child) => sum + 1 + countDescendants(child), 0);
 
     // Children ring around the spire. A single child sits directly in front; multiple
     // children spread evenly across a forward-facing arc so links don't cross the spire.
@@ -317,10 +325,11 @@ export function computeGoalForest(goals, now = Date.now()) {
       return m;
     });
 
-    // Links: from each child's apex up to the root spire's apex.
+    // Links: from each child's apex up to the root spire's apex. Towers rise from a 0.4
+    // plinth, so the true top sits at 0.4 + height — match that so links join the tips.
     const links = children.map((child) => ({
-      from: [child.position[0], child.height, child.position[2]],
-      to: [spire.position[0], spire.height, spire.position[2]],
+      from: [child.position[0], 0.4 + child.height, child.position[2]],
+      to: [spire.position[0], 0.4 + spire.height, spire.position[2]],
       childId: child.id,
     }));
 
@@ -336,6 +345,9 @@ export function computeGoalForest(goals, now = Date.now()) {
     // A forest is only worth showing when at least one root actually has children;
     // otherwise it's just the flat row with extra spacing. The component uses this to
     // decide whether to render the hierarchy view vs. fall back to the flat row.
-    hasHierarchy: clusters.some((c) => c.children.length > 0),
+    // Derived from ALL ranked roots (pre-cap) so a child-bearing root that overflows past
+    // FOREST.maxRoots still flips the district into the forest layout instead of the flat
+    // row — otherwise its sub-tree would be invisible AND uncounted.
+    hasHierarchy: rankedRoots.some(({ node }) => node.children.length > 0),
   };
 }
