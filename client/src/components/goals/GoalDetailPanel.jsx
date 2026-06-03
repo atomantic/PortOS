@@ -1,155 +1,32 @@
-import { useState, useEffect } from 'react';
-import {
-  Target, X, Check, Trash2, Milestone, Calendar, CalendarDays, Clock,
-  Heart, DollarSign, Lightbulb, Users, Flame, AlertTriangle, Tag,
-  Link2, Unlink, Activity, Plus, NotebookPen, ListTodo, TrendingUp,
-  TrendingDown, Minus, CircleDot, Wand2, ArrowUp, ArrowDown, CalendarPlus,
-  CalendarX, RefreshCw, ChevronDown, ChevronRight, ClipboardCheck
-} from 'lucide-react';
-import * as api from '../../services/api';
+import { X, AlertTriangle, Calendar, Activity, Tag, Check, Trash2 } from 'lucide-react';
 import Pill from '../ui/Pill';
+import {
+  CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, GOAL_TYPE_OPTIONS, DEFAULT_NEW_GOAL
+} from './goalConstants';
+import { useGoalDetail } from '../../hooks/useGoalDetail';
+import ProgressSlider from './ProgressSlider';
+import GoalEditForm from './GoalEditForm';
+import GoalTodoList from './GoalTodoList';
+import GoalMilestones from './GoalMilestones';
+import GoalPlanSection from './GoalPlanSection';
+import GoalCheckIns from './GoalCheckIns';
+import GoalProgressLog from './GoalProgressLog';
+import GoalLinkedActivities from './GoalLinkedActivities';
+import GoalLinkedCalendars from './GoalLinkedCalendars';
 
-const CATEGORY_CONFIG = {
-  creative: { label: 'Creative', icon: Lightbulb, color: 'text-purple-400', bg: 'bg-purple-500/20', hex: '#a855f7' },
-  family: { label: 'Family', icon: Users, color: 'text-pink-400', bg: 'bg-pink-500/20', hex: '#ec4899' },
-  health: { label: 'Health', icon: Heart, color: 'text-green-400', bg: 'bg-green-500/20', hex: '#22c55e' },
-  financial: { label: 'Financial', icon: DollarSign, color: 'text-yellow-400', bg: 'bg-yellow-500/20', hex: '#eab308' },
-  legacy: { label: 'Legacy', icon: Flame, color: 'text-orange-400', bg: 'bg-orange-500/20', hex: '#f97316' },
-  mastery: { label: 'Mastery', icon: Target, color: 'text-blue-400', bg: 'bg-blue-500/20', hex: '#3b82f6' }
-};
-
-const HORIZON_OPTIONS = [
-  { value: '1-year', label: '1 Year' },
-  { value: '3-year', label: '3 Years' },
-  { value: '5-year', label: '5 Years' },
-  { value: '10-year', label: '10 Years' },
-  { value: '20-year', label: '20 Years' },
-  { value: 'lifetime', label: 'Lifetime' }
-];
-
-const GOAL_TYPE_CONFIG = {
-  apex: { label: 'Apex', color: 'text-amber-400', bg: 'bg-amber-500/20', description: 'North-star purpose' },
-  'sub-apex': { label: 'Sub-Apex', color: 'text-purple-400', bg: 'bg-purple-500/20', description: 'Major life pillar' },
-  standard: { label: 'Standard', color: 'text-gray-400', bg: 'bg-gray-500/20', description: 'Regular goal' }
-};
-
-const GOAL_TYPE_OPTIONS = Object.entries(GOAL_TYPE_CONFIG).map(([value, cfg]) => ({ value, label: cfg.label }));
-
-const MAX_TAGS = 20;
-const MAX_TAG_LENGTH = 50;
-
-const DEFAULT_NEW_GOAL = { title: '', description: '', horizon: '5-year', category: 'mastery', parentId: null };
-
-const CHECK_IN_STATUS_CONFIG = {
-  'on-track': { color: 'text-green-400', bg: 'bg-green-500/20', label: 'On Track' },
-  'behind': { color: 'text-yellow-400', bg: 'bg-yellow-500/20', label: 'Behind' },
-  'at-risk': { color: 'text-red-400', bg: 'bg-red-500/20', label: 'At Risk' }
-};
-
-const CHECK_IN_DOT_COLORS = { 'on-track': 'bg-green-500', 'behind': 'bg-yellow-500', 'at-risk': 'bg-red-500' };
-
+// Re-exported for backward compatibility — GoalsListView/GoalsTreeView/GoalProgressWidget
+// import these from GoalDetailPanel. Source of truth is ./goalConstants.
 export { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, GOAL_TYPE_OPTIONS, DEFAULT_NEW_GOAL };
 
-function ProgressSlider({ goal, onCommit }) {
-  const [draft, setDraft] = useState(goal.progress ?? 0);
-  const [dragging, setDragging] = useState(false);
-
-  // Sync draft when goal changes externally (not during drag)
-  useEffect(() => {
-    if (!dragging) setDraft(goal.progress ?? 0);
-  }, [goal.progress, dragging]);
-
-  const commit = () => {
-    setDragging(false);
-    if (draft !== (goal.progress ?? 0)) onCommit(draft);
-  };
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-xs font-medium text-gray-400">Progress</span>
-        <span className="text-xs text-gray-300 font-mono">{draft}%</span>
-      </div>
-      <input
-        type="range"
-        min="0"
-        max="100"
-        value={draft}
-        onChange={e => { setDragging(true); setDraft(parseInt(e.target.value, 10)); }}
-        onMouseUp={commit}
-        onTouchEnd={commit}
-        className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-port-border accent-port-accent"
-      />
-      {goal.velocity && (
-        <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500">
-          <div className="flex items-center gap-1">
-            {goal.velocity.trend === 'increasing' && <TrendingUp className="w-3 h-3 text-green-400" />}
-            {goal.velocity.trend === 'decreasing' && <TrendingDown className="w-3 h-3 text-red-400" />}
-            {goal.velocity.trend === 'stable' && <Minus className="w-3 h-3 text-gray-400" />}
-            <span>{goal.velocity.percentPerMonth}%/mo</span>
-          </div>
-          {goal.velocity.projectedCompletion && (
-            <span className="text-gray-600">
-              ETA {new Date(goal.velocity.projectedCompletion + 'T00:00:00').toLocaleDateString()}
-            </span>
-          )}
-        </div>
-      )}
-      {goal.timeTracking?.totalMinutes > 0 && (
-        <div className="flex items-center gap-1 mt-1 text-xs text-gray-600">
-          <Clock className="w-3 h-3" />
-          {goal.timeTracking.totalMinutes >= 60
-            ? `${Math.floor(goal.timeTracking.totalMinutes / 60)}h${goal.timeTracking.totalMinutes % 60 ? ` ${goal.timeTracking.totalMinutes % 60}m` : ''}`
-            : `${goal.timeTracking.totalMinutes}m`}
-          {' total'}
-          {goal.timeTracking.weeklyAverage > 0 && ` · ${goal.timeTracking.weeklyAverage}m/wk`}
-        </div>
-      )}
-    </div>
-  );
-}
+const urgencyColor = (u) => {
+  if (u == null) return 'text-gray-500';
+  if (u >= 0.7) return 'text-red-400';
+  if (u >= 0.4) return 'text-yellow-400';
+  return 'text-green-400';
+};
 
 export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) {
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({});
-  const [tagInput, setTagInput] = useState('');
-  const [newMilestone, setNewMilestone] = useState({ title: '', targetDate: '' });
-  const [activities, setActivities] = useState([]);
-  const [selectedActivity, setSelectedActivity] = useState('');
-  const [showProgressForm, setShowProgressForm] = useState(false);
-  const todayISO = new Date().toISOString().slice(0, 10);
-  const [progressForm, setProgressForm] = useState({ date: todayISO, note: '', durationMinutes: '' });
-  const [subcalendars, setSubcalendars] = useState([]);
-  const [selectedCalendar, setSelectedCalendar] = useState('');
-  const [calendarMatchPattern, setCalendarMatchPattern] = useState('');
-  const [newTodoTitle, setNewTodoTitle] = useState('');
-  const [newTodoPriority, setNewTodoPriority] = useState('medium');
-  const [newTodoEstimate, setNewTodoEstimate] = useState('');
-  // Plan & scheduling state
-  const [planOpen, setPlanOpen] = useState(false);
-  const [generatingPhases, setGeneratingPhases] = useState(false);
-  const [proposedPhases, setProposedPhases] = useState(null);
-  const [schedulingBusy, setSchedulingBusy] = useState(false);
-  const [checkInsOpen, setCheckInsOpen] = useState(false);
-  const [checkingIn, setCheckingIn] = useState(false);
-
-  useEffect(() => {
-    api.getActivities().then(setActivities).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    api.getCalendarAccounts().then(accounts => {
-      const scs = [];
-      for (const account of (accounts || [])) {
-        for (const sc of (account.subcalendars || [])) {
-          if (sc.enabled && !sc.dormant) {
-            scs.push({ ...sc, accountName: account.name });
-          }
-        }
-      }
-      setSubcalendars(scs);
-    }).catch(() => {});
-  }, []);
+  const s = useGoalDetail({ goal, allGoals, onClose, onRefresh });
 
   if (!goal) return null;
 
@@ -158,218 +35,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
   const parent = goal.parentId ? allGoals?.find(g => g.id === goal.parentId) : null;
   const children = allGoals?.filter(g => g.parentId === goal.id) || [];
 
-  const startEdit = () => {
-    setForm({
-      title: goal.title,
-      description: goal.description || '',
-      horizon: goal.horizon,
-      category: goal.category,
-      goalType: goal.goalType || 'standard',
-      parentId: goal.parentId || '',
-      tags: [...(goal.tags || [])],
-      targetDate: goal.targetDate || '',
-      timeBlockConfig: goal.timeBlockConfig || null
-    });
-    setEditing(true);
-  };
-
-  const saveEdit = async () => {
-    await api.updateGoal(goal.id, {
-      ...form,
-      parentId: form.parentId || null,
-      targetDate: form.targetDate || null,
-      timeBlockConfig: form.timeBlockConfig || null
-    });
-    setEditing(false);
-    onRefresh();
-  };
-
-  const handleGeneratePhases = async () => {
-    setGeneratingPhases(true);
-    const phases = await api.generateGoalPhases(goal.id).catch(() => null);
-    setGeneratingPhases(false);
-    if (phases) setProposedPhases(phases);
-  };
-
-  const handleAcceptPhases = async () => {
-    if (!proposedPhases?.length) return;
-    await api.acceptGoalPhases(goal.id, proposedPhases);
-    setProposedPhases(null);
-    onRefresh();
-  };
-
-  const handleCheckIn = async () => {
-    setCheckingIn(true);
-    await api.checkInGoal(goal.id).catch(() => null);
-    setCheckingIn(false);
-    setCheckInsOpen(true);
-    onRefresh();
-  };
-
-  const handleSchedule = async () => {
-    setSchedulingBusy(true);
-    await api.scheduleGoalTimeBlocks(goal.id);
-    setSchedulingBusy(false);
-    onRefresh();
-  };
-
-  const handleRemoveSchedule = async () => {
-    setSchedulingBusy(true);
-    await api.removeGoalSchedule(goal.id);
-    setSchedulingBusy(false);
-    onRefresh();
-  };
-
-  const handleReschedule = async () => {
-    setSchedulingBusy(true);
-    await api.rescheduleGoalTimeBlocks(goal.id);
-    setSchedulingBusy(false);
-    onRefresh();
-  };
-
-  const handleDelete = async () => {
-    await api.deleteGoal(goal.id);
-    onClose();
-    onRefresh();
-  };
-
-  const handleComplete = async () => {
-    await api.updateGoal(goal.id, { status: 'completed' });
-    onRefresh();
-  };
-
-  const handleAddMilestone = async () => {
-    if (!newMilestone.title.trim()) return;
-    await api.addGoalMilestone(goal.id, {
-      title: newMilestone.title,
-      ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
-    });
-    setNewMilestone({ title: '', targetDate: '' });
-    onRefresh();
-  };
-
-  const handleCompleteMilestone = async (milestoneId) => {
-    await api.completeGoalMilestone(goal.id, milestoneId);
-    onRefresh();
-  };
-
-  const handleLinkActivity = async () => {
-    if (!selectedActivity) return;
-    await api.linkGoalActivity(goal.id, { activityName: selectedActivity });
-    setSelectedActivity('');
-    onRefresh();
-  };
-
-  const handleAddProgress = async () => {
-    if (!progressForm.note.trim() || !progressForm.date) return;
-    await api.addGoalProgress(goal.id, {
-      date: progressForm.date,
-      note: progressForm.note,
-      ...(progressForm.durationMinutes ? { durationMinutes: parseInt(progressForm.durationMinutes, 10) } : {})
-    });
-    setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
-    setShowProgressForm(false);
-    onRefresh();
-  };
-
-  const resetProgressForm = () => {
-    setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
-    setShowProgressForm(false);
-  };
-
-  const handleDeleteProgress = async (entryId) => {
-    await api.deleteGoalProgress(goal.id, entryId);
-    onRefresh();
-  };
-
-  const handleUnlinkActivity = async (activityName) => {
-    await api.unlinkGoalActivity(goal.id, activityName);
-    onRefresh();
-  };
-
-  const handleLinkCalendar = async () => {
-    if (!selectedCalendar) return;
-    const sc = subcalendars.find(s => s.calendarId === selectedCalendar);
-    if (!sc) return;
-    await api.linkGoalCalendar(goal.id, {
-      subcalendarId: sc.calendarId,
-      subcalendarName: sc.name,
-      matchPattern: calendarMatchPattern
-    });
-    setSelectedCalendar('');
-    setCalendarMatchPattern('');
-    onRefresh();
-  };
-
-  const handleUnlinkCalendar = async (subcalendarId) => {
-    await api.unlinkGoalCalendar(goal.id, subcalendarId);
-    onRefresh();
-  };
-
-  const handleProgressChange = async (value) => {
-    await api.updateGoalProgress(goal.id, value);
-    onRefresh();
-  };
-
-  const handleAddTodo = async () => {
-    if (!newTodoTitle.trim()) return;
-    await api.addGoalTodo(goal.id, {
-      title: newTodoTitle,
-      priority: newTodoPriority,
-      ...(newTodoEstimate ? { estimateMinutes: parseInt(newTodoEstimate, 10) } : {})
-    });
-    setNewTodoTitle('');
-    setNewTodoPriority('medium');
-    setNewTodoEstimate('');
-    onRefresh();
-  };
-
-  const handleToggleTodo = async (todo) => {
-    const nextStatus = todo.status === 'done' ? 'pending' : 'done';
-    await api.updateGoalTodo(goal.id, todo.id, { status: nextStatus });
-    onRefresh();
-  };
-
-  const handleDeleteTodo = async (todoId) => {
-    await api.deleteGoalTodo(goal.id, todoId);
-    onRefresh();
-  };
-
-  const addTag = () => {
-    const tag = tagInput.trim().slice(0, MAX_TAG_LENGTH);
-    if (tag && form.tags.length < MAX_TAGS && !form.tags.includes(tag)) {
-      setForm({ ...form, tags: [...form.tags, tag] });
-    }
-    setTagInput('');
-  };
-
-  const removeTag = (tag) => {
-    setForm({ ...form, tags: form.tags.filter(t => t !== tag) });
-  };
-
-  const urgencyColor = (u) => {
-    if (u == null) return 'text-gray-500';
-    if (u >= 0.7) return 'text-red-400';
-    if (u >= 0.4) return 'text-yellow-400';
-    return 'text-green-400';
-  };
-
-  // Exclude self and descendants from parent options to prevent cycles
-  const getDescendantIds = (id) => {
-    const ids = new Set([id]);
-    const queue = [id];
-    while (queue.length) {
-      const current = queue.shift();
-      for (const g of (allGoals || [])) {
-        if (g.parentId === current && !ids.has(g.id)) {
-          ids.add(g.id);
-          queue.push(g.id);
-        }
-      }
-    }
-    return ids;
-  };
-  const excludedIds = getDescendantIds(goal.id);
+  const excludedIds = s.getDescendantIds(goal.id);
   const parentOptions = (allGoals || []).filter(g => !excludedIds.has(g.id));
 
   return (
@@ -394,175 +60,18 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
         </button>
       </div>
 
-      {editing ? (
-        <div className="space-y-3">
-          <input
-            type="text"
-            value={form.title}
-            onChange={e => setForm({ ...form, title: e.target.value })}
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-          />
-          <textarea
-            value={form.description}
-            onChange={e => setForm({ ...form, description: e.target.value })}
-            rows={3}
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white resize-none"
-          />
-          <div>
-            <label className="text-xs text-gray-500">Horizon</label>
-            <select
-              value={form.horizon}
-              onChange={e => setForm({ ...form, horizon: e.target.value })}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
-            >
-              {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-gray-500">Category</label>
-            <select
-              value={form.category}
-              onChange={e => setForm({ ...form, category: e.target.value })}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
-            >
-              {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
-                <option key={k} value={k}>{v.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-gray-500">Goal Type</label>
-            <select
-              value={form.goalType || 'standard'}
-              onChange={e => setForm({ ...form, goalType: e.target.value })}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
-            >
-              {GOAL_TYPE_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-gray-500">Parent Goal</label>
-            <select
-              value={form.parentId}
-              onChange={e => setForm({ ...form, parentId: e.target.value })}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
-            >
-              <option value="">None (root)</option>
-              {parentOptions.map(g => (
-                <option key={g.id} value={g.id}>{g.title}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-gray-500">Target Date</label>
-            <input
-              type="date"
-              value={form.targetDate || ''}
-              onChange={e => setForm({ ...form, targetDate: e.target.value })}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500">Time Block Config</label>
-            <div className="mt-1 space-y-2">
-              <div>
-                <span className="text-[10px] text-gray-600">Preferred days</span>
-                <div className="flex flex-wrap gap-1 mt-0.5">
-                  {['mon','tue','wed','thu','fri','sat','sun'].map(d => {
-                    const days = form.timeBlockConfig?.preferredDays || [];
-                    const active = days.includes(d);
-                    return (
-                      <button
-                        key={d}
-                        type="button"
-                        onClick={() => {
-                          const next = active ? days.filter(x => x !== d) : [...days, d];
-                          setForm({ ...form, timeBlockConfig: { ...(form.timeBlockConfig || { timeSlot: 'morning', sessionDurationMinutes: 60 }), preferredDays: next } });
-                        }}
-                        className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-400'}`}
-                      >
-                        {d}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <span className="text-[10px] text-gray-600">Time slot</span>
-                  <select
-                    value={form.timeBlockConfig?.timeSlot || 'morning'}
-                    onChange={e => setForm({ ...form, timeBlockConfig: { ...(form.timeBlockConfig || { preferredDays: ['mon','wed','fri'], sessionDurationMinutes: 60 }), timeSlot: e.target.value } })}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white mt-0.5"
-                  >
-                    <option value="morning">Morning</option>
-                    <option value="afternoon">Afternoon</option>
-                    <option value="evening">Evening</option>
-                  </select>
-                </div>
-                <div className="w-20">
-                  <span className="text-[10px] text-gray-600">Duration</span>
-                  <input
-                    type="number"
-                    min="15"
-                    max="480"
-                    value={form.timeBlockConfig?.sessionDurationMinutes || 60}
-                    onChange={e => setForm({ ...form, timeBlockConfig: { ...(form.timeBlockConfig || { preferredDays: ['mon','wed','fri'], timeSlot: 'morning' }), sessionDurationMinutes: parseInt(e.target.value, 10) || 60 } })}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white mt-0.5"
-                  />
-                  <span className="text-[10px] text-gray-600">min</span>
-                </div>
-              </div>
-              {form.timeBlockConfig?.preferredDays?.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setForm({ ...form, timeBlockConfig: null })}
-                  className="text-[10px] text-red-400 hover:text-red-300"
-                >
-                  Clear config
-                </button>
-              )}
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-gray-500">Tags</label>
-            <div className="flex flex-wrap gap-1 mt-1 mb-2">
-              {form.tags.map(tag => (
-                <Pill key={tag} tone="bare" bordered={false} className="bg-port-accent/20 text-port-accent">
-                  {tag}
-                  <button onClick={() => removeTag(tag)} className="hover:text-white">
-                    <X className="w-3 h-3" />
-                  </button>
-                </Pill>
-              ))}
-            </div>
-            <div className="flex gap-1">
-              <input
-                type="text"
-                value={tagInput}
-                onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag())}
-                placeholder="Add tag..."
-                className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
-              />
-              <button
-                onClick={addTag}
-                disabled={form.tags.length >= MAX_TAGS}
-                className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
-              >
-                Add
-              </button>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={saveEdit} className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600">
-              Save
-            </button>
-            <button onClick={() => setEditing(false)} className="px-3 py-1.5 text-sm rounded bg-port-border text-gray-300">
-              Cancel
-            </button>
-          </div>
-        </div>
+      {s.editing ? (
+        <GoalEditForm
+          form={s.form}
+          setForm={s.setForm}
+          tagInput={s.tagInput}
+          setTagInput={s.setTagInput}
+          addTag={s.addTag}
+          removeTag={s.removeTag}
+          parentOptions={parentOptions}
+          saveEdit={s.saveEdit}
+          onCancel={() => s.setEditing(false)}
+        />
       ) : (
         <>
           {/* Info */}
@@ -586,99 +95,21 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           </div>
 
           {/* Progress Bar */}
-          <ProgressSlider goal={goal} onCommit={handleProgressChange} />
+          <ProgressSlider goal={goal} onCommit={s.handleProgressChange} />
 
           {/* Todos */}
-          <div>
-            <div className="flex items-center gap-1 mb-2">
-              <ListTodo className="w-3.5 h-3.5 text-gray-500" />
-              <span className="text-xs font-medium text-gray-400">
-                Todos ({goal.todos?.filter(t => t.status === 'done').length || 0}/{goal.todos?.length || 0})
-              </span>
-            </div>
-            {goal.todos?.length > 0 && (
-              <div className="space-y-1 mb-2">
-                {goal.todos.map(todo => (
-                  <div key={todo.id} className="flex items-center gap-2 text-xs group">
-                    <button
-                      onClick={() => handleToggleTodo(todo)}
-                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                        todo.status === 'done'
-                          ? 'bg-green-500/20 border-green-500 text-green-400'
-                          : todo.status === 'in-progress'
-                            ? 'bg-port-accent/20 border-port-accent text-port-accent'
-                            : 'border-gray-600 hover:border-port-accent'
-                      }`}
-                    >
-                      {todo.status === 'done' && <Check className="w-3 h-3" />}
-                      {todo.status === 'in-progress' && <CircleDot className="w-2.5 h-2.5" />}
-                    </button>
-                    <span className={`flex-1 ${todo.status === 'done' ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
-                      {todo.title}
-                    </span>
-                    {/* Not <Pill>: px-1 is tighter than Pill's xs (px-1.5) and would be overridden. */}
-                    <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${
-                      todo.priority === 'high' ? 'bg-red-500/20 text-red-400' :
-                      todo.priority === 'low' ? 'bg-gray-700 text-gray-500' :
-                      'bg-yellow-500/20 text-yellow-400'
-                    }`}>
-                      {todo.priority}
-                    </span>
-                    {todo.estimateMinutes && (
-                      <span className="shrink-0 text-gray-600">{todo.estimateMinutes}m</span>
-                    )}
-                    <button
-                      onClick={() => handleDeleteTodo(todo.id)}
-                      className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="space-y-1">
-              <div className="flex gap-1">
-                <input
-                  type="text"
-                  value={newTodoTitle}
-                  onChange={e => setNewTodoTitle(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleAddTodo()}
-                  placeholder="Add todo..."
-                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
-                />
-                <button
-                  onClick={handleAddTodo}
-                  disabled={!newTodoTitle.trim()}
-                  className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </div>
-              {newTodoTitle.trim() && (
-                <div className="flex gap-1">
-                  <select
-                    value={newTodoPriority}
-                    onChange={e => setNewTodoPriority(e.target.value)}
-                    className="bg-port-bg border border-port-border rounded px-1.5 py-0.5 text-xs text-white"
-                  >
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                  <input
-                    type="number"
-                    value={newTodoEstimate}
-                    onChange={e => setNewTodoEstimate(e.target.value)}
-                    placeholder="Est. min"
-                    min="1"
-                    className="w-20 bg-port-bg border border-port-border rounded px-1.5 py-0.5 text-xs text-white"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
+          <GoalTodoList
+            goal={goal}
+            newTodoTitle={s.newTodoTitle}
+            setNewTodoTitle={s.setNewTodoTitle}
+            newTodoPriority={s.newTodoPriority}
+            setNewTodoPriority={s.setNewTodoPriority}
+            newTodoEstimate={s.newTodoEstimate}
+            setNewTodoEstimate={s.setNewTodoEstimate}
+            handleAddTodo={s.handleAddTodo}
+            handleToggleTodo={s.handleToggleTodo}
+            handleDeleteTodo={s.handleDeleteTodo}
+          />
 
           {/* Feasibility */}
           {goal.feasibility && (
@@ -729,58 +160,13 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           )}
 
           {/* Milestones */}
-          <div>
-            <div className="flex items-center gap-1 mb-2">
-              <Milestone className="w-3.5 h-3.5 text-gray-500" />
-              <span className="text-xs font-medium text-gray-400">
-                Milestones ({goal.milestones?.filter(m => m.completedAt).length || 0}/{goal.milestones?.length || 0})
-              </span>
-            </div>
-            {goal.milestones?.length > 0 && (
-              <div className="space-y-1 mb-2">
-                {goal.milestones.map(ms => (
-                  <div key={ms.id} className="flex items-center gap-2 text-sm">
-                    <button
-                      onClick={() => !ms.completedAt && handleCompleteMilestone(ms.id)}
-                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                        ms.completedAt
-                          ? 'bg-green-500/20 border-green-500 text-green-400'
-                          : 'border-gray-600 hover:border-port-accent'
-                      }`}
-                    >
-                      {ms.completedAt && <Check className="w-3 h-3" />}
-                    </button>
-                    <span className={`text-xs ${ms.completedAt ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
-                      {ms.title}
-                    </span>
-                    {ms.targetDate && (
-                      <span className="text-xs text-gray-600 ml-auto flex items-center gap-1">
-                        <Calendar className="w-3 h-3" />
-                        {new Date(ms.targetDate).toLocaleDateString()}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex gap-1">
-              <input
-                type="text"
-                value={newMilestone.title}
-                onChange={e => setNewMilestone({ ...newMilestone, title: e.target.value })}
-                onKeyDown={e => e.key === 'Enter' && handleAddMilestone()}
-                placeholder="Add milestone..."
-                className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
-              />
-              <button
-                onClick={handleAddMilestone}
-                disabled={!newMilestone.title.trim()}
-                className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
-              >
-                Add
-              </button>
-            </div>
-          </div>
+          <GoalMilestones
+            goal={goal}
+            newMilestone={s.newMilestone}
+            setNewMilestone={s.setNewMilestone}
+            handleAddMilestone={s.handleAddMilestone}
+            handleCompleteMilestone={s.handleCompleteMilestone}
+          />
 
           {/* Target Date */}
           {goal.targetDate && (
@@ -791,448 +177,75 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           )}
 
           {/* Plan Section */}
-          <div>
-            <button
-              onClick={() => setPlanOpen(!planOpen)}
-              className="flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white w-full"
-            >
-              {planOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-              <Wand2 className="w-3.5 h-3.5" />
-              <span>Plan</span>
-            </button>
-            {planOpen && (
-              <div className="mt-2 space-y-2">
-                <button
-                  onClick={handleGeneratePhases}
-                  disabled={!goal.targetDate || generatingPhases}
-                  className="w-full px-3 py-1.5 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50 flex items-center justify-center gap-1"
-                >
-                  <Wand2 className="w-3 h-3" />
-                  {generatingPhases ? 'Generating...' : 'Generate Plan'}
-                </button>
-                {!goal.targetDate && (
-                  <p className="text-[10px] text-gray-600">Set a target date first to generate phases</p>
-                )}
-                {proposedPhases && (
-                  <div className="space-y-1.5">
-                    <p className="text-[10px] text-gray-500">{proposedPhases.length} phases proposed</p>
-                    {proposedPhases.map((phase, idx) => (
-                      <div key={idx} className="p-2 rounded bg-port-bg border border-port-border space-y-1">
-                        <div className="flex items-center gap-2">
-                          <div className="flex flex-col gap-0.5">
-                            <button
-                              onClick={() => {
-                                if (idx === 0) return;
-                                const next = [...proposedPhases];
-                                [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                                next.forEach((p, i) => { p.order = i; });
-                                setProposedPhases(next);
-                              }}
-                              disabled={idx === 0}
-                              className="text-gray-600 hover:text-white disabled:opacity-30"
-                            >
-                              <ArrowUp className="w-2.5 h-2.5" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (idx === proposedPhases.length - 1) return;
-                                const next = [...proposedPhases];
-                                [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-                                next.forEach((p, i) => { p.order = i; });
-                                setProposedPhases(next);
-                              }}
-                              disabled={idx === proposedPhases.length - 1}
-                              className="text-gray-600 hover:text-white disabled:opacity-30"
-                            >
-                              <ArrowDown className="w-2.5 h-2.5" />
-                            </button>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <input
-                              type="text"
-                              value={phase.title}
-                              onChange={e => {
-                                const next = [...proposedPhases];
-                                next[idx] = { ...next[idx], title: e.target.value };
-                                setProposedPhases(next);
-                              }}
-                              className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-white"
-                            />
-                            <input
-                              type="text"
-                              value={phase.description || ''}
-                              onChange={e => {
-                                const next = [...proposedPhases];
-                                next[idx] = { ...next[idx], description: e.target.value };
-                                setProposedPhases(next);
-                              }}
-                              placeholder="Description..."
-                              className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-gray-400 mt-0.5"
-                            />
-                          </div>
-                          <div className="flex flex-col items-end gap-0.5">
-                            <input
-                              type="date"
-                              value={phase.targetDate}
-                              onChange={e => {
-                                const next = [...proposedPhases];
-                                next[idx] = { ...next[idx], targetDate: e.target.value };
-                                setProposedPhases(next);
-                              }}
-                              className="bg-port-card border border-port-border rounded px-1 py-0.5 text-[10px] text-white"
-                            />
-                            <button
-                              onClick={() => setProposedPhases(proposedPhases.filter((_, i) => i !== idx).map((p, i) => ({ ...p, order: i })))}
-                              className="text-gray-600 hover:text-red-400"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() => setProposedPhases([...proposedPhases, { title: '', description: '', targetDate: goal.targetDate, order: proposedPhases.length }])}
-                      className="text-xs text-port-accent hover:text-blue-300 flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" /> Add phase
-                    </button>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleAcceptPhases}
-                        className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-blue-600"
-                      >
-                        Accept Plan
-                      </button>
-                      <button
-                        onClick={() => setProposedPhases(null)}
-                        className="px-3 py-1.5 text-xs rounded bg-port-border text-gray-300"
-                      >
-                        Discard
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Schedule Controls */}
-                {goal.milestones?.length > 0 && goal.timeBlockConfig && (
-                  <div className="pt-2 border-t border-port-border space-y-2">
-                    <div className="text-[10px] text-gray-500">
-                      <CalendarPlus className="w-3 h-3 inline mr-1" />
-                      {goal.scheduledEvents?.length
-                        ? `${goal.scheduledEvents.length} events scheduled`
-                        : 'No events scheduled'}
-                    </div>
-                    {!goal.scheduledEvents?.length ? (
-                      <button
-                        onClick={handleSchedule}
-                        disabled={schedulingBusy}
-                        className="w-full px-3 py-1.5 text-xs rounded bg-green-500/20 text-green-400 disabled:opacity-50 flex items-center justify-center gap-1"
-                      >
-                        <CalendarPlus className="w-3 h-3" />
-                        {schedulingBusy ? 'Scheduling...' : 'Schedule Time Blocks'}
-                      </button>
-                    ) : (
-                      <div className="flex gap-1">
-                        <button
-                          onClick={handleReschedule}
-                          disabled={schedulingBusy}
-                          className="flex-1 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50 flex items-center justify-center gap-1"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          Reschedule
-                        </button>
-                        <button
-                          onClick={handleRemoveSchedule}
-                          disabled={schedulingBusy}
-                          className="px-2 py-1 text-xs rounded bg-red-500/20 text-red-400 disabled:opacity-50 flex items-center justify-center gap-1"
-                        >
-                          <CalendarX className="w-3 h-3" />
-                          Remove
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <GoalPlanSection
+            goal={goal}
+            planOpen={s.planOpen}
+            setPlanOpen={s.setPlanOpen}
+            generatingPhases={s.generatingPhases}
+            handleGeneratePhases={s.handleGeneratePhases}
+            proposedPhases={s.proposedPhases}
+            setProposedPhases={s.setProposedPhases}
+            handleAcceptPhases={s.handleAcceptPhases}
+            schedulingBusy={s.schedulingBusy}
+            handleSchedule={s.handleSchedule}
+            handleReschedule={s.handleReschedule}
+            handleRemoveSchedule={s.handleRemoveSchedule}
+          />
 
           {/* Check-ins */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <button
-                onClick={() => setCheckInsOpen(!checkInsOpen)}
-                className="flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white"
-              >
-                {checkInsOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                <ClipboardCheck className="w-3.5 h-3.5" />
-                <span>Check-ins ({goal.checkIns?.length || 0})</span>
-                {goal.checkIns?.length > 0 && (() => {
-                  const latest = goal.checkIns[goal.checkIns.length - 1];
-                  return <span className={`ml-1 w-2 h-2 rounded-full ${CHECK_IN_DOT_COLORS[latest.status] || 'bg-gray-500'}`} />;
-                })()}
-              </button>
-              {goal.status === 'active' && (
-                <button
-                  onClick={handleCheckIn}
-                  disabled={checkingIn}
-                  className="flex items-center gap-1 px-2 py-1 text-[10px] rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
-                >
-                  <Wand2 className={`w-3 h-3 ${checkingIn ? 'animate-spin' : ''}`} />
-                  {checkingIn ? 'Checking in...' : 'Run Check-In'}
-                </button>
-              )}
-            </div>
-            {checkInsOpen && goal.checkIns?.length > 0 && (
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {[...goal.checkIns].reverse().map(ci => {
-                  const sc = CHECK_IN_STATUS_CONFIG[ci.status] || CHECK_IN_STATUS_CONFIG['behind'];
-                  return (
-                    <div key={ci.id} className="p-2 rounded bg-port-bg border border-port-border space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-gray-500">{new Date(ci.date + 'T00:00:00').toLocaleDateString()}</span>
-                        <Pill tone="bare" size="xs" bordered={false} className={`${sc.bg} ${sc.color}`}>{sc.label}</Pill>
-                      </div>
-                      <div className="text-[10px] text-gray-500">
-                        Progress: {ci.actualProgress}%{ci.expectedProgress != null && ` / ${ci.expectedProgress}% expected`}
-                        {ci.attendanceRate != null && ` · ${ci.attendanceRate}% activity`}
-                      </div>
-                      {ci.assessment && <p className="text-xs text-gray-300">{ci.assessment}</p>}
-                      {ci.recommendations?.length > 0 && (
-                        <ul className="text-[10px] text-gray-400 list-disc pl-3 space-y-0.5">
-                          {ci.recommendations.map((r, i) => <li key={i}>{r}</li>)}
-                        </ul>
-                      )}
-                      {ci.encouragement && (
-                        <p className="text-[10px] text-port-accent italic">{ci.encouragement}</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <GoalCheckIns
+            goal={goal}
+            checkInsOpen={s.checkInsOpen}
+            setCheckInsOpen={s.setCheckInsOpen}
+            checkingIn={s.checkingIn}
+            handleCheckIn={s.handleCheckIn}
+          />
 
           {/* Progress Log */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1">
-                <NotebookPen className="w-3.5 h-3.5 text-gray-500" />
-                <span className="text-xs font-medium text-gray-400">
-                  Progress ({goal.progressLog?.length || 0})
-                </span>
-                {goal.progressLog?.length > 0 && (
-                  <span className="text-xs text-gray-600 ml-1">
-                    {goal.progressLog.reduce((sum, e) => sum + (e.durationMinutes || 0), 0)}min total
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={() => setShowProgressForm(!showProgressForm)}
-                className="p-0.5 text-gray-500 hover:text-port-accent"
-                title="Log progress"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            {showProgressForm && (
-              <div className="space-y-1.5 mb-2 p-2 rounded bg-port-bg border border-port-border">
-                <input
-                  type="date"
-                  value={progressForm.date}
-                  onChange={e => setProgressForm({ ...progressForm, date: e.target.value })}
-                  className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
-                />
-                <textarea
-                  value={progressForm.note}
-                  onChange={e => setProgressForm({ ...progressForm, note: e.target.value })}
-                  placeholder="What did you work on?"
-                  rows={2}
-                  className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white resize-none"
-                />
-                <div className="flex items-center gap-1">
-                  <Clock className="w-3 h-3 text-gray-500" />
-                  <input
-                    type="number"
-                    value={progressForm.durationMinutes}
-                    onChange={e => setProgressForm({ ...progressForm, durationMinutes: e.target.value })}
-                    placeholder="Minutes (optional)"
-                    min="1"
-                    max="1440"
-                    className="flex-1 bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white"
-                  />
-                </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={handleAddProgress}
-                    disabled={!progressForm.note.trim()}
-                    className="px-2 py-1 text-xs rounded bg-port-accent text-white disabled:opacity-50"
-                  >
-                    Log
-                  </button>
-                  <button
-                    onClick={resetProgressForm}
-                    className="px-2 py-1 text-xs rounded bg-port-border text-gray-300"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-            {goal.progressLog?.length > 0 && (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {[...goal.progressLog].reverse().map(entry => (
-                  <div key={entry.id} className="flex items-start gap-2 text-xs group">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 text-gray-500">
-                        <span>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</span>
-                        {entry.durationMinutes && (
-                          <span className="flex items-center gap-0.5">
-                            <Clock className="w-3 h-3" />
-                            {entry.durationMinutes >= 60
-                              ? `${Math.floor(entry.durationMinutes / 60)}h${entry.durationMinutes % 60 ? ` ${entry.durationMinutes % 60}m` : ''}`
-                              : `${entry.durationMinutes}m`}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-gray-300 mt-0.5">{entry.note}</p>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteProgress(entry.id)}
-                      className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <GoalProgressLog
+            goal={goal}
+            showProgressForm={s.showProgressForm}
+            setShowProgressForm={s.setShowProgressForm}
+            progressForm={s.progressForm}
+            setProgressForm={s.setProgressForm}
+            handleAddProgress={s.handleAddProgress}
+            resetProgressForm={s.resetProgressForm}
+            handleDeleteProgress={s.handleDeleteProgress}
+          />
 
           {/* Linked Activities */}
-          <div>
-            <div className="flex items-center gap-1 mb-2">
-              <Link2 className="w-3.5 h-3.5 text-gray-500" />
-              <span className="text-xs font-medium text-gray-400">
-                Activities ({goal.linkedActivities?.length || 0})
-              </span>
-            </div>
-            {goal.linkedActivities?.length > 0 && (
-              <div className="space-y-1 mb-2">
-                {goal.linkedActivities.map(link => (
-                  <div key={link.activityName} className="flex items-center gap-2 text-xs">
-                    <span className="text-gray-300 flex-1">{link.activityName}</span>
-                    {link.note && <span className="text-gray-600 truncate max-w-[100px]" title={link.note}>{link.note}</span>}
-                    <button
-                      onClick={() => handleUnlinkActivity(link.activityName)}
-                      className="p-0.5 text-gray-600 hover:text-red-400"
-                      title="Unlink"
-                    >
-                      <Unlink className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {activities.length > 0 && (
-              <div className="flex gap-1">
-                <select
-                  value={selectedActivity}
-                  onChange={e => setSelectedActivity(e.target.value)}
-                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
-                >
-                  <option value="">Link activity...</option>
-                  {activities
-                    .filter(a => !goal.linkedActivities?.some(l => l.activityName === a.name))
-                    .map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
-                </select>
-                <button
-                  onClick={handleLinkActivity}
-                  disabled={!selectedActivity}
-                  className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
-                >
-                  Link
-                </button>
-              </div>
-            )}
-          </div>
+          <GoalLinkedActivities
+            goal={goal}
+            activities={s.activities}
+            selectedActivity={s.selectedActivity}
+            setSelectedActivity={s.setSelectedActivity}
+            handleLinkActivity={s.handleLinkActivity}
+            handleUnlinkActivity={s.handleUnlinkActivity}
+          />
 
           {/* Linked Calendars */}
-          <div>
-            <div className="flex items-center gap-1 mb-2">
-              <CalendarDays className="w-3.5 h-3.5 text-gray-500" />
-              <span className="text-xs font-medium text-gray-400">
-                Calendars ({goal.linkedCalendars?.length || 0})
-              </span>
-            </div>
-            {goal.linkedCalendars?.length > 0 && (
-              <div className="space-y-1 mb-2">
-                {goal.linkedCalendars.map(lc => (
-                  <div key={lc.subcalendarId} className="flex items-center gap-2 text-xs">
-                    <span className="text-gray-300 flex-1 truncate">{lc.subcalendarName}</span>
-                    {lc.matchPattern && (
-                      <span className="text-gray-600 truncate max-w-[80px]" title={`Pattern: ${lc.matchPattern}`}>
-                        /{lc.matchPattern}/
-                      </span>
-                    )}
-                    <button
-                      onClick={() => handleUnlinkCalendar(lc.subcalendarId)}
-                      className="p-0.5 text-gray-600 hover:text-red-400"
-                      title="Unlink"
-                    >
-                      <Unlink className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {subcalendars.length > 0 && (
-              <div className="space-y-1">
-                <div className="flex gap-1">
-                  <select
-                    value={selectedCalendar}
-                    onChange={e => setSelectedCalendar(e.target.value)}
-                    className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
-                  >
-                    <option value="">Link calendar...</option>
-                    {subcalendars
-                      .filter(sc => !goal.linkedCalendars?.some(lc => lc.subcalendarId === sc.calendarId))
-                      .map(sc => <option key={sc.calendarId} value={sc.calendarId}>{sc.name}</option>)}
-                  </select>
-                  <button
-                    onClick={handleLinkCalendar}
-                    disabled={!selectedCalendar}
-                    className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
-                  >
-                    Link
-                  </button>
-                </div>
-                {selectedCalendar && (
-                  <input
-                    type="text"
-                    value={calendarMatchPattern}
-                    onChange={e => setCalendarMatchPattern(e.target.value)}
-                    placeholder="Match pattern (optional)"
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
-                  />
-                )}
-              </div>
-            )}
-          </div>
+          <GoalLinkedCalendars
+            goal={goal}
+            subcalendars={s.subcalendars}
+            selectedCalendar={s.selectedCalendar}
+            setSelectedCalendar={s.setSelectedCalendar}
+            calendarMatchPattern={s.calendarMatchPattern}
+            setCalendarMatchPattern={s.setCalendarMatchPattern}
+            handleLinkCalendar={s.handleLinkCalendar}
+            handleUnlinkCalendar={s.handleUnlinkCalendar}
+          />
 
           {/* Actions */}
           <div className="flex gap-2 pt-2 border-t border-port-border">
             <button
-              onClick={startEdit}
+              onClick={s.startEdit}
               className="px-3 py-1.5 text-xs rounded bg-port-border text-gray-300 hover:bg-gray-600"
             >
               Edit
             </button>
             {goal.status === 'active' && (
               <button
-                onClick={handleComplete}
+                onClick={s.handleComplete}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-green-500/20 text-green-400 hover:bg-green-500/30"
               >
                 <Check className="w-3 h-3" />
@@ -1240,7 +253,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
               </button>
             )}
             <button
-              onClick={handleDelete}
+              onClick={s.handleDelete}
               className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
             >
               <Trash2 className="w-3 h-3" />

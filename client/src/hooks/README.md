@@ -113,6 +113,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCodeReviewDefaults` | Global Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model) via a small Provider/hook pair. | TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown. |
 | `useCatalogTypes` | Catalog ingredient type registry (system + user-defined) merged with the static fallback via a Provider/hook pair; synchronous fallback to the built-in six so first render never blanks. | Catalog list/picker/editor; anywhere the catalog type list/lookup is needed. |
 | `useDeathClock` | 1-second countdown for death-clock display. | Mortality / death-clock surfaces. |
+| `useGoalDetail` | All state + handlers backing the GoalDetailPanel (edit form, todos, milestones, plan/phases, check-ins, progress log, activity/calendar links). Loads activities + subcalendars on mount. | GoalDetailPanel composition shell; not intended for reuse outside the goals panel. |
 | `useNextEvalCountdown` | 1-second countdown to the next CoS evaluation tick. | Chief of Staff "next eval in Xs" displays. |
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useRecordMerge` | Duplicate Universe/Series merge flow: open → dry-run preview → resolve field conflicts → execute, with an `onMerged` refresh callback. Drives `<MergeModal>`. | Surfacing the merge-duplicates UI anywhere (Sharing → Duplicates, Universes page). Don't re-implement the preview/execute dance. |
