@@ -30,9 +30,10 @@ export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/
 
 // Digital Twin - Values-Alignment Testing (M34 P6)
 export const getValuesAlignmentTests = () => request('/digital-twin/values-tests');
-export const runValuesAlignmentTests = (providerId, model, testIds = null, personaId = null) => request('/digital-twin/values-tests/run', {
+export const runValuesAlignmentTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/values-tests/run', {
   method: 'POST',
-  body: JSON.stringify({ providerId, model, testIds, personaId })
+  body: JSON.stringify({ providerId, model, testIds, personaId }),
+  ...options
 });
 export const getValuesAlignmentTestHistory = (limit = 10) => request(`/digital-twin/values-tests/history?limit=${limit}`);
 

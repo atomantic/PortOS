@@ -24,7 +24,7 @@ import { timeAgo } from '../../../utils/formatters';
  * Reuses the provider/model selection from the parent TestTab via the
  * `selectedProviders` prop so the two suites share one configuration.
  */
-export default function ValuesAlignmentPanel({ selectedProviders = [], personaId = '', onRefresh }) {
+export default function ValuesAlignmentPanel({ selectedProviders = [], personaId = '', onPersonaNotFound, onRefresh }) {
   const [dilemmas, setDilemmas] = useState([]);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -56,11 +56,13 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
     setRunning(true);
     setResults([]);
 
+    // These calls own their error UI below (and one path delegates to the
+    // parent), so silence the helper's default toast to avoid double-toasting.
     const runResults = await Promise.all(
       selectedProviders.map(({ providerId, model }) =>
-        api.runValuesAlignmentTests(providerId, model, null, personaId || null)
+        api.runValuesAlignmentTests(providerId, model, null, personaId || null, { silent: true })
           .then(result => ({ providerId, model, ...result }))
-          .catch(err => ({ providerId, model, error: err.message }))
+          .catch(err => ({ providerId, model, error: err.message, code: err?.code }))
       )
     );
 
@@ -73,7 +75,13 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
     if (fresh.length) setHistory(prev => [...fresh, ...prev].slice(0, 5));
     setRunning(false);
 
-    if (runResults.some(r => r.error)) {
+    // A stale/deleted persona is rejected by the same route guard the
+    // behavioral runner hits; ask the parent (which owns the picker) to clear
+    // it, and show a persona-specific message instead of the generic one.
+    if (runResults.some(r => r.code === 'NOT_FOUND')) {
+      onPersonaNotFound?.();
+      toast.error('That persona no longer exists — switched to the base twin. Try again.');
+    } else if (runResults.some(r => r.error)) {
       toast.error('Some runs failed — check provider availability');
     } else {
       toast.success('Values-alignment tests completed');

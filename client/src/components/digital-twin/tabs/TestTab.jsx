@@ -110,6 +110,14 @@ export default function TestTab({ onRefresh }) {
     });
   };
 
+  // Self-heal the picker when a run is rejected because the selected persona no
+  // longer exists (the route guard 404s). Shared by the behavioral runner's
+  // catch and the values-alignment panel via the onPersonaNotFound callback.
+  const handlePersonaNotFound = () => {
+    setSelectedPersonaId('');
+    loadData();
+  };
+
   const toggleTest = (testId) => {
     setSelectedTests(prev =>
       prev.includes(testId) ? prev.filter(id => id !== testId) : [...prev, testId]
@@ -148,8 +156,7 @@ export default function TestTab({ onRefresh }) {
       // self-heal the picker so the next run isn't blocked. The api helper
       // already toasts the error, so don't add a second one here.
       if (err?.code === 'NOT_FOUND') {
-        setSelectedPersonaId('');
-        loadData();
+        handlePersonaNotFound();
       }
     } finally {
       // Always clear the spinner — without this an error (e.g. the 404 above)
@@ -680,7 +687,7 @@ export default function TestTab({ onRefresh }) {
       )}
 
       {/* Values-Alignment Tests (M34 P6) — shares the provider + persona selection above */}
-      <ValuesAlignmentPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onRefresh={onRefresh} />
+      <ValuesAlignmentPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
     </div>
   );
 }
