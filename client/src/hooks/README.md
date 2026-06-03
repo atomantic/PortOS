@@ -106,6 +106,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 |---|---|---|
 | `useAppDeploy` | Stream `deploy.sh` output via Socket.IO. | App deployment surfaces only. |
 | `useAppOperation` | Socket-based app ops (update, standardize) with step tracking. | App operations UI. |
+| `useCanonPatch` | Optimistic canon-entry patch: rebuild the kind list with one entry mutated, apply locally, PATCH the universe, re-apply the server copy (with a captured-id staleness guard). `apply` is `setUniverse` or `onUniverseChange`. | Inline canon-field edits on a universe (UniverseCanonSection, NounsStage). Don't re-roll the optimistic-then-confirm dance. |
 | `useCityAudio` | CyberCity ambient audio. | CyberCity only. |
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
