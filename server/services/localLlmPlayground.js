@@ -189,6 +189,10 @@ export async function runLocalLlmTest({
   maxTokens = 1000,
   timeoutMs = 300000,
   signal: clientSignal,
+  // Optional per-token callback. When provided (streaming route), each content
+  // delta is forwarded as it arrives so the client can render live output. The
+  // returned result is unchanged, so non-streaming callers ignore this entirely.
+  onToken,
 }) {
   const provider = await resolveLocalProvider(backend);
   const fullPrompt = buildPrompt({ systemPrompt, prompt });
@@ -228,6 +232,7 @@ export async function runLocalLlmTest({
       signal,
       onChunk: (chunk) => {
         if (!firstChunkAt && chunk) firstChunkAt = Date.now();
+        if (chunk) onToken?.(chunk);
       },
     }).finally(() => clearTimeout(timeoutHandle));
 

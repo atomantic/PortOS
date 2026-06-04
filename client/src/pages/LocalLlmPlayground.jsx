@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRightLeft, Check, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Check, ChevronDown, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
 import { formatBytes } from '../utils/formatters';
-import { compareLocalLlmModels, getLocalLlmCatalog, getLocalLlmStatus, testLocalLlmModel } from '../services/api';
+import { compareLocalLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
@@ -145,7 +146,9 @@ function ResultPanel({ result }) {
       {result.text && (
         <div className="space-y-1">
           {hasPartial && <div className="text-xs text-port-warning">Partial output before the run stopped</div>}
-          <pre className="text-sm text-gray-200 whitespace-pre-wrap break-words font-sans leading-relaxed max-h-72 overflow-auto">{result.text}</pre>
+          <div className="max-h-[28rem] overflow-auto">
+            <PlaygroundOutput text={result.text} />
+          </div>
         </div>
       )}
 
@@ -169,6 +172,28 @@ function ResultPanel({ result }) {
   );
 }
 
+// Live panel shown while a chat run streams tokens. Replaced by a final
+// ResultPanel (with timings) once the run settles.
+function StreamingPanel({ stream }) {
+  return (
+    <section className="border border-port-accent/40 rounded-lg bg-port-bg p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm text-white truncate">{stream.modelId}</div>
+          <div className="text-xs text-gray-500">{BACKEND_LABEL[stream.backend] || stream.backend}</div>
+        </div>
+        <span className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-port-accent/15 text-port-accent">
+          <BrailleSpinner />
+          Streaming
+        </span>
+      </div>
+      {stream.text
+        ? <div className="max-h-[28rem] overflow-auto"><PlaygroundOutput text={stream.text} /></div>
+        : <div className="text-sm text-gray-500">Waiting for the first token…</div>}
+    </section>
+  );
+}
+
 export default function LocalLlmPlayground() {
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState(null);
@@ -185,17 +210,35 @@ export default function LocalLlmPlayground() {
   const [timeoutMs, setTimeoutMs] = useState(300000);
   const [busy, setBusy] = useState(false);
   const [chatResults, setChatResults] = useState([]);
+  const [streamingChat, setStreamingChat] = useState(null);
   const [compareResult, setCompareResult] = useState(null);
+  // Models sidebar is always shown on xl+; on smaller screens it collapses so
+  // the prompt/controls stay above the fold. Open by default on first load.
+  const [modelsOpen, setModelsOpen] = useState(true);
 
   const mountedRef = useRef(true);
   // Holds the AbortController for the in-flight run so the Cancel button can
   // abort the client fetch (which closes the server-side stream early). Cleared
   // in each run's .finally(). Abort the live request on unmount too.
   const runControllerRef = useRef(null);
+  // Streaming tokens arrive faster than is worth re-rendering for (each render
+  // re-parses the whole accumulated output). Accumulate into a ref and flush to
+  // state on a ~80ms timer so the live panel updates smoothly without an
+  // O(n²) re-parse storm on long outputs.
+  const streamBufRef = useRef('');
+  const flushTimerRef = useRef(null);
   useEffect(() => () => {
     mountedRef.current = false;
     runControllerRef.current?.abort();
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
   }, []);
+
+  const flushStream = () => {
+    flushTimerRef.current = null;
+    if (!mountedRef.current) return;
+    const text = streamBufRef.current;
+    setStreamingChat((prev) => (prev ? { ...prev, text } : prev));
+  };
 
   const cancelRun = () => runControllerRef.current?.abort();
 
@@ -279,9 +322,21 @@ export default function LocalLlmPlayground() {
     runControllerRef.current = controller;
     setBusy(true);
     const target = primaryTarget;
-    testLocalLlmModel({ ...target, prompt: prompt.trim(), ...options() }, { silent: true, signal: controller.signal })
+    streamBufRef.current = '';
+    setStreamingChat({ backend: target.backend, modelId: target.modelId, text: '' });
+    streamLocalLlmTest(
+      { ...target, prompt: prompt.trim(), ...options() },
+      {
+        signal: controller.signal,
+        onToken: (delta) => {
+          if (!mountedRef.current || !delta) return;
+          streamBufRef.current += delta;
+          if (!flushTimerRef.current) flushTimerRef.current = setTimeout(flushStream, 80);
+        },
+      },
+    )
       .then((result) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || !result) return;
         setChatResults((prev) => [result, ...prev]);
         if (result.error) toast.error(result.error);
       })
@@ -290,7 +345,12 @@ export default function LocalLlmPlayground() {
       .catch((err) => { if (mountedRef.current && !controller.signal.aborted) toast.error(err?.message || 'Model test failed'); })
       .finally(() => {
         if (runControllerRef.current === controller) runControllerRef.current = null;
-        if (mountedRef.current) setBusy(false);
+        // Drop any pending flush — the final result replaces the live panel.
+        if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+        if (mountedRef.current) {
+          setBusy(false);
+          setStreamingChat(null);
+        }
       });
   };
 
@@ -326,8 +386,8 @@ export default function LocalLlmPlayground() {
             <ArrowLeft size={16} />
           </Link>
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-white">Local LLM Playground</h1>
-            <p className="text-sm text-gray-500 truncate">{selectedTargets.length} model{selectedTargets.length === 1 ? '' : 's'} selected</p>
+            <h1 className="text-lg md:text-2xl font-bold text-white truncate">Local LLM Playground</h1>
+            <p className="text-xs md:text-sm text-gray-500 truncate">{selectedTargets.length} model{selectedTargets.length === 1 ? '' : 's'} selected</p>
           </div>
         </div>
         <button onClick={loadStatus} disabled={loadingStatus} className="p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
@@ -338,10 +398,22 @@ export default function LocalLlmPlayground() {
       <div className="flex-1 overflow-auto p-4 space-y-4">
         <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
           <aside className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-gray-300">Models</h2>
-              {loadingStatus && <BrailleSpinner />}
-            </div>
+            <button
+              type="button"
+              onClick={() => setModelsOpen((v) => !v)}
+              className="w-full flex items-center justify-between gap-2 xl:cursor-default"
+              aria-expanded={modelsOpen}
+            >
+              <span className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-300">Models</span>
+                <span className="text-xs text-gray-500 xl:hidden">({selectedTargets.length} selected)</span>
+              </span>
+              <span className="flex items-center gap-2">
+                {loadingStatus && <BrailleSpinner />}
+                <ChevronDown size={16} className={`text-gray-500 xl:hidden transition-transform ${modelsOpen ? '' : '-rotate-90'}`} />
+              </span>
+            </button>
+            <div className={`${modelsOpen ? 'block' : 'hidden'} xl:block space-y-4`}>
             {installedTargets.length === 0 && !loadingStatus ? (
               <p className={`text-sm ${modelLoadError ? 'text-port-warning' : 'text-gray-500'}`}>
                 {modelLoadError || 'No installed local models found.'}
@@ -400,6 +472,7 @@ export default function LocalLlmPlayground() {
                 })}
               </div>
             )}
+            </div>
           </aside>
 
           <main className="space-y-4">
@@ -489,7 +562,8 @@ export default function LocalLlmPlayground() {
 
             {activeMode === 'chat' ? (
               <section className="space-y-3">
-                {chatResults.length === 0 ? (
+                {streamingChat && <StreamingPanel stream={streamingChat} />}
+                {chatResults.length === 0 && !streamingChat ? (
                   <div className="bg-port-card border border-port-border rounded-lg p-5 text-sm text-gray-500 flex items-center gap-2">
                     <TriangleAlert size={16} className="text-gray-600" />
                     Pick a model, enter a prompt, and run a chat test.

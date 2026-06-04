@@ -381,6 +381,33 @@ describe('storyBuilder — sync-safe staleness (#730)', () => {
     expect(view.staleSteps).toContain('plotArc');
   });
 
+  it('view reports syncDrift when live records diverge from the synced baseline, and clears it on reconcile (#730)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    // Baseline freshly captured at lock → no drift yet.
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(false);
+    // A peer edit moves the live records but not the carried baseline → drift.
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'DRIFTED', summary: 'sum' }, locked: {} });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(true);
+    // Reconcile adopts the live records as the new baseline → drift clears.
+    await sb.reconcileStorySession(s.id);
+    view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(false);
+  });
+
+  it('a local-only session always reports syncDrift:false', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'CHANGED', summary: 'sum' }, locked: {} });
+    const view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(false);
+  });
+
   it('turning sync OFF reverts to live-diff staleness and drops the baseline', async () => {
     const s = await sb.createStorySession({ title: 'X' });
     await sb.setStorySessionSync(s.id, true);

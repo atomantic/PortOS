@@ -44,7 +44,7 @@ import { runStagedLLM } from '../lib/stageRunner.js';
 import {
   STEP_IDS, STEP_STATUSES, isValidStepId,
 } from '../lib/storyBuilderSteps.js';
-import { hashUpstream, computeStaleSteps } from '../lib/storyBuilderIntegrity.js';
+import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
 import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
 import { refineWorldPrompts } from './universeBuilderRefine.js';
@@ -540,7 +540,14 @@ export async function getStorySessionView(id) {
   const { hashes, universe, series } = await computeCurrentHashes(session);
   const baseline = session.sync === true ? (session.syncedHashes || {}) : hashes;
   const staleSteps = computeStaleSteps(session, baseline);
-  return { session, staleSteps, universe, series };
+  // For a synced session, also report whether THIS machine's live records have
+  // drifted from the carried baseline — the "reconcile would adopt new state"
+  // signal the UI shows next to the reconcile action (#730). Always false for
+  // local-only sessions (their staleness already live-diffs).
+  const syncDrift = session.sync === true
+    ? computeSyncDrift(session, hashes, session.syncedHashes || {})
+    : false;
+  return { session, staleSteps, syncDrift, universe, series };
 }
 
 // Persist sync mode + (when enabled) a fresh live-hash baseline. Both

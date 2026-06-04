@@ -1,21 +1,46 @@
 // Procedural ambient synthwave using Web Audio oscillators
 import { getAudioContext, getMusicGain } from './cityAudioEngine';
+import { CHORD_SETS } from '../../../utils/citySoundscape';
 
 let isPlaying = false;
 let oscillators = [];
 let intervals = [];
 let nodesCleanup = [];
 
-// Chord progressions (Am -> Em -> F -> C) as frequency arrays
-const CHORDS = [
-  [110, 130.81, 164.81],   // Am (A2, C3, E3)
-  [82.41, 123.47, 164.81], // Em (E2, B2, E3)
-  [87.31, 110, 130.81],    // F  (F2, A2, C3)
-  [65.41, 98.0, 130.81],   // C  (C2, G2, C3)
-];
+// Default chord progression (Am -> Em -> F -> C). The soundscape layer (roadmap 3.4) can swap
+// this for the darker `tense` set via setSoundscape(); we keep a mutable pointer so the running
+// chord interval reads whatever's current without re-scheduling.
+const DEFAULT_CHORDS = CHORD_SETS.bright;
+let activeChords = DEFAULT_CHORDS;
+
+// Live references to the modulatable nodes, captured in startMusic(). setSoundscape() ramps
+// these in real time so the music's mood/brightness/energy follows system state. Null while
+// the music is stopped. `baseArpGain` is the energy-driven target the arp envelope peaks at.
+let liveBassFilter = null;
+let livePadOscs = [];
+let liveArpPeak = 0.06; // peak gain the arp pluck opens to; raised/lowered by energy
 
 // Arp note patterns (scale degrees relative to chord root)
 const ARP_PATTERN = [0, 2, 4, 7, 12, 7, 4, 2];
+
+// Apply a soundscape view-model (from computeSoundscape) to the running music graph. Safe to call
+// whether or not music is playing — it just updates the targets the next chord/arp tick uses.
+export const setSoundscape = (params) => {
+  if (!params) return;
+  const ctx = getAudioContext();
+  activeChords = params.chordSet === 'tense' ? CHORD_SETS.tense : CHORD_SETS.bright;
+  liveArpPeak = Math.max(0.01, params.arpGain ?? 0.06);
+  if (ctx && liveBassFilter) {
+    // Ramp the base cutoff smoothly so mood shifts glide rather than click. The LFO still rides
+    // on top of this via its own connection to bassFilter.frequency.
+    liveBassFilter.frequency.setTargetAtTime(params.filterBase ?? 200, ctx.currentTime, 0.5);
+  }
+  if (ctx && livePadOscs.length) {
+    livePadOscs.forEach((osc, i) => {
+      osc.detune.setTargetAtTime((i - 1) * (params.padDetune ?? 8), ctx.currentTime, 0.5);
+    });
+  }
+};
 
 const createReverb = (ctx) => {
   const convolver = ctx.createConvolver();
@@ -63,7 +88,7 @@ export const startMusic = () => {
   let currentChordIdx = 0;
   const bassOsc = ctx.createOscillator();
   bassOsc.type = 'sawtooth';
-  bassOsc.frequency.value = CHORDS[0][0];
+  bassOsc.frequency.value = activeChords[0][0];
   const bassGain = ctx.createGain();
   bassGain.gain.value = 0.12;
   bassOsc.connect(bassGain);
@@ -92,7 +117,7 @@ export const startMusic = () => {
   for (let i = 0; i < 3; i++) {
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.value = CHORDS[0][i];
+    osc.frequency.value = activeChords[0][i];
     osc.detune.value = (i - 1) * 8; // slight spread
     osc.connect(padGain);
     osc.start();
@@ -121,11 +146,13 @@ export const startMusic = () => {
   oscillators.push(arpOsc);
 
   let arpStep = 0;
-  // Chord change every 2.4s (4 beats at 100BPM)
+  // Chord change every 2.4s (4 beats at 100BPM). Reads `activeChords` live so a soundscape
+  // mood-swap (bright↔tense) takes effect on the next chord without re-scheduling the interval.
   const chordInterval = setInterval(() => {
     if (!isPlaying) return;
-    currentChordIdx = (currentChordIdx + 1) % CHORDS.length;
-    const chord = CHORDS[currentChordIdx];
+    const chords = activeChords;
+    currentChordIdx = (currentChordIdx + 1) % chords.length;
+    const chord = chords[currentChordIdx];
     const now = ctx.currentTime;
     bassOsc.frequency.setTargetAtTime(chord[0], now, 0.3);
     padOscs.forEach((osc, i) => {
@@ -134,10 +161,11 @@ export const startMusic = () => {
   }, 2400);
   intervals.push(chordInterval);
 
-  // Arp sixteenth notes at 100BPM = 150ms per step
+  // Arp sixteenth notes at 100BPM = 150ms per step. The pluck peaks at `liveArpPeak`, which the
+  // soundscape raises with system energy (more active agents → a louder, livelier lead).
   const arpInterval = setInterval(() => {
     if (!isPlaying) return;
-    const chord = CHORDS[currentChordIdx];
+    const chord = activeChords[currentChordIdx % activeChords.length];
     const rootFreq = chord[0] * 4; // two octaves up
     const semitone = ARP_PATTERN[arpStep % ARP_PATTERN.length];
     const freq = rootFreq * Math.pow(2, semitone / 12);
@@ -145,12 +173,16 @@ export const startMusic = () => {
 
     arpOsc.frequency.setTargetAtTime(freq, now, 0.01);
     // Short percussive envelope
-    arpGain.gain.setTargetAtTime(0.06, now, 0.005);
+    arpGain.gain.setTargetAtTime(liveArpPeak, now, 0.005);
     arpGain.gain.setTargetAtTime(0.0, now + 0.06, 0.04);
 
     arpStep++;
   }, 150);
   intervals.push(arpInterval);
+
+  // Expose the modulatable nodes so setSoundscape() can ramp them in real time.
+  liveBassFilter = bassFilter;
+  livePadOscs = padOscs;
 
   nodesCleanup.push(reverb, reverbGain, delay, delayFeedback, bassFilter, bassGain, padGain, arpFilter, arpGain);
 };
@@ -166,4 +198,8 @@ export const stopMusic = () => {
   intervals = [];
   nodesCleanup.forEach(node => node.disconnect());
   nodesCleanup = [];
+  // Drop references to the now-disconnected nodes so a stray setSoundscape() can't ramp a
+  // dead graph. The next startMusic() re-captures fresh ones.
+  liveBassFilter = null;
+  livePadOscs = [];
 };

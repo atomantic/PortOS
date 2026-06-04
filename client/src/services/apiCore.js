@@ -5,6 +5,20 @@ export const API_BASE = '/api'; // exported for sub-modules that use fetch() dir
 // Stable ID for the PortOS baseline app (mirrors server PORTOS_APP_ID)
 export const PORTOS_APP_ID = 'portos-default';
 
+// Bounce to /login when the auth gate (server: lib/authGate.js) rejects a
+// request with 401 + AUTH_REQUIRED. Shared by request() AND the streaming-fetch
+// helpers (apiLocalLlm.streamLocalLlmTest, etc.) that bypass request() to read a
+// stream body but must still honor session expiry — otherwise a session that
+// lapses mid-feature just errors in place instead of re-authenticating.
+export function maybeRedirectToLogin(response, error) {
+  if (response.status === 401 && error?.code === 'AUTH_REQUIRED' && typeof window !== 'undefined') {
+    if (!window.location.pathname.startsWith('/login')) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.replace(`/login?next=${next}`);
+    }
+  }
+}
+
 export async function request(endpoint, options = {}) {
   const { silent, responseType, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
@@ -34,13 +48,7 @@ export async function request(endpoint, options = {}) {
     // Auth gate (server: lib/authGate.js) returns 401 with code AUTH_REQUIRED
     // for any /api request without a valid session. Bounce to /login so the
     // user can re-authenticate; skip if we're already there.
-    if (response.status === 401 && error?.code === 'AUTH_REQUIRED' && typeof window !== 'undefined') {
-      const here = window.location.pathname + window.location.search;
-      if (!window.location.pathname.startsWith('/login')) {
-        const next = encodeURIComponent(here);
-        window.location.replace(`/login?next=${next}`);
-      }
-    }
+    maybeRedirectToLogin(response, error);
     if (!silent) {
       // Platform unavailability is a warning, not an error
       if (error.code === 'PLATFORM_UNAVAILABLE') {

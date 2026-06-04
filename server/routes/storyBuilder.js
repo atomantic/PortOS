@@ -58,10 +58,14 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(created);
 }));
 
+// Flatten a session view into the shape the client consumes: the persisted
+// session plus the computed (non-persisted) staleSteps array and the syncDrift
+// flag (#730: this machine's live records diverged from the synced baseline).
+const flattenView = (view) => ({ ...view.session, staleSteps: view.staleSteps, syncDrift: view.syncDrift });
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const view = await getStorySessionView(req.params.id).catch((err) => { throw mapServiceError(err); });
-  // Flatten the session with the computed (non-persisted) staleSteps array.
-  res.json({ ...view.session, staleSteps: view.staleSteps });
+  res.json(flattenView(view));
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
@@ -82,15 +86,23 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // with the session so a peer's universe edit can't false-positive-stale it.
 router.post('/:id/sync', asyncHandler(async (req, res) => {
   const { sync } = validateRequest(storySessionSyncSchema, req.body || {});
-  const updated = await setStorySessionSync(req.params.id, sync).catch((err) => { throw mapServiceError(err); });
-  res.json(updated);
+  await setStorySessionSync(req.params.id, sync).catch((err) => { throw mapServiceError(err); });
+  // Return the recomputed view, not the bare record: toggling sync changes the
+  // staleness baseline (live-diff ↔ carried syncedHashes), so staleSteps can
+  // shift too — the client merges both reactively without a separate refetch.
+  const view = await getStorySessionView(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(flattenView(view));
 }));
 
 // Re-snapshot a sync-enabled session's staleness baseline to the current live
 // records — the explicit "adopt this machine's universe/series state" gesture.
 router.post('/:id/reconcile', asyncHandler(async (req, res) => {
-  const updated = await reconcileStorySession(req.params.id).catch((err) => { throw mapServiceError(err); });
-  res.json(updated);
+  await reconcileStorySession(req.params.id).catch((err) => { throw mapServiceError(err); });
+  // Reconcile moves the carried baseline, so staleSteps recompute against it
+  // (a locked step whose frozen hash differs from the adopted records becomes
+  // stale). Return the fresh view so the step rail updates without a refetch.
+  const view = await getStorySessionView(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(flattenView(view));
 }));
 
 // ── Step state machine ─────────────────────────────────────────────────────
