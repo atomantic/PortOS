@@ -150,6 +150,13 @@ export async function listConversations({ limit = 50 } = {}) {
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
         turnCount: Array.isArray(conv.turns) ? conv.turns.length : 0,
+        // Count assistant turns separately: a conversation can have turns
+        // (turnCount > 0) with only a user turn when an Ask stream errors or the
+        // client disconnects before any assistant text is persisted. Promotion
+        // needs an assistant answer, so consumers must gate on this, not turnCount.
+        assistantTurnCount: Array.isArray(conv.turns)
+          ? conv.turns.filter((t) => t?.role === 'assistant').length
+          : 0,
         promoted: !!conv.promoted,
       });
     }

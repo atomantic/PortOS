@@ -68,11 +68,15 @@ describe('reviewQueue.buildQueue', () => {
     });
   });
 
-  it('only surfaces unpromoted ask conversations with content', async () => {
+  it('only surfaces unpromoted ask conversations that have an assistant answer', async () => {
     askConversations.listConversations.mockResolvedValue([
-      { id: 'a1', title: 'has content', promoted: false, turnCount: 2, updatedAt: '2026-06-03T10:00:00.000Z' },
-      { id: 'a2', title: 'already promoted', promoted: true, turnCount: 3 },
-      { id: 'a3', title: 'no turns', promoted: false, turnCount: 0 }
+      { id: 'a1', title: 'has content', promoted: false, turnCount: 2, assistantTurnCount: 1, updatedAt: '2026-06-03T10:00:00.000Z' },
+      { id: 'a2', title: 'already promoted', promoted: true, turnCount: 3, assistantTurnCount: 2 },
+      { id: 'a3', title: 'no turns', promoted: false, turnCount: 0, assistantTurnCount: 0 },
+      // turnCount > 0 but NO assistant turn (stream errored / client disconnected
+      // before the answer persisted). Promoting it would fail NO_ASSISTANT_TURN,
+      // so it must NOT be surfaced as a promotable row.
+      { id: 'a4', title: 'user turn only', promoted: false, turnCount: 1, assistantTurnCount: 0 }
     ]);
     const queue = await buildQueue();
     const askRows = queue.items.filter(i => i.source === 'ask');
@@ -166,7 +170,7 @@ describe('reviewQueue.buildQueue', () => {
   it('tags resolvable rows with an inline action verb, leaves no-clean-resolve sources without one', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
-    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }] });
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full' });
     const queue = await buildQueue();
@@ -182,7 +186,7 @@ describe('reviewQueue.buildQueue', () => {
 
   it('attaches source-appropriate meta chips when the raw field is present', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', source: 'voice', capturedAt: '2026-06-03T10:00:00.000Z' }]);
-    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4 }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4, assistantTurnCount: 2 }]);
     cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: ['boss@example.com'], sendVia: 'gmail', updatedAt: '2026-06-03T08:00:00.000Z' }]);
     proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }] });
@@ -211,7 +215,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('advertises Ask promote targets (brain/task) and no other source carries them', async () => {
-    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     const queue = await buildQueue();
     const ask = queue.items.find(i => i.source === 'ask');
@@ -222,7 +226,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('adds the goal target + active-goal options to Ask rows when goals exist', async () => {
-    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     identity.getGoals.mockResolvedValue({
       goals: [
         { id: 'g1', title: 'Ship inbox zero', status: 'active' },
@@ -237,7 +241,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('degrades to no goal target when the goal store fails', async () => {
-    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     identity.getGoals.mockRejectedValue(new Error('goals unreadable'));
     const queue = await buildQueue();
     const ask = queue.items.find(i => i.source === 'ask');
@@ -247,7 +251,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('skips malformed goal entries without sinking the whole queue', async () => {
-    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     // A null / non-object entry must not throw synchronously in the filter —
     // that would run before the per-producer catch and sink every source.
     identity.getGoals.mockResolvedValue({ goals: [null, 'bogus', { id: 'g1', title: 'Real goal', status: 'active' }] });

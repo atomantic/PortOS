@@ -127,9 +127,14 @@ const PRODUCERS = [
     // goal via a picker (see map() below). Drilling into /ask still works for a
     // per-turn promote the queue's latest-turn shortcut doesn't cover.
     async gather() {
-      // Conversations with content that haven't been promoted to brain/task/goal.
+      // Conversations with a promotable assistant answer that haven't been
+      // promoted to brain/task/goal. Gate on assistantTurnCount, NOT turnCount:
+      // an Ask conversation whose stream errored (or whose client disconnected)
+      // before the assistant turn persisted still has the user turn (turnCount
+      // > 0), but promoteLatestAssistantTurn would fail with NO_ASSISTANT_TURN —
+      // so advertising a promote action on it would be a dead-end button.
       const convs = await askConversations.listConversations({ limit: PER_SOURCE_LIMIT * 2 });
-      return convs.filter(c => !c.promoted && (c.turnCount || 0) > 0);
+      return convs.filter(c => !c.promoted && (c.assistantTurnCount || 0) > 0);
     },
     // Inline promote targets the UI can offer without a per-turn drill-down.
     // The queue picks the conversation's latest assistant turn server-side, so
