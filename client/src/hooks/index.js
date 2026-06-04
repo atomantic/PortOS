@@ -23,6 +23,7 @@ export { default as useMoltworldWs } from './useMoltworldWs.js';
 export { default as useMounted } from './useMounted.js';
 export { default as useNextEvalCountdown } from './useNextEvalCountdown.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
+export { default as usePopoverPosition } from './usePopoverPosition.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderModels } from './useProviderModels.js';
 export { default as useRowDraft } from './useRowDraft.js';
@@ -91,8 +92,10 @@ export * from './useLocalStorageBool.js';
 // === Domain: City / Voice / Mortality / Universe / Apps / Sessions ===
 export * from './useAppDeploy.js';
 export * from './useAppOperation.js';
+export * from './useCanonPatch.js';
 export * from './useCityData.js';
 export * from './useDeathClock.js';
+export * from './useGoalDetail.js';
 export * from './usePostSession.js';
 export * from './useRecordMerge.js';
 export * from './useSyncIntegrity.js';

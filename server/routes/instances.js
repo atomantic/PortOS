@@ -55,6 +55,7 @@ const syncCategoriesSchema = z.object({
   // universe + pipeline omission tracked in .changelog/NEXT.md.
   mediaCollections: z.boolean().optional(),
   videoHistory: z.boolean().optional(),
+  storyBuilder: z.boolean().optional(),
   catalog: z.boolean().optional()
 }).optional();
 
@@ -131,7 +132,7 @@ router.post('/provision-cert', asyncHandler(async (req, res) => {
   const result = await provisionTailscaleCert();
   if (!result.ok) {
     // Map to apiCore.js error envelope so the client auto-toasts the message.
-    return res.status(400).json({ error: result.message, code: result.reason });
+    throw new ServerError(result.message, { status: 400, code: result.reason });
   }
   res.json(result);
 }));

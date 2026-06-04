@@ -15,7 +15,10 @@ export const digitalTwinEvents = new EventEmitter();
 const cache = {
   meta: { data: null, timestamp: 0 },
   documents: { data: null, timestamp: 0 },
-  tests: { data: null, timestamp: 0 }
+  tests: { data: null, timestamp: 0 },
+  valuesTests: { data: null, timestamp: 0 },
+  adversarialTests: { data: null, timestamp: 0 },
+  multiTurnTests: { data: null, timestamp: 0 }
 };
 export const CACHE_TTL_MS = 5000;
 
@@ -27,6 +30,10 @@ export const DEFAULT_META = {
   version: '1.0.0',
   documents: [],
   testHistory: [],
+  valuesTestHistory: [],
+  adversarialTestHistory: [],
+  multiTurnTestHistory: [],
+  personas: [],
   enrichment: { completedCategories: [], lastSession: null },
   settings: { autoInjectToCoS: true, maxContextTokens: 4000 }
 };

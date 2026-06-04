@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatClockTime } from '../../utils/formatters';
+import { computeActivityDensity, buildTimelineBuckets } from '../../utils/cityTimeline';
 
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 const SEVERITY_COLORS = {
@@ -222,6 +223,116 @@ function ActivityLogList({ logs }) {
   );
 }
 
+const DENSITY_BAR_COLORS = {
+  error: 'bg-red-400',
+  warn: 'bg-amber-400',
+  success: 'bg-emerald-400',
+  info: 'bg-cyan-400',
+  debug: 'bg-gray-600',
+};
+
+const relativeAge = (ms) => {
+  const s = Math.floor(ms / 1000);
+  if (s < 10) return 'now';
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h`;
+};
+
+// Temporal view of the event stream: a density sparkbar (when did bursts of
+// activity happen) over relative-age buckets (what happened, newest first).
+// Reads the same `eventLogs` the ACTIVITY tab does — no new data wiring.
+function TimelineView({ logs }) {
+  const navigate = useNavigate();
+  // Tick `now` every 15s so "2m" ages forward without re-fetching anything.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const density = useMemo(() => computeActivityDensity(logs, { now }), [logs, now]);
+  const buckets = useMemo(() => buildTimelineBuckets(logs, { now }), [logs, now]);
+  const maxCount = useMemo(() => Math.max(1, ...density.map(d => d.count)), [density]);
+
+  if (!logs || logs.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center px-3 py-6">
+        <div className="font-pixel text-[8px] text-cyan-500/30 tracking-wide">No recent activity</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5"
+      style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(6,182,212,0.2) transparent' }}
+    >
+      {/* Density sparkbar — last 10 minutes, oldest at left */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-pixel text-[8px] text-cyan-500/50 tracking-wider">ACTIVITY · 10 MIN</span>
+          <span className="font-pixel text-[8px] text-cyan-500/30 tracking-wider">NOW {'>'}</span>
+        </div>
+        <div className="flex items-end gap-px h-8" title="Event density over the last 10 minutes">
+          {density.map((slot, i) => {
+            // Floor non-empty bins at 12% so a single event is still visible.
+            const heightPct = slot.count > 0 ? Math.max(12, (slot.count / maxCount) * 100) : 0;
+            const colorClass = slot.level ? (DENSITY_BAR_COLORS[slot.level] || DENSITY_BAR_COLORS.info) : 'bg-cyan-500/10';
+            return (
+              <div key={i} className="flex-1 flex items-end h-full">
+                <div
+                  className={`w-full rounded-sm ${colorClass} ${slot.count > 0 ? 'opacity-80' : 'opacity-100'}`}
+                  style={{ height: slot.count > 0 ? `${heightPct}%` : '2px' }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Time-bucketed event spine, newest first */}
+      <div className="space-y-2">
+        {buckets.map(bucket => (
+          <div key={bucket.id}>
+            <div className="font-pixel text-[8px] text-cyan-500/40 tracking-widest mb-1 border-b border-cyan-500/10 pb-0.5">
+              {bucket.label}
+            </div>
+            <div className="space-y-1 pl-1">
+              {bucket.events.map(event => {
+                const colorClass = LEVEL_COLORS[event.level] || LEVEL_COLORS.info;
+                const indicatorClass = LEVEL_INDICATORS[event.level] || LEVEL_INDICATORS.info;
+                return (
+                  <div
+                    key={event.id}
+                    className="font-pixel text-[9px] leading-tight flex items-start gap-1.5 tracking-wide group hover:bg-cyan-500/5 rounded px-1 py-0.5 -mx-1"
+                    title={event.message}
+                  >
+                    <span className={`w-1 h-1 rounded-full ${indicatorClass} shrink-0 mt-1 opacity-70`} />
+                    <span className="text-gray-500 shrink-0 w-7 text-right">{relativeAge(event.ageMs)}</span>
+                    <span className={`${colorClass} truncate group-hover:whitespace-normal group-hover:break-all`}>
+                      {event.message || '(event)'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => navigate('/cos')}
+        className="w-full font-pixel text-[8px] text-cyan-500/40 hover:text-cyan-400 tracking-wider py-1 transition-colors"
+      >
+        OPEN CHIEF OF STAFF {'>'}
+      </button>
+    </div>
+  );
+}
+
 export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts, eventLogs }) {
   const [tab, setTab] = useState('attention');
   const [collapsed, setCollapsed] = useState(false);
@@ -258,6 +369,18 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
           </button>
           <button
             type="button"
+            onClick={() => { setTab('timeline'); setCollapsed(false); }}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 border-l border-cyan-500/20 transition-colors ${
+              tab === 'timeline' && !collapsed
+                ? 'bg-cyan-500/10 text-cyan-400'
+                : 'text-cyan-500/50 hover:bg-cyan-500/5'
+            }`}
+            title="Recent-action timeline"
+          >
+            <span className="font-pixel text-[10px] tracking-wider font-bold">TIMELINE</span>
+          </button>
+          <button
+            type="button"
             onClick={() => { setTab('activity'); setCollapsed(false); }}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 border-l border-cyan-500/20 transition-colors ${
               tab === 'activity' && !collapsed
@@ -283,7 +406,9 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
         {!collapsed && (
           tab === 'attention'
             ? <AttentionList items={items} />
-            : <ActivityLogList logs={eventLogs} />
+            : tab === 'timeline'
+              ? <TimelineView logs={eventLogs} />
+              : <ActivityLogList logs={eventLogs} />
         )}
       </div>
     </div>

@@ -15,7 +15,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
 import * as feedsService from '../services/feeds.js';
 
@@ -55,8 +55,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const { url } = validateRequest(addFeedSchema, req.body);
   const result = await feedsService.addFeed(url);
   if (result.error) {
-    res.status(400).json({ error: result.error });
-    return;
+    throw new ServerError(result.error, { status: 400 });
   }
   res.status(201).json(result.feed);
 }));
@@ -78,8 +77,7 @@ router.post('/items/read-all', asyncHandler(async (req, res) => {
 router.post('/items/:id/read', asyncHandler(async (req, res) => {
   const result = await feedsService.markItemRead(req.params.id);
   if (result.error) {
-    res.status(404).json({ error: result.error });
-    return;
+    throw new ServerError(result.error, { status: 404 });
   }
   res.json(result);
 }));
@@ -88,8 +86,7 @@ router.post('/items/:id/read', asyncHandler(async (req, res) => {
 router.post('/:id/refresh', asyncHandler(async (req, res) => {
   const result = await feedsService.refreshFeed(req.params.id);
   if (result.error) {
-    res.status(404).json({ error: result.error });
-    return;
+    throw new ServerError(result.error, { status: 404 });
   }
   res.json(result);
 }));
@@ -98,8 +95,7 @@ router.post('/:id/refresh', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   const result = await feedsService.removeFeed(req.params.id);
   if (result.error) {
-    res.status(404).json({ error: result.error });
-    return;
+    throw new ServerError(result.error, { status: 404 });
   }
   res.json(result);
 }));

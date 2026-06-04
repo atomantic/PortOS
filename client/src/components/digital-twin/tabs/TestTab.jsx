@@ -16,6 +16,10 @@ import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
+import ValuesAlignmentPanel from './ValuesAlignmentPanel';
+import AdversarialBoundaryPanel from './AdversarialBoundaryPanel';
+import MultiTurnPanel from './MultiTurnPanel';
+import PersonaBadge from '../PersonaBadge';
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -29,6 +33,8 @@ export default function TestTab({ onRefresh }) {
   // Test configuration
   const [selectedProviders, setSelectedProviders] = useState([]);
   const [selectedTests, setSelectedTests] = useState([]);
+  const [personas, setPersonas] = useState([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState(''); // '' = base twin (no persona)
 
   // Results
   const [results, setResults] = useState([]);
@@ -49,11 +55,12 @@ export default function TestTab({ onRefresh }) {
 
   const loadData = async () => {
     setLoading(true);
-    const [testsData, providersData, historyData, fbStats] = await Promise.all([
+    const [testsData, providersData, historyData, fbStats, personaData] = await Promise.all([
       api.getDigitalTwinTests().catch(() => []),
       api.getProviders().catch(() => ({ providers: [] })),
       api.getDigitalTwinTestHistory(5).catch(() => []),
-      api.getBehavioralFeedbackStats().catch(() => null)
+      api.getBehavioralFeedbackStats().catch(() => null),
+      api.getDigitalTwinPersonas({ silent: true }).catch(() => [])
     ]);
 
     setTests(testsData);
@@ -61,6 +68,11 @@ export default function TestTab({ onRefresh }) {
     setProviders(providersList.filter(p => p.enabled));
     setHistory(historyData);
     if (fbStats) setFeedbackStats(fbStats);
+    setPersonas(Array.isArray(personaData) ? personaData : []);
+    // Drop the persona selection if it no longer exists (e.g. deleted elsewhere).
+    // A falsy prev ('' = base twin) fails the .some() check and falls back to '',
+    // so no extra guard is needed.
+    setSelectedPersonaId(prev => ((personaData || []).some(p => p.id === prev) ? prev : ''));
 
     // Default: select all tests
     setSelectedTests(testsData.map(t => t.testId));
@@ -100,6 +112,14 @@ export default function TestTab({ onRefresh }) {
     });
   };
 
+  // Self-heal the picker when a run is rejected because the selected persona no
+  // longer exists (the route guard 404s). Shared by the behavioral runner's
+  // catch and the values-alignment panel via the onPersonaNotFound callback.
+  const handlePersonaNotFound = () => {
+    setSelectedPersonaId('');
+    loadData();
+  };
+
   const toggleTest = (testId) => {
     setSelectedTests(prev =>
       prev.includes(testId) ? prev.filter(id => id !== testId) : [...prev, testId]
@@ -116,22 +136,35 @@ export default function TestTab({ onRefresh }) {
     setResults([]);
 
     const testIds = selectedTests.length > 0 ? selectedTests : null;
+    const personaId = selectedPersonaId || null;
 
-    if (selectedProviders.length === 1) {
-      // Single provider test
-      const { providerId, model } = selectedProviders[0];
-      const result = await api.runSoulTests(providerId, model, testIds);
-      setResults([{ providerId, model, ...result }]);
-    } else {
-      // Multi-provider test
-      const multiResults = await api.runSoulMultiTests(selectedProviders, testIds);
-      setResults(multiResults);
+    try {
+      if (selectedProviders.length === 1) {
+        // Single provider test
+        const { providerId, model } = selectedProviders[0];
+        const result = await api.runSoulTests(providerId, model, testIds, personaId);
+        setResults([{ providerId, model, ...result }]);
+      } else {
+        // Multi-provider test
+        const multiResults = await api.runSoulMultiTests(selectedProviders, testIds, personaId);
+        setResults(multiResults);
+      }
+
+      await loadData();
+      toast.success('Tests completed');
+      onRefresh();
+    } catch (err) {
+      // A stale/deleted persona id is rejected with 404 by the route guard —
+      // self-heal the picker so the next run isn't blocked. The api helper
+      // already toasts the error, so don't add a second one here.
+      if (err?.code === 'NOT_FOUND') {
+        handlePersonaNotFound();
+      }
+    } finally {
+      // Always clear the spinner — without this an error (e.g. the 404 above)
+      // would strand the tab on "Running Tests...".
+      setRunning(false);
     }
-
-    await loadData();
-    setRunning(false);
-    toast.success('Tests completed');
-    onRefresh();
   };
 
   const getResultIcon = (result) => {
@@ -264,6 +297,29 @@ export default function TestTab({ onRefresh }) {
           </div>
         </div>
       </div>
+
+      {/* Persona selector — run the suite as a named persona (P7) or the base twin */}
+      {personas.length > 0 && (
+        <div className="bg-port-card rounded-lg border border-port-border p-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          <label htmlFor="test-persona" className="text-sm font-medium text-gray-400">
+            Embody persona
+          </label>
+          <select
+            id="test-persona"
+            value={selectedPersonaId}
+            onChange={(e) => setSelectedPersonaId(e.target.value)}
+            className="px-3 py-2 min-h-[40px] text-sm rounded-lg border border-port-border bg-port-bg text-white focus:ring-port-accent focus:border-port-accent"
+          >
+            <option value="">Base twin (no persona)</option>
+            {personas.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <span className="text-xs text-gray-500">
+            Applies to both behavioral and values-alignment runs.
+          </span>
+        </div>
+      )}
 
       {/* Run Button */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
@@ -565,7 +621,10 @@ export default function TestTab({ onRefresh }) {
                     {Math.round(run.score * 100)}%
                   </span>
                   <div>
-                    <div className="text-sm text-white">{run.model}</div>
+                    <div className="text-sm text-white flex items-center gap-2">
+                      {run.model}
+                      <PersonaBadge name={run.personaName} />
+                    </div>
                     <div className="text-xs text-gray-500">
                       {run.passed}/{run.total} passed • {timeAgo(run.timestamp)}
                     </div>
@@ -628,6 +687,15 @@ export default function TestTab({ onRefresh }) {
           )}
         </div>
       )}
+
+      {/* Values-Alignment Tests (M34 P6) — shares the provider + persona selection above */}
+      <ValuesAlignmentPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
+
+      {/* Adversarial Boundary Tests (M34 P6) — shares the provider + persona selection above */}
+      <AdversarialBoundaryPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
+
+      {/* Multi-Turn Conversation Tests (M34 P6) — shares the provider + persona selection above */}
+      <MultiTurnPanel selectedProviders={selectedProviders} personaId={selectedPersonaId} onPersonaNotFound={handlePersonaNotFound} onRefresh={onRefresh} />
     </div>
   );
 }

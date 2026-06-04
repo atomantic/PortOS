@@ -1,0 +1,139 @@
+import { join } from 'path';
+import { access } from 'fs/promises';
+import { bufferedSpawn, needsShell } from '../lib/bufferedSpawn.js';
+
+/** Async equivalent of existsSync — returns true if the path is accessible */
+const pathExists = (p) => access(p).then(() => true).catch(() => false);
+
+// Allowlist of safe build commands
+export const ALLOWED_BUILD_CMDS = new Set([
+  'npm',        // Node.js
+  'npx',        // Node.js
+  'xcodebuild', // Xcode
+  'swift',      // Swift Package Manager
+  'make',       // Make
+  'cargo'       // Rust
+]);
+
+// Actual cmd.exe metacharacters (& | < > ^ % ! and grouping parens).
+// Validated only when shell is active (needsShell guard at call site).
+const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
+/**
+ * True if any arg contains a cmd.exe metacharacter. Pure and
+ * platform-independent so the shell-safety check is testable on every platform
+ * (the `needsShell` gate that actually applies it stays at the call site).
+ */
+export const hasShellUnsafeArg = (args) => args.some(a => SHELL_UNSAFE_RE.test(a));
+const INSTALL_TIMEOUT_MS = 3 * 60 * 1000;
+const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_BUILD_COMMAND = 'npm run build';
+
+/**
+ * Validate and split a build command.
+ * @returns {{ ok: true, cmd, args, buildCommand }} when valid (buildCommand is
+ *          the resolved string, with the default applied), or
+ *          {{ ok: false, message, code: 'INVALID_BUILD_COMMAND' }} when not —
+ *          so the route can map a bad command to HTTP 400 without try/catch.
+ */
+export function parseBuildCommand(buildCommand) {
+  const resolved = buildCommand || DEFAULT_BUILD_COMMAND;
+  const [cmd, ...args] = resolved.split(/\s+/);
+
+  if (!ALLOWED_BUILD_CMDS.has(cmd)) {
+    return {
+      ok: false,
+      code: 'INVALID_BUILD_COMMAND',
+      message: `Build command '${cmd}' is not allowed. Allowed: ${[...ALLOWED_BUILD_CMDS].join(', ')}`,
+      buildCommand: resolved
+    };
+  }
+
+  if (needsShell(cmd) && hasShellUnsafeArg(args)) {
+    return { ok: false, code: 'INVALID_BUILD_COMMAND', message: 'Build command args contain shell-unsafe characters', buildCommand: resolved };
+  }
+
+  return { ok: true, cmd, args, buildCommand: resolved };
+}
+
+/**
+ * Run `npm install` in a single directory.
+ * @returns {Promise<{success, exitCode, output}>} — resolves (never rejects).
+ */
+async function runNpmInstall(subDir) {
+  const result = await bufferedSpawn('npm', ['install'], { cwd: subDir, timeoutMs: INSTALL_TIMEOUT_MS });
+  if (result.timedOut) {
+    return { success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` };
+  }
+  if (result.error) {
+    return { success: false, exitCode: -1, output: result.error.message };
+  }
+  return { success: result.success, exitCode: result.code, output: (result.stderr.trim() || result.stdout.trim()).slice(-1024) };
+}
+
+/**
+ * Run the build command in `repoPath`.
+ * @returns {Promise<{success, stdout, stderr, code, signal, output}>} — resolves (never rejects).
+ */
+async function runBuild(cmd, args, repoPath) {
+  const result = await bufferedSpawn(cmd, args, { cwd: repoPath, timeoutMs: BUILD_TIMEOUT_MS });
+  if (result.timedOut) {
+    const timeoutMsg = `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`;
+    const tail = (result.stderr.trim() || result.stdout.trim()).slice(-512);
+    return { success: false, stderr: timeoutMsg, code: -1, output: tail ? `${timeoutMsg} — last output: ${tail}` : timeoutMsg };
+  }
+  if (result.error) {
+    return { success: false, stderr: result.error.message, code: -1, signal: null, output: result.error.message };
+  }
+  const output = (result.stderr.trim() || result.stdout.trim()).slice(-1024);
+  return { success: result.success, stdout: result.stdout.trim(), stderr: result.stderr.trim(), code: result.code, signal: result.signal, output };
+}
+
+/**
+ * Build an app's production UI: install dependencies (root + common subdirs for
+ * Node apps) then run the validated build command.
+ *
+ * Resolves (never rejects) with a structured result the route maps to HTTP:
+ *   - { success: false, failure: 'validation', code, message }   → 400
+ *   - { success: false, failure: 'install', label, exitCode, output } → 500
+ *   - { success: false, failure: 'build', code, signal, output }  → 500
+ *   - { success: true, output }   (build stdout)                  → 200
+ *
+ * @param {object} app - app object (id, name, repoPath, buildCommand?)
+ * @returns {Promise<object>} structured build result
+ */
+export async function buildApp(app) {
+  const parsed = parseBuildCommand(app.buildCommand);
+  if (!parsed.ok) {
+    return { success: false, failure: 'validation', code: parsed.code, message: parsed.message, buildCommand: parsed.buildCommand };
+  }
+  const { cmd, args, buildCommand } = parsed;
+
+  console.log(`🔨 Building ${app.name}: ${buildCommand}`);
+
+  // Install dependencies before building (root + common subdirs) - skip for non-Node apps
+  // For self-builds, skip server/ install to avoid triggering PM2 watch restart
+  const isNodeApp = ['npm', 'npx'].includes(cmd);
+  const isSelfBuild = app.id === 'portos-default';
+  const installDirs = isNodeApp ? ['', 'client', ...(isSelfBuild ? [] : ['server']), 'admin'] : [];
+  for (const sub of installDirs) {
+    const subDir = sub ? join(app.repoPath, sub) : app.repoPath;
+    if (await pathExists(join(subDir, 'package.json'))) {
+      const label = sub || 'root';
+      console.log(`📦 Installing ${label} dependencies for ${app.name}`);
+      const installResult = await runNpmInstall(subDir);
+      if (!installResult.success) {
+        console.log(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(-300)}`);
+        return { success: false, failure: 'install', label, exitCode: installResult.exitCode, output: installResult.output, buildCommand };
+      }
+    }
+  }
+
+  const result = await runBuild(cmd, args, app.repoPath);
+  console.log(`${result.success ? '✅' : '❌'} Build ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+
+  if (!result.success) {
+    return { success: false, failure: 'build', code: result.code, signal: result.signal, output: result.output, buildCommand };
+  }
+
+  return { success: true, output: result.stdout, buildCommand };
+}

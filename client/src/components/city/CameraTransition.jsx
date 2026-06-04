@@ -1,13 +1,11 @@
 import { useRef } from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { smoothstep } from '../../utils/easing';
 
 const ORBITAL_POS = new THREE.Vector3(0, 25, 45);
 const ORBITAL_TARGET = new THREE.Vector3(0, 0, 0);
 const DURATION = 0.8;
-
-// Smoothstep easing
-const smoothstep = (t) => t * t * (3 - 2 * t);
 
 export default function CameraTransition({ active, targetPos, targetLookAt, onTransitionComplete }) {
   const { camera } = useThree();

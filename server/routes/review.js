@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
+import { buildQueue, resolveQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -38,6 +39,50 @@ router.get('/counts', asyncHandler(async (req, res) => {
 router.get('/briefing', asyncHandler(async (req, res) => {
   const briefing = await reviewService.getBriefing();
   res.json(briefing);
+}));
+
+// GET /api/review/queue — cross-domain live aggregator of items needing
+// attention (brain inbox, ask answers, CoS approvals, drafts, health, backups)
+router.get('/queue', asyncHandler(async (req, res) => {
+  const queue = await buildQueue();
+  res.json(queue);
+}));
+
+const resolveQueueSchema = z.object({
+  id: z.string().min(1).max(500)
+});
+
+// POST /api/review/queue/resolve — accept a single cross-domain queue row in
+// place (mark a Brain inbox item done, approve a CoS task or message draft)
+// without leaving the Review Hub. Sources with no clean one-click resolve
+// (Ask, health, backup) have no inline action and 400 here. The `id` is the
+// row's `<source>:<rawId>` — the service dispatches to that source's primitive.
+router.post('/queue/resolve', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(resolveQueueSchema, req.body);
+  const result = await resolveQueueItem(id);
+  res.json(result);
+}));
+
+const promoteAskQueueSchema = z.object({
+  id: z.string().min(1).max(500),
+  target: z.enum(['brain', 'task', 'goal']),
+  // Required when target === 'goal' (cross-field rule below); the row supplies
+  // it from the goal picker. Ignored for brain/task.
+  goalId: z.string().min(1).max(200).optional()
+}).refine((v) => v.target !== 'goal' || !!v.goalId, {
+  message: 'goalId is required when target is "goal"',
+  path: ['goalId']
+});
+
+// POST /api/review/queue/promote-ask — promote an Ask row's latest assistant
+// answer into Brain, a CoS task, or a Goal's progress, in place, without
+// leaving the Review Hub. The `id` is the row's `ask:<conversationId>`; the
+// service finds the latest assistant turn so the client doesn't track turn ids.
+// Goal promotion supplies a `goalId` picked inline from the row's goalOptions.
+router.post('/queue/promote-ask', asyncHandler(async (req, res) => {
+  const { id, target, goalId } = validateRequest(promoteAskQueueSchema, req.body);
+  const result = await promoteAskQueueItem(id, target, goalId);
+  res.json(result);
 }));
 
 // POST /api/review/todo — create a user todo

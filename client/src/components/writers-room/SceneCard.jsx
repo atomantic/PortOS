@@ -15,7 +15,7 @@ import {
 } from '../../services/apiWritersRoom';
 import socket from '../../services/socket';
 import useClickOutside from '../../hooks/useClickOutside';
-import { WR_IMAGE_DEFAULTS } from '../../lib/wrImageDefaults';
+import { WR_IMAGE_DEFAULTS, buildSceneRenderPayload } from '../../lib/wrImageDefaults';
 import {
   buildScenePrompt,
   matchSceneCharacters,
@@ -124,7 +124,7 @@ const SceneCard = forwardRef(function SceneCard({
           filename: `${completedJobId}.png`,
           jobId: completedJobId,
           prompt: data.prompt || null,
-        }).catch((err) => {
+        }, { silent: true }).catch((err) => {
           console.warn(`scene-image persist failed: ${err.message}`);
         });
       }
@@ -159,18 +159,11 @@ const SceneCard = forwardRef(function SceneCard({
     setProgress(null);
     setGenerated(null);
     const prompt = buildScenePrompt(workTitle, scene, matchedCharacters, imageStyle?.prompt || '', matchedPlace);
-    const stepsNum = imageCfg.steps ? Number(imageCfg.steps) : undefined;
-    const seedNum = imageCfg.seed && Number(imageCfg.seed) >= 0 ? Number(imageCfg.seed) : undefined;
-    const res = await generateImage({
+    const res = await generateImage(buildSceneRenderPayload({
       prompt,
       negativePrompt: imageStyle?.negativePrompt || '',
-      modelId: imageCfg.modelId,
-      mode: imageCfg.mode,
-      width: imageCfg.width,
-      height: imageCfg.height,
-      ...(Number.isFinite(stepsNum) ? { steps: stepsNum } : {}),
-      ...(Number.isFinite(seedNum) ? { seed: seedNum } : {}),
-    }).catch((err) => {
+      imageCfg,
+    }), { silent: true }).catch((err) => {
       setError(err.message);
       setGenStatus('error');
       return null;

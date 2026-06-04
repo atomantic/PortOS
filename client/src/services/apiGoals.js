@@ -3,7 +3,7 @@ import { request } from './apiCore.js';
 // Digital Twin - Identity & Goals
 export const getIdentityStatus = () => request('/digital-twin/identity');
 export const getCrossInsights = () => request('/digital-twin/identity/cross-insights');
-export const getChronotype = () => request('/digital-twin/identity/chronotype');
+export const getChronotype = (options) => request('/digital-twin/identity/chronotype', options);
 export const getChronotypeEnergySchedule = () => request('/digital-twin/identity/chronotype/energy-schedule');
 export const deriveChronotype = () => request('/digital-twin/identity/chronotype/derive', { method: 'POST' });
 export const updateChronotypeBehavioral = (data) => request('/digital-twin/identity/chronotype', {

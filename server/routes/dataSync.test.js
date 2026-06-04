@@ -113,4 +113,17 @@ describe('GET /api/sync/:category/checksum — forPeer scoping', () => {
     expect(res.status).toBe(200);
     expect(getChecksum).toHaveBeenCalledWith('universe', { forPeerId: undefined });
   });
+
+  // The category enum is hand-maintained and MUST cover every category the
+  // service supports (a missing one 400s before the snapshot handler runs —
+  // the latent bug #730 hit for `storyBuilder`). Assert each known snapshot
+  // category is accepted (non-400) so a future addition that forgets the enum
+  // is caught here.
+  it.each([
+    'goals', 'character', 'digitalTwin', 'meatspace',
+    'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder',
+  ])('accepts the %s category (enum parity with getSupportedCategories)', async (category) => {
+    const res = await request(buildApp()).get(`/api/sync/${category}/checksum`);
+    expect(res.status).not.toBe(400);
+  });
 });

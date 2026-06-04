@@ -130,6 +130,35 @@ describe('askConversations', () => {
       expect(summaries[0].turnCount).toBe(1);
     });
 
+    it('counts assistant turns separately from total turns', async () => {
+      // A user-only conversation (e.g. the assistant stream errored before any
+      // answer persisted) has turnCount > 0 but no assistant turn — consumers
+      // that offer promote-to-target must gate on assistantTurnCount.
+      const userOnly = await convs.createConversation({ title: 'user only' });
+      await convs.appendTurn(userOnly.id, { role: 'user', content: 'q with no answer' });
+      const answered = await convs.createConversation({ title: 'answered' });
+      await convs.appendTurn(answered.id, { role: 'user', content: 'q' });
+      await convs.appendTurn(answered.id, { role: 'assistant', content: 'a' });
+
+      // A blank/whitespace-only assistant turn (stream interrupted after only
+      // whitespace deltas) is NOT promotable — promoteLatestAssistantTurn trims
+      // content — so it must not count toward assistantTurnCount either.
+      const blankAnswer = await convs.createConversation({ title: 'blank answer' });
+      await convs.appendTurn(blankAnswer.id, { role: 'user', content: 'q' });
+      await convs.appendTurn(blankAnswer.id, { role: 'assistant', content: '   ' });
+
+      const summaries = await convs.listConversations();
+      const u = summaries.find((s) => s.id === userOnly.id);
+      const a = summaries.find((s) => s.id === answered.id);
+      const blank = summaries.find((s) => s.id === blankAnswer.id);
+      expect(u.turnCount).toBe(1);
+      expect(u.assistantTurnCount).toBe(0);
+      expect(a.turnCount).toBe(2);
+      expect(a.assistantTurnCount).toBe(1);
+      expect(blank.turnCount).toBe(2);
+      expect(blank.assistantTurnCount).toBe(0);
+    });
+
     it('prunes non-promoted conversations older than 30 days', async () => {
       const stale = await convs.createConversation({ title: 'stale' });
       // Backdate the file by writing a stale updatedAt. We cheat by re-saving

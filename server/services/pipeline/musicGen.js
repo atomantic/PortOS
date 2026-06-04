@@ -1,22 +1,30 @@
 /**
- * Local OSS music generation — MusicGen via MLX (Pipeline Audio Phase 4c.2).
+ * Local OSS music generation — generator-agnostic backend selector
+ * (Pipeline Audio Phase 4c.2).
  *
- * The first generator behind the audio stage's `source: 'gen'` library entry.
- * Meta's MusicGen (MLX port) renders bounded text-conditioned clips on-device:
- * no network, no API key — the same "local OSS first" posture as the Kokoro /
- * Piper voice path in `audio.js`. A future 3rd-party engine (Suno, etc.) would
- * plug in here as a sibling generator behind the same `generateMusic` contract;
- * we ship local-only for now per the product decision.
+ * The audio stage's `source: 'gen'` library entry renders text-conditioned
+ * background music on-device: no network, no API key — the same "local OSS
+ * first" posture as the Kokoro / Piper voice path in `audio.js`. Each backend
+ * is a sibling Python sidecar behind one `generateMusic` contract:
  *
- * Runtime: the MLX MusicGen code lives in ml-explore/mlx-examples (not a pip
- * package), so generation needs the opt-in venv + clone from
- * `INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh`. When that isn't set
- * up, `generateMusic` throws a 503 with the install hint rather than a bare
- * spawn error — exactly like the FLUX.2 venv gate.
+ *   - `musicgen`  — Meta's MusicGen via MLX (Apple Silicon). Bounded clips
+ *     (≤30s; trained on 30s windows, degrades past that). First backend.
+ *   - `audioldm2` — AudioLDM2 latent diffusion via HuggingFace `diffusers`.
+ *     Long-form (well past 30s), torch on MPS/CUDA/CPU. Second backend.
  *
- * Output: a 32 kHz mono WAV written into the shared music library (PATHS.music)
- * under a `music-gen-<uuid>.wav` basename, so the picker treats a generated
- * track identically to an uploaded one.
+ * An ENGINES registry holds each backend's models, duration window, sidecar
+ * script, venv resolver and install hint, so the route, UI and `generateMusic`
+ * stay engine-agnostic — adding a third backend is one ENGINES entry plus its
+ * Python sidecar, with the route contract unchanged.
+ *
+ * Runtime: each backend has an opt-in venv from
+ * `INSTALL_<ENGINE>=1 bash scripts/setup-image-video.sh`. When it isn't set up,
+ * `generateMusic` throws a 503 with that backend's install hint rather than a
+ * bare spawn error — exactly like the FLUX.2 venv gate.
+ *
+ * Output: a mono WAV written into the shared music library (PATHS.music) under
+ * a `music-gen-<uuid>.wav` basename, so the picker treats a generated track
+ * identically to an uploaded one.
  */
 
 import { spawn } from 'child_process';
@@ -28,26 +36,32 @@ import { randomUUID } from 'crypto';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
-import { resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT } from '../../lib/pythonSetup.js';
+import {
+  resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT,
+  resolveAudioldm2Python, AUDIOLDM2_RUNTIME_DIR, AUDIOLDM2_VENV_DEFAULT,
+} from '../../lib/pythonSetup.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// scripts/generate_musicgen.py lives at the repo root — resolve module-relative
-// so the path is correct regardless of the server process's cwd.
-const SIDECAR_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
+// The sidecar scripts live at the repo root — resolve module-relative so the
+// paths are correct regardless of the server process's cwd.
+const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
+const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py');
+// Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
+const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
 
-// Practical clip-length window. MusicGen was trained on 30s windows and
-// degrades past that; the floor keeps at least one decoder step.
+// MusicGen's practical clip-length window. It was trained on 30s windows and
+// degrades past that; the floor keeps at least one decoder step. Exported as
+// the module-level defaults for backward compatibility — `musicgen` is the
+// default engine, so these mirror its ENGINES entry.
 export const MIN_DURATION_SEC = 1;
 export const MAX_DURATION_SEC = 30;
 export const DEFAULT_DURATION_SEC = 12;
 
-// Registry of selectable generators. "Pick generator first" (the PLAN's
-// gating decision) resolves to MusicGen across three size tiers; medium is the
-// default — a quality/speed balance that fits comfortably in unified memory.
-// Kept as a small in-module constant rather than threaded through the
-// image/video `media-models.json` registry, whose seed/merge/migration
-// machinery doesn't apply to a one-shot audio generator.
+// MusicGen model tiers; medium is the default — a quality/speed balance that
+// fits comfortably in unified memory. Kept as a small in-module constant rather
+// than threaded through the image/video `media-models.json` registry, whose
+// seed/merge/migration machinery doesn't apply to a one-shot audio generator.
 export const MUSICGEN_MODELS = Object.freeze([
   { id: 'musicgen-small',  repo: 'facebook/musicgen-small',  name: 'MusicGen Small (~2 GB, fastest)' },
   { id: 'musicgen-medium', repo: 'facebook/musicgen-medium', name: 'MusicGen Medium (~6 GB, balanced)' },
@@ -55,44 +69,132 @@ export const MUSICGEN_MODELS = Object.freeze([
 ]);
 export const DEFAULT_MUSICGEN_MODEL_ID = 'musicgen-medium';
 
+// AudioLDM2 model tiers; the base model is the default — long-form text-to-audio
+// with the smallest weights. `audioldm2-large` and `-music` trade size for
+// fidelity / music-specialization.
+export const AUDIOLDM2_MODELS = Object.freeze([
+  { id: 'audioldm2',       repo: 'cvssp/audioldm2',       name: 'AudioLDM2 Base (~3 GB, long-form)' },
+  { id: 'audioldm2-large', repo: 'cvssp/audioldm2-large', name: 'AudioLDM2 Large (~7 GB, best quality)' },
+  { id: 'audioldm2-music', repo: 'cvssp/audioldm2-music', name: 'AudioLDM2 Music (~3 GB, music-tuned)' },
+]);
+export const DEFAULT_AUDIOLDM2_MODEL_ID = 'audioldm2';
+
+/**
+ * Backend registry. Each engine is fully described here so the route, UI and
+ * `generateMusic` stay generator-agnostic. Fields:
+ *   - `id`/`name`        — stable id (the contract stored on the request) + label
+ *   - `models`/`defaultModelId` — selectable weights for this backend
+ *   - duration window    — min/max/default seconds, clamped before spawn
+ *   - `scriptPath`       — the Python sidecar
+ *   - `runtimeDir`       — value for the sidecar's --runtime-dir flag
+ *   - `resolvePython`    — () => venv interpreter path | null (readiness probe)
+ *   - `venvDefault`/`installEnv` — install-hint pieces for the 503 message
+ */
+export const ENGINES = Object.freeze({
+  musicgen: {
+    id: 'musicgen',
+    name: 'MusicGen (MLX)',
+    models: MUSICGEN_MODELS,
+    defaultModelId: DEFAULT_MUSICGEN_MODEL_ID,
+    minDurationSec: 1,
+    maxDurationSec: 30,
+    defaultDurationSec: 12,
+    scriptPath: MUSICGEN_SCRIPT,
+    runtimeDir: MUSICGEN_RUNTIME_DIR,
+    resolvePython: resolveMusicgenPython,
+    venvDefault: MUSICGEN_VENV_DEFAULT,
+    installEnv: 'INSTALL_MUSICGEN',
+  },
+  audioldm2: {
+    id: 'audioldm2',
+    name: 'AudioLDM2 (diffusers)',
+    models: AUDIOLDM2_MODELS,
+    defaultModelId: DEFAULT_AUDIOLDM2_MODEL_ID,
+    minDurationSec: 1,
+    maxDurationSec: 120,
+    defaultDurationSec: 20,
+    scriptPath: AUDIOLDM2_SCRIPT,
+    runtimeDir: AUDIOLDM2_RUNTIME_DIR,
+    resolvePython: resolveAudioldm2Python,
+    venvDefault: AUDIOLDM2_VENV_DEFAULT,
+    installEnv: 'INSTALL_AUDIOLDM2',
+  },
+});
+
+export const DEFAULT_ENGINE_ID = 'musicgen';
+
+// Resolve a requested engine id to its registry entry, falling back to the
+// default engine for unknown/absent ids (the route validates against the known
+// set, but generateMusic can be called directly).
+export function getEngine(engineId) {
+  return ENGINES[engineId] || ENGINES[DEFAULT_ENGINE_ID];
+}
+
+// Look up a model within a specific engine. Returns null for unknown ids so the
+// caller can fall back to the engine's default.
+export function getEngineModel(engineId, modelId) {
+  const engine = getEngine(engineId);
+  return engine.models.find((m) => m.id === modelId) || null;
+}
+
+// Back-compat: MusicGen-specific model lookup (pre-multi-engine callers/tests).
 export function getMusicgenModel(modelId) {
   return MUSICGEN_MODELS.find((m) => m.id === modelId) || null;
 }
 
-// Whether the opt-in MusicGen venv is provisioned. The UI gates its "Generate"
-// affordance on this so users see an install hint instead of a 503 after
-// typing a prompt. Cheap (an existsSync probe behind resolveMusicgenPython's
-// cache) — safe to call per request.
+// Whether a backend's opt-in venv is provisioned. The UI gates its "Generate"
+// affordance on this so users see an install hint instead of a 503 after typing
+// a prompt. Cheap (an existsSync probe behind the resolver's cache) — safe to
+// call per request.
+export function isEngineReady(engineId) {
+  return getEngine(engineId).resolvePython() !== null;
+}
+
+// Back-compat: MusicGen readiness probe.
 export function isMusicGenReady() {
   return resolveMusicgenPython() !== null;
 }
 
-// Clamp a requested duration into the model's usable window. Non-finite input
-// falls back to the default rather than throwing — the route validates shape,
-// this guards the math.
-export function clampDuration(durationSec) {
+// Clamp a requested duration into an engine's usable window. Non-finite input
+// falls back to that engine's default rather than throwing — the route
+// validates shape, this guards the math. `engineId` defaults to the module's
+// default engine so the back-compat signature `clampDuration(seconds)` keeps
+// the original MusicGen window.
+export function clampDuration(durationSec, engineId = DEFAULT_ENGINE_ID) {
+  const engine = getEngine(engineId);
   const n = Number(durationSec);
-  if (!Number.isFinite(n)) return DEFAULT_DURATION_SEC;
-  return Math.max(MIN_DURATION_SEC, Math.min(MAX_DURATION_SEC, n));
+  if (!Number.isFinite(n)) return engine.defaultDurationSec;
+  return Math.max(engine.minDurationSec, Math.min(engine.maxDurationSec, n));
 }
 
 /**
- * Build the `{ bin, args }` for the MusicGen sidecar. Pure — unit-tested
- * without spawning Python. `runtimeDir` is the mlx-examples musicgen/ package
- * dir the sidecar adds to sys.path.
+ * Build the `{ bin, args }` for a backend's sidecar. Pure — unit-tested without
+ * spawning Python. Both sidecars share the same flag contract
+ * (`--model/--text/--duration/--output/--runtime-dir`), so one builder serves
+ * every engine; `engineId` selects the duration window + script + runtime dir.
  */
-export function buildMusicGenArgs({ pythonPath, scriptPath = SIDECAR_SCRIPT, runtimeDir = MUSICGEN_RUNTIME_DIR, repo, prompt, durationSec, outputPath }) {
+export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scriptPath, runtimeDir, repo, prompt, durationSec, outputPath }) {
+  const engine = getEngine(engineId);
   return {
     bin: pythonPath,
     args: [
-      scriptPath,
+      scriptPath ?? engine.scriptPath,
       '--model', repo,
       '--text', prompt,
-      '--duration', String(clampDuration(durationSec)),
+      '--duration', String(clampDuration(durationSec, engine.id)),
       '--output', outputPath,
-      '--runtime-dir', runtimeDir,
+      '--runtime-dir', runtimeDir ?? engine.runtimeDir,
     ],
   };
+}
+
+/**
+ * Back-compat wrapper: build the MusicGen sidecar argv. Pre-existing callers
+ * and tests use this name; it forwards to the engine-agnostic builder pinned to
+ * the `musicgen` engine.
+ */
+export function buildMusicGenArgs({ pythonPath, scriptPath = SIDECAR_SCRIPT, runtimeDir = MUSICGEN_RUNTIME_DIR, repo, prompt, durationSec, outputPath }) {
+  return buildSidecarArgs({ engineId: 'musicgen', pythonPath, scriptPath, runtimeDir, repo, prompt, durationSec, outputPath });
 }
 
 // Pull the saved path + actual duration out of the sidecar's `RESULT:<json>`
@@ -110,23 +212,27 @@ function parseResultLine(stdout) {
 
 /**
  * Generate a background-music track and land it in the shared music library.
- * Returns `{ filename, durationSec, modelId, model }`. Throws a ServerError
- * (503) when the MusicGen venv isn't provisioned, or (500) when the sidecar
- * exits non-zero / produces no result.
+ * Returns `{ filename, durationSec, modelId, model, engine }`. Throws a
+ * ServerError (503) when the selected backend's venv isn't provisioned, or
+ * (500) when the sidecar exits non-zero / produces no result.
  *
+ * `engine` selects the backend (`musicgen` | `audioldm2`); unknown ids fall
+ * back to the default. `modelId` is resolved within that engine's registry.
  * `signal` (optional AbortSignal) SIGTERMs the child — wired through so a
  * future cancel button can abort a long render.
  */
-export async function generateMusic({ prompt, durationSec = DEFAULT_DURATION_SEC, modelId = DEFAULT_MUSICGEN_MODEL_ID, signal } = {}) {
+export async function generateMusic({ prompt, engine: engineId = DEFAULT_ENGINE_ID, durationSec, modelId, signal } = {}) {
   const text = (prompt || '').trim();
   if (!text) {
     throw new ServerError('prompt is required', { status: 400, code: 'PIPELINE_MUSIC_EMPTY_PROMPT' });
   }
-  const model = getMusicgenModel(modelId) || getMusicgenModel(DEFAULT_MUSICGEN_MODEL_ID);
-  const pythonPath = resolveMusicgenPython();
+  const engine = getEngine(engineId);
+  const model = getEngineModel(engine.id, modelId) || getEngineModel(engine.id, engine.defaultModelId);
+  const resolvedDuration = durationSec ?? engine.defaultDurationSec;
+  const pythonPath = engine.resolvePython();
   if (!pythonPath) {
     throw new ServerError(
-      `MusicGen runtime not found. Run \`INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected venv at ${MUSICGEN_VENV_DEFAULT}).`,
+      `${engine.name} runtime not found. Run \`${engine.installEnv}=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected venv at ${engine.venvDefault}).`,
       { status: 503, code: 'PIPELINE_MUSIC_RUNTIME_MISSING' },
     );
   }
@@ -134,14 +240,14 @@ export async function generateMusic({ prompt, durationSec = DEFAULT_DURATION_SEC
   await ensureDir(PATHS.music);
   const filename = `music-gen-${randomUUID()}.wav`;
   const outputPath = join(PATHS.music, filename);
-  const { bin, args } = buildMusicGenArgs({ pythonPath, repo: model.repo, prompt: text, durationSec, outputPath });
+  const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, prompt: text, durationSec: resolvedDuration, outputPath });
 
-  console.log(`🎼 Generating music [${model.id}] ${clampDuration(durationSec)}s: "${text.slice(0, 60)}"`);
-  // MusicGen's facebook/* weights are ungated, so a token isn't required — but
-  // pass it through when the user has one set so the first download doesn't hit
-  // anonymous HF rate limits.
+  console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s: "${text.slice(0, 60)}"`);
+  // The default backends use ungated HF weights (facebook/* and cvssp/*), so a
+  // token isn't required — but pass it through when the user has one set so the
+  // first download doesn't hit anonymous HF rate limits.
   const env = safeChildProcessEnv(await hfTokenEnv());
-  const result = await runMusicGenProcess({ bin, args, env, signal });
+  const result = await runSidecarProcess({ bin, args, env, signal, engineId: engine.id });
   // A clean exit isn't enough — the sidecar could exit 0 yet write nothing (or
   // a truncated file) if the runtime changes shape. Require both a parsed
   // RESULT line AND a non-empty file on disk before we persist the library
@@ -158,19 +264,20 @@ export async function generateMusic({ prompt, durationSec = DEFAULT_DURATION_SEC
   }
   return {
     filename,
-    durationSec: Number.isFinite(parsed.durationSec) ? parsed.durationSec : clampDuration(durationSec),
+    durationSec: Number.isFinite(parsed.durationSec) ? parsed.durationSec : clampDuration(resolvedDuration, engine.id),
     modelId: model.id,
     model: model.name,
+    engine: engine.id,
   };
 }
 
-// Spawn the sidecar and resolve `{ ok, stdout, reason? }`. STAGE: lines on
-// stderr are echoed to pm2 logs so a stuck first-run model download is visible
-// (mirrors the image/video sidecars). Captures stdout for the RESULT line and
-// a bounded stderr tail for the failure reason. Not a route handler — the
-// spawn-error / close branches must not throw (they run outside the Express
+// Spawn a backend sidecar and resolve `{ ok, stdout, reason? }`. STAGE: lines
+// on stderr are echoed to pm2 logs so a stuck first-run model download is
+// visible (mirrors the image/video sidecars). Captures stdout for the RESULT
+// line and a bounded stderr tail for the failure reason. Not a route handler —
+// the spawn-error / close branches must not throw (they run outside the Express
 // lifecycle), so they resolve a structured result instead.
-function runMusicGenProcess({ bin, args, env, signal }) {
+function runSidecarProcess({ bin, args, env, signal, engineId = DEFAULT_ENGINE_ID }) {
   return new Promise((resolve) => {
     const proc = spawn(bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -192,7 +299,7 @@ function runMusicGenProcess({ bin, args, env, signal }) {
       stderrTail = (stderrTail + s).slice(-STDERR_TAIL);
       for (const line of s.split(/\r?\n/)) {
         const t = line.trim();
-        if (t.startsWith('STAGE:')) console.log(`🎼 musicgen ${t.slice('STAGE:'.length)}`);
+        if (t.startsWith('STAGE:')) console.log(`🎼 ${engineId} ${t.slice('STAGE:'.length)}`);
       }
     });
     proc.on('error', (err) => finish({ ok: false, reason: `spawn failed: ${err.message}`, stdout }));

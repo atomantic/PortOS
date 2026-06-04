@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
+import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 
 // Shared popover shell for the two collection pickers:
 //
@@ -28,7 +29,6 @@ import { listMediaCollections, createMediaCollection } from '../../services/api'
 
 const DEFAULT_MENU_WIDTH = 260;
 const MENU_GAP = 6;
-const VIEWPORT_PADDING = 8;
 const SEARCH_THRESHOLD = 6;
 
 export default function CollectionPickerShell({
@@ -57,8 +57,22 @@ export default function CollectionPickerShell({
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  const [style, setStyle] = useState(null);
-  const menuRef = useRef(null);
+  const {
+    popoverRef: menuRef,
+    style,
+  } = usePopoverPosition({
+    open,
+    width,
+    minWidth,
+    gap: MENU_GAP,
+    position: 'above',
+    anchorRef,
+    // The popover height changes as the user filters/searches or the list loads;
+    // the hook re-measures synchronously (pre-paint) when these change. `filtered`
+    // is a pure function of these plus `excludeId`, so they cover its height
+    // effect without forward-referencing it.
+    contentDeps: [collectionsState, query, excludeId],
+  });
 
   // Parents may pass inline arrow handlers — read through a ref so the
   // event-listener effect doesn't tear down on every parent render.
@@ -101,35 +115,8 @@ export default function CollectionPickerShell({
     return q ? base.filter((c) => c.name.toLowerCase().includes(q)) : base;
   }, [collectionsState, query, excludeId]);
 
-  const reposition = useCallback(() => {
-    const trigger = anchorRef?.current;
-    const menu = menuRef.current;
-    if (!trigger || !menu) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const w = Math.min(width, Math.max(minWidth, vw - VIEWPORT_PADDING * 2));
-    menu.style.width = `${w}px`;
-    const tr = trigger.getBoundingClientRect();
-    const mr = menu.getBoundingClientRect();
-    const maxLeft = vw - w - VIEWPORT_PADDING;
-    const left = Math.min(Math.max(tr.right - w, VIEWPORT_PADDING), Math.max(VIEWPORT_PADDING, maxLeft));
-    const above = tr.top - mr.height - MENU_GAP;
-    const below = tr.bottom + MENU_GAP;
-    const top = above < VIEWPORT_PADDING ? below : above;
-    const maxTop = Math.max(VIEWPORT_PADDING, vh - mr.height - VIEWPORT_PADDING);
-    const clampedTop = Math.min(Math.max(top, VIEWPORT_PADDING), maxTop);
-    setStyle((prev) => {
-      const next = { left: `${left}px`, top: `${clampedTop}px`, width: `${w}px` };
-      if (prev && prev.left === next.left && prev.top === next.top && prev.width === next.width) return prev;
-      return next;
-    });
-  }, [anchorRef, width, minWidth]);
-
-  useLayoutEffect(() => {
-    if (!open) { setStyle(null); return; }
-    reposition();
-  }, [open, reposition, filtered, query, collectionsState]);
-
+  // Close on outside-click / Escape — placement and scroll/resize reflow are
+  // owned by usePopoverPosition; this effect only handles dismissal.
   useEffect(() => {
     if (!open) return undefined;
     const close = () => onCloseRef.current?.();
@@ -139,20 +126,13 @@ export default function CollectionPickerShell({
       const onMenu = menuRef.current?.contains(e.target);
       if (!onTrigger && !onMenu) close();
     };
-    let raf = null;
-    const onScroll = () => { if (raf !== null) return; raf = requestAnimationFrame(() => { raf = null; reposition(); }); };
     document.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onAway);
-    window.addEventListener('resize', onScroll);
-    window.addEventListener('scroll', onScroll, true);
     return () => {
-      if (raf !== null) cancelAnimationFrame(raf);
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('mousedown', onAway);
-      window.removeEventListener('resize', onScroll);
-      window.removeEventListener('scroll', onScroll, true);
     };
-  }, [open, anchorRef, reposition]);
+  }, [open, anchorRef, menuRef]);
 
   const updateCollections = useCallback((updater) => {
     setCollectionsState((prev) => {

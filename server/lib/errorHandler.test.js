@@ -3,7 +3,8 @@ import {
   ServerError,
   normalizeError,
   emitErrorEvent,
-  errorEvents
+  errorEvents,
+  errorMiddleware
 } from './errorHandler.js';
 
 describe('errorHandler.js', () => {
@@ -33,6 +34,18 @@ describe('errorHandler.js', () => {
       expect(error.severity).toBe('warning');
       expect(error.canAutoFix).toBe(true);
       expect(error.context).toEqual({ resource: 'user' });
+    });
+
+    it('should derive code from status when no explicit code is passed', () => {
+      expect(new ServerError('nope', { status: 404 }).code).toBe('NOT_FOUND');
+      expect(new ServerError('bad', { status: 400 }).code).toBe('BAD_REQUEST');
+      expect(new ServerError('conflict', { status: 409 }).code).toBe('CONFLICT');
+      expect(new ServerError('down', { status: 503 }).code).toBe('SERVICE_UNAVAILABLE');
+    });
+
+    it('should let an explicit code override the status-derived one', () => {
+      const error = new ServerError('dup', { status: 409, code: 'DUPLICATE_ENTRY' });
+      expect(error.code).toBe('DUPLICATE_ENTRY');
     });
 
     it('should be an instance of Error', () => {
@@ -146,6 +159,40 @@ describe('errorHandler.js', () => {
       b.cause = a;
       const normalized = normalizeError(a);
       expect(normalized.context.cause.length).toBeLessThanOrEqual(5);
+    });
+  });
+
+  describe('errorMiddleware', () => {
+    const makeRes = () => {
+      const res = {};
+      res.status = vi.fn(() => res);
+      res.json = vi.fn(() => res);
+      return res;
+    };
+    const makeReq = () => ({ method: 'GET', originalUrl: '/x', app: { get: () => null } });
+
+    it('emits the standard envelope and includes non-empty sanitized context', () => {
+      const res = makeRes();
+      errorMiddleware(
+        new ServerError('boom', { status: 404, context: { modelId: 'm', apiKey: 'secret' } }),
+        makeReq(),
+        res,
+        () => {}
+      );
+      expect(res.status).toHaveBeenCalledWith(404);
+      const body = res.json.mock.calls[0][0];
+      expect(body.error).toBe('boom');
+      expect(body.code).toBe('NOT_FOUND');
+      expect(body.timestamp).toBeDefined();
+      // context is forwarded but sensitive keys are stripped.
+      expect(body.context).toEqual({ modelId: 'm' });
+    });
+
+    it('omits context when it is empty', () => {
+      const res = makeRes();
+      errorMiddleware(new ServerError('nope', { status: 400 }), makeReq(), res, () => {});
+      const body = res.json.mock.calls[0][0];
+      expect(body).not.toHaveProperty('context');
     });
   });
 

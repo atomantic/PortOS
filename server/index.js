@@ -88,6 +88,8 @@ import { initMortalLoomStore } from './services/mortalLoomStore.js';
 import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
+import authRoutes from './routes/auth.js';
+import { authGate, socketAuthGate } from './lib/authGate.js';
 import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
 import loopsRoutes from './routes/loops.js';
@@ -145,6 +147,7 @@ import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
+import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
@@ -185,6 +188,11 @@ const io = new Server(httpServer, {
   },
   path: '/socket.io'
 });
+
+// Auth gate for Socket.IO — when settings.secrets.auth.enabled is true the
+// handshake must carry a valid token cookie or Authorization: Bearer header
+// (set by POST /api/auth/login). No-op when auth is off.
+io.use(socketAuthGate);
 
 // Initialize socket handlers
 initSocket(io);
@@ -366,15 +374,26 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+// Make io available to routes
+app.set('io', io);
+
+// Auth gate runs BEFORE the body parsers so unauthenticated requests to
+// gated routes are rejected from the headers alone, without forcing the
+// server to read and parse a 55 MB JSON body first (DoS surface).
+// Public routes (login, status, health) still need a parsed body / no body,
+// and they flow through to the parsers below normally. When
+// settings.secrets.auth.enabled is true the gate returns 401 for everything
+// except the small public set in lib/authGate.js (auth status/whoami/login/
+// logout + /api/system/health). No-op when auth is off.
+app.use(authGate);
+
 // Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
 // so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
 app.use(express.json({ limit: '55mb' }));
 app.use(express.urlencoded({ limit: '55mb', extended: true }));
 
-// Make io available to routes
-app.set('io', io);
-
 // API Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemHealthRoutes);
@@ -515,6 +534,9 @@ initBrainMemoryBridge();
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Periodically GC orphan zero-issue/zero-canon importer shells left by an
+// abandoned analyze (issue #727).
+startOrphanShellGc();
 // Warm the catalog user-type registry from settings before any catalog request
 // can land, so user-defined types validate + mint ids immediately on boot.
 // Refresh on every settings write (the Settings → Catalog tab persists through

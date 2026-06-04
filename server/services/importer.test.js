@@ -320,6 +320,14 @@ describe('analyzeImport', () => {
     expect(result.universe.id).toBeDefined();
     expect(result.series.id).toMatch(/^ser-/);
     expect(result.series.universeId).toBe(result.universe.id);
+    // New shells are created as import drafts (issue #727): `ephemeral` keeps
+    // them out of sync, `importDraft` is the marker the orphan-shell GC keys on
+    // so an abandoned analyze self-cleans (without touching a user's private
+    // `ephemeral`-only records).
+    expect(result.universe.ephemeral).toBe(true);
+    expect(result.series.ephemeral).toBe(true);
+    expect(result.universe.importDraft).toBe(true);
+    expect(result.series.importDraft).toBe(true);
     expect(result.canonPreview.characters).toHaveLength(1);
     expect(result.canonPreview.characters[0].name).toBe('Aria');
     expect(result.canonPreview.places).toHaveLength(1);
@@ -811,8 +819,12 @@ async function setupForCommit() {
   // PATHS is, and instances.js resolves its own file paths) and fans the
   // fixture out to every actual peer, leaving "Commit U" / "Commit S"
   // records on the user's null sync machine after every test run.
-  const uni = await universeSvc.createUniverse({ name: 'Commit U', ephemeral: true });
-  const ser = await seriesSvc.createSeries({ name: 'Commit S', universeId: uni.id, ephemeral: true });
+  //
+  // importDraft:true models what analyzeImport stamps on a brand-new shell, so
+  // commitImport's promotion (which gates strictly on importDraft) clears both
+  // flags — matching the real analyze→commit lifecycle.
+  const uni = await universeSvc.createUniverse({ name: 'Commit U', ephemeral: true, importDraft: true });
+  const ser = await seriesSvc.createSeries({ name: 'Commit S', universeId: uni.id, ephemeral: true, importDraft: true });
   return { uni, ser };
 }
 
@@ -862,6 +874,13 @@ describe('commitImport', () => {
     expect(result.series.logline).toBe('A reluctant heir.');
     expect(result.series.premise).toBe('Big story.');
     expect(result.series.issueCountTarget).toBe(1);
+    // A successful commit promotes both shells out of draft state (issue #727):
+    // ephemeral cleared so they sync to peers, importDraft cleared so the
+    // orphan-shell GC never touches them.
+    expect(result.universe.ephemeral).not.toBe(true);
+    expect(result.series.ephemeral).not.toBe(true);
+    expect(result.universe.importDraft).not.toBe(true);
+    expect(result.series.importDraft).not.toBe(true);
     // One issue created with prose + idea seeded.
     expect(result.createdIssueIds).toHaveLength(1);
     const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
@@ -1657,5 +1676,109 @@ describe('mergeSeasons (pure helper)', () => {
     expect(caught).toBeDefined();
     expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
     expect(caught.message).toMatch(/duplicate/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reconcile draft parent universe (issue #851)
+//
+// An import-draft universe (ephemeral + importDraft, created by analyzeImport)
+// must be promoted to a normal syncing record when a COMMITTED (non-draft)
+// series is linked to it WITHOUT going through commitImport — otherwise the
+// universe holds real work but silently never syncs. The promotion mirrors
+// commitImport: clear BOTH importDraft and ephemeral. It must NOT fire when a
+// draft series is linked (that's commitImport's job) or when the parent isn't
+// a draft.
+// ---------------------------------------------------------------------------
+describe('reconcile draft parent universe (issue #851)', () => {
+  it('promotes a draft universe when a committed series is linked via updateSeries', async () => {
+    // Draft universe shell, exactly as analyzeImport would stamp it.
+    const draftUni = await universeSvc.createUniverse({
+      name: 'Draft Parent', ephemeral: true, importDraft: true,
+    });
+    // A separate, committed (non-draft) universe the series starts under.
+    const realUni = await universeSvc.createUniverse({ name: 'Committed Home' });
+    const committedSeries = await seriesSvc.createSeries({ name: 'Real Work', universeId: realUni.id });
+    expect(committedSeries.importDraft).not.toBe(true);
+
+    // Manually re-home the committed series onto the draft universe.
+    await seriesSvc.updateSeries(committedSeries.id, { universeId: draftUni.id });
+
+    const promoted = await universeSvc.getUniverse(draftUni.id);
+    expect(promoted.importDraft).not.toBe(true);
+    expect(promoted.ephemeral).not.toBe(true);
+  });
+
+  it('promotes a draft universe when a committed series is CREATED already linked to it', async () => {
+    const draftUni = await universeSvc.createUniverse({
+      name: 'Draft Parent 2', ephemeral: true, importDraft: true,
+    });
+    await seriesSvc.createSeries({ name: 'Born Committed', universeId: draftUni.id });
+
+    const promoted = await universeSvc.getUniverse(draftUni.id);
+    expect(promoted.importDraft).not.toBe(true);
+    expect(promoted.ephemeral).not.toBe(true);
+  });
+
+  it('does NOT promote a draft universe when a DRAFT series is linked (commitImport owns that)', async () => {
+    const draftUni = await universeSvc.createUniverse({
+      name: 'Still Draft', ephemeral: true, importDraft: true,
+    });
+    // A draft-shell series, as analyzeImport stamps it — linking it must leave
+    // the universe a draft so the orphan GC + commitImport keep their contract.
+    const draftSeries = await seriesSvc.createSeries({
+      name: 'Draft Child', universeId: draftUni.id, ephemeral: true, importDraft: true,
+    });
+    expect(draftSeries.importDraft).toBe(true);
+
+    const after = await universeSvc.getUniverse(draftUni.id);
+    expect(after.importDraft).toBe(true);
+    expect(after.ephemeral).toBe(true);
+  });
+
+  it('leaves a private (ephemeral-only, non-draft) universe untouched when a committed series is linked', async () => {
+    // `ephemeral` alone is a user's "keep local" choice — linking a series must
+    // not un-privatize it. Only `importDraft` parents get promoted.
+    const privateUni = await universeSvc.createUniverse({ name: 'Private', ephemeral: true });
+    expect(privateUni.importDraft).not.toBe(true);
+    const realUni = await universeSvc.createUniverse({ name: 'Elsewhere' });
+    const series = await seriesSvc.createSeries({ name: 'A Series', universeId: realUni.id });
+
+    await seriesSvc.updateSeries(series.id, { universeId: privateUni.id });
+
+    const after = await universeSvc.getUniverse(privateUni.id);
+    expect(after.ephemeral).toBe(true);
+    expect(after.importDraft).not.toBe(true);
+  });
+
+  it('leaves a non-draft universe untouched when a committed series links to it', async () => {
+    const normalUni = await universeSvc.createUniverse({ name: 'Normal' });
+    const realUni = await universeSvc.createUniverse({ name: 'Origin' });
+    const series = await seriesSvc.createSeries({ name: 'Moving Series', universeId: realUni.id });
+
+    await seriesSvc.updateSeries(series.id, { universeId: normalUni.id });
+
+    const after = await universeSvc.getUniverse(normalUni.id);
+    expect(after.importDraft).not.toBe(true);
+    expect(after.ephemeral).not.toBe(true);
+  });
+
+  it('does NOT promote a draft universe when an EPHEMERAL (private, non-draft) series is linked', async () => {
+    // An ephemeral series is the user signaling "keep this local" — it carries
+    // no syncing work, so promoting (un-privatizing) its parent would push
+    // peers a universe whose only child never syncs. Only a series that itself
+    // reaches peers should pull its draft parent into sync.
+    const draftUni = await universeSvc.createUniverse({
+      name: 'Draft Parent 3', ephemeral: true, importDraft: true,
+    });
+    const privateSeries = await seriesSvc.createSeries({
+      name: 'Private Committed', universeId: draftUni.id, ephemeral: true,
+    });
+    expect(privateSeries.importDraft).not.toBe(true);
+    expect(privateSeries.ephemeral).toBe(true);
+
+    const after = await universeSvc.getUniverse(draftUni.id);
+    expect(after.importDraft).toBe(true);
+    expect(after.ephemeral).toBe(true);
   });
 });

@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as toolsService from '../services/tools.js';
 
@@ -48,7 +48,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const id = validateRequest(toolIdSchema, req.params.id);
   const tool = await toolsService.getTool(id);
-  if (!tool) return res.status(404).json({ error: 'Tool not found' });
+  if (!tool) throw new ServerError('Tool not found', { status: 404 });
   res.json(tool);
 }));
 
@@ -64,7 +64,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const id = validateRequest(toolIdSchema, req.params.id);
   const data = validateRequest(updateToolSchema, req.body);
   const tool = await toolsService.updateTool(id, data);
-  if (!tool) return res.status(404).json({ error: 'Tool not found' });
+  if (!tool) throw new ServerError('Tool not found', { status: 404 });
   res.json(tool);
 }));
 

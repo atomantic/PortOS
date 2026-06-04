@@ -842,13 +842,46 @@ export const writersRoomImageStyleSchema = z.object({
   negativePrompt: z.string().max(2000).default(''),
 }).strict();
 
+// Phase 5 live-mode opt-in (per work). `enabled` gates the editor's
+// background continuation suggestions; `debounceMs` is the client's
+// idle-after-typing throttle before it asks; `dailyCallBudget` caps how many
+// suggest calls the server will run per UTC day (0 = unlimited);
+// `dailyRenderBudget` is the distinct cap on live render previews (renders cost
+// materially more than text, so they get their own knob). The server-tracked
+// `usage` / `renderUsage` counters are NOT user-editable — they're bumped by
+// the suggest / render-reserve paths and reset on a new day — so they live
+// outside this update schema (mirrors how `pipelineSeriesId` is set by
+// linkToPipeline, not updateWork).
+export const writersRoomLiveModeSchema = z.object({
+  enabled: z.boolean().default(false),
+  debounceMs: z.number().int().min(800).max(30_000).default(2500),
+  dailyCallBudget: z.number().int().min(0).max(10_000).default(100),
+  dailyRenderBudget: z.number().int().min(0).max(10_000).default(20),
+}).strict();
+
 export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   kind: writersRoomWorkKindSchema.optional(),
   status: writersRoomWorkStatusSchema.optional(),
   folderId: wrIdNullable.optional(),
   imageStyle: writersRoomImageStyleSchema.optional(),
+  liveMode: writersRoomLiveModeSchema.partial().optional(),
 }).strict();
+
+// Cursor-context payload for the live continuation suggest route. The three
+// prose slices are bounded so a runaway editor can't ship a multi-MB body on
+// every keystroke — the server only needs a window around the cursor, not the
+// whole manuscript.
+export const writersRoomLiveSuggestSchema = z.object({
+  before: z.string().max(12_000).optional().default(''),
+  after: z.string().max(12_000).optional().default(''),
+  selection: z.string().max(8_000).optional().default(''),
+}).strict();
+
+// Live render-preview reservation takes no body — the work id is in the path
+// and the budget is server-owned. A strict empty object rejects any crafted
+// payload (e.g. an attempt to smuggle a usage counter) instead of ignoring it.
+export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
   body: z.string().max(5_000_000), // 5 MB ceiling — well over a long novel in plain text
@@ -1895,6 +1928,13 @@ export const storySessionUpdateSchema = z.object({
     provider: z.string().trim().max(80).nullable().optional(),
     model: z.string().trim().max(200).nullable().optional(),
   }).optional(),
+}).strict();
+
+// Cross-machine resume opt-in toggle (#730). Sessions are local-only by
+// default; flipping this on snapshots a staleness baseline that travels with
+// the session so a peer's universe edit can't false-positive-stale it.
+export const storySessionSyncSchema = z.object({
+  sync: z.boolean(),
 }).strict();
 
 export const storyStepGenerateSchema = z.object({

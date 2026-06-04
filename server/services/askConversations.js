@@ -150,6 +150,16 @@ export async function listConversations({ limit = 50 } = {}) {
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
         turnCount: Array.isArray(conv.turns) ? conv.turns.length : 0,
+        // Count promotable assistant answers separately: a conversation can have
+        // turns (turnCount > 0) with no promotable answer when an Ask stream
+        // errors or the client disconnects — either before any assistant text is
+        // persisted (user turn only) OR after only whitespace deltas (a blank
+        // assistant turn). Promotion gates on a NON-EMPTY assistant turn (see
+        // latestAssistantTurn in askPromote.js, which `.trim()`s content), so this
+        // count must apply the same predicate or it would advertise a dead-end row.
+        assistantTurnCount: Array.isArray(conv.turns)
+          ? conv.turns.filter((t) => t?.role === 'assistant' && (t.content || '').trim()).length
+          : 0,
         promoted: !!conv.promoted,
       });
     }

@@ -1,6 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import * as messageAccounts from '../services/messageAccounts.js';
@@ -86,21 +86,21 @@ router.post('/accounts', asyncHandler(async (req, res) => {
 
 router.put('/accounts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const updates = validateRequest(updateAccountSchema, req.body);
   const account = await messageAccounts.updateAccount(req.params.id, updates);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!account) throw new ServerError('Account not found', { status: 404 });
   req.app.get('io')?.emit('messages:changed', {});
   res.json(account);
 }));
 
 router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const deleted = await messageAccounts.deleteAccount(req.params.id);
-  if (!deleted) return res.status(404).json({ error: 'Account not found' });
+  if (!deleted) throw new ServerError('Account not found', { status: 404 });
   // Clean up related data
   await messageSync.deleteCache(req.params.id).catch(() => {});
   await messageDrafts.deleteDraftsByAccountId(req.params.id).catch(() => {});
@@ -111,21 +111,21 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
 // === Sync Routes ===
 router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const mode = ['unread', 'full'].includes(req.body?.mode) ? req.body.mode : 'unread';
   const io = req.app.get('io');
   const result = await messageSync.syncAccount(req.params.accountId, io, { mode });
-  if (result.error) return res.status(result.status || 404).json({ error: result.error });
+  if (result.error) throw new ServerError(result.error, { status: result.status || 404 });
   res.json(result);
 }));
 
 router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const status = await messageSync.getSyncStatus(req.params.accountId);
-  if (!status) return res.status(404).json({ error: 'Account not found' });
+  if (!status) throw new ServerError('Account not found', { status: 404 });
   res.json(status);
 }));
 
@@ -133,7 +133,7 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 router.get('/inbox', asyncHandler(async (req, res) => {
   const { accountId, search } = req.query;
   if (accountId && !UUID_RE.test(accountId)) {
-    return res.status(400).json({ error: 'Invalid accountId format' });
+    throw new ServerError('Invalid accountId format', { status: 400 });
   }
   const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const result = await messageSync.getMessages({
@@ -153,9 +153,9 @@ router.get('/triage-rules', asyncHandler(async (req, res) => {
 
 router.delete('/triage-rules/:index', asyncHandler(async (req, res) => {
   const index = parseInt(req.params.index, 10);
-  if (Number.isNaN(index) || index < 0) return res.status(400).json({ error: 'Invalid rule index' });
+  if (Number.isNaN(index) || index < 0) throw new ServerError('Invalid rule index', { status: 400 });
   const deleted = await deleteRule(index);
-  if (!deleted) return res.status(404).json({ error: 'Rule not found' });
+  if (!deleted) throw new ServerError('Rule not found', { status: 404 });
   res.status(204).send();
 }));
 
@@ -187,7 +187,7 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 router.get('/drafts', asyncHandler(async (req, res) => {
   const { accountId, status } = req.query;
   if (accountId && !UUID_RE.test(accountId)) {
-    return res.status(400).json({ error: 'Invalid accountId format' });
+    throw new ServerError('Invalid accountId format', { status: 400 });
   }
   const drafts = await messageDrafts.listDrafts({ accountId, status });
   res.json(drafts);
@@ -196,10 +196,10 @@ router.get('/drafts', asyncHandler(async (req, res) => {
 router.post('/drafts', asyncHandler(async (req, res) => {
   const data = validateRequest(createDraftSchema, req.body);
   const account = await messageAccounts.getAccount(data.accountId);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!account) throw new ServerError('Account not found', { status: 404 });
   const derivedSendVia = account.type === 'gmail' ? 'api' : 'playwright';
   if (data.sendVia && data.sendVia !== derivedSendVia) {
-    return res.status(400).json({ error: `sendVia "${data.sendVia}" conflicts with account type "${account.type}" (expected "${derivedSendVia}")` });
+    throw new ServerError(`sendVia "${data.sendVia}" conflicts with account type "${account.type}" (expected "${derivedSendVia}")`, { status: 400 });
   }
   data.sendVia = derivedSendVia;
   const draft = await messageDrafts.createDraft(data);
@@ -210,7 +210,7 @@ router.post('/drafts', asyncHandler(async (req, res) => {
 router.post('/drafts/generate', asyncHandler(async (req, res) => {
   const data = validateRequest(generateDraftSchema, req.body);
   const account = await messageAccounts.getAccount(data.accountId);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!account) throw new ServerError('Account not found', { status: 404 });
 
   // Fetch the original message to build AI reply
   let replyBody = '';
@@ -251,54 +251,54 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
 
 router.put('/drafts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid draft ID format' });
+    throw new ServerError('Invalid draft ID format', { status: 400 });
   }
   const updates = validateRequest(updateDraftSchema, req.body);
   const draft = await messageDrafts.updateDraft(req.params.id, updates);
-  if (!draft) return res.status(404).json({ error: 'Draft not found' });
+  if (!draft) throw new ServerError('Draft not found', { status: 404 });
   res.json(draft);
 }));
 
 router.post('/drafts/:id/approve', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid draft ID format' });
+    throw new ServerError('Invalid draft ID format', { status: 400 });
   }
   const draft = await messageDrafts.approveDraft(req.params.id);
-  if (!draft) return res.status(404).json({ error: 'Draft not found' });
+  if (!draft) throw new ServerError('Draft not found', { status: 404 });
   res.json(draft);
 }));
 
 router.post('/drafts/:id/send', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid draft ID format' });
+    throw new ServerError('Invalid draft ID format', { status: 400 });
   }
   const io = req.app.get('io');
   const result = await messageSender.sendDraft(req.params.id, io);
   if (!result.success) {
-    return res.status(result.status || 500).json({ code: result.code, error: result.error });
+    throw new ServerError(result.error, { status: result.status || 500, code: result.code });
   }
   res.json(result);
 }));
 
 router.delete('/drafts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid draft ID format' });
+    throw new ServerError('Invalid draft ID format', { status: 400 });
   }
   const deleted = await messageDrafts.deleteDraft(req.params.id);
-  if (!deleted) return res.status(404).json({ error: 'Draft not found' });
+  if (!deleted) throw new ServerError('Draft not found', { status: 404 });
   res.status(204).send();
 }));
 
 // === Browser Launch Route ===
 router.post('/launch/:accountId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const account = await messageAccounts.getAccount(req.params.accountId);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
-  if (account.type === 'gmail') return res.status(400).json({ error: 'Gmail uses the Google API, not browser automation' });
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (account.type === 'gmail') throw new ServerError('Gmail uses the Google API, not browser automation', { status: 400 });
   const result = await launchProvider(account.type);
-  if (!result.success) return res.status(503).json({ error: result.error });
+  if (!result.success) throw new ServerError(result.error, { status: 503 });
   res.json(result);
 }));
 
@@ -337,7 +337,7 @@ const ALLOWED_PROVIDERS = ['outlook', 'teams'];
 
 router.put('/selectors/:provider', asyncHandler(async (req, res) => {
   if (!ALLOWED_PROVIDERS.includes(req.params.provider)) {
-    return res.status(400).json({ error: 'Invalid provider' });
+    throw new ServerError('Invalid provider', { status: 400 });
   }
   const { selectors } = validateRequest(updateSelectorsSchema, req.body);
   const updated = await updateSelectors(req.params.provider, selectors);
@@ -346,7 +346,7 @@ router.put('/selectors/:provider', asyncHandler(async (req, res) => {
 
 router.post('/selectors/:provider/test', asyncHandler(async (req, res) => {
   if (!ALLOWED_PROVIDERS.includes(req.params.provider)) {
-    return res.status(400).json({ error: 'Invalid provider' });
+    throw new ServerError('Invalid provider', { status: 400 });
   }
   const result = await testSelectors(req.params.provider);
   res.json(result);
@@ -355,9 +355,9 @@ router.post('/selectors/:provider/test', asyncHandler(async (req, res) => {
 // === Thread Route ===
 router.get('/thread/:accountId/:threadId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
-    return res.status(400).json({ error: 'Invalid accountId format' });
+    throw new ServerError('Invalid accountId format', { status: 400 });
   }
-  if (!req.params.threadId) return res.status(400).json({ error: 'threadId is required' });
+  if (!req.params.threadId) throw new ServerError('threadId is required', { status: 400 });
   const messages = await messageSync.getThread(req.params.accountId, req.params.threadId);
   res.json({ messages });
 }));
@@ -371,14 +371,14 @@ const messageParamsSchema = z.object({
 // === Per-message refresh ===
 router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid accountId or messageId format' });
+  if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
   const { accountId, messageId } = parsed.data;
   const message = await messageSync.getMessage(accountId, messageId);
-  if (!message) return res.status(404).json({ error: 'Message not found' });
+  if (!message) throw new ServerError('Message not found', { status: 404 });
   const result = await messageSync.refreshMessage(accountId, messageId);
   if (result?.error) {
     const status = result.error === 'no-browser' || result.error === 'auth-required' ? 503 : 502;
-    return res.status(status).json({ error: result.message || result.error });
+    throw new ServerError(result.message || result.error, { status });
   }
   req.app.get('io')?.emit('messages:changed', {});
   res.json(result);
@@ -387,11 +387,11 @@ router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
 // === Fetch full content for preview-only messages ===
 router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const { accountId } = req.params;
   const account = await messageAccounts.getAccount(accountId);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!account) throw new ServerError('Account not found', { status: 404 });
   if (account.type !== 'outlook') return res.json({ updated: 0, total: 0 });
 
   const force = req.body?.force === true;
@@ -411,7 +411,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
 // === Clear account cache ===
 router.post('/accounts/:id/cache/clear', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
-    return res.status(400).json({ error: 'Invalid account ID format' });
+    throw new ServerError('Invalid account ID format', { status: 400 });
   }
   await messageSync.deleteCache(req.params.id);
   req.app.get('io')?.emit('messages:changed', {});
@@ -421,11 +421,11 @@ router.post('/accounts/:id/cache/clear', asyncHandler(async (req, res) => {
 // === Message Action Route (archive/delete) ===
 router.post('/:accountId/:messageId/action', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid accountId or messageId format' });
+  if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
   const { accountId, messageId } = parsed.data;
   const action = req.body?.action;
   if (!['archive', 'delete'].includes(action)) {
-    return res.status(400).json({ error: 'Invalid action — must be "archive" or "delete"' });
+    throw new ServerError('Invalid action — must be "archive" or "delete"', { status: 400 });
   }
   const result = await executeAction(accountId, messageId, action);
   req.app.get('io')?.emit('messages:changed', {});
@@ -443,7 +443,12 @@ router.get('/debug/token-status', asyncHandler(async (req, res) => {
 router.post('/debug/test-token', asyncHandler(async (req, res) => {
   const provider = ALLOWED_TOKEN_PROVIDERS.includes(req.body?.provider) ? req.body.provider : 'outlook';
   const tokenResult = await getToken(provider);
-  if (tokenResult.error) return res.status(503).json(tokenResult);
+  if (tokenResult.error) {
+    throw new ServerError(tokenResult.message || tokenResult.error, {
+      status: 503,
+      context: { reason: tokenResult.error, provider: tokenResult.provider }
+    });
+  }
 
   const decoded = tokenResult.decoded || {};
   const tokenInfo = {
@@ -470,9 +475,9 @@ router.post('/debug/clear-token', asyncHandler(async (req, res) => {
 
 router.get('/:accountId/:messageId', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid accountId or messageId format' });
+  if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
   const message = await messageSync.getMessage(parsed.data.accountId, parsed.data.messageId);
-  if (!message) return res.status(404).json({ error: 'Message not found' });
+  if (!message) throw new ServerError('Message not found', { status: 404 });
   res.json(message);
 }));
 

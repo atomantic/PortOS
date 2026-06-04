@@ -87,13 +87,11 @@ import {
 } from '../services/pipeline/musicLibrary.js';
 import {
   generateMusic,
-  MUSICGEN_MODELS,
-  DEFAULT_MUSICGEN_MODEL_ID,
-  DEFAULT_DURATION_SEC,
-  MIN_DURATION_SEC,
-  MAX_DURATION_SEC,
-  isMusicGenReady,
+  ENGINES,
+  DEFAULT_ENGINE_ID,
+  isEngineReady,
 } from '../services/pipeline/musicGen.js';
+import { deriveAudioCues, preserveRenderedCues } from '../services/pipeline/audioCues.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
 import {
@@ -304,6 +302,28 @@ const stageInputSchema = z.object({
   locked: z.boolean().optional(),
 });
 
+// Strict base arm for the stage-record union below — a bare text-stage patch
+// (only base fields) validates here, but a payload carrying any visual/audio
+// extra key fails this arm and is routed to the matching specific arm instead
+// of being silently key-stripped. The non-strict `stageInputSchema` stays the
+// `.extend()` base for the specific arms (they re-apply `.strict()` themselves).
+const baseStageStrictSchema = stageInputSchema.strict();
+
+// Light per-cue arm for the audio stage (issue #863). The service-side
+// `sanitizeAudioCue` enforces the real shape (ids, time sentinels, gain clamp);
+// here we only bound sizes so a corrupt payload can't balloon the request.
+const audioCueInputSchema = z.object({
+  id: z.string().trim().max(issuesSvc.AUDIO_CUE_ID_MAX).optional(),
+  label: z.string().max(issuesSvc.AUDIO_CUE_LABEL_MAX).nullable().optional(),
+  prompt: z.string().max(issuesSvc.AUDIO_CUE_PROMPT_MAX).nullable().optional(),
+  engine: z.string().trim().max(issuesSvc.AUDIO_CUE_ENGINE_MAX).nullable().optional(),
+  startSec: z.number().nullable().optional(),
+  endSec: z.number().nullable().optional(),
+  trackFilename: z.string().trim().max(issuesSvc.AUDIO_FILENAME_MAX).nullable().optional(),
+  durationSec: z.number().nullable().optional(),
+  gain: z.number().nullable().optional(),
+}).strip();
+
 // Visual stage records also accept pages/scenes/cdProjectId/videoPath — those
 // are arbitrary structured artifacts written by the visual UI. Keep the
 // validation light here so the artifact shape can evolve without a schema
@@ -341,17 +361,27 @@ const visualStageInputSchema = stageInputSchema.extend({
     imageJobId: z.string().trim().max(200).nullable().optional(),
     prompt: z.string().max(16_000).nullable().optional(),
   }).nullable().optional(),
-});
+}).strict();
 
-// Audio stage payloads carry lines[] (voice-over per dialogue line) + a
-// nullable music descriptor. Light validation — the sanitizer in
-// services/pipeline/issues.js enforces per-line + per-music shape. Without
-// this arm in the union below, audio PATCHes silently fall through to the
-// base stageInputSchema and Zod strips lines[]/music.
+// Audio stage payloads carry lines[] (voice-over per dialogue line), a nullable
+// music descriptor, the whole-episode `audioMode` selector, and arc-driven
+// `cues[]` (issue #863). Light validation — the sanitizer in
+// services/pipeline/issues.js enforces per-line / per-music / per-cue shape.
+// Without this arm in the union below, audio PATCHes fall through and the
+// base/visual arms strip lines/music/audioMode/cues.
+//
+// `.strict()` is load-bearing here: the union arms below all share the same
+// optional base fields, so a plain object parses against *any* arm and Zod's
+// default key-stripping would let an audio payload match the visual arm FIRST,
+// silently dropping audioMode/cues. Strict arms reject unknown keys, so an
+// audio payload (with audioMode/cues/lines/music) only validates against THIS
+// arm and reaches the audio sanitizer intact.
 const audioStageInputSchema = stageInputSchema.extend({
   lines: z.array(z.any()).max(1000).optional(),
   music: z.any().nullable().optional(),
-});
+  audioMode: z.enum(issuesSvc.AUDIO_MODES).optional(),
+  cues: z.array(audioCueInputSchema).max(issuesSvc.AUDIO_CUES_MAX).optional(),
+}).strict();
 
 const issuePatchSchema = z.object({
   title: z.string().trim().min(1).max(issuesSvc.TITLE_MAX).optional(),
@@ -368,14 +398,16 @@ const issuePatchSchema = z.object({
   lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
   pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
   minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
-  // Use visualStageInputSchema as the union arm so visual-stage payloads keep
-  // their `scenes` / `pages` / `cdProjectId` / `videoPath` fields. The schema
-  // is a superset of stageInputSchema (those four are optional additions), so
-  // text-stage patches still validate. Z.union picks the first schema that
-  // succeeds — stageInputSchema first would silently strip the visual fields.
-  // Union order matters: Zod picks the first arm that succeeds, so the
-  // more-specific schemas (visual, audio) must precede the bare base.
-  stages: z.record(z.string(), z.union([visualStageInputSchema, audioStageInputSchema, stageInputSchema])).optional(),
+  // Stage-record arms are all `.strict()` (see audioStageInputSchema above):
+  // every arm shares the same optional base fields, so a non-strict arm would
+  // accept (and key-strip) a payload meant for a sibling arm. With strict arms
+  // a payload only validates against the arm whose extra keys it actually
+  // carries — visual payloads (pages/scenes/…) reach the visual arm, audio
+  // payloads (lines/music/audioMode/cues) reach the audio arm, and bare
+  // text-stage patches (status/output/locked only) fall through to the base.
+  // Order is now defensive rather than load-bearing, but we still place the
+  // more-specific arms first; the bare base last.
+  stages: z.record(z.string(), z.union([visualStageInputSchema, audioStageInputSchema, baseStageStrictSchema])).optional(),
   ephemeral: z.boolean().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
@@ -895,31 +927,73 @@ const musicUpload = uploadSingle('track', {
 const audioStatusAfterMusicChange = (stage) =>
   (stage.lines?.length ? 'edited' : 'empty');
 
+// Attaching/generating/uploading a single track means "use this one track as
+// the episode bed" — flip audioMode to 'uploaded-track' so the stitcher
+// actually muxes it. Without this a new issue stays at the default 'per-clip'
+// mode, which (correctly) ignores the music pointer, so the track would land on
+// the issue but never play (issue #863). Only override the generated/silent
+// modes when the user explicitly attaches a single track — those are deliberate
+// strategy choices we shouldn't silently undo for an unrelated music write... but
+// since all three routes ARE the "set the single track" action, the override is
+// the user's intent. The delete route mirrors this: clearing the only track
+// reverts an 'uploaded-track' issue to 'per-clip', leaving generated/silent be.
+const audioModeAfterTrackSet = () => 'uploaded-track';
+const audioModeAfterTrackClear = (stage) =>
+  (stage.audioMode === 'uploaded-track' ? 'per-clip' : stage.audioMode);
+
 router.get('/audio/music-library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
 }));
 
 // Local-OSS music generators available to the audio stage (Phase 4c.2).
-// `ready` reflects whether the opt-in MusicGen venv is provisioned, so the UI
-// can show an install hint instead of letting the user type a prompt that 503s.
+// Returns every selectable backend under `engines` (each carrying its models,
+// duration window and a `ready` flag for the opt-in venv) plus a `defaultEngine`
+// id. The top-level `models`/`ready`/duration fields mirror the default engine
+// for backward compatibility with pre-multi-engine clients.
 router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
+  const engines = Object.values(ENGINES).map((engine) => ({
+    id: engine.id,
+    name: engine.name,
+    models: engine.models.map(({ id, name }) => ({ id, name })),
+    defaultModelId: engine.defaultModelId,
+    defaultDurationSec: engine.defaultDurationSec,
+    minDurationSec: engine.minDurationSec,
+    maxDurationSec: engine.maxDurationSec,
+    // The authoritative install-hint env var (e.g. INSTALL_AUDIOLDM2) so the UI
+    // renders the exact command instead of re-deriving it from the engine id.
+    installEnv: engine.installEnv,
+    ready: isEngineReady(engine.id),
+  }));
+  const fallback = engines.find((e) => e.id === DEFAULT_ENGINE_ID) ?? engines[0];
   res.json({
-    models: MUSICGEN_MODELS.map(({ id, name }) => ({ id, name })),
-    defaultModelId: DEFAULT_MUSICGEN_MODEL_ID,
-    defaultDurationSec: DEFAULT_DURATION_SEC,
-    minDurationSec: MIN_DURATION_SEC,
-    maxDurationSec: MAX_DURATION_SEC,
-    ready: isMusicGenReady(),
+    engines,
+    defaultEngine: DEFAULT_ENGINE_ID,
+    // Back-compat: flatten the default engine's fields to the top level.
+    models: fallback.models,
+    defaultModelId: fallback.defaultModelId,
+    defaultDurationSec: fallback.defaultDurationSec,
+    minDurationSec: fallback.minDurationSec,
+    maxDurationSec: fallback.maxDurationSec,
+    ready: fallback.ready,
   });
 }));
 
-// Generate a background-music track with MusicGen (MLX) and attach it to the
-// issue as a `source: 'gen'` track. The generated WAV lands in the shared
+// Every model id across all engines — the schema validates `modelId` against
+// this union and `generateMusic` resolves it within the chosen engine (falling
+// back to that engine's default for a mismatched id).
+const ALL_MODEL_IDS = Object.values(ENGINES).flatMap((e) => e.models.map((m) => m.id));
+// The widest duration window across engines; per-engine clamping happens in the
+// service, so the schema just rejects absurd values.
+const MAX_ENGINE_DURATION = Math.max(...Object.values(ENGINES).map((e) => e.maxDurationSec));
+
+// Generate a background-music track with the selected backend and attach it to
+// the issue as a `source: 'gen'` track. The generated WAV lands in the shared
 // music library, so it's reusable across issues exactly like an upload.
 const musicGenerateSchema = z.object({
   prompt: z.string().trim().min(1).max(800),
-  durationSec: z.number().min(MIN_DURATION_SEC).max(MAX_DURATION_SEC).optional(),
-  modelId: z.enum(MUSICGEN_MODELS.map((m) => m.id)).optional(),
+  engine: z.enum(Object.keys(ENGINES)).optional(),
+  durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
+  modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
 router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicGenerateSchema, req.body ?? {});
@@ -930,19 +1004,21 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
   issuesSvc.assertStageUnlocked(issue, 'audio');
   const gen = await generateMusic({
     prompt: body.prompt,
-    durationSec: body.durationSec ?? DEFAULT_DURATION_SEC,
-    modelId: body.modelId ?? DEFAULT_MUSICGEN_MODEL_ID,
+    engine: body.engine ?? DEFAULT_ENGINE_ID,
+    durationSec: body.durationSec,
+    modelId: body.modelId,
   }).catch((err) => { throw mapServiceError(err); });
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackSet(),
       music: { source: MUSIC_SOURCE.GEN, trackFilename: gen.filename, label: gen.model },
       errorMessage: '',
     }),
   ).catch((err) => { throw mapServiceError(err); });
-  res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId });
+  res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId, engine: gen.engine });
 }));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {
@@ -963,6 +1039,7 @@ router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(a
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackSet(),
       music: { source: MUSIC_SOURCE.UPLOAD, trackFilename: filename, label },
       errorMessage: '',
     }),
@@ -988,6 +1065,7 @@ router.post('/issues/:id/stages/audio/music/attach', asyncHandler(async (req, re
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackSet(),
       music: {
         source: MUSIC_SOURCE.LIBRARY,
         trackFilename: body.trackFilename,
@@ -1005,11 +1083,149 @@ router.delete('/issues/:id/stages/audio/music', asyncHandler(async (req, res) =>
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackClear(current),
       music: null,
       errorMessage: '',
     }),
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage });
+}));
+
+// Whole-episode audio cues (issue #863, step 3). The 'generated' audioMode lays
+// an ordered cues[] array — one cue per narrative arc beat — onto the episode
+// timeline at stitch time. These two routes derive the cue list from the
+// episode's own beats and render each cue's audio.
+
+// Derive the per-arc cue list from the episode's OWN beat prose (stages.idea) +
+// storyboard scene order. Replaces the existing cues[] unless force is false and
+// cues already exist (mirrors the extract-lines / extract-scenes overwrite
+// guard). Already-rendered cue audio is carried forward by label so re-deriving
+// doesn't silently invalidate every rendered WAV.
+const cuesGenerateSchema = z.object({
+  engine: z.enum(Object.keys(ENGINES)).optional(),
+  providerOverride: z.string().trim().max(80).optional(),
+  modelOverride: z.string().trim().max(128).optional(),
+  force: z.boolean().optional(),
+});
+router.post('/issues/:id/stages/audio/cues/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(cuesGenerateSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, 'audio');
+  const existing = Array.isArray(issue.stages?.audio?.cues) ? issue.stages.audio.cues : [];
+  if (existing.length > 0 && !body.force) {
+    throw new ServerError(
+      `Audio stage already has ${existing.length} cue${existing.length === 1 ? '' : 's'} — pass { force: true } to replace`,
+      { status: 409, code: 'PIPELINE_AUDIO_CUES_EXIST' },
+    );
+  }
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+  // Inherit the series LLM unless the client overrides — same provider/model
+  // resolution as the other Pipeline LLM actions (extract-scenes / extract-canon).
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: body.providerOverride,
+    overrideModel: body.modelOverride,
+  });
+  const result = await deriveAudioCues(issue, {
+    defaultEngine: body.engine ?? DEFAULT_ENGINE_ID,
+    providerOverride: provider,
+    modelOverride: model,
+    series: { name: series.name, styleNotes: series.styleNotes },
+  }).catch((err) => { throw mapServiceError(err); });
+  // Carry forward already-rendered cue audio (matched by label) so a re-derive
+  // doesn't drop WAVs the user already generated.
+  const cues = preserveRenderedCues(result.cues, existing);
+  // Deriving cues implies the user wants the episode-level generated soundtrack —
+  // flip audioMode to 'generated' so the muxer picks up the cues at stitch time.
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    () => ({ audioMode: 'generated', cues, lastRunId: result.runId, errorMessage: '' }),
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    issue: updatedIssue, stage,
+    cues: stage.cues,
+    cueCount: stage.cues.length,
+    runId: result.runId,
+    providerId: result.providerId,
+    model: result.model,
+  });
+}));
+
+// Render one cue's audio via the generator-agnostic generateMusic contract,
+// stamping trackFilename + durationSec back into that cue. Mirrors the per-line
+// render route. The duration is the cue's placed timeline span (endSec-startSec)
+// when placed, else the requested durationSec, else the engine default —
+// per-engine clampDuration in generateMusic guards the final value.
+const cueRenderSchema = z.object({
+  engine: z.enum(Object.keys(ENGINES)).optional(),
+  durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
+  modelId: z.enum(ALL_MODEL_IDS).optional(),
+});
+router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (req, res) => {
+  const cueIdx = Number(req.params.cueIdx);
+  if (!Number.isInteger(cueIdx) || cueIdx < 0) {
+    throw new ServerError('cueIdx must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_AUDIO_BAD_INDEX',
+    });
+  }
+  const body = validateRequest(cueRenderSchema, req.body ?? {});
+  // Guard the expensive generation behind a 404 + range check first so we don't
+  // burn GPU time only to discover the issue/cue is gone (orphaning the WAV).
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, 'audio');
+  const cues = Array.isArray(issue.stages?.audio?.cues) ? issue.stages.audio.cues : [];
+  const cue = cues[cueIdx];
+  if (!cue) {
+    throw new ServerError(`cueIdx ${cueIdx} out of range (have ${cues.length})`, {
+      status: 404, code: 'PIPELINE_AUDIO_CUE_NOT_FOUND',
+    });
+  }
+  if (!cue.prompt) {
+    throw new ServerError('Cue has no prompt to render — derive cues first', {
+      status: 400, code: 'PIPELINE_AUDIO_CUE_NO_PROMPT',
+    });
+  }
+  // Duration priority: an explicit body override → the placed timeline span
+  // (endSec-startSec when both are placed) → the engine default (generateMusic
+  // resolves undefined to the engine's defaultDurationSec). Engine resolution
+  // priority: body → the cue's own engine hint → the global default.
+  const span = (typeof cue.startSec === 'number' && typeof cue.endSec === 'number' && cue.endSec > cue.startSec)
+    ? cue.endSec - cue.startSec
+    : undefined;
+  const engine = body.engine ?? cue.engine ?? DEFAULT_ENGINE_ID;
+  const gen = await generateMusic({
+    prompt: cue.prompt,
+    engine,
+    durationSec: body.durationSec ?? span,
+    modelId: body.modelId,
+  }).catch((err) => { throw mapServiceError(err); });
+  // Merge against the freshest persisted cue inside the write queue so a
+  // concurrent re-derive can't clobber the render (the cue list is re-read here).
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => {
+      const curCues = Array.isArray(current?.cues) ? current.cues : [];
+      const target = curCues[cueIdx];
+      if (!target) return {};
+      const nextCues = [...curCues];
+      nextCues[cueIdx] = {
+        ...target,
+        engine: gen.engine,
+        trackFilename: gen.filename,
+        durationSec: gen.durationSec,
+      };
+      return { cues: nextCues, errorMessage: '' };
+    },
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    issue: updatedIssue, stage, cueIdx,
+    cue: stage.cues[cueIdx],
+    trackFilename: gen.filename,
+    durationSec: gen.durationSec,
+    engine: gen.engine,
+    modelId: gen.modelId,
+  });
 }));
 
 // Deleting from the library leaves stale `music.trackFilename` pointers on
@@ -1367,7 +1583,7 @@ router.post('/series/:id/seasons/:seasonId/generate-beats', asyncHandler(async (
 router.get('/series/:id/seasons/:seasonId/generate-beats/progress', (req, res) => {
   const attached = volumeBeatsRunner.attachClient(req.params.seasonId, res);
   if (!attached) {
-    res.status(404).json({ error: 'No active beat-sheet run for this volume' });
+    throw new ServerError('No active beat-sheet run for this volume', { status: 404 });
   }
 });
 
@@ -2198,7 +2414,7 @@ router.post('/issues/:id/auto-run-text', asyncHandler(async (req, res) => {
 router.get('/issues/:id/auto-run-text/progress', (req, res) => {
   const attached = autoRunner.attachClient(req.params.id, res);
   if (!attached) {
-    res.status(404).json({ error: 'No active auto-run for this issue' });
+    throw new ServerError('No active auto-run for this issue', { status: 404 });
   }
 });
 
@@ -2245,7 +2461,7 @@ router.post('/series/:id/editorial/analyze', asyncHandler(async (req, res) => {
 router.get('/series/:id/editorial/analyze/progress', (req, res) => {
   const attached = editorialRunner.attachClient(req.params.id, res);
   if (!attached) {
-    res.status(404).json({ error: 'No active editorial analysis for this series' });
+    throw new ServerError('No active editorial analysis for this series', { status: 404 });
   }
 });
 

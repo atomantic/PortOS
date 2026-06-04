@@ -183,12 +183,18 @@ Safe-Install -Dir "client" -Label "client"
 Safe-Install -Dir "server" -Label "server"
 Safe-Install -Dir "autofixer" -Label "autofixer"
 
-# Run trusted install scripts skipped by ignore-scripts=true in .npmrc
+# Run trusted install scripts skipped by ignore-scripts=true in .npmrc.
+# Use `npm rebuild esbuild` rather than a hardcoded node_modules/esbuild/install.js
+# path: esbuild is no longer hoisted to the top of either tree (it nests under
+# vite/vitest), and the server has no direct esbuild dependency at all since
+# vitest 4 → vite 8 dropped it — so the old install.js path 404'd and crashed
+# the update. `npm rebuild` finds esbuild wherever it lives and no-ops cleanly
+# when absent. Server rebuild is non-fatal (esbuild is a test-only transitive
+# there, not needed for runtime or the production build).
 Write-SafeHost "🔧 Rebuilding esbuild, node-pty & sharp..." -ForegroundColor Yellow
-Invoke-Logged node client/node_modules/esbuild/install.js
+Invoke-Logged npm rebuild esbuild --prefix client
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Invoke-Logged node server/node_modules/esbuild/install.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-Logged npm rebuild esbuild --prefix server
 Invoke-Logged npm rebuild node-pty sharp --prefix server
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-SafeHost ""

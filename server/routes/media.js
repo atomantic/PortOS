@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import mediaService from '../services/mediaService.js';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = express.Router();
 
@@ -57,7 +57,7 @@ router.get('/video', (req, res) => {
   const videoStream = mediaService.getVideoStream();
 
   if (!videoStream) {
-    return res.status(404).json({ error: 'Video stream not active' });
+    throw new ServerError('Video stream not active', { status: 404 });
   }
 
   res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=frame');
@@ -101,7 +101,7 @@ router.get('/audio', (req, res) => {
   const audioStream = mediaService.getAudioStream();
 
   if (!audioStream) {
-    return res.status(404).json({ error: 'Audio stream not active' });
+    throw new ServerError('Audio stream not active', { status: 404 });
   }
 
   res.setHeader('Content-Type', 'audio/webm');

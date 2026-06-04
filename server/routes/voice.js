@@ -160,7 +160,7 @@ router.get('/voices', asyncHandler(async (req, res) => {
 router.post('/piper/fetch', asyncHandler(async (req, res) => {
   const voice = (req.body?.voice || '').toString();
   if (!findPiperVoice(voice)) {
-    return res.status(400).json({ error: `unknown piper voice: ${voice}` });
+    throw new ServerError(`unknown piper voice: ${voice}`, { status: 400 });
   }
   const cfg = await getVoiceConfig();
   const result = await downloadPiperVoice(voice, cfg);
@@ -172,9 +172,9 @@ router.post('/piper/fetch', asyncHandler(async (req, res) => {
 // without saving first (e.g. flip to Piper, hit ▶, before clicking Save).
 router.post('/test', asyncHandler(async (req, res) => {
   const text = (req.body?.text || '').toString().trim();
-  if (!text) return res.status(400).json({ error: 'text is required' });
+  if (!text) throw new ServerError('text is required', { status: 400 });
   if (text.length > MAX_VOICE_TEXT_LEN) {
-    return res.status(400).json({ error: `text too long (${text.length} > ${MAX_VOICE_TEXT_LEN} chars)` });
+    throw new ServerError(`text too long (${text.length} > ${MAX_VOICE_TEXT_LEN} chars)`, { status: 400 });
   }
   const voice = (req.body?.voice || '').toString().trim() || undefined;
   const engine = validEngine((req.body?.engine || '').toString().trim());

@@ -242,6 +242,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--repo", required=True, help="HF repo for the quantized weights")
     p.add_argument("--tokenizer-repo", default=None, help="HF repo for tokenizer (sdnq variants)")
     p.add_argument("--base-pipeline-repo", default=None, help="HF repo for VAE/scheduler (int8 variant)")
+    # Reference-editing repo for the bf16 (`quantization=none`) path. The base
+    # FLUX.2-klein-9B transformer wasn't tuned for the K/V reference-editing
+    # task, so when reference images are present we load the `-kv` sibling repo
+    # instead. Absent (or no reference images) → the plain bf16 path stays on
+    # `--repo`. See server/lib/mediaModels.js `kvRepo`.
+    p.add_argument("--kv-repo", default=None, help="HF repo to load for multi-reference editing on the bf16 path (FLUX.2-klein-9B-kv)")
     p.add_argument("--prompt", required=True)
     p.add_argument("--negative-prompt", default="")
     p.add_argument("--width", type=int, default=1024)
@@ -364,20 +370,29 @@ def main() -> None:
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
     use_kv = bool(args.reference_images)
-    # Multi-reference editing is gated to the SDNQ Disty0 quantization today.
-    # The int8 path attaches a quanto-rehydrated transformer directly and the
-    # KV pipeline's reference-token attention hooks don't compose through that
-    # wrapper. The bf16 path loads from the gated base 9B repo (not the kv
-    # variant) whose transformer wasn't tuned for the reference-editing task,
-    # so the KV pipeline would run but produce off-task output. Both paths
-    # should refuse early with a clear message rather than mislead. Lift this
-    # gate per quantization once the corresponding KV pipeline is validated.
-    if use_kv and args.quantization in ("int8", "none"):
+    # Multi-reference editing is gated to SDNQ + bf16 today. The int8 path
+    # attaches a quanto-rehydrated transformer directly and the KV pipeline's
+    # reference-token attention hooks don't compose through that wrapper, so it
+    # still refuses early with a clear message rather than mislead. Lift the
+    # int8 gate once its KV pipeline is validated.
+    if use_kv and args.quantization == "int8":
         print(
-            f"❌ Multi-reference editing (--reference-images) is not supported on "
-            f"{args.quantization} quantization yet. Use the SDNQ variant "
-            f"(flux2-klein-9b / flux2-klein-4b) for multi-reference renders; "
-            f"PLAN tracks the bf16 + KV pin as a follow-up.",
+            "❌ Multi-reference editing (--reference-images) is not supported on "
+            "int8 quantization yet. Use an SDNQ variant (flux2-klein-9b / "
+            "flux2-klein-4b) or the bf16 variant (flux2-klein-9b-bf16) for "
+            "multi-reference renders.",
+            file=sys.stderr,
+        )
+        sys.exit(64)
+    # bf16 reference editing loads the `-kv` sibling repo (whose transformer is
+    # tuned for the reference-editing task) instead of the base 9B repo. The
+    # route always threads `--kv-repo` for this model, but guard the manual /
+    # curl path so we don't silently run off-task on the base transformer.
+    if use_kv and args.quantization == "none" and not args.kv_repo:
+        print(
+            "❌ Multi-reference editing on bf16 requires --kv-repo "
+            "(the FLUX.2-klein-9B-kv sibling repo); the base 9B transformer "
+            "is not tuned for reference editing.",
             file=sys.stderr,
         )
         sys.exit(64)
@@ -403,9 +418,13 @@ def main() -> None:
         probe_hf_auth(args.base_pipeline_repo)
         pipe = load_pipeline_int8(args.repo, args.base_pipeline_repo, device, dtype, pipeline_cls)
     elif args.quantization == "none":
-        # Native bf16 — `repo` is the gated base repo itself.
-        probe_hf_auth(args.repo)
-        pipe = load_pipeline_bf16(args.repo, device, dtype, pipeline_cls)
+        # Native bf16 — `repo` is the gated base repo itself. For multi-reference
+        # editing, load the `-kv` sibling repo instead (its transformer is tuned
+        # for the K/V reference-editing task); the plain text/i2i path stays on
+        # the base repo. Both share the same FLUX.2-klein license.
+        bf16_repo = args.kv_repo if (use_kv and args.kv_repo) else args.repo
+        probe_hf_auth(bf16_repo)
+        pipe = load_pipeline_bf16(bf16_repo, device, dtype, pipeline_cls)
     else:
         print(f"❌ unknown quantization: {args.quantization}", file=sys.stderr)
         sys.exit(64)

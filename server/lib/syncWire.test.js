@@ -164,6 +164,29 @@ describe('syncWire', () => {
       expect(sanitizeRecordForWire('universe', { id: 'u1', ephemeral: 'yes' })).not.toBeNull();
       expect(sanitizeRecordForWire('universe', { id: 'u1', ephemeral: false })).not.toBeNull();
     });
+
+    it('strips styleImageRefs from universe wire form (wire-local probe renders)', () => {
+      // styleImageRefs are per-peer, regenerable base style-probe renders. They
+      // must never cross the wire: an older peer that lacks the field in its
+      // sanitizer would drop it on receive, then LWW-strip it back off a newer
+      // peer after its own edit. The wire form is byte-stable against a record
+      // that never carried the field at all.
+      const withRefs = sanitizeRecordForWire('universe', {
+        id: 'u1', name: 'U', styleImageRefs: ['a.png', 'b.png'],
+      });
+      expect(withRefs.styleImageRefs).toBeUndefined();
+      const without = sanitizeRecordForWire('universe', { id: 'u1', name: 'U' });
+      expect(JSON.stringify(withRefs)).toBe(JSON.stringify(without));
+    });
+
+    it('does NOT strip styleImageRefs from series/issue wire form (universe-only field)', () => {
+      // The strip is scoped to `kind === 'universe'` — series/issue records
+      // never carry styleImageRefs, but a stray value (hand-edit, corrupted
+      // payload) on those kinds must pass through unchanged so the strip can't
+      // silently alter unrelated record shapes.
+      const series = sanitizeRecordForWire('series', { id: 's1', name: 'S', styleImageRefs: ['x.png'] });
+      expect(series.styleImageRefs).toEqual(['x.png']);
+    });
   });
 
   describe('sanitizeStateForWire', () => {

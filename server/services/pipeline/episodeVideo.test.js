@@ -38,8 +38,13 @@ vi.mock('../creativeDirector/completionHook.js', () => ({
   startCreativeDirectorProject: vi.fn(async () => undefined),
 }));
 
+let mockVideoModels = [
+  { id: 'ltx23_distilled_q4' },
+  { id: 'ltx2_unified' },
+];
 vi.mock('../../lib/mediaModels.js', () => ({
   getDefaultVideoModelId: () => 'ltx23_distilled_q4',
+  getVideoModels: () => mockVideoModels,
 }));
 
 vi.mock('../settings.js', () => ({
@@ -49,6 +54,7 @@ vi.mock('../settings.js', () => ({
 const svc = await import('./episodeVideo.js');
 const issuesSvc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
+const settingsMod = await import('../settings.js');
 
 async function seedSeriesAndIssue({ scenes = [] } = {}) {
   const series = await seriesSvc.createSeries({
@@ -76,6 +82,10 @@ describe('pipeline episodeVideo helper', () => {
     cdCreated.length = 0;
     cdTreatments.length = 0;
     uuidCounter = 0;
+    mockVideoModels = [
+      { id: 'ltx23_distilled_q4' },
+      { id: 'ltx2_unified' },
+    ];
     vi.clearAllMocks();
   });
 
@@ -278,6 +288,77 @@ describe('pipeline episodeVideo helper', () => {
     const refreshed = await issuesSvc.getIssue(issue.id);
     expect(refreshed.stages.episodeVideo.aspectRatio).toBe('9:16');
     expect(refreshed.stages.episodeVideo.quality).toBe('high');
+  });
+
+  it('startEpisodeVideoForIssue forwards an explicit modelId to the CD project + persists it on the stage', async () => {
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    await svc.startEpisodeVideoForIssue(issue.id, { modelId: 'ltx2_unified' });
+    expect(cdCreated[0].modelId).toBe('ltx2_unified');
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.modelId).toBe('ltx2_unified');
+  });
+
+  it('startEpisodeVideoForIssue resolves a concrete default for the CD project but records the Default choice (null) on the stage', async () => {
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    await svc.startEpisodeVideoForIssue(issue.id);
+    // The renderer needs a concrete id — mediaModels mock resolves the default
+    // to 'ltx23_distilled_q4'.
+    expect(cdCreated[0].modelId).toBe('ltx23_distilled_q4');
+    // ...but the stage records the *choice* (null = Default) so a Default pick
+    // keeps following the videoGen.defaultModelId setting across reloads
+    // instead of pinning to the first-resolved id.
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.modelId).toBeNull();
+  });
+
+  it('startEpisodeVideoForIssue drops a stale modelId (absent from the registry) to the default', async () => {
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    // 'pruned_model' was a valid pick once but has since been renamed/removed
+    // from the registry — it should degrade to the resolved default rather than
+    // flow into the CD project and fail asynchronously.
+    await svc.startEpisodeVideoForIssue(issue.id, { modelId: 'pruned_model' });
+    expect(cdCreated[0].modelId).toBe('ltx23_distilled_q4');
+    // The stale choice is cleared on the stage too (null = Default), so a reload
+    // doesn't keep re-submitting the dead id.
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.modelId).toBeNull();
+  });
+
+  it('startEpisodeVideoForIssue resolves a stale settings default through the registry too', async () => {
+    // The Default choice (no explicit pick) resolves the concrete model from
+    // videoGen.defaultModelId — but that saved default can be just as stale as
+    // an explicit pick. A broken settings default must not reach the CD project;
+    // it falls through to getDefaultVideoModelId() (which self-validates).
+    settingsMod.getSettings.mockResolvedValueOnce({ videoGen: { defaultModelId: 'pruned_default' } });
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    await svc.startEpisodeVideoForIssue(issue.id);
+    expect(cdCreated[0].modelId).toBe('ltx23_distilled_q4');
+    // The recorded choice is still Default (null) — the stale *setting* is the
+    // user's to fix; we only resolve a working model for this render.
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.modelId).toBeNull();
+  });
+
+  it('startEpisodeVideoForIssue passes an explicit modelId through when the registry is empty (cannot validate)', async () => {
+    // An empty registry means "no models to validate against on this platform",
+    // NOT "this id is unknown" — so a possibly-valid id must not be silently
+    // swapped for an equally-unresolvable default.
+    mockVideoModels = [];
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    await svc.startEpisodeVideoForIssue(issue.id, { modelId: 'some_byov_model' });
+    expect(cdCreated[0].modelId).toBe('some_byov_model');
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.modelId).toBe('some_byov_model');
   });
 
   it('startEpisodeVideoForIssue reuses an existing cdProjectId by default', async () => {

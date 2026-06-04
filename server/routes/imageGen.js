@@ -424,12 +424,12 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
 router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   const model = getImageModels().find((m) => m.id === req.params.modelId);
   if (!model) {
-    return res.status(404).json({ error: `Unknown model id: ${req.params.modelId}` });
+    throw new ServerError(`Unknown model id: ${req.params.modelId}`, { status: 404 });
   }
   const repos = requiredReposForModel(model);
   if (!repos) {
-    return res.status(400).json({
-      error: `Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`,
+    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
+      status: 400,
       code: 'NO_REPO_FOR_MODEL',
     });
   }
@@ -455,7 +455,7 @@ router.get('/gallery', asyncHandler(async (_req, res) => {
 router.get('/:jobId/events', (req, res) => {
   if (attachQueueSseClient(req.params.jobId, res)) return;
   if (imageGen.attachSseClient(req.params.jobId, res)) return;
-  res.status(404).json({ error: 'Job not found or expired' });
+  throw new ServerError('Job not found or expired', { status: 404 });
 });
 
 router.post('/cancel', asyncHandler(async (req, res) => {
@@ -796,7 +796,7 @@ const invalidateSetupCheck = (pythonPath) => {
 router.get('/setup/check', asyncHandler(async (req, res) => {
   const { pythonPath } = validateRequest(checkSchema, req.query);
   if (!isAllowedPython(pythonPath)) {
-    return res.status(400).json({ error: 'pythonPath must be a python interpreter (basename python/python3/python3.NN)' });
+    throw new ServerError('pythonPath must be a python interpreter (basename python/python3/python3.NN)', { status: 400 });
   }
   // mtime keys auto-bust when the interpreter binary itself changes (rare but
   // surfaces brew upgrades / re-symlinks). A stat() failure (path not found)
@@ -828,11 +828,11 @@ const venvSchema = z.object({
 router.post('/setup/create-venv', asyncHandler(async (req, res) => {
   const { basePython } = validateRequest(venvSchema, req.body || {});
   if (basePython && !isAllowedPython(basePython)) {
-    return res.status(400).json({ error: 'basePython must be a python interpreter (basename python/python3/python3.NN)' });
+    throw new ServerError('basePython must be a python interpreter (basename python/python3/python3.NN)', { status: 400 });
   }
   const base = basePython || (await detectPython());
   if (!base) {
-    return res.status(400).json({ error: 'No base Python 3 found to bootstrap a venv. Install Python 3.10+ first.' });
+    throw new ServerError('No base Python 3 found to bootstrap a venv. Install Python 3.10+ first.', { status: 400 });
   }
   const target = join(PATHS.data, 'python', 'venv');
   const venvPython = await createVenv(base, target);

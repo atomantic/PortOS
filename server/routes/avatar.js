@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 const AVATAR_PATH = join(PATHS.data, 'avatar', 'model.glb');
@@ -30,7 +31,7 @@ router.head('/model.glb', (req, res) => {
 
 router.get('/model.glb', (req, res) => {
   if (!existsSync(AVATAR_PATH)) {
-    return res.status(404).json({ error: 'No avatar model configured. Drop a GLB at data/avatar/model.glb' });
+    throw new ServerError('No avatar model configured. Drop a GLB at data/avatar/model.glb', { status: 404 });
   }
   res.set('Content-Type', 'model/gltf-binary');
   res.set('Cache-Control', 'public, max-age=60');

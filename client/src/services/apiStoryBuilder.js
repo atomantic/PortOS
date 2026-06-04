@@ -27,6 +27,20 @@ export const deleteStorySession = (id, options = {}) => request(`/story-builder/
   ...options,
 });
 
+// Cross-machine resume (#730). setStorySessionSync toggles whether a session
+// participates in peer sync; reconcileStorySession re-baselines a synced
+// session's staleness baseline to the current machine's live records (rejected
+// server-side for a local-only session).
+export const setStorySessionSync = (id, sync, options = {}) =>
+  request(`/story-builder/${id}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({ sync }),
+    ...options,
+  });
+
+export const reconcileStorySession = (id, options = {}) =>
+  request(`/story-builder/${id}/reconcile`, { method: 'POST', ...options });
+
 export const setStoryCurrentStep = (id, stepId, options = {}) =>
   request(`/story-builder/${id}/current-step/${stepId}`, { method: 'POST', ...options });
 

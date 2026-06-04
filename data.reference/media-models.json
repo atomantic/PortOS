@@ -140,6 +140,7 @@
       "runner": "flux2",
       "quantization": "none",
       "repo": "black-forest-labs/FLUX.2-klein-9B",
+      "kvRepo": "black-forest-labs/FLUX.2-klein-9B-kv",
       "steps": 20,
       "guidance": 3.5,
       "cfgDisabled": true,

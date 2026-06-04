@@ -1,5 +1,5 @@
 import express from 'express';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, githubRepoUpdateSchema, githubSecretSchema } from '../lib/validation.js';
 import * as githubService from '../services/github.js';
 
@@ -63,7 +63,7 @@ router.get('/secrets', asyncHandler(async (req, res) => {
 router.put('/secrets/:name', asyncHandler(async (req, res) => {
   const name = req.params.name;
   if (!/^[A-Z0-9_]{1,100}$/.test(name)) {
-    return res.status(400).json({ error: 'Invalid secret name. Use uppercase letters, digits, and underscores only.' });
+    throw new ServerError('Invalid secret name. Use uppercase letters, digits, and underscores only.', { status: 400 });
   }
   const { value } = validateRequest(githubSecretSchema, req.body);
   const result = await githubService.setSecret(name, value);
@@ -76,7 +76,7 @@ router.put('/secrets/:name', asyncHandler(async (req, res) => {
 router.post('/secrets/:name/sync', asyncHandler(async (req, res) => {
   const name = req.params.name;
   if (!/^[A-Z0-9_]{1,100}$/.test(name)) {
-    return res.status(400).json({ error: 'Invalid secret name. Use uppercase letters, digits, and underscores only.' });
+    throw new ServerError('Invalid secret name. Use uppercase letters, digits, and underscores only.', { status: 400 });
   }
   const result = await githubService.syncSecretToRepos(name);
   res.json(result);

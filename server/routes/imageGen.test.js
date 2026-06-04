@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import imageGenRoutes from './imageGen.js';
 
 vi.mock('../services/imageGen/index.js', () => ({
@@ -90,6 +91,7 @@ describe('Image Gen Routes', () => {
     app = express();
     app.use(express.json());
     app.use('/api/image-gen', imageGenRoutes);
+    app.use(errorMiddleware);
     vi.clearAllMocks();
   });
 
@@ -524,6 +526,8 @@ describe('Image Gen Routes', () => {
       imageGen.attachSseClient.mockReturnValueOnce(false);
       const response = await request(app).get('/api/image-gen/missing-job/events');
       expect(response.status).toBe(404);
+      expect(response.body.error).toMatch(/not found/i);
+      expect(response.body.code).toBe('NOT_FOUND');
       expect(imageGen.attachSseClient).toHaveBeenCalledWith('missing-job', expect.anything());
     });
 

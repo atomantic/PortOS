@@ -56,6 +56,28 @@ const IS_WIN = process.platform === 'win32';
 
 const MODULE_NOT_FOUND_RE = /ModuleNotFoundError: No module named ['"]([^'"]+)['"]/;
 
+// Panel-side SIGKILL watchdog (defense-in-depth at the Node layer).
+//
+// Some video runtimes finish all real work — decode, mux, write the file, and
+// print the final `{"video_path": ...}` JSON — yet the python process lingers
+// instead of exiting (a known mlx/torch teardown hang where a daemon thread or
+// GPU context keeps the interpreter alive). The helper-side `os._exit(0)` is the
+// first line of defense; this watchdog is the second. Once we observe the
+// render's completion marker on stdout (the muxing-done line or the result
+// JSON), we arm a grace timer; if the child still hasn't emitted 'close' by the
+// time it fires, we SIGKILL it so the job (and the serialized gpu lane) doesn't
+// wedge forever. The timer is cleared in every exit path so it can never fire
+// against a recycled PID.
+const COMPLETION_WATCHDOG_GRACE_MS = (() => {
+  const raw = parseInt(process.env.VIDEOGEN_COMPLETION_WATCHDOG_MS || '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 40000;
+})();
+
+// Upstream prints this when the final decode+mux finishes, just before it should
+// exit. Matching it (case-insensitive) lets us arm the watchdog even for
+// runtimes that don't emit the result JSON on stdout.
+const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
+
 // Catalog comes from data/media-models.json (see server/lib/mediaModels.js).
 // Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
@@ -232,11 +254,53 @@ export const computeFflfSafeFrames = (width, height, numFrames, budget = resolve
   return safeLatent * 8 + 1;
 };
 
+// Env-gated LTX-2 T2V "two-stage" perf experiment (PORTOS_T2V_TWO_STAGE).
+//
+// Phosphene found that routing a plain T2V Standard render through the
+// two-stage pipeline at a fast half-res config (8 stage-1 + 3 stage-2 steps,
+// cfg 1.0) cuts ~30-35% of wall time. This DECISION has to live on the Node
+// side, not in generate_ltx2.py: buildLtx2Args always emits `--cfg-scale`
+// from model.guidance, so the Python helper can't tell a defaulted guidance
+// from one the user set on purpose. Here we still know.
+//
+// Returns the override `{ guidance, steps, stage2Steps }` only when ALL hold:
+// the runtime is ltx2, it's a no-conditioning text render, the user left
+// guidance AND steps at their defaults (so we only ever hijack the "Standard"
+// render, never a customized one), and the env knob is truthy. Otherwise null
+// (no change → existing behavior). Pure + exported so it's unit-tested
+// directly, mirroring the FFLF pixel-budget helpers above.
+export const resolveT2vTwoStageOverride = ({
+  runtime, mode, guidanceScale, steps,
+  sourceImagePath, uploadedTempPath, uploadedTempPaths,
+  keyframes, extendFromVideoPath, audioFilePath,
+  env = process.env,
+}) => {
+  const enabled = ['1', 'true', 'yes', 'on']
+    .includes(String(env.PORTOS_T2V_TWO_STAGE ?? '').trim().toLowerCase());
+  if (!enabled || runtime !== 'ltx2') return null;
+  // Only the default text mode — anything explicitly fflf/a2v/extend/image
+  // is conditioned and out of scope for the T2V Standard experiment.
+  if (mode != null && mode !== 'text') return null;
+  // Customized renders opt out — the experiment is the Standard render only.
+  const userSetGuidance = guidanceScale != null && guidanceScale !== '';
+  const userSetSteps = !!steps;
+  if (userSetGuidance || userSetSteps) return null;
+  // Any conditioning input makes this not a plain T2V. This is a strict
+  // subset of buildLtx2Args's helperMode==='text' inference — never broader —
+  // so the experiment declines rather than over-fires on an edge case.
+  const hasConditioning = !!sourceImagePath || !!uploadedTempPath
+    || (Array.isArray(uploadedTempPaths) && uploadedTempPaths.length > 0)
+    || (Array.isArray(keyframes) && keyframes.length > 0)
+    || !!extendFromVideoPath || !!audioFilePath;
+  if (hasConditioning) return null;
+  return { guidance: 1.0, steps: 8, stage2Steps: 3 };
+};
+
 // Build the spawn args for dgrauet's ltx-2-mlx runtime via our Python helper.
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
-const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
+const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
   assertByovRuntimeInstalled('ltx2');
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -344,6 +408,9 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     '--steps', String(steps),
     '--cfg-scale', String(guidance),
   ];
+  // Two-stage T2V experiment passes an explicit stage-2 step count; omitted
+  // otherwise so the pipeline keeps its own default.
+  if (stage2Steps != null) args.push('--stage2-steps', String(stage2Steps));
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (imageStrength != null) args.push('--image-strength', String(imageStrength));
   if (disableAudio) args.push('--no-audio');
@@ -452,12 +519,12 @@ const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFra
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
-    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
+    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath });
@@ -571,8 +638,23 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const w = Math.floor(Number(width) / 64) * 64;
   const h = Math.floor(Number(height) / 64) * 64;
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
-  const actualSteps = steps ? Number(steps) : model.steps;
-  const actualGuidance = guidanceScale != null && guidanceScale !== '' ? Number(guidanceScale) : model.guidance;
+  let actualSteps = steps ? Number(steps) : model.steps;
+  let actualGuidance = guidanceScale != null && guidanceScale !== '' ? Number(guidanceScale) : model.guidance;
+  // Opt-in T2V Standard two-stage perf experiment — overrides steps/guidance
+  // (and adds an explicit stage-2 step count) only for a plain default text
+  // render when PORTOS_T2V_TWO_STAGE is on. No-op otherwise.
+  let actualStage2Steps = null;
+  const t2vTwoStage = resolveT2vTwoStageOverride({
+    runtime: model.runtime, mode, guidanceScale, steps,
+    sourceImagePath, uploadedTempPath, uploadedTempPaths,
+    keyframes, extendFromVideoPath, audioFilePath,
+  });
+  if (t2vTwoStage) {
+    actualGuidance = t2vTwoStage.guidance;
+    actualSteps = t2vTwoStage.steps;
+    actualStage2Steps = t2vTwoStage.stage2Steps;
+    console.log(`🎬 PORTOS_T2V_TWO_STAGE on — T2V Standard via fast two-stage (${actualSteps}/${actualStage2Steps} steps, cfg ${actualGuidance}) [${jobId.slice(0, 8)}]`);
+  }
   // Caller may pass null/'' to use mlx_video's default (1.0 = preserve source).
   const actualImageStrength = imageStrength != null && imageStrength !== '' ? Number(imageStrength) : null;
   const actualTextEncoderRepo = getTextEncoderRepo();
@@ -689,6 +771,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // from `keyframes` even when caller omitted `mode`, so without this the
     // history entry would say 'text' for a multi-keyframe render.
     mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
+    // Stamp the experimental fast-path so A/B analysis can tell a two-stage
+    // render apart from a user who happened to pick 8 steps — comparing it
+    // against the default Standard render is the whole point of the knob.
+    ...(t2vTwoStage ? { twoStageT2v: true, stage2Steps: actualStage2Steps } : {}),
     ...(hidden ? { hidden: true } : {}),
   };
   const job = { ...meta, clients: [], status: 'running' };
@@ -702,7 +788,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
@@ -741,6 +827,43 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   childEnv.PYTHONUNBUFFERED = '1';
   const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
+
+  // Panel-side completion watchdog. Armed once we see the render's completion
+  // marker on stdout; SIGKILLs the child if it hasn't exited after the grace
+  // window. clearCompletionWatchdog() runs in every terminal path ('close',
+  // 'error') so the timer can't outlive this child or fire against a recycled
+  // PID. Armed at most once per child (re-seeing the marker is a no-op).
+  let completionWatchdog = null;
+  // Set when the watchdog itself fires the SIGKILL. The 'close' handler reads
+  // it so it can treat that kill as success (the render already wrote its file —
+  // we only killed a post-completion teardown hang) rather than reporting the
+  // generic "killed, likely OOM" failure.
+  let completionWatchdogFired = false;
+  const clearCompletionWatchdog = () => {
+    if (completionWatchdog) {
+      clearTimeout(completionWatchdog);
+      completionWatchdog = null;
+    }
+  };
+  const armCompletionWatchdog = () => {
+    if (completionWatchdog) return;
+    completionWatchdog = setTimeout(() => {
+      // Runs outside the Express request lifecycle — an uncaught throw here
+      // would crash the Node process, so guard the whole body.
+      try {
+        completionWatchdog = null;
+        if (activeProcess !== proc || proc.exitCode !== null || proc.signalCode !== null) return;
+        console.log(`⚠️ video child reported completion but never exited — SIGKILL [${jobId.slice(0, 8)}]`);
+        completionWatchdogFired = true;
+        proc.kill('SIGKILL');
+      } catch (err) {
+        console.error(`❌ completion watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      }
+    }, COMPLETION_WATCHDOG_GRACE_MS);
+    // Don't let the watchdog timer keep the event loop alive on its own.
+    if (typeof completionWatchdog.unref === 'function') completionWatchdog.unref();
+  };
+
   // Hold a sleep-prevention lock for the lifetime of the python child, so a
   // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
   // sleep (lid-close / low-power), `-i` blocks idle sleep, `-d` blocks display
@@ -754,6 +877,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // Without an 'error' handler, a missing/non-executable pythonPath would
   // crash the server with an unhandled error event.
   proc.on('error', (err) => {
+    clearCompletionWatchdog();
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
@@ -871,9 +995,17 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // for the result metadata; otherwise raw-log so we can debug failures.
       try {
         const parsed = JSON.parse(line);
-        if (parsed.video_path) job.resultJson = parsed;
+        if (parsed.video_path) {
+          job.resultJson = parsed;
+          // The result JSON is the strongest "work is done" signal — arm the
+          // watchdog so a post-completion teardown hang can't wedge the job.
+          armCompletionWatchdog();
+        }
         continue;
       } catch { /* not JSON */ }
+      // Some runtimes don't print the result JSON but do log the final
+      // decode+mux line right before they should exit — treat it the same way.
+      if (MUXING_DONE_RE.test(line)) armCompletionWatchdog();
       console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
     }
   });
@@ -891,6 +1023,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   });
 
   proc.on('close', async (code, signal) => {
+    clearCompletionWatchdog();
     activeProcess = null;
     // Cleanup the resized temp images if we made them. Track via flags rather
     // than a path-prefix check — tmpdir() can return a symlinked path
@@ -909,7 +1042,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       await unlink(audioFilePath).catch(() => {});
     }
 
-    if (code !== 0) {
+    // A watchdog-triggered SIGKILL means the render already emitted its
+    // completion marker and only the python teardown hung — the output file is
+    // on disk, so treat it as success (not the generic "killed, likely OOM"
+    // failure). Guard on the file actually existing + being non-empty so a
+    // marker without a real output (a malformed runtime) still fails loudly.
+    const watchdogSuccess = completionWatchdogFired && signal === 'SIGKILL'
+      && existsSync(outputPath) && statSync(outputPath).size > 0;
+
+    if (code !== 0 && !watchdogSuccess) {
       job.status = 'error';
       let reason;
       if (missingPyModule) {
@@ -934,6 +1075,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
       videoGenEvents.emit('failed', { generationId: jobId, error: reason });
     } else {
+      if (watchdogSuccess) {
+        console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
+      }
       job.status = 'complete';
       await optimizeForStreaming(outputPath);
       const thumbnail = await generateThumbnail(outputPath, jobId);

@@ -170,6 +170,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   const fail = async (err) => {
     isRunning = false;
     await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message });
+    if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
   };
 

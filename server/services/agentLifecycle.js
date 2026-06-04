@@ -5,40 +5,47 @@
  * agent completion, and worktree cleanup.
  */
 
-import { join, relative, resolve, sep } from 'path';
-import { readFile, unlink, rm } from 'fs/promises';
+import { join } from 'path';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { execGit } from '../lib/execGit.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { registerAgent, updateAgent, completeAgent } from './cosAgents.js';
-import { getConfig, updateTask, addTask, getTaskById, checkStagePrecondition } from './cos.js';
+import { getConfig, updateTask, getTaskById } from './cos.js';
 import { spawnAgentViaRunner, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
-import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
-import { isProviderAvailable, markProviderUsageLimit, markProviderRateLimited, getFallbackProvider, getProviderStatus } from './providerStatus.js';
-import { PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { getActiveProvider } from './providers.js';
+import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';
+import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
-import { detectConflicts } from './taskConflict.js';
-import { createWorktree, removeWorktree } from './worktreeManager.js';
-import * as jiraService from './jira.js';
-import * as git from './git.js';
-import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
-import { buildAgentPrompt, getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
+import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
-import { selectModelForTask } from './agentModelSelection.js';
 import { processAgentCompletion } from './agentCompletion.js';
-import { activeAgents, runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta } from './agentState.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers } from '../lib/validation.js';
-import { resolveReviewLoopOptions } from './codeReview.js';
+import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { writeFile } from 'fs/promises';
+
+// Extracted helpers — these carve the two giant orchestrators
+// (spawnAgentForTask / handleAgentCompletion) into focused, testable modules.
+// The worktree-cleanup cluster and handlePipelineProgression are re-exported
+// below so existing consumers (subAgentSpawner, agentManagement) that import
+// them from agentLifecycle.js keep working.
+import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
+import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
+
+// Re-export the moved functions so existing consumers (subAgentSpawner,
+// agentManagement) keep importing them from agentLifecycle.js. cleanupAgentWorktree
+// is also used internally (passed as cleanupWorktreeFn to the spawn helpers), so it
+// stays imported above; the rest are pure pass-throughs.
+export { cleanupAgentWorktree };
+export { spawnReviewLoopFollowUp, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
+export { handlePipelineProgression } from './agentCompletionCleanup.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -178,326 +185,39 @@ export async function spawnAgentForTask(task) {
   try {
     // Get configuration
     const config = await getConfig();
-    let provider = await getActiveProvider();
-
-    if (!provider) {
-      cleanupOnError('No active AI provider configured');
-      cosEvents.emit('agent:error', { taskId: task.id, error: 'No active AI provider configured' });
+    // Resolve provider (with availability/fallback + user override) and the
+    // per-task model. A resolvable failure returns { ok: false } so we can
+    // fire cleanupOnError + the matching agent:error event here, where the
+    // spawn-local guard/lane/execution state lives.
+    const resolution = await resolveAgentProviderAndModel(task);
+    if (!resolution.ok) {
+      cleanupOnError(resolution.error);
+      cosEvents.emit('agent:error', {
+        taskId: task.id,
+        error: resolution.error,
+        ...(resolution.providerId && { providerId: resolution.providerId }),
+        ...(resolution.providerStatus && { providerStatus: resolution.providerStatus }),
+      });
       return null;
     }
+    const { provider, selectedModel, modelSelection } = resolution;
 
-    // Check provider availability (usage limits, rate limits, etc.)
-    // Set when we fall back below to a provider with a configured "Fallback
-    // Model" pin — it overrides the usual per-task model selection so the
-    // user's chosen fallback provider+model pair is honored on agent runs.
-    let fallbackModelPin = null;
-    const providerAvailable = isProviderAvailable(provider.id);
-    if (!providerAvailable) {
-      const status = getProviderStatus(provider.id);
-      emitLog('warn', `Provider ${provider.id} unavailable: ${status.message}`, {
-        taskId: task.id,
-        providerId: provider.id,
-        reason: status.reason
-      });
-
-      // Try to get a fallback provider (check task-level, then provider-level, then system default).
-      // getFallbackProvider indexes its providers arg by id, so pass a map — NOT the
-      // { activeProvider, providers: [...] } shape getAllProviders() returns (mirrors promptRunner.js).
-      const { providers: providerList = [] } = await getAllProviders();
-      const providersMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
-      const taskFallbackId = task.metadata?.fallbackProvider;
-      const taskFallbackModel = task.metadata?.fallbackModel;
-      const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId, taskFallbackModel);
-
-      if (fallbackResult) {
-        emitLog('info', `Using fallback provider: ${fallbackResult.provider.id} (source: ${fallbackResult.source})`, {
-          taskId: task.id,
-          primaryProvider: provider.id,
-          fallbackProvider: fallbackResult.provider.id,
-          fallbackSource: fallbackResult.source
-        });
-        provider = fallbackResult.provider;
-        fallbackModelPin = fallbackResult.model || null;
-      } else {
-        const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
-        cleanupOnError(errorMsg);
-        cosEvents.emit('agent:error', {
-          taskId: task.id,
-          error: errorMsg,
-          providerId: provider.id,
-          providerStatus: status
-        });
-        return null;
-      }
+    // Resolve the workspace and provision any worktree / JIRA branch the task
+    // needs. A git conflict defers the task; an explicitly-requested worktree
+    // that fails to create blocks it. Both outcomes are finished here so the
+    // dedup guard / lane / execution state are released consistently.
+    const prep = await prepareAgentWorkspace({ agentId, task });
+    if (prep.outcome === 'deferred') {
+      cleanupOnError(prep.reason);
+      cosEvents.emit('agent:deferred', { taskId: task.id, reason: prep.deferReason, branch: prep.branch });
+      return null;
     }
-
-    // Check if user specified a different provider in task metadata
-    const userProviderId = task.metadata?.provider;
-    if (userProviderId && userProviderId !== provider.id) {
-      const userProvider = await getProviderById(userProviderId);
-      if (userProvider) {
-        emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
-        provider = userProvider;
-        // The fallback pin belonged to the fallback provider we just replaced —
-        // it must not carry onto the user's explicitly chosen provider, which
-        // gets its own normal model selection.
-        fallbackModelPin = null;
-      } else {
-        emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
-      }
+    if (prep.outcome === 'blocked') {
+      cleanupOnError(prep.reason);
+      cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
+      return null;
     }
-
-    // Select optimal model for this task (async to allow learning-based suggestions)
-    const modelSelection = await selectModelForTask(task, provider);
-    let selectedModel = modelSelection.model;
-
-    // A configured "Fallback Model" pin (from the provider- or task-level
-    // fallback we took above) wins over the usual selection — the user
-    // explicitly chose this model to run on the fallback. The compatibility
-    // check below still guards it against the fallback provider's model list.
-    if (fallbackModelPin) selectedModel = fallbackModelPin;
-
-    // Validate model is compatible with provider
-    if (selectedModel && provider.models && provider.models.length > 0) {
-      const modelIsValid = provider.models.includes(selectedModel);
-      if (!modelIsValid) {
-        emitLog('warn', `Model "${selectedModel}" not valid for provider "${provider.id}", falling back to provider default`, {
-          taskId: task.id,
-          requestedModel: selectedModel,
-          providerId: provider.id,
-          validModels: provider.models
-        });
-        selectedModel = modelSelection.tier === 'heavy' ? provider.heavyModel :
-                        modelSelection.tier === 'light' ? provider.lightModel :
-                        modelSelection.tier === 'medium' ? provider.mediumModel :
-                        provider.defaultModel;
-      }
-    }
-
-    const logMessage = modelSelection.learningReason
-      ? `Model selection: ${selectedModel} (${modelSelection.reason} - ${modelSelection.learningReason})`
-      : `Model selection: ${selectedModel} (${modelSelection.reason})`;
-    emitLog('info', logMessage, {
-      taskId: task.id,
-      model: selectedModel,
-      tier: modelSelection.tier,
-      reason: modelSelection.reason,
-      ...(modelSelection.learningReason && { learningReason: modelSelection.learningReason })
-    });
-
-    // Determine workspace path and resolve app name
-    const isReadOnly = isTruthyMeta(task.metadata?.readOnly);
-    let workspacePath = task.metadata?.app
-      ? await getAppWorkspace(task.metadata.app)
-      : ROOT_DIR;
-    const resolvedAppName = task.metadata?.app
-      ? (await getAppById(task.metadata.app).catch(() => null))?.name || null
-      : null;
-
-    let jiraTicket = null;
-    let jiraBranchName = null;
-    let worktreeInfo = null;
-    const explicitOpenPR = isTruthyMeta(task.metadata?.openPR);
-    const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR;
-
-    if (!isReadOnly) {
-      // Pull latest from git before starting work
-      const pullResult = await git.ensureLatest(workspacePath).catch(err => {
-        emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
-        return { success: false, error: err.message };
-      });
-
-      if (pullResult.skipped) {
-        emitLog('debug', `Pre-task git pull skipped: ${pullResult.skipped}`, { taskId: task.id, workspace: workspacePath });
-      } else if (pullResult.conflict) {
-        emitLog('warn', `🔀 Git conflict in ${workspacePath} (branch: ${pullResult.branch}): ${pullResult.error}`, {
-          taskId: task.id, workspace: workspacePath, branch: pullResult.branch
-        });
-
-        const appId = task.metadata?.app || null;
-        const conflictDesc = `Resolve git conflict in ${resolvedAppName || workspacePath} on branch ${pullResult.branch}. `
-          + `The branch has diverged from origin and automatic rebase failed. `
-          + `Error: ${pullResult.error}`;
-
-        await addTask({
-          description: conflictDesc,
-          priority: 'HIGH',
-          app: appId,
-          context: `This conflict is blocking task ${task.id}: "${task.description}". `
-            + `Resolve the conflict, commit, and push so the blocked task can proceed.`,
-          position: 'top'
-        }, 'internal').catch(err => {
-          emitLog('warn', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
-        });
-
-        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user').catch(() => {});
-        cleanupOnError(`Git conflict blocks task — conflict resolution task created`);
-        cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'git-conflict', branch: pullResult.branch });
-        return null;
-      } else if (pullResult.success && !pullResult.upToDate && !pullResult.skipped) {
-        emitLog('info', `📥 Pulled latest for ${resolvedAppName || 'workspace'} (branch: ${pullResult.branch})`, {
-          taskId: task.id, workspace: workspacePath, branch: pullResult.branch
-        });
-      } else if (!pullResult.success) {
-        emitLog('warn', `⚠️ Pre-task git pull error: ${pullResult.error}`, { taskId: task.id, workspace: workspacePath });
-      }
-
-      // JIRA integration: create ticket + feature branch if app has JIRA enabled and task opted in
-      const appData = await getAppDataForTask(task);
-
-      if (appData?.jira?.enabled && task.metadata?.createJiraTicket) {
-        jiraTicket = await createJiraTicketForTask(task, appData);
-
-        if (jiraTicket) {
-          const slug = (task.description || 'task')
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-|-$/g, '')
-            .substring(0, 40);
-          jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
-
-          if (task.metadata?.app) {
-            await git.fetchOrigin(workspacePath).catch(() => {});
-            const { baseBranch: defaultBranch } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
-            if (defaultBranch) {
-              await git.checkout(workspacePath, defaultBranch).catch(() => {});
-              await execGit(['merge', '--ff-only', `origin/${defaultBranch}`], workspacePath).catch(err => { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); });
-            }
-          }
-
-          await git.createBranch(workspacePath, jiraBranchName).catch(err => {
-            emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
-            jiraBranchName = null;
-          });
-
-          if (jiraBranchName) {
-            emitLog('success', `Created feature branch ${jiraBranchName}`, { taskId: task.id, ticketId: jiraTicket.ticketId });
-          }
-
-          task.metadata = {
-            ...task.metadata,
-            jiraTicketId: jiraTicket.ticketId,
-            jiraTicketUrl: jiraTicket.ticketUrl,
-            jiraBranch: jiraBranchName,
-            jiraInstanceId: appData.jira.instanceId,
-            jiraCreatePR: appData.jira.createPR !== false
-          };
-        }
-      }
-
-      // Feature agent tasks: use persistent worktree instead of creating a new one
-      if (task.metadata?.featureAgentRun && task.metadata?.featureAgentId) {
-        const { getFeatureAgent } = await import('./featureAgents.js');
-        const fa = await getFeatureAgent(task.metadata.featureAgentId).catch(() => null);
-        if (fa) {
-          const faWorktreePath = join(PATHS.cos, 'feature-agents', fa.id, 'worktree');
-          if (existsSync(faWorktreePath)) {
-            workspacePath = faWorktreePath;
-            worktreeInfo = {
-              worktreePath: faWorktreePath,
-              branchName: fa.git.branchName,
-              baseBranch: fa.git.baseBranch || 'main',
-              isPersistentWorktree: true
-            };
-            const { mergeBaseIntoFeatureWorktree } = await import('./worktreeManager.js');
-            if (fa.git.autoMergeBase) {
-              await mergeBaseIntoFeatureWorktree(fa.id, fa.git.baseBranch).catch(err => {
-                emitLog('warn', `🌳 Feature agent base merge failed: ${err.message}`, { featureAgentId: fa.id });
-              });
-            }
-            emitLog('info', `🌳 Feature agent ${fa.name} using persistent worktree: ${fa.git.branchName}`, {
-              featureAgentId: fa.id, worktreePath: faWorktreePath
-            });
-          }
-        }
-      }
-
-      if (explicitWorktree && !jiraBranchName) {
-        const existingBranch = task.metadata?.existingBranch || null;
-        const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
-        if (existingBranch) {
-          emitLog('info', `🌳 Worktree requested for task ${task.id} on existing branch ${existingBranch}`, {
-            taskId: task.id, app: task.metadata?.app, branch: existingBranch
-          });
-        } else {
-          emitLog('info', `🌳 Worktree requested for task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
-            taskId: task.id, app: task.metadata?.app, baseBranch: detectedBase
-          });
-        }
-
-        worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-          baseBranch: detectedBase || undefined,
-          existingBranch: existingBranch || undefined,
-          planId: task.metadata?.planId || undefined
-        }).catch(err => {
-          emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
-          return null;
-        });
-
-        if (worktreeInfo) {
-          workspacePath = worktreeInfo.worktreePath;
-          emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName} (base: ${worktreeInfo.baseBranch})`, {
-            agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
-          });
-        } else {
-          // Isolation was EXPLICITLY requested (useWorktree/openPR) but the
-          // worktree couldn't be created. Falling back to the shared workspace
-          // would run the agent against the live checkout and — with openPR —
-          // auto-commit to the current branch, exactly the isolation the
-          // caller opted into. Fail closed: block the task rather than touch
-          // the working tree behind the user's back. (The auto-detected
-          // conflict branch below keeps its lenient shared-workspace fallback,
-          // since there the worktree was only a recommendation, not a request.)
-          const reason = `Worktree creation failed for task ${task.id}; refusing to run in the shared workspace because isolation was explicitly requested`;
-          emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
-          await updateTask(task.id, {
-            status: 'blocked',
-            metadata: {
-              ...task.metadata,
-              blockedReason: 'Worktree creation failed — isolation was explicitly requested',
-              blockedCategory: 'worktree-failed',
-              blockedAt: new Date().toISOString(),
-            },
-          }, task.taskType || 'user').catch(() => {});
-          cleanupOnError(reason);
-          cosEvents.emit('agent:error', { taskId: task.id, error: reason });
-          return null;
-        }
-      } else if (!jiraBranchName && !isFalsyMeta(task.metadata?.useWorktree)) {
-        const { getAgents } = await import('./cos.js');
-        const allAgents = await getAgents();
-        const runningAgents = allAgents.filter(a => a.status === 'running');
-
-        const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
-          emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
-          return { hasConflict: false, recommendation: 'proceed' };
-        });
-
-        if (conflictResult.recommendation === 'worktree') {
-          emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
-            taskId: task.id,
-            conflictingAgents: conflictResult.conflictingAgents,
-            reason: conflictResult.reason
-          });
-
-          worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-            planId: task.metadata?.planId || undefined
-          }).catch(err => {
-            emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
-            return null;
-          });
-
-          if (worktreeInfo) {
-            workspacePath = worktreeInfo.worktreePath;
-            emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
-              agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
-            });
-          }
-        } else if (conflictResult.recommendation === 'proceed') {
-          emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
-        }
-      }
-    } // end !isReadOnly
+    const { workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
 
     const isTui = isTuiProvider(provider);
 
@@ -974,114 +694,6 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
 }
 
 /**
- * Advance a pipeline to its next stage after the current stage completes.
- * Creates a new task for the next stage or marks the pipeline as complete/failed.
- */
-export async function handlePipelineProgression(task, agentId, success) {
-  const pipeline = task.metadata?.pipeline;
-  if (!pipeline || pipeline.status !== 'running') return;
-
-  const { currentStage, stages } = pipeline;
-  const stageResult = {
-    stage: currentStage,
-    name: stages[currentStage]?.name,
-    agentId,
-    success,
-    completedAt: new Date().toISOString()
-  };
-  const updatedResults = [...(pipeline.stageResults || []), stageResult];
-
-  if (!success) {
-    await updateTask(task.id, {
-      metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
-    }, task.taskType);
-    emitLog('warn', `⛔ Pipeline ${pipeline.id} failed at stage ${currentStage}: ${stages[currentStage]?.name}`, { pipelineId: pipeline.id });
-    return;
-  }
-
-  const nextStageIndex = currentStage + 1;
-  if (nextStageIndex >= stages.length) {
-    await updateTask(task.id, {
-      metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'completed', stageResults: updatedResults } }
-    }, task.taskType);
-    // Clean up pipeline artifacts (e.g., REVIEW.md left by stage 1)
-    if (task.metadata.repoPath) {
-      const repoRoot = resolve(task.metadata.repoPath);
-      for (const stage of stages) {
-        const file = stage.precondition?.fileNotExists;
-        if (file) {
-          const filePath = resolve(repoRoot, file);
-          const rel = relative(repoRoot, filePath);
-          if (!rel || rel === '..' || rel.startsWith('..' + sep) || resolve(rel) === rel) continue;
-          await unlink(filePath).catch(() => {});
-        }
-      }
-    }
-    emitLog('info', `✅ Pipeline ${pipeline.id} completed all ${stages.length} stages`, { pipelineId: pipeline.id });
-    return;
-  }
-
-  const nextStage = stages[nextStageIndex];
-
-  // Check next stage's precondition before advancing
-  if (nextStage.precondition && task.metadata.repoPath) {
-    const check = checkStagePrecondition(nextStage, task.metadata.repoPath);
-    if (!check.passed) {
-      await updateTask(task.id, {
-        metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
-      }, task.taskType);
-      emitLog('warn', `⏭️ Pipeline ${pipeline.id} stage ${nextStageIndex} precondition failed: ${check.reason}`, { pipelineId: pipeline.id });
-      return;
-    }
-  }
-
-  const taskScheduleMod = await import('./taskSchedule.js');
-  let prompt = await taskScheduleMod.getStagePrompt(task.metadata.analysisType, nextStageIndex);
-  if (task.metadata.appName) prompt = prompt.replace(/\{appName\}/g, task.metadata.appName);
-  if (task.metadata.repoPath) prompt = prompt.replace(/\{repoPath\}/g, task.metadata.repoPath);
-  if (task.metadata.app) prompt = prompt.replace(/\{appId\}/g, task.metadata.app);
-
-  const nextTask = {
-    id: `${task.id || 'sys-pipeline'}-stage${nextStageIndex}-${Date.now().toString(36)}`,
-    status: 'pending',
-    description: prompt,
-    priority: task.priority || 'MEDIUM',
-    metadata: {
-      ...task.metadata,
-      readOnly: nextStage.readOnly ?? false,
-      pipeline: {
-        ...pipeline,
-        currentStage: nextStageIndex,
-        stageResults: updatedResults,
-        previousStageAgentId: agentId,
-        status: 'running'
-      }
-    },
-    autoApproved: true
-  };
-  if (nextStage.model) nextTask.metadata.model = nextStage.model;
-  if (nextStage.providerId) {
-    nextTask.metadata.provider = nextStage.providerId;
-    nextTask.metadata.providerId = nextStage.providerId;
-  }
-  // Apply per-stage overrides for agent behavior flags
-  const stageReadOnly = nextStage.readOnly ?? false;
-  const taskDefaults = pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_BEHAVIOR_FLAGS) {
-    if (flag in nextStage) {
-      nextTask.metadata[flag] = nextStage[flag];
-    } else if (stageReadOnly) {
-      nextTask.metadata[flag] = false;
-    } else if (flag in taskDefaults) {
-      nextTask.metadata[flag] = taskDefaults[flag];
-    }
-  }
-
-  await addTask(nextTask, 'internal', { raw: true });
-  emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
-}
-
-/**
  * Handle agent completion (from runner events).
  */
 export async function handleAgentCompletion(agentId, exitCode, success, duration) {
@@ -1234,175 +846,11 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       emitLog('error', `finalizeAgent threw for ${agentId} (continuing cleanup): ${err.message}`, { agentId, error: err.message });
     }
 
-    // Fetch agent state once for JIRA and plan-question blocks
-    const { getAgent: getAgentState } = await import('./cos.js');
-    const agentState = await getAgentState(agentId).catch(() => null);
-
-    // JIRA integration: push branch, create PR, comment on ticket
-    const jiraTicketId = agent.task?.metadata?.jiraTicketId;
-    const jiraBranch = agent.task?.metadata?.jiraBranch;
-    const jiraInstanceId = agent.task?.metadata?.jiraInstanceId;
-    const jiraCreatePR = agent.task?.metadata?.jiraCreatePR;
-
-    if (jiraTicketId && jiraBranch && effectiveSuccess) {
-      const workspace = agentState?.metadata?.workspacePath || ROOT_DIR;
-
-      let jiraTicketUrl = agent.task?.metadata?.jiraTicketUrl || null;
-      if (!jiraTicketUrl && jiraInstanceId) {
-        const jiraConfig = await jiraService.getInstances().catch(() => null);
-        const baseUrl = jiraConfig?.instances?.[jiraInstanceId]?.baseUrl;
-        if (baseUrl) jiraTicketUrl = `${baseUrl}/browse/${jiraTicketId}`;
-      }
-      const jiraTicketRef = jiraTicketUrl ? `[${jiraTicketId}](${jiraTicketUrl})` : jiraTicketId;
-
-      await git.push(workspace, jiraBranch).catch(err => {
-        emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
-      });
-
-      let prUrl = null;
-      if (jiraCreatePR !== false) {
-        const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
-        const targetBranch = devBranch || baseBranch || 'main';
-
-        const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer);
-        const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
-
-        const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
-        const jiraPrTitle = `${jiraTicketId}: ${baseTitle}`.substring(0, 100);
-
-        const prResult = await git.createPR(workspace, {
-          title: jiraPrTitle,
-          body: jiraPrBodyWithRef,
-          base: targetBranch,
-          head: jiraBranch
-        }).catch(err => {
-          emitLog('warn', `Failed to create PR for ${jiraTicketId}: ${err.message}`, { agentId });
-          return null;
-        });
-
-        if (prResult?.success) {
-          prUrl = prResult.url;
-          emitLog('success', `Created PR: ${prUrl}`, { agentId, ticketId: jiraTicketId });
-        }
-      }
-
-      if (jiraInstanceId) {
-        const commentLines = [`Agent completed task successfully.`];
-        if (prUrl) {
-          commentLines.push(`\n*Pull Request:* ${prUrl}`);
-        } else if (jiraBranch) {
-          commentLines.push(`\n*Branch:* \`${jiraBranch}\``);
-        }
-        await jiraService.addComment(jiraInstanceId, jiraTicketId, commentLines.join('\n')).catch(err => {
-          emitLog('warn', `Failed to comment on JIRA ticket ${jiraTicketId}: ${err.message}`, { agentId });
-        });
-      }
-
-      const { devBranch: dev, baseBranch: base } = await git.getRepoBranches(workspace).catch(() => ({ devBranch: null, baseBranch: null }));
-      const returnBranch = dev || base || 'main';
-      await git.checkout(workspace, returnBranch).catch(err => {
-        emitLog('warn', `Failed to checkout back to ${returnBranch}: ${err.message}`, { agentId });
-      });
-    }
-
-    // Check for plan questions marker file (feature-ideas / plan-task needing user input)
-    const planAnalysisType = task?.metadata?.analysisType;
-    if (planAnalysisType === 'feature-ideas' || planAnalysisType === 'plan-task') {
-      const planWorkspace = agentState?.metadata?.workspacePath || task?.metadata?.repoPath || ROOT_DIR;
-      const markerPath = join(planWorkspace, '.plan-questions.md');
-
-      const markerContent = await tryReadFile(markerPath);
-      if (markerContent) {
-        const titleMatch = markerContent.match(/^#\s+Plan Question:\s*(.+)/m);
-        const title = titleMatch?.[1]?.trim() || 'PLAN.md item needs your input';
-        const appId = task.metadata?.app;
-
-        const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
-        await addNotification({
-          type: NOTIFICATION_TYPES.PLAN_QUESTION,
-          title,
-          message: markerContent,
-          priority: PRIORITY_LEVELS.MEDIUM,
-          link: appId ? `/apps/${appId}/documents` : undefined,
-          metadata: { appId, agentId, taskType: planAnalysisType }
-        }).catch(err => {
-          emitLog('warn', `Failed to create plan_question notification: ${err.message}`, { agentId });
-        });
-
-        await rm(markerPath).catch(() => {});
-        emitLog('info', `📋 Plan question notification created: ${title}`, { agentId, appId });
-      }
-    }
-
-    // Advance pipeline to next stage if applicable
-    if (task?.metadata?.pipeline) {
-      await handlePipelineProgression(task, agentId, effectiveSuccess);
-    }
-
-    // Advance Creative Director task chain if applicable. After a Creative
-    // Director agent task (treatment or evaluate) finishes, the orchestrator
-    // decides what comes next and enqueues it. Scene rendering and final
-    // stitching run server-side rather than as separate CoS tasks, so they
-    // never reach this hook directly. Failure marks the project failed; the
-    // user can resume from the UI.
-    if (task?.metadata?.creativeDirector) {
-      const { handleCreativeDirectorCompletion } = await import('./creativeDirector/completionHook.js');
-      handleCreativeDirectorCompletion(task, agentId, effectiveSuccess)
-        .catch((err) => console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`));
-    }
-
-    // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
-    if (!jiraBranch) {
-      const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
-      const taskReviewLoop = isTruthyMeta(agent.task?.metadata?.reviewLoop);
-      // Review-loop follow-up agents already merged via `gh pr merge` in the agent
-      // body — re-merging the worktree branch into the source workspace would
-      // duplicate the squashed commits, so suppress the auto-merge fallback.
-      const taskReviewLoopFollowUp = isTruthyMeta(agent.task?.metadata?.reviewLoopFollowUp);
-      // Claude Code CLI agents run `/simplify` + `/do:pr` themselves (see
-      // buildCliCompletionSection in agentPromptBuilder.js) — they push the
-      // branch and open the PR on their own. Mirror the TUI cleanup contract
-      // so PortOS doesn't double-fire `gh pr create` ("a pull request already
-      // exists" would preserve the worktree as a false-positive failure).
-      const agentOwnsPR = taskOpenPR && (agent.providerId === 'claude-code' || agent.providerId === 'claude-code-bedrock');
-      // Merge per-task reviewer metadata with the user's Code Review Defaults
-      // (AI Providers → Code Review Defaults panel). Settings I/O is cached
-      // inside the resolver, so this is effectively free even when invoked
-      // from a tight CoS sweep.
-      const reviewOptions = await resolveReviewLoopOptions(agent.task?.metadata, { normalize: normalizeReviewers, isTruthyMeta });
-      const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, {
-        openPR: agentOwnsPR ? false : taskOpenPR,
-        requestCopilotReview: !agentOwnsPR && taskOpenPR && taskReviewLoop,
-        ...reviewOptions,
-        skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
-        description: task?.description,
-        agentOutput: outputBuffer,
-        originalTask: task
-      });
-
-      if (cleanupWarnings?.length > 0) {
-        const { getAgent: getAgentForResult } = await import('./cos.js');
-        const currentAgent = await getAgentForResult(agentId).catch(() => null);
-        await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
-
-        const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
-        const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
-        await addNotification({
-          type: NOTIFICATION_TYPES.AGENT_WARNING,
-          title: `Agent cleanup issue: ${appName}`,
-          description: cleanupWarnings.join('\n'),
-          priority: PRIORITY_LEVELS.HIGH,
-          link: '/cos/agents',
-          metadata: { agentId, taskId: task?.id, warnings: cleanupWarnings }
-        }).catch(err => {
-          emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
-        });
-
-        void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
-          emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
-        });
-      }
-    }
+    // Post-finalize cleanup: JIRA push/PR/comment, plan-question marker,
+    // pipeline progression, the Creative Director chain hook, and worktree
+    // cleanup (+ cleanup-warning notification and merge-recovery task). Runs
+    // inside this try so a throw still hits the finally below.
+    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer });
 
     // Surface a finalizeAgent throw to the caller after best-effort
     // cleanup completed — without this the runner harness would never see
@@ -1410,334 +858,5 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     if (finalizeError) throw finalizeError;
   } finally {
     runnerAgents.delete(agentId);
-  }
-}
-
-/**
- * Clean up a worktree for a completed agent.
- * Reads worktree metadata from the agent's registered state and removes the worktree.
- * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
- * When requestCopilotReview is also true, spawns a follow-up internal task that drives
- * the multi-reviewer loop and merges once the review chain is clean — that follow-up is
- * the part the user expects to "keep looping until ready to merge."
- * `reviewers` is the ordered reviewer list (e.g. `[codex, antigravity, copilot]`); the native
- * GitHub Copilot review is pre-requested here only when copilot LEADS the list (otherwise
- * the follow-up requests it at its turn so Copilot sees the post-fix diff). `reviewStopMode`
- * (`all`/`on-findings`/`on-clean`) and `reviewerApplies` are threaded into the follow-up's
- * metadata. CLI reviewers (claude/antigravity/codex) are always driven by the follow-up agent,
- * which works on any forge; copilot is GitHub-only and dropped on non-GitHub remotes.
- * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
- * the worktree branch into the source workspace because `gh pr merge` already handled it.
- * Otherwise, merges the worktree branch back to the source branch on success.
- */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
-  const { getAgent: getAgentState } = await import('./cos.js');
-  const agentState = await getAgentState(agentId).catch(() => null);
-  if (!agentState?.metadata?.isWorktree) return [];
-  if (agentState?.metadata?.isPersistentWorktree) return [];
-
-  const { sourceWorkspace, worktreeBranch } = agentState.metadata;
-  if (!sourceWorkspace || !worktreeBranch) return [];
-
-  const warnings = [];
-
-  // When openPR is set and task succeeded, push branch and create PR instead of auto-merging
-  if (openPR && success) {
-    emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
-
-    const worktreePath = agentState.metadata.workspacePath || join(PATHS.worktrees, agentId);
-
-    const [pushResult, branchInfo] = await Promise.all([
-      git.push(worktreePath, worktreeBranch).then(() => true).catch(err => {
-        emitLog('warn', `🌳 Failed to push worktree branch ${worktreeBranch}: ${err.message}`, { agentId });
-        return false;
-      }),
-      git.getRepoBranches(sourceWorkspace).catch(() => ({ baseBranch: null, devBranch: null }))
-    ]);
-
-    if (pushResult) {
-      let targetBranch = branchInfo.baseBranch;
-      if (!targetBranch) {
-        targetBranch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null) || 'main';
-      }
-      const prTitle = await git.suggestPRTitle(worktreePath, targetBranch, worktreeBranch, description);
-
-      const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput);
-
-      const prResult = await git.createPR(worktreePath, {
-        title: prTitle,
-        body: prBody,
-        base: targetBranch,
-        head: worktreeBranch
-      }).catch(err => {
-        emitLog('warn', `🌳 Failed to create PR for ${worktreeBranch}: ${err.message}`, { agentId });
-        return null;
-      });
-
-      if (!prResult?.success) {
-        const reason = prResult?.error || 'unknown error (createPR returned null or threw)';
-
-        // "No commits between X and Y" means the agent made no code changes.
-        // Clean up the worktree silently — nothing to review or merge.
-        // Also delete the remote branch (it was pushed before PR creation).
-        if (reason.includes('No commits between')) {
-          emitLog('info', `🌳 No commits on ${worktreeBranch} vs ${targetBranch} — agent made no changes, cleaning up`, { agentId });
-          await git.deleteBranch(sourceWorkspace, worktreeBranch, { remote: true }).catch(err => {
-            emitLog('warn', `🌳 Remote branch delete failed for ${worktreeBranch}: ${err.message}`, { agentId });
-            warnings.push(`Remote branch delete failed for ${worktreeBranch}: ${err.message}`);
-          });
-          const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
-            emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-            return { warnings: [`Worktree cleanup failed for ${agentId}: ${err.message}`] };
-          });
-          warnings.push(...(result?.warnings || []));
-          return warnings;
-        }
-
-        const cliName = prResult?.cli || 'gh';
-        const authHint = prResult?.account
-          ? ` (${cliName} authed as ${prResult.account} for ${prResult.owner})`
-          : prResult?.owner
-            ? ` (${cliName} on ${prResult.host || prResult.owner} — no account auto-pinned)`
-            : '';
-        emitLog('error', `🌳 PR creation failed for ${worktreeBranch}${authHint}: ${reason}`, { agentId, branchName: worktreeBranch, cli: prResult?.cli, account: prResult?.account, owner: prResult?.owner, host: prResult?.host });
-        warnings.push(`PR creation failed for branch ${worktreeBranch}: ${reason}. Worktree preserved for manual PR creation.`);
-        return warnings;
-      }
-
-      const cliName = prResult.cli || 'gh';
-      emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
-
-      const reviewerList = normalizeReviewers({ reviewers });
-      const copilotIsFirst = reviewerList[0] === DEFAULT_REVIEWER;
-      const nonCopilotReviewers = reviewerList.filter(r => r !== DEFAULT_REVIEWER);
-      // Pre-request the native Copilot review ONLY when copilot LEADS the order — it
-      // then reviews the freshly-opened PR. When copilot is configured after a CLI
-      // reviewer (e.g. [codex, copilot]), pre-requesting now would make Copilot review
-      // the stale pre-CLI-fix diff; instead the follow-up agent requests it at copilot's
-      // turn, after the earlier reviewer's fixes are pushed. This pre-request is a
-      // latency optimization only — the follow-up requests Copilot at its turn
-      // regardless, so a failed/absent pre-request is recoverable (no reviewer dropped).
-      if (shouldRequestCopilot && copilotIsFirst) {
-        const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
-        if (reviewResult.success && reviewResult.skipped) {
-          emitLog('info', `🤖 Skipping Copilot pre-request for ${prResult.url} (non-GitHub forge)`, { agentId, prUrl: prResult.url });
-        } else if (reviewResult.success) {
-          emitLog('success', `🤖 Requested initial Copilot review on ${prResult.url}`, { agentId, prUrl: prResult.url });
-        } else {
-          emitLog('warn', `🤖 Copilot pre-request failed for ${prResult.url}: ${reviewResult.error} — follow-up will re-request at its turn`, { agentId, prUrl: prResult.url });
-          warnings.push(`Copilot review request failed for ${prResult.url}: ${reviewResult.error}`);
-        }
-      }
-      if (shouldRequestCopilot && nonCopilotReviewers.length > 0) {
-        emitLog('info', `🤖 Follow-up will run CLI reviewers: ${nonCopilotReviewers.join(', ')}`, { agentId, prUrl: prResult.url });
-      }
-
-      // Spawn the review-loop follow-up agent that runs the multi-reviewer loop until
-      // clean and merges. Hand it the FULL ordered list — the follow-up requests Copilot
-      // at copilot's turn (so a failed pre-request or copilot-only config still gets a
-      // review pass) and invokes the CLI reviewers itself. The only reviewer dropped is
-      // copilot on a non-GitHub forge, handled centrally in spawnReviewLoopFollowUp.
-      const canSpawnFollowUp = shouldRequestCopilot && reviewerList.length > 0;
-      if (canSpawnFollowUp) {
-        await spawnReviewLoopFollowUp({
-          originalAgentId: agentId,
-          originalTask,
-          prUrl: prResult.url,
-          prBranch: worktreeBranch,
-          sourceWorkspace,
-          reviewers: reviewerList,
-          reviewStopMode,
-          reviewerApplies
-        }).catch(err => {
-          emitLog('warn', `🤖 Failed to spawn review-loop follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
-          warnings.push(`Review-loop follow-up spawn failed for ${prResult.url}: ${err.message}`);
-        });
-      }
-
-      const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
-        emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-        return { warnings: [`Worktree cleanup failed: ${err.message}`] };
-      });
-      warnings.push(...(result?.warnings || []));
-      return warnings;
-    }
-
-    // Push failed — preserve worktree/branch for manual intervention
-    warnings.push(`Push failed for branch ${worktreeBranch} — worktree preserved at ${worktreePath} for manual retry`);
-    emitLog('warn', `🌳 Push failed for ${worktreeBranch} — worktree preserved at ${worktreePath} for manual retry`, { agentId, branchName: worktreeBranch });
-    return warnings;
-  }
-
-  // Default: auto-merge on success, just cleanup on failure.
-  // Review-loop follow-up agents pass skipMerge: true because gh pr merge already
-  // handled the merge upstream — re-merging the worktree branch into the local
-  // source workspace would duplicate the squashed commits.
-  const shouldMerge = success && !skipMerge;
-  emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${shouldMerge})`, {
-    agentId, branchName: worktreeBranch, merge: shouldMerge
-  });
-
-  const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: shouldMerge }).catch(err => {
-    emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-    return { warnings: [`Worktree cleanup failed: ${err.message}`] };
-  });
-  warnings.push(...(result?.warnings || []));
-  return warnings;
-}
-
-/**
- * Spawn an internal follow-up task that drives the ordered multi-reviewer
- * review-and-fix loop on the just-created PR until the configured reviewer chain
- * is satisfied, then merges the PR. This is what makes the user-facing "review
- * loop" actually loop — the original agent only opens the PR (and at most
- * pre-requests Copilot when it leads) and exits; without this follow-up the loop
- * ends after one iteration and the PR is never merged.
- *
- * `reviewers` is the ordered list (e.g. `[codex, antigravity, copilot]`); the follow-up
- * runs each in order — invoking the CLI reviewers itself and requesting Copilot at
- * its turn — honoring `reviewStopMode` (`all`/`on-findings`/`on-clean`) and
- * `reviewerApplies`. Copilot is GitHub-only, so it is stripped here on non-GitHub
- * forges; if that empties the list, no follow-up is spawned.
- *
- * The follow-up task uses an isolated worktree attached to the existing PR
- * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
- * without trampling concurrent agents.
- */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
-  if (!prUrl || !prBranch) return null;
-
-  const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex) work on any
-  // forge because the agent invokes the CLI directly. On a non-GitHub forge, drop
-  // copilot from the list — if nothing's left, there's no review to run.
-  const isNonGithubForge = parsedPr && parsedPr.host && parsedPr.host !== 'github.com';
-  const reviewerList = normalizeReviewers({ reviewers });
-  const effectiveReviewers = isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList;
-  if (effectiveReviewers.length === 0) return null;
-
-  const appId = originalTask?.metadata?.app || null;
-  const sourceTaskDesc = originalTask?.description || 'CoS automated task';
-  const firstLine = sourceTaskDesc.split(/[\r\n]/).find(l => l.trim()) || sourceTaskDesc;
-  const followUpTitle = `[Review Loop] ${firstLine.trim().substring(0, 80)} (${prUrl})`;
-
-  const followUpTaskId = `sys-rl-${Date.now().toString(36)}`;
-  const followUpTask = {
-    id: followUpTaskId,
-    status: 'pending',
-    priority: (originalTask?.priority || 'MEDIUM').toUpperCase(),
-    priorityValue: 2,
-    description: followUpTitle,
-    metadata: {
-      app: appId,
-      // useWorktree is required so the follow-up runs in isolation; existingBranch
-      // tells createWorktree to attach to the PR branch instead of cutting a new one.
-      useWorktree: true,
-      existingBranch: prBranch,
-      // openPR/reviewLoop must stay false so cleanup doesn't try to create another PR
-      // or request another initial review (the agent itself drives the loop)
-      openPR: false,
-      reviewLoop: false,
-      simplify: false,
-      // Marker flags consumed by the agent prompt + completion handler
-      reviewLoopFollowUp: true,
-      reviewLoopPRUrl: prUrl,
-      reviewLoopPRBranch: prBranch,
-      reviewLoopPRNumber: parsedPr?.number ?? null,
-      reviewLoopPRHost: parsedPr?.host ?? null,
-      reviewLoopPROwner: parsedPr?.owner ?? null,
-      reviewLoopPRRepo: parsedPr?.repo ?? null,
-      reviewLoopReviewers: effectiveReviewers,
-      reviewLoopStopMode: reviewStopMode,
-      reviewLoopReviewerApplies: reviewerApplies,
-      sourceTaskId: originalTask?.id || null,
-      sourceAgentId: originalAgentId || null,
-      // This follow-up may legitimately exit with zero new commits when every
-      // reviewer comes back clean — completion handling must not treat a
-      // zero-commit exit as a failure.
-      readOnly: false
-    },
-    autoApproved: true,
-    section: 'pending'
-  };
-
-  await addTask(followUpTask, 'internal', { raw: true });
-  emitLog('info', `🔁 Spawned review-loop follow-up task ${followUpTaskId} (${effectiveReviewers.join(', ')}) for PR ${prUrl}`, {
-    taskId: followUpTaskId, prUrl, prBranch, sourceAgentId: originalAgentId, sourceTaskId: originalTask?.id
-  });
-  return followUpTask;
-}
-
-/**
- * Auto-create a recovery task when a worktree merge or PR creation fails, so stale
- * branches don't accumulate in managed app repos and block future agent work.
- */
-export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, sourceWorkspace) {
-  let staleBranch = null;
-  let isMergeFail = false;
-
-  for (const w of cleanupWarnings) {
-    const mergeMatch = w.match(/Auto-merge failed for branch (\S+)/);
-    if (mergeMatch) { staleBranch = mergeMatch[1]; isMergeFail = true; break; }
-
-    const prMatch = w.match(/PR creation failed for branch (\S+?):/);
-    if (prMatch) { staleBranch = prMatch[1]; break; }
-  }
-
-  if (!staleBranch || !sourceWorkspace) return;
-
-  const appId = task?.metadata?.app;
-
-  if (isMergeFail) {
-    const defaultBr = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    addTask({
-      description: `${RECOVERY_TASK_PREFIX} Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
-      priority: 'HIGH',
-      app: appId,
-      isRecovery: true,
-      context: `An agent failed to auto-merge branch "${staleBranch}" back to ${defaultBr} in ${sourceWorkspace}. `
-        + `Resolve this by: (1) checking if the branch's changes are already on ${defaultBr} (superseded by other commits), `
-        + `and if so, delete the branch with "git branch -D ${staleBranch}"; `
-        + `(2) if the changes are NOT on ${defaultBr}, attempt "git merge ${staleBranch} --no-edit" from ${defaultBr}, resolve any conflicts, and commit; `
-        + `(3) after merging or determining the branch is stale, delete it with "git branch -D ${staleBranch}". `
-        + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
-      useWorktree: false,
-    }, 'user').catch(err => {
-      emitLog('warn', `Failed to create merge recovery task: ${err.message}`, { agentId, staleBranch });
-    });
-    emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
-  } else {
-    // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
-    // glab based on the repo's forge so the recovery agent gets commands that
-    // actually work against this remote.
-    const [{ cli }, detectedBase] = await Promise.all([
-      git.resolveForgeForRepo(sourceWorkspace).catch(() => ({ cli: 'gh' })),
-      git.getDefaultBranch(sourceWorkspace).catch(() => null)
-    ]);
-    const targetBase = detectedBase || 'main';
-    const isGitLab = cli === 'glab';
-    const reqWord = isGitLab ? 'MR' : 'PR';
-    const listCmd = isGitLab
-      ? `glab mr list --source-branch ${staleBranch}`
-      : `gh pr list --head ${staleBranch}`;
-    const createCmd = isGitLab
-      ? `glab mr create --source-branch ${staleBranch} --target-branch ${targetBase} --title '...' --description '...'`
-      : `gh pr create --head ${staleBranch} --base ${targetBase} --title '...' --body '...'`;
-
-    addTask({
-      description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,
-      priority: 'HIGH',
-      app: appId,
-      isRecovery: true,
-      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated ${reqWord} creation failed. `
-        + `Investigate by: (1) checking if a ${reqWord} already exists for this branch: "${listCmd}"; `
-        + `(2) if no ${reqWord} exists, review the branch changes and create one: "${createCmd}"; `
-        + `(3) if the branch is stale or changes are already on ${targetBase}, delete the remote branch: "git push origin --delete ${staleBranch}". `
-        + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
-      useWorktree: false,
-    }, 'user').catch(err => {
-      emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
-    });
-    emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
   }
 }

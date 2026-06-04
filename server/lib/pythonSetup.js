@@ -210,6 +210,44 @@ export function invalidateMusicgenPython() {
   cachedMusicgenPython = null;
 }
 
+// AudioLDM2 (Pipeline Audio Phase 4c.2 — second music backend) runs in its own
+// venv at ~/.portos/venv-audioldm2 — torch + diffusers + transformers, kept
+// apart from MusicGen's MLX pile. AudioLDM2 ships in HuggingFace `diffusers` (a
+// pip package), so unlike MusicGen there's no clone to import from; the sidecar
+// has an optional --runtime-dir for parity but normally just imports diffusers.
+// `INSTALL_AUDIOLDM2=1 bash scripts/setup-image-video.sh` provisions the venv.
+const AUDIOLDM2_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-audioldm2', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-audioldm2', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-audioldm2', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-audioldm2', 'bin', 'python3'),
+    ];
+
+export const AUDIOLDM2_VENV_DEFAULT = AUDIOLDM2_VENV_CANDIDATES[0];
+
+// Optional dir prepended to the sidecar's sys.path before importing diffusers.
+// AudioLDM2 normally imports straight from the venv's diffusers, so this is an
+// empty sentinel (the sidecar's --runtime-dir is a no-op when blank); kept for
+// argv parity with the MusicGen sidecar and so a vendored diffusers build can
+// be pointed at later without a contract change.
+export const AUDIOLDM2_RUNTIME_DIR = '';
+
+let cachedAudioldm2Python = null;
+export function resolveAudioldm2Python() {
+  if (cachedAudioldm2Python && existsSync(cachedAudioldm2Python)) return cachedAudioldm2Python;
+  for (const p of AUDIOLDM2_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedAudioldm2Python = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateAudioldm2Python() {
+  cachedAudioldm2Python = null;
+}
+
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
 // before exec. Single-user / Tailnet model means we trust the operator, but
 // "you can shell out to anything" is still too sharp — restrict to actual

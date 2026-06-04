@@ -7,6 +7,7 @@ import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import * as appUpdater from '../services/appUpdater.js';
+import * as appBuilder from '../services/appBuilder.js';
 import * as cos from '../services/cos.js';
 import { logAction } from '../services/history.js';
 import { z } from 'zod';
@@ -298,12 +299,12 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   }
 
   if (!iconPath || !await pathExists(iconPath)) {
-    return res.status(404).json({ error: 'No app icon found' });
+    throw new ServerError('No app icon found', { status: 404 });
   }
 
   const contentType = getIconContentType(iconPath);
   const iconStat = await stat(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
-  if (!iconStat) return res.status(404).json({ error: 'No app icon found' });
+  if (!iconStat) throw new ServerError('No app icon found', { status: 404 });
   const etag = `W/"${iconStat.mtimeMs.toString(36)}-${iconStat.size.toString(36)}"`;
 
   res.set('Content-Type', contentType);
@@ -324,7 +325,7 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   }
 
   const iconData = await readFile(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
-  if (!iconData) return res.status(404).json({ error: 'No app icon found' });
+  if (!iconData) throw new ServerError('No app icon found', { status: 404 });
   res.send(iconData);
 }));
 
@@ -673,100 +674,25 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     throw new ServerError('App repo path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
   }
 
-  const buildCommand = app.buildCommand || 'npm run build';
-  const [cmd, ...args] = buildCommand.split(/\s+/);
+  const result = await appBuilder.buildApp(app);
 
-  if (!ALLOWED_BUILD_CMDS.has(cmd)) {
-    throw new ServerError(`Build command '${cmd}' is not allowed. Allowed: ${[...ALLOWED_BUILD_CMDS].join(', ')}`, { status: 400, code: 'INVALID_BUILD_COMMAND' });
+  if (result.failure === 'validation') {
+    throw new ServerError(result.message, { status: 400, code: result.code });
   }
 
-  if (needsShell(cmd) && args.some(a => SHELL_UNSAFE_RE.test(a))) {
-    throw new ServerError('Build command args contain shell-unsafe characters', { status: 400, code: 'INVALID_BUILD_COMMAND' });
+  if (result.failure === 'install') {
+    await logAction('build', app.id, app.name, { buildCommand: result.buildCommand, step: `npm install (${result.label})` }, false);
+    throw new ServerError(`npm install failed (${result.label}) exit=${result.exitCode}: ${result.output}`, { status: 500, code: 'INSTALL_FAILED' });
   }
 
-  console.log(`🔨 Building ${app.name}: ${buildCommand}`);
-
-  // Install dependencies before building (root + common subdirs) - skip for non-Node apps
-  // For self-builds, skip server/ install to avoid triggering PM2 watch restart
-  const isNodeApp = ['npm', 'npx'].includes(cmd);
-  const isSelfBuild = app.id === 'portos-default';
-  const installDirs = isNodeApp ? ['', 'client', ...(isSelfBuild ? [] : ['server']), 'admin'] : [];
-  for (const sub of installDirs) {
-    const subDir = sub ? join(app.repoPath, sub) : app.repoPath;
-    if (await pathExists(join(subDir, 'package.json'))) {
-      const label = sub || 'root';
-      console.log(`📦 Installing ${label} dependencies for ${app.name}`);
-      const installResult = await new Promise((resolve) => {
-        const child = spawn('npm', ['install'], { cwd: subDir, windowsHide: true, shell: needsShell('npm') });
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-        const MAX = 64 * 1024;
-        const timer = setTimeout(() => {
-          if (!settled) { settled = true; killProc(child); resolve({ success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
-        }, INSTALL_TIMEOUT_MS);
-        child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX) stdout = stdout.slice(-MAX); });
-        child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX) stderr = stderr.slice(-MAX); });
-        child.on('close', exitCode => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: exitCode === 0, exitCode, output: (stderr.trim() || stdout.trim()).slice(-1024) }); } });
-        child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, exitCode: -1, output: err.message }); } });
-      });
-      if (!installResult.success) {
-        console.log(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(-300)}`);
-        await logAction('build', app.id, app.name, { buildCommand, step: `npm install (${label})` }, false);
-        throw new ServerError(`npm install failed (${label}) exit=${installResult.exitCode}: ${installResult.output}`, { status: 500, code: 'INSTALL_FAILED' });
-      }
-    }
-  }
-
-  const result = await new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: app.repoPath, windowsHide: true, shell: needsShell(cmd) });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const MAX = 64 * 1024;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        killProc(child);
-        const timeoutMsg = `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`;
-        const tail = (stderr.trim() || stdout.trim()).slice(-512);
-        resolve({ success: false, stderr: timeoutMsg, code: -1, output: tail ? `${timeoutMsg} — last output: ${tail}` : timeoutMsg });
-      }
-    }, BUILD_TIMEOUT_MS);
-    child.stdout.on('data', d => {
-      stdout += d;
-      if (stdout.length > MAX) stdout = stdout.slice(-MAX);
-    });
-    child.stderr.on('data', d => {
-      stderr += d;
-      if (stderr.length > MAX) stderr = stderr.slice(-MAX);
-    });
-    child.on('close', (code, signal) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        const output = (stderr.trim() || stdout.trim()).slice(-1024);
-        resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code, signal, output });
-      }
-    });
-    child.on('error', err => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve({ success: false, stderr: err.message, code: -1, signal: null, output: err.message });
-      }
-    });
-  });
-
-  await logAction('build', app.id, app.name, { buildCommand }, result.success);
-  console.log(`${result.success ? '✅' : '❌'} Build ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+  await logAction('build', app.id, app.name, { buildCommand: result.buildCommand }, result.success);
 
   if (!result.success) {
     const detail = result.signal ? `killed by ${result.signal}` : result.output || `exit code ${result.code}`;
     throw new ServerError(`Build failed: ${detail}`, { status: 500, code: 'BUILD_FAILED' });
   }
 
-  res.json({ success: true, output: result.stdout });
+  res.json({ success: true, output: result.output });
 }));
 
 // GET /api/apps/:id/status - Get PM2 status
@@ -803,37 +729,6 @@ router.get('/:id/logs', loadApp, asyncHandler(async (req, res) => {
 
   res.json({ processName, lines, logs });
 }));
-
-// Allowlist of safe build commands
-const ALLOWED_BUILD_CMDS = new Set([
-  'npm',        // Node.js
-  'npx',        // Node.js
-  'xcodebuild', // Xcode
-  'swift',      // Swift Package Manager
-  'make',       // Make
-  'cargo'       // Rust
-]);
-
-const IS_WIN32 = process.platform === 'win32';
-// npm/npx are .cmd shims on Windows — enable shell only for these so cmd.exe
-// can resolve them, without enabling shell metacharacter interpretation for
-// native binaries (xcodebuild, swift, make, cargo).
-const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
-const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
-// Actual cmd.exe metacharacters (& | < > ^ % ! and grouping parens).
-// Validated only when shell is active (needsShell guard at call site).
-const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
-// On Windows, SIGTERM kills cmd.exe but orphans its child (npm). Use taskkill
-// /T /F to terminate the whole process tree.
-const killProc = (child) => {
-  if (IS_WIN32 && child.pid) {
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
-  } else {
-    child.kill('SIGTERM');
-  }
-};
-const INSTALL_TIMEOUT_MS = 3 * 60 * 1000;
-const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Allowlist of safe editor commands
 // Security: Only allow known-safe editor commands to prevent arbitrary code execution

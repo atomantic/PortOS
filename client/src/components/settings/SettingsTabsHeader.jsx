@@ -21,6 +21,7 @@ export const TABS = [
   { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom' },
   { id: 'prompts', label: 'Prompts', to: '/prompts' },
   { id: 'providers', label: 'Providers', to: '/ai' },
+  { id: 'security', label: 'Security', to: '/settings/security' },
   { id: 'sharing', label: 'Sharing', to: '/settings/sharing' },
   { id: 'telegram', label: 'Telegram', to: '/settings/telegram' },
   { id: 'voice', label: 'Voice', to: '/settings/voice' }

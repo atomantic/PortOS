@@ -49,7 +49,7 @@ export const updateCosConfig = (config) => request('/cos/config', {
   method: 'PUT',
   body: JSON.stringify(config)
 });
-export const getCosTasks = () => request('/cos/tasks');
+export const getCosTasks = (options) => request('/cos/tasks', options);
 export const addCosTask = (task) => request('/cos/tasks', {
   method: 'POST',
   body: JSON.stringify(task)

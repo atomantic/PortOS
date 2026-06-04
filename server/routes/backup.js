@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, restoreRequestSchema } from '../lib/validation.js';
 import * as backup from '../services/backup.js';
 import { getSettings } from '../services/settings.js';
@@ -24,7 +24,7 @@ router.post('/run', asyncHandler(async (req, res) => {
   const settings = await getSettings();
   const destPath = settings.backup?.destPath;
   if (!destPath) {
-    return res.status(400).json({ error: 'BACKUP_NOT_CONFIGURED', message: 'No backup destination configured in settings' });
+    throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
   }
   const excludePaths = settings.backup?.excludePaths || [];
   const disabledDefaultExcludes = settings.backup?.disabledDefaultExcludes || [];

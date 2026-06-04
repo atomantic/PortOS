@@ -55,11 +55,11 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.put('/active', asyncHandler(async (req, res) => {
     const { id } = req.body;
     if (!id) {
-      return res.status(400).json({ error: 'Provider ID required' });
+      throw new ServerError('Provider ID required', { status: 400 });
     }
     const provider = await providerService.setActiveProvider(id);
     if (!provider) {
-      return res.status(404).json({ error: 'Provider not found' });
+      throw new ServerError('Provider not found', { status: 404 });
     }
     res.json(sanitizeProvider(provider));
   }));
@@ -130,7 +130,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // Sanitized GET /:id — must be after specific /:id/* routes above
   router.get('/:id', asyncHandler(async (req, res) => {
     const provider = await providerService.getProviderById(req.params.id);
-    if (!provider) return res.status(404).json({ error: 'Provider not found' });
+    if (!provider) throw new ServerError('Provider not found', { status: 404 });
     res.json(sanitizeProvider(provider));
   }));
 
@@ -142,11 +142,11 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // POST path now blocks.
   router.put('/:id', asyncHandler(async (req, res) => {
     const existing = await providerService.getProviderById(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Provider not found' });
+    if (!existing) throw new ServerError('Provider not found', { status: 404 });
 
     const validation = validate(providerSchema.partial(), req.body);
     if (!validation.success) {
-      return res.status(400).json({ error: 'Invalid provider data', details: validation.errors });
+      throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: validation.errors } });
     }
 
     const updates = { ...validation.data };
@@ -177,7 +177,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.post('/', asyncHandler(async (req, res) => {
     const validation = validate(providerSchema, req.body);
     if (!validation.success) {
-      return res.status(400).json({ error: 'Invalid provider data', details: validation.errors });
+      throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: validation.errors } });
     }
     const provider = await providerService.createProvider(validation.data);
     res.status(201).json(sanitizeProvider(provider));

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { listMediaAnnotations, setMediaAnnotation } from '../services/api';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
+import { sameJsonShape } from '../lib/sameJsonShape';
 
 // Per-entry: `own`/`others` from the server, plus back-compat aliases
 // (`starred`/`note`/`updatedAt` = local author) and `anyNote` for the
@@ -56,8 +57,17 @@ export function useMediaAnnotations() {
     const onUpdate = ({ key, entry }) => {
       if (!key) return;
       setAnnotations((prev) => {
-        const next = { ...prev };
         const enriched = enrich(entry);
+        // Bail out when the broadcast carries nothing new: an identical entry
+        // (the originator re-receives its own write) or a delete of a key we
+        // never held. Returning `prev` lets React skip the re-render and the
+        // downstream MediaCard churn instead of allocating a fresh map.
+        if (enriched) {
+          if (sameJsonShape(prev[key], enriched)) return prev;
+        } else if (!(key in prev)) {
+          return prev;
+        }
+        const next = { ...prev };
         if (enriched) next[key] = enriched;
         else delete next[key];
         return next;

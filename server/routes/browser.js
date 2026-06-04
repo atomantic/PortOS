@@ -1,6 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
 import { isSafeIngestUrl } from '../lib/catalogValidation.js';
@@ -137,7 +137,7 @@ router.get('/pages', asyncHandler(async (req, res) => {
 router.get('/version', asyncHandler(async (req, res) => {
   const version = await browserService.getCdpVersion();
   if (!version) {
-    return res.status(503).json({ error: 'Browser not reachable' });
+    throw new ServerError('Browser not reachable', { status: 503 });
   }
   res.json(version);
 }));
@@ -164,7 +164,7 @@ const RISKY_DOWNLOAD_EXTS = new Set(['.html', '.htm', '.svg', '.js', '.mjs', '.x
 // browser; the listing UI passes ?attachment=1 + HTML5 `download` for save-to-disk.
 router.get('/downloads/:name', asyncHandler(async (req, res) => {
   const file = await browserService.resolveDownload(req.params.name);
-  if (!file) return res.status(404).json({ error: 'File not found' });
+  if (!file) throw new ServerError('File not found', { status: 404 });
   res.set('X-Content-Type-Options', 'nosniff');
   // Files of the same name can be replaced by a fresh Chrome download; bypass
   // any aggressive client/intermediary caching so the user always sees current.
@@ -184,7 +184,7 @@ router.get('/downloads/:name', asyncHandler(async (req, res) => {
 // DELETE /api/browser/downloads/:name - Remove a downloaded file
 router.delete('/downloads/:name', asyncHandler(async (req, res) => {
   const removed = await browserService.deleteDownload(req.params.name);
-  if (!removed) return res.status(404).json({ error: 'File not found' });
+  if (!removed) throw new ServerError('File not found', { status: 404 });
   console.log(`🗑️ Browser download deleted: ${req.params.name}`);
   res.json({ success: true });
 }));

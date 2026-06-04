@@ -1,0 +1,534 @@
+/**
+ * Task Learning — heuristic routing & scheduling decisions
+ *
+ * The "read" side of the learning data that drives runtime decisions:
+ * priority multipliers, model-tier suggestions, routing-accuracy matrices,
+ * adaptive cooldowns, skip/rehabilitation gating, and per-task-type
+ * confidence tiers. None of these mutate the store except the
+ * rehabilitation path, which delegates the actual reset to the metrics
+ * module.
+ */
+
+import { loadLearningData, emitLog } from './store.js';
+import { resetTaskTypeLearning } from './metrics.js';
+
+/**
+ * Get suggested priority boost for a task type based on historical success
+ * Returns a multiplier: >1 for boost, <1 for demotion
+ */
+export async function getTaskTypePriorityMultiplier(taskType) {
+  const data = await loadLearningData();
+
+  const metrics = data.byTaskType[taskType];
+  if (!metrics || metrics.completed < 3) {
+    return 1.0; // Not enough data, use default priority
+  }
+
+  // High success rate = boost priority
+  if (metrics.successRate >= 90) return 1.2;
+  if (metrics.successRate >= 75) return 1.1;
+
+  // Low success rate = demote priority slightly (but not too much, as we want to retry)
+  if (metrics.successRate < 50) return 0.9;
+
+  return 1.0;
+}
+
+/**
+ * Suggest model tier based on historical performance for a task type
+ * Enhanced with negative signal awareness: avoids tiers that consistently fail
+ * and prefers tiers with proven success for the task type
+ */
+export async function suggestModelTier(taskType) {
+  const data = await loadLearningData();
+
+  const metrics = data.byTaskType[taskType];
+  if (!metrics || metrics.completed < 5) {
+    return null; // Not enough data to suggest
+  }
+
+  // Check routing accuracy for tier-specific signals
+  const routingData = data.routingAccuracy?.[taskType];
+  if (routingData) {
+    // Find tiers with enough data and their success rates
+    const tierResults = Object.entries(routingData)
+      .filter(([, r]) => (r.succeeded + r.failed) >= 3)
+      .map(([tier, r]) => {
+        const total = r.succeeded + r.failed;
+        return { tier, successRate: Math.round((r.succeeded / total) * 100), total };
+      })
+      .sort((a, b) => b.successRate - a.successRate);
+
+    // If a lighter tier has high success, no need to upgrade
+    const bestTier = tierResults[0];
+    if (bestTier && bestTier.successRate >= 80) {
+      return {
+        suggested: bestTier.tier,
+        reason: `${taskType} has ${bestTier.successRate}% success with ${bestTier.tier} tier`,
+        avoidTiers: tierResults.filter(t => t.successRate < 40).map(t => t.tier)
+      };
+    }
+
+    // If current default tier is failing, find a better one
+    const failingTiers = tierResults.filter(t => t.successRate < 40);
+    if (failingTiers.length > 0) {
+      const successfulTier = tierResults.find(t => t.successRate >= 60);
+      return {
+        suggested: successfulTier?.tier || 'heavy',
+        reason: `${taskType} fails with ${failingTiers.map(t => t.tier).join(', ')} (${failingTiers.map(t => `${t.successRate}%`).join(', ')})`,
+        avoidTiers: failingTiers.map(t => t.tier)
+      };
+    }
+  }
+
+  // Fallback: if overall success rate is low, suggest heavier model
+  if (metrics.successRate < 60) {
+    return {
+      suggested: 'heavy',
+      reason: `${taskType} has ${metrics.successRate}% success rate - heavier model may help`
+    };
+  }
+
+  return null; // Current selection is working fine
+}
+
+/**
+ * Get routing accuracy metrics showing which model tiers succeed/fail for each task type
+ * Returns a matrix suitable for display in the Learning tab UI
+ */
+export async function getRoutingAccuracy() {
+  const data = await loadLearningData();
+  const routingData = data.routingAccuracy || {};
+
+  const matrix = [];
+  const tierSummary = {};
+
+  for (const [taskType, tiers] of Object.entries(routingData)) {
+    const taskEntry = { taskType, tiers: [] };
+
+    for (const [tier, counts] of Object.entries(tiers)) {
+      const total = counts.succeeded + counts.failed;
+      if (total === 0) continue;
+
+      const successRate = Math.round((counts.succeeded / total) * 100);
+      taskEntry.tiers.push({
+        tier,
+        succeeded: counts.succeeded,
+        failed: counts.failed,
+        total,
+        successRate,
+        lastAttempt: counts.lastAttempt
+      });
+
+      // Aggregate tier summary
+      if (!tierSummary[tier]) {
+        tierSummary[tier] = { succeeded: 0, failed: 0, taskTypes: 0, misroutes: 0 };
+      }
+      tierSummary[tier].succeeded += counts.succeeded;
+      tierSummary[tier].failed += counts.failed;
+      tierSummary[tier].taskTypes++;
+      if (successRate < 40 && total >= 3) {
+        tierSummary[tier].misroutes++;
+      }
+    }
+
+    // Sort tiers by success rate descending
+    taskEntry.tiers.sort((a, b) => b.successRate - a.successRate);
+    if (taskEntry.tiers.length > 0) {
+      matrix.push(taskEntry);
+    }
+  }
+
+  // Calculate tier-level success rates
+  const tierOverview = Object.entries(tierSummary).map(([tier, s]) => {
+    const total = s.succeeded + s.failed;
+    return {
+      tier,
+      successRate: total > 0 ? Math.round((s.succeeded / total) * 100) : 0,
+      total,
+      taskTypes: s.taskTypes,
+      misroutes: s.misroutes
+    };
+  }).sort((a, b) => b.successRate - a.successRate);
+
+  // Identify misroutes: task+tier combos with <40% success and 3+ attempts
+  const misroutes = [];
+  for (const entry of matrix) {
+    for (const tier of entry.tiers) {
+      if (tier.successRate < 40 && tier.total >= 3) {
+        misroutes.push({
+          taskType: entry.taskType,
+          tier: tier.tier,
+          successRate: tier.successRate,
+          failed: tier.failed,
+          total: tier.total
+        });
+      }
+    }
+  }
+  misroutes.sort((a, b) => a.successRate - b.successRate);
+
+  return { matrix, tierOverview, misroutes, totalMisroutes: misroutes.length };
+}
+
+/**
+ * Get a performance summary for logging during task evaluation
+ * Provides insights about how different task types are performing
+ */
+export async function getPerformanceSummary() {
+  const data = await loadLearningData();
+
+  const summary = {
+    totalCompleted: data.totals.completed,
+    overallSuccessRate: data.totals.completed > 0
+      ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
+      : 0,
+    avgDurationMin: Math.round(data.totals.avgDurationMs / 60000),
+    topPerformers: [],
+    needsAttention: [],
+    skipped: []
+  };
+
+  // Analyze each task type
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    if (metrics.completed < 3) continue;
+
+    const entry = {
+      taskType,
+      successRate: metrics.successRate,
+      completed: metrics.completed,
+      avgDurationMin: Math.round(metrics.avgDurationMs / 60000)
+    };
+
+    if (metrics.successRate >= 80) {
+      summary.topPerformers.push(entry);
+    } else if (metrics.successRate < 50 && metrics.completed >= 5) {
+      summary.needsAttention.push(entry);
+      // Also mark as skipped if very low
+      if (metrics.successRate < 30) {
+        summary.skipped.push(entry);
+      }
+    }
+  }
+
+  // Sort by success rate
+  summary.topPerformers.sort((a, b) => b.successRate - a.successRate);
+  summary.needsAttention.sort((a, b) => a.successRate - b.successRate);
+
+  return summary;
+}
+
+/**
+ * Get adaptive cooldown multiplier for a task type based on historical performance
+ *
+ * This allows the CoS to work more efficiently:
+ * - High success rate tasks: Reduced cooldown (can work on similar tasks sooner)
+ * - Low success rate tasks: Increased cooldown (give time for fixes/investigation)
+ * - Very low success rate: Skip this task type (needs review)
+ *
+ * @param {string} taskType - The task type (e.g., 'self-improve:ui-bugs')
+ * @returns {Object} Cooldown adjustment info
+ */
+export async function getAdaptiveCooldownMultiplier(taskType) {
+  const data = await loadLearningData();
+
+  const metrics = data.byTaskType[taskType];
+
+  // Not enough data - use default cooldown
+  if (!metrics || metrics.completed < 3) {
+    return {
+      multiplier: 1.0,
+      reason: 'insufficient-data',
+      skip: false,
+      successRate: null,
+      completed: metrics?.completed || 0
+    };
+  }
+
+  const successRate = metrics.successRate;
+
+  // Very high success (90%+): Reduce cooldown by 30% - this task type works well
+  if (successRate >= 90) {
+    return {
+      multiplier: 0.7,
+      reason: 'high-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed,
+      recommendation: `Task type has ${successRate}% success rate - reduced cooldown`
+    };
+  }
+
+  // Good success (75-89%): Slight reduction (15%)
+  if (successRate >= 75) {
+    return {
+      multiplier: 0.85,
+      reason: 'good-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed
+    };
+  }
+
+  // Moderate success (50-74%): Default cooldown
+  if (successRate >= 50) {
+    return {
+      multiplier: 1.0,
+      reason: 'moderate-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed
+    };
+  }
+
+  // Low success (30-49%): Increase cooldown by 50%
+  if (successRate >= 30) {
+    return {
+      multiplier: 1.5,
+      reason: 'low-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed,
+      recommendation: `Task type has only ${successRate}% success rate - increased cooldown`
+    };
+  }
+
+  // Very low success (<30%) with significant attempts: Skip this task type
+  if (metrics.completed >= 5) {
+    return {
+      multiplier: 0, // Effectively infinite cooldown
+      reason: 'skip-failing',
+      skip: true,
+      successRate,
+      completed: metrics.completed,
+      recommendation: `Task type has ${successRate}% success rate after ${metrics.completed} attempts - skipping until reviewed`
+    };
+  }
+
+  // Very low success but few attempts: Double cooldown and keep trying
+  return {
+    multiplier: 2.0,
+    reason: 'very-low-success',
+    skip: false,
+    successRate,
+    completed: metrics.completed,
+    recommendation: `Task type has ${successRate}% success rate - doubled cooldown for retry`
+  };
+}
+
+/**
+ * Get all task types that should be skipped due to poor performance
+ * Useful for filtering out problematic task types in evaluateTasks
+ */
+export async function getSkippedTaskTypes() {
+  const data = await loadLearningData();
+  const skipped = [];
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Skip if: completed >= 5 AND success rate < 30%
+    if (metrics.completed >= 5 && metrics.successRate < 30) {
+      skipped.push({
+        taskType,
+        successRate: metrics.successRate,
+        completed: metrics.completed,
+        lastCompleted: metrics.lastCompleted
+      });
+    }
+  }
+
+  return skipped;
+}
+
+/**
+ * Check if a specific task type should be skipped
+ */
+export async function shouldSkipTaskType(taskType) {
+  const result = await getAdaptiveCooldownMultiplier(taskType);
+  return result.skip;
+}
+
+/**
+ * Check if any skipped task types are eligible for automatic rehabilitation
+ * Task types that have been skipped for a grace period get a "fresh start" opportunity
+ *
+ * Auto-rehabilitation rules:
+ * - Task must have been skipped (success rate < 30% with 5+ attempts)
+ * - Must have been at least rehabilitationGracePeriodMs since last completion
+ * - Reset the task type's learning data to give it a fresh chance
+ *
+ * This allows CoS to automatically retry previously-failing task types
+ * after enough time has passed for fixes to be applied.
+ *
+ * @param {number} gracePeriodMs - Minimum time since last attempt (default: 7 days)
+ * @returns {Object} Summary of rehabilitated task types
+ */
+export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 60 * 60 * 1000) {
+  const data = await loadLearningData();
+  const rehabilitated = [];
+  const now = Date.now();
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Only consider task types that would be skipped (< 30% success with 5+ attempts)
+    if (metrics.completed < 5 || metrics.successRate >= 30) {
+      continue;
+    }
+
+    // Check if enough time has passed since last attempt
+    const lastCompletedTime = metrics.lastCompleted
+      ? new Date(metrics.lastCompleted).getTime()
+      : 0;
+    const timeSinceLastAttempt = now - lastCompletedTime;
+
+    if (timeSinceLastAttempt >= gracePeriodMs) {
+      // This task type is eligible for rehabilitation
+      emitLog('info', `Auto-rehabilitating ${taskType} (was ${metrics.successRate}% success, ${Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))} days since last attempt)`, {
+        taskType,
+        previousSuccessRate: metrics.successRate,
+        previousAttempts: metrics.completed,
+        daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))
+      }, '📚 TaskLearning');
+
+      // Reset this task type's data
+      await resetTaskTypeLearning(taskType);
+
+      rehabilitated.push({
+        taskType,
+        previousSuccessRate: metrics.successRate,
+        previousAttempts: metrics.completed,
+        daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))
+      });
+    }
+  }
+
+  if (rehabilitated.length > 0) {
+    emitLog('success', `Auto-rehabilitated ${rehabilitated.length} skipped task type(s)`, {
+      rehabilitated: rehabilitated.map(r => r.taskType)
+    }, '📚 TaskLearning');
+  }
+
+  return { rehabilitated, count: rehabilitated.length };
+}
+
+/**
+ * Get all skipped task types with their rehabilitation eligibility status
+ * Useful for UI display and debugging
+ * @param {number} gracePeriodMs - Grace period for rehabilitation eligibility
+ * @returns {Array} List of skipped task types with status info
+ */
+export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 * 60 * 1000) {
+  const data = await loadLearningData();
+  const skipped = [];
+  const now = Date.now();
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Only include task types that would be skipped
+    if (metrics.completed < 5 || metrics.successRate >= 30) {
+      continue;
+    }
+
+    const lastCompletedTime = metrics.lastCompleted
+      ? new Date(metrics.lastCompleted).getTime()
+      : 0;
+    const timeSinceLastAttempt = now - lastCompletedTime;
+    const eligibleForRehabilitation = timeSinceLastAttempt >= gracePeriodMs;
+    const timeUntilEligible = eligibleForRehabilitation
+      ? 0
+      : gracePeriodMs - timeSinceLastAttempt;
+
+    skipped.push({
+      taskType,
+      successRate: metrics.successRate,
+      completed: metrics.completed,
+      lastCompleted: metrics.lastCompleted,
+      daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000)),
+      eligibleForRehabilitation,
+      daysUntilEligible: Math.ceil(timeUntilEligible / (24 * 60 * 60 * 1000))
+    });
+  }
+
+  return skipped;
+}
+
+/**
+ * Pure classifier — returns { tier, autoApprove } for a given metrics object.
+ * Shared by getTaskTypeConfidence() and getConfidenceLevels().
+ */
+function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50, minSamples = 5 } = {}) {
+  const completed = metrics?.completed ?? 0;
+  const successRate = metrics?.successRate ?? 0;
+
+  if (completed < minSamples) return { tier: 'new', autoApprove: true };
+  if (successRate >= highThreshold) return { tier: 'high', autoApprove: true };
+  if (successRate >= lowThreshold) return { tier: 'medium', autoApprove: true };
+  return { tier: 'low', autoApprove: false };
+}
+
+/**
+ * Calculate confidence tier for a specific task type based on learning data.
+ *
+ * @param {string} taskType - The task type to evaluate
+ * @param {Object} [thresholds] - Override default thresholds
+ * @returns {Promise<Object>} Confidence assessment
+ */
+export async function getTaskTypeConfidence(taskType, thresholds = {}) {
+  const data = await loadLearningData();
+  const metrics = data.byTaskType[taskType];
+  const { tier, autoApprove } = classifyConfidenceTier(metrics, thresholds);
+
+  const reasons = {
+    new: `Fewer than ${thresholds.minSamples ?? 5} completions — auto-approve by default`,
+    high: `${metrics?.successRate}% success across ${metrics?.completed} runs — high confidence`,
+    medium: `${metrics?.successRate}% success — acceptable confidence`,
+    low: `${metrics?.successRate}% success after ${metrics?.completed} attempts — requires approval`
+  };
+
+  return {
+    taskType,
+    tier,
+    autoApprove,
+    successRate: metrics?.successRate ?? null,
+    completed: metrics?.completed ?? 0,
+    reason: reasons[tier]
+  };
+}
+
+/**
+ * Get confidence levels for all tracked task types.
+ * Returns a summary suitable for display in the Learning tab UI.
+ *
+ * @param {Object} [thresholds] - Override default thresholds
+ * @returns {Promise<Object>} All task types grouped by confidence tier
+ */
+export async function getConfidenceLevels(thresholds = {}) {
+  const data = await loadLearningData();
+  const levels = { high: [], medium: [], low: [], new: [] };
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    const { tier, autoApprove } = classifyConfidenceTier(metrics, thresholds);
+    levels[tier].push({
+      taskType,
+      successRate: metrics.successRate ?? 0,
+      completed: metrics.completed || 0,
+      autoApprove,
+      lastCompleted: metrics.lastCompleted
+    });
+  }
+
+  for (const tier of Object.values(levels)) {
+    tier.sort((a, b) => b.successRate - a.successRate);
+  }
+
+  const { highThreshold = 80, lowThreshold = 50, minSamples = 5 } = thresholds;
+  return {
+    levels,
+    thresholds: { highThreshold, lowThreshold, minSamples },
+    summary: {
+      high: levels.high.length,
+      medium: levels.medium.length,
+      low: levels.low.length,
+      new: levels.new.length,
+      total: Object.values(levels).reduce((sum, arr) => sum + arr.length, 0),
+      requireApproval: levels.low.length
+    }
+  };
+}

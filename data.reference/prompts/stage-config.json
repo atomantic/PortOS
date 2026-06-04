@@ -42,6 +42,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-continue": {
+      "name": "Writers Room — Live Continuation",
+      "description": "Live Creative Director feedback: from the prose around the cursor, propose 2–4 short optional continuation beats, prose snippets, or dialogue lines the writer can accept. Drives the opt-in live-mode side panel in the editor.",
+      "model": "quick",
+      "returnsJson": true,
+      "variables": []
+    },
     "catalog-ideas-scenes-concepts": {
       "name": "Catalog Ingest — Ideas / Scenes / Concepts",
       "description": "Extract reusable narrative fragments — ideas (premises), scenes (dramatic beats), and concepts (lore, magic systems, factions) — from a raw user-pasted scrap into the Creative Ingredients Catalog. Runs alongside the character/place/object writers-room passes during catalog ingest.",
@@ -165,6 +172,27 @@
       "returnsJson": true,
       "variables": []
     },
+    "values-alignment-scorer": {
+      "name": "Values-Alignment Scorer",
+      "description": "Grade whether a twin response is consistent with the user's ranked values hierarchy",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "adversarial-boundary-scorer": {
+      "name": "Adversarial Boundary Scorer",
+      "description": "Grade whether a twin held or breached a stated boundary under an adversarial manipulation attempt",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "multi-turn-consistency-scorer": {
+      "name": "Multi-Turn Consistency Scorer",
+      "description": "Grade whether a twin stayed consistent across a multi-turn conversation",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "soul-writing-analyzer": {
       "name": "Soul Writing Analyzer",
       "description": "Extract communication patterns from writing samples",
@@ -231,6 +259,13 @@
     "pipeline-extract-scenes": {
       "name": "Pipeline — Extract Scenes from TV Teleplay",
       "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-audio-cues": {
+      "name": "Pipeline — Audio Cue Planner",
+      "description": "Break an episode's narrative beats into a small ordered list of per-arc-beat musical cues (one cue per emotional movement, not per scene), each with a self-contained text-to-music prompt + human label. Drives the whole-episode 'generated' audio mode; timing is placed at stitch time from rendered clip durations.",
       "model": "default",
       "returnsJson": true,
       "variables": []

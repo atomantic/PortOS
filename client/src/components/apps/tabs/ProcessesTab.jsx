@@ -42,7 +42,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
   // Let errors throw — `useAutoRefetch` preserves the last-good process list
   // on transient failures. `silent: true` is essential here because the 5s
   // poll would otherwise spit a toast every 5 seconds during any blip.
-  const { data, loading } = useAutoRefetch(
+  const { data, loading, refetch } = useAutoRefetch(
     () => api.getProcessesList({ silent: true }),
     5000,
   );
@@ -108,7 +108,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
     }).catch(() => null);
     setTimeout(() => {
       setRestarting(prev => ({ ...prev, [name]: false }));
-      loadProcesses();
+      refetch();
     }, 2000);
   };
 
@@ -121,7 +121,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
     }).catch(() => null);
     setTimeout(() => {
       setRestarting(prev => ({ ...prev, [name]: false }));
-      loadProcesses();
+      refetch();
     }, 2000);
   };
 
@@ -134,7 +134,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
     }).catch(() => null);
     setTimeout(() => {
       setRestarting(prev => ({ ...prev, [name]: false }));
-      loadProcesses();
+      refetch();
     }, 2000);
   };
 
@@ -159,7 +159,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
         <div className="flex justify-between items-center">
           <p className="text-gray-500 text-sm">{filteredProcesses.length} process{filteredProcesses.length !== 1 ? 'es' : ''}</p>
           <button
-            onClick={loadProcesses}
+            onClick={refetch}
             className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm"
           >
             Refresh

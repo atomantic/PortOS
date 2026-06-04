@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
-import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX } from 'lucide-react';
+import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
 
@@ -21,6 +21,20 @@ const QUICK_COMMANDS = [
   { label: 'git pull', command: 'git pull --rebase --autostash' },
   { label: 'npm test', command: 'npm test' },
   { label: 'npm run dev', command: 'npm run dev' },
+];
+
+// Hot buttons for arrow / Enter entry — handy on touch devices and for driving TUI
+// apps or scrolling shell history without a hardware keyboard. Arrow keys carry the
+// final char only: the CSI (`\x1b[`) vs SS3 (`\x1bO`) prefix is chosen at send time
+// from the terminal's application-cursor-key mode (DECCKM) so the button matches what
+// a real arrow keypress emits — many full-screen TUIs (vim, htop) set DECCKM and expect
+// the SS3 form. Enter is a literal carriage return, unaffected by cursor mode.
+const NAV_KEYS = [
+  { label: 'Up', Icon: ArrowUp, code: 'A' },
+  { label: 'Down', Icon: ArrowDown, code: 'B' },
+  { label: 'Left', Icon: ArrowLeft, code: 'D' },
+  { label: 'Right', Icon: ArrowRight, code: 'C' },
+  { label: 'Enter', Icon: CornerDownLeft, seq: '\r' },
 ];
 
 // Read a CSS custom property as hex (e.g., '--port-bg' → '#0f0f0f')
@@ -141,16 +155,27 @@ export default function Shell() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const emitShellInput = useCallback((data) => {
+  // focus:false skips returning keyboard focus to the terminal after sending — used by
+  // the nav-key hot buttons so repeated arrow taps on touch devices don't keep re-summoning
+  // the on-screen keyboard (input is delivered over the socket regardless of focus).
+  const emitShellInput = useCallback((data, { focus = true } = {}) => {
     if (!socket || !sessionIdRef.current) return;
     // Don't fire quick-commands into the prior session while a switch/start is mid-flight.
     if (pendingAttachRef.current.target) return;
     socket.emit('shell:input', { sessionId: sessionIdRef.current, data });
-    termInstanceRef.current?.focus();
+    if (focus) termInstanceRef.current?.focus();
   }, [socket]);
 
   const sendCommand = useCallback((cmd) => emitShellInput(cmd + '\n'), [emitShellInput]);
   const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);
+  // Arrow keys send CSI or SS3 based on the terminal's DECCKM state (see NAV_KEYS);
+  // Enter and any other literal-`seq` keys pass through unchanged. focus:false keeps the
+  // soft keyboard down on touch — these buttons exist to replace it, not trigger it.
+  const sendNavKey = useCallback((key) => {
+    if (key.seq != null) { emitShellInput(key.seq, { focus: false }); return; }
+    const appCursor = termInstanceRef.current?.modes?.applicationCursorKeysMode;
+    emitShellInput(`\x1b${appCursor ? 'O' : '['}${key.code}`, { focus: false });
+  }, [emitShellInput]);
   const handlePaste = useCallback(async () => {
     const text = await readClipboard();
     if (text == null) { setShowPasteInput(true); return; }
@@ -834,6 +859,19 @@ export default function Shell() {
               onBlur={() => setShowPasteInput(false)}
             />
           )}
+          <div className="w-px h-6 bg-port-border" />
+          {/* Arrow / Enter hot buttons — touch-friendly TUI nav + shell history */}
+          {NAV_KEYS.map((key) => (
+            <button
+              key={key.label}
+              onClick={() => sendNavKey(key)}
+              className="flex items-center justify-center px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs font-mono transition-colors border border-port-border min-h-[40px] min-w-[40px]"
+              title={`Send ${key.label} key`}
+              aria-label={`Send ${key.label} key`}
+            >
+              <key.Icon size={14} />
+            </button>
+          ))}
           <div className="w-px h-6 bg-port-border" />
           {QUICK_COMMANDS.map(({ label, command }) => (
             <button

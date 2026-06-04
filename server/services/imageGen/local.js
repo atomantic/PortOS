@@ -183,6 +183,11 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     ];
     if (model.tokenizerRepo) args.push('--tokenizer-repo', model.tokenizerRepo);
     if (model.basePipelineRepo) args.push('--base-pipeline-repo', model.basePipelineRepo);
+    // bf16 multi-reference editing loads the `-kv` sibling repo (whose
+    // transformer is tuned for reference editing) instead of `model.repo`.
+    // The runner only uses --kv-repo when --reference-images is also present;
+    // the plain text/i2i bf16 path stays on the base repo.
+    if (model.kvRepo) args.push('--kv-repo', model.kvRepo);
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));

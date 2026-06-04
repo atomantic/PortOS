@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { asyncHandler } from '../lib/errorHandler.js'
+import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest, LOCAL_LLM_REVIEWERS } from '../lib/validation.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalCodeReview, getCodeReviewDefaults } from '../services/codeReview.js'
@@ -43,8 +43,10 @@ router.post('/local', asyncHandler(async (req, res) => {
     timeoutMs: body.timeoutMs,
   })
   if (!result.ok) {
-    res.status(502).json(result)
-    return
+    throw new ServerError(result.error || 'Code review failed', {
+      status: 502,
+      context: { backend: result.backend, model: result.model }
+    })
   }
   res.json(result)
 }))

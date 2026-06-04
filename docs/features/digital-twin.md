@@ -108,15 +108,15 @@ traits: {
 - Comparison of spoken vs written style
 
 ### Phase 6: Advanced Behavioral Testing
-- Complex multi-turn conversation scenarios
-- Ethical dilemma tests aligned with stated values
+- Complex multi-turn conversation scenarios — **done**: the Test tab's multi-turn suite (`MULTI_TURN_SUITE.md`) plays each scenario's user turns in order (the twin sees its own prior replies) and grades whether the twin stayed consistent / partial / inconsistent across the whole conversation — not contradicting earlier turns, caving to repeated pushback, or forgetting a stated constraint
+- Ethical dilemma tests aligned with stated values — **done**: the Test tab's values-alignment suite poses dilemmas and grades each answer against the user's ranked values hierarchy
 - Quantitative scoring of communication style match
-- Adversarial testing of boundaries
+- Adversarial testing of boundaries — **done**: the Test tab's adversarial-boundary suite (`ADVERSARIAL_BOUNDARY_SUITE.md`) tries to manipulate the embodied twin (authority pressure, flattery, guilt, incremental escalation, harmful reframing) into crossing a stated boundary, and grades each response held / partial / breached
 
 ### Phase 7: Twin Personas & Context Switching
 - Named personas (Professional, Casual, Family, Creative)
 - Blending rules for trait variation per context
-- Per-persona testing
+- Per-persona testing — **done**: the Test tab can run the behavioral and values-alignment suites *as* a selected persona (or the base twin), and each run-history entry records which persona it embodied
 
 ## Success Metrics
 

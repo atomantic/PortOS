@@ -121,12 +121,34 @@ const playDataPulse = (ctx, output) => {
   osc.stop(now + 0.12);
 };
 
+// Task complete: a bright two-note major-third chime (E6 → G#6) with a soft bell decay. Played
+// when a CoS task completes (roadmap 3.4) so finishing work has an audible reward in the city.
+const playTaskComplete = (ctx, output) => {
+  const now = ctx.currentTime;
+  const notes = [1318.51, 1661.22]; // E6, G#6 — a rising major third reads as "success"
+  notes.forEach((freq, i) => {
+    const t = now + i * 0.09; // slight arpeggiation
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    osc.connect(gain);
+    gain.connect(output);
+    osc.start(t);
+    osc.stop(t + 0.55);
+  });
+};
+
 const SFX_MAP = {
   buildingHover: playBuildingHover,
   buildingClick: playBuildingClick,
   lightning: playLightning,
   shootingStar: playShootingStar,
   dataPulse: playDataPulse,
+  taskComplete: playTaskComplete,
 };
 
 export const playSfx = (name) => {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/videoTimeline/local.js', () => ({
   listProjects: vi.fn(),
@@ -22,6 +23,7 @@ describe('videoTimeline routes', () => {
     app = express();
     app.use(express.json());
     app.use('/api/video-timeline', videoTimelineRoutes);
+    app.use(errorMiddleware);
     vi.clearAllMocks();
   });
 
@@ -136,6 +138,8 @@ describe('videoTimeline routes', () => {
       svc.attachSseClient.mockReturnValue(false);
       const r = await request(app).get('/api/video-timeline/unknown/events');
       expect(r.status).toBe(404);
+      expect(r.body.error).toMatch(/not found/i);
+      expect(r.body.code).toBe('NOT_FOUND');
     });
   });
 

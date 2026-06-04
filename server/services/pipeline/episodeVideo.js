@@ -19,7 +19,7 @@ import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { createProject as createCDProject, setTreatment as setCDTreatment } from '../creativeDirector/local.js';
 import { startCreativeDirectorProject } from '../creativeDirector/completionHook.js';
-import { getDefaultVideoModelId } from '../../lib/mediaModels.js';
+import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { buildPlaceByKey } from '../../lib/scenePrompt.js';
 import { getSettings } from '../settings.js';
 
@@ -160,7 +160,43 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
   assertStageUnlocked(issue, 'episodeVideo');
   const aspectRatio = options.aspectRatio || '16:9';
   const quality = options.quality || 'standard';
-  const modelId = options.modelId || settings?.videoGen?.defaultModelId || getDefaultVideoModelId();
+  // The user's picker choice: `null` = "Default model". Unlike aspectRatio /
+  // quality (whose defaults are fixed constants), the video default is a live
+  // user setting (videoGen.defaultModelId), so we persist the *choice* — not
+  // the resolved id — and keep "Default" following the setting across reloads.
+  // The CD project's renderer still needs a concrete model, so resolve one here.
+  // Validate an explicit picker choice against the live video-model registry.
+  // A persisted `modelId` can go stale if the model is later renamed/pruned —
+  // on restart it would flow into createCDProject and fail asynchronously on
+  // the CD project's failureReason. Drop a now-unknown id to the resolved
+  // default so the render degrades cleanly instead.
+  //
+  // Sentinel rule: only drop when the registry has a NON-EMPTY list to validate
+  // against. An empty list means "can't validate on this platform" (e.g. every
+  // video model flagged broken) — NOT "this id is unknown" — so we pass the id
+  // through rather than silently swapping a possibly-valid choice for a default
+  // that's equally unresolvable. This mirrors getDefaultVideoModelId, which
+  // returns the configured id unchanged when there's nothing to fall back to.
+  let requestedModelId = options.modelId || null;
+  const knownModels = getVideoModels();
+  // `null` when the registry can't be validated (empty list) — in that case
+  // isKnown() is never consulted and every candidate id passes through.
+  const isKnown = knownModels.length ? (id) => knownModels.some((m) => m.id === id) : null;
+  if (requestedModelId && isKnown && !isKnown(requestedModelId)) {
+    console.log(`⚠️ Pipeline episode video — unknown modelId "${requestedModelId}" not in registry; dropping to default`);
+    requestedModelId = null;
+  }
+  // Resolve the concrete model the CD renderer needs. The saved videoGen
+  // default can be just as stale as the explicit pick, so validate it the same
+  // way before trusting it — otherwise a broken settings default would still
+  // reach createCDProject and defeat the drop-to-default contract.
+  // getDefaultVideoModelId() is the final fallback and self-validates against
+  // the platform's available list.
+  const settingsDefault = settings?.videoGen?.defaultModelId || null;
+  const resolvedDefault = (settingsDefault && (!isKnown || isKnown(settingsDefault)))
+    ? settingsDefault
+    : getDefaultVideoModelId();
+  const modelId = requestedModelId || resolvedDefault;
 
   const project = await createCDProject({
     name: `Pipeline: ${(series?.name || 'Series').slice(0, 60)} — ${(issue.title || issueId).slice(0, 60)}`,
@@ -182,9 +218,13 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
     cdProjectId: project.id,
     // Persist the chosen render settings so a page reload restores the
     // pickers — otherwise restart from a fresh tab would silently fall back
-    // to defaults that the user can't see or adjust.
+    // to defaults that the user can't see or adjust. modelId persists the
+    // user's CHOICE (null = "Default"), so a Default pick keeps tracking the
+    // videoGen.defaultModelId setting on reload instead of pinning to whatever
+    // it happened to resolve to at first render.
     aspectRatio,
     quality,
+    modelId: requestedModelId,
     output: '',
     errorMessage: '',
   });

@@ -329,5 +329,5 @@ Error severity levels:
 3. Import in routes as needed
 
 ### Adding CoS Task Types
-1. Update `SELF_IMPROVEMENT_TYPES` in `server/services/cos.js`
-2. Add prompt template in `generateSelfImprovementTask()`
+1. Add the task type to `SELF_IMPROVEMENT_TASK_TYPES` and `DEFAULT_TASK_INTERVALS` in `server/services/taskSchedule.js`
+2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptService.js`

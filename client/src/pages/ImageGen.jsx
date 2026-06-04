@@ -22,7 +22,9 @@ import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import HfTokenBanner from '../components/imageGen/HfTokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
+import InitImagePicker from '../components/imageGen/InitImagePicker';
 import LoraPicker from '../components/imageGen/LoraPicker';
+import ReferenceImagePicker from '../components/imageGen/ReferenceImagePicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
@@ -1011,129 +1013,25 @@ export default function ImageGen() {
           )}
 
           {isLocalMode && (
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">
-                {isEditOnlyModel ? 'Source image' : 'Init image'}{' '}
-                <span className={`font-normal ${isEditOnlyModel ? 'text-port-warning' : 'text-gray-500'}`}>
-                  {isEditOnlyModel ? '(required — this model edits an existing image)' : '(image-to-image — Flux only)'}
-                </span>
-              </label>
-              {initImage.previewUrl ? (
-                <div className="flex items-start gap-3">
-                  <div className="relative shrink-0">
-                    <img
-                      src={initImage.previewUrl}
-                      alt="Init"
-                      className="w-16 h-16 object-cover rounded-lg border border-port-border bg-port-bg"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleClearInitImage}
-                      disabled={statusLoading}
-                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
-                      title="Remove init image"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="text-xs text-gray-400 truncate" title={initImage.name}>{initImage.name}</div>
-                    <label className="block text-[11px] text-gray-500">
-                      Strength {initImageStrength.toFixed(2)}
-                      <input
-                        type="range" min={0} max={1} step={0.05}
-                        value={initImageStrength}
-                        disabled={statusLoading}
-                        onChange={(e) => setInitImageStrength(Number(e.target.value))}
-                        className="w-full accent-port-accent mt-1"
-                      />
-                    </label>
-                  </div>
-                </div>
-              ) : (
-                <label className="flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed border-port-border rounded-lg text-xs text-gray-400 hover:text-white hover:border-port-accent cursor-pointer transition-colors">
-                  <ImageIcon className="w-4 h-4" />
-                  Upload image to remix (PNG/JPG/WebP)
-                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handlePickInitImage} disabled={statusLoading} />
-                </label>
-              )}
-            </div>
+            <InitImagePicker
+              initImage={initImage}
+              initImageStrength={initImageStrength}
+              onStrengthChange={setInitImageStrength}
+              onPick={handlePickInitImage}
+              onClear={handleClearInitImage}
+              editOnly={isEditOnlyModel}
+              disabled={statusLoading}
+            />
           )}
 
           {isLocalMode && isFlux2Model && (
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">
-                Reference images <span className="text-gray-500 font-normal">(up to 4 images for FLUX.2 multi-reference edit)</span>
-              </label>
-              {/*
-                FLUX.2 multi-reference editing — references are conditioned via
-                diffusers' Flux2KleinKVPipeline (K/V-cache reference-token
-                attention). First-time use prompts the user to accept the
-                FLUX.2-klein-9B-kv license on Hugging Face. Per-reference
-                strengths are honored end-to-end: scripts/flux2_macos.py
-                patches Flux2KVLayerCache.store + _flux2_kv_causal_attention
-                so each reference's V slice is scaled by its strength
-                (1.0 = full influence, 0.0 = ignored).
-              */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {referenceImages.map((slot, i) => {
-                  const slotId = `ref-image-${i}`;
-                  const strengthId = `ref-strength-${i}`;
-                  return (
-                    <div key={i} className="flex flex-col gap-1 p-2 rounded-lg border border-port-border bg-port-bg/30">
-                      <div className="text-[10px] uppercase tracking-wide text-gray-500">Ref {i + 1}</div>
-                      {slot.previewUrl ? (
-                        <>
-                          <div className="relative">
-                            <img
-                              src={slot.previewUrl}
-                              alt={`Reference ${i + 1}`}
-                              className="w-full h-16 object-cover rounded border border-port-border bg-port-bg"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleClearReferenceImage(i)}
-                              disabled={statusLoading}
-                              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
-                              title={`Remove reference ${i + 1}`}
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                          <label htmlFor={strengthId} className="block text-[10px] text-gray-500">
-                            Strength {slot.strength.toFixed(2)}
-                          </label>
-                          <input
-                            id={strengthId}
-                            type="range" min={0} max={1} step={0.05}
-                            value={slot.strength}
-                            disabled={statusLoading}
-                            onChange={(e) => handleReferenceStrengthChange(i, Number(e.target.value))}
-                            className="w-full accent-port-accent"
-                          />
-                        </>
-                      ) : (
-                        <label
-                          htmlFor={slotId}
-                          className="flex flex-col items-center justify-center gap-1 h-[88px] border border-dashed border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent cursor-pointer transition-colors"
-                        >
-                          <ImageIcon className="w-4 h-4" />
-                          Add
-                          <input
-                            id={slotId}
-                            type="file"
-                            accept="image/png,image/jpeg,image/webp"
-                            className="hidden"
-                            onChange={(e) => handlePickReferenceImage(i, e)}
-                            disabled={statusLoading}
-                          />
-                        </label>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <ReferenceImagePicker
+              referenceImages={referenceImages}
+              onPick={handlePickReferenceImage}
+              onClear={handleClearReferenceImage}
+              onStrengthChange={handleReferenceStrengthChange}
+              disabled={statusLoading}
+            />
           )}
 
           <div className="flex items-center gap-2 pt-1 flex-wrap">

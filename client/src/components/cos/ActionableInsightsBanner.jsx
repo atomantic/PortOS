@@ -67,7 +67,7 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
 
   // Let errors throw — `useAutoRefetch` preserves the last-good insights on
   // transient failures. `silent: true` keeps the 60s poll quiet on blips.
-  const { data, loading } = useAutoRefetch(
+  const { data, loading, refetch } = useAutoRefetch(
     () => api.getCosActionableInsights({ silent: true }),
     60_000,
   );
@@ -94,26 +94,10 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
     });
     if (!result) return;
     toast.success('Task unblocked and moved to pending');
-    // Optimistically remove the task from local banner state
-    setData(prev => {
-      if (!prev?.insights) return prev;
-      return {
-        ...prev,
-        insights: prev.insights.map(insight => {
-          if (insight.type !== 'blocked' || !insight.tasks) return insight;
-          const remaining = insight.tasks.filter(t => t.id !== taskId);
-          if (remaining.length === 0) return null;
-          const firstTask = remaining[0];
-          return {
-            ...insight,
-            tasks: remaining,
-            count: remaining.length,
-            title: `${remaining.length} blocked task${remaining.length !== 1 ? 's' : ''} need${remaining.length === 1 ? 's' : ''} attention`,
-            description: firstTask?.description || insight.description
-          };
-        }).filter(Boolean)
-      };
-    });
+    // Re-fetch insights so the unblocked task drops out of the banner. The
+    // hook owns `data`, so we can't optimistically splice it here — the
+    // server already persisted the unblock, so a refetch reflects it.
+    refetch();
     // Notify parent to update task list reactively
     onTaskUnblocked?.(taskId);
   };

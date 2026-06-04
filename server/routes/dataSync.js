@@ -13,7 +13,10 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory']);
+// MUST stay in sync with dataSync.getSupportedCategories() — a category
+// registered in the service but absent here 400s before its snapshot/apply
+// handler can run (the latent bug #730 hit for `storyBuilder`).
+const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder']);
 
 // Tombstone GC manual trigger. Declared BEFORE `/:category/*` so the literal
 // "tombstones" segment wins Express's first-match lookup (categoryParam's

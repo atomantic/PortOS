@@ -1670,6 +1670,22 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     expect(out[2]).toMatchObject({ severity: 'medium', category: 'pacing' });
   });
 
+  it('shapeCompletenessFindings sets replacementStrategy (full-page for comic-structure, delta otherwise; trusts a valid explicit value)', () => {
+    const { shapeCompletenessFindings } = planner.__testing;
+    const out = shapeCompletenessFindings([
+      { category: 'comic-structure', problem: 'page is prose', suggestion: 'Panel 1 …' },
+      { category: 'missing-content', problem: 'no climax', suggestion: 'add one' },
+      // explicit strategy wins when valid …
+      { category: 'pacing', problem: 'rushed', replacementStrategy: 'full-page' },
+      // … and an invalid one falls back to the category default.
+      { category: 'comic-structure', problem: 'another page', replacementStrategy: 'bogus' },
+    ]);
+    expect(out[0].replacementStrategy).toBe('full-page'); // derived from category
+    expect(out[1].replacementStrategy).toBe('delta'); // narrative default
+    expect(out[2].replacementStrategy).toBe('full-page'); // explicit, valid
+    expect(out[3].replacementStrategy).toBe('full-page'); // invalid → category default
+  });
+
   it('analyzeManuscriptCompleteness reads the manuscript and returns shaped findings', async () => {
     const s = await setupSeries();
     await issuesSvc.createIssue({

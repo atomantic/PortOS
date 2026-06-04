@@ -19,8 +19,10 @@ import {
   Loader2,
   BookOpen,
   Pencil,
+  Columns3,
   Film,
   ExternalLink,
+  Zap,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ProseEditor from '../ui/ProseEditor';
@@ -42,8 +44,11 @@ import { listCatalogIngredientsForRef } from '../../services/apiCatalog';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
+import LiveContinuationPanel from './LiveContinuationPanel';
+import LiveRenderPanel from './LiveRenderPanel';
 import AnalysisHistory from './AnalysisHistory';
 import ProseReader from './ProseReader';
+import SyncedReview from './SyncedReview';
 import ProseTokenPopover from './ProseTokenPopover';
 import WritersRoomDock from './WritersRoomDock';
 import useImageGenQueue from '../../hooks/useImageGenQueue';
@@ -139,14 +144,37 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     stopOne: queueStopOne,
   } = useImageGenQueue();
 
-  // View mode (Edit | Read) is URL-driven so it deep-links and survives reloads.
-  // ?view=read switches to ProseReader; default is the existing textarea.
+  // Phase 5 live mode — opt-in, per-work Creative Director continuation
+  // suggestions. Optimistic mirror of work.liveMode so the toggle flips
+  // instantly; re-synced from the prop. `liveTriggerRef` holds the panel's
+  // imperative suggest fn; `liveTimerRef` is the post-typing debounce.
+  const [liveMode, setLiveMode] = useState(work.liveMode || null);
+  useEffect(() => { setLiveMode(work.liveMode || null); }, [work.liveMode]);
+  const liveTriggerRef = useRef(null);
+  const liveTimerRef = useRef(null);
+  const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
+  // Phase 5 live render preview — the scene/analysis/image context the storyboard
+  // surfaces, fed into LiveRenderPanel so it can render the scene at the cursor
+  // using the existing image-gen route + the shared render queue (queueRegister).
+  const [liveRenderContext, setLiveRenderContext] = useState(null);
+  // Imperative bridge: StoryboardPanel registers its sceneImages merge fn here
+  // so a finished live render preview updates the boards reactively (no refetch).
+  const sceneImageMergeRef = useRef(null);
+  const registerSceneImageMerge = useCallback((fn) => { sceneImageMergeRef.current = fn; }, []);
+  const handleSceneImageAttached = useCallback((analysis) => {
+    sceneImageMergeRef.current?.(analysis);
+  }, []);
+
+  // View mode (Edit | Read | Review) is URL-driven so it deep-links and
+  // survives reloads. ?view=read → ProseReader; ?view=review → SyncedReview
+  // (Phase 4 prose/script/media surface); default is the existing textarea.
   const [searchParams, setSearchParams] = useSearchParams();
-  const viewMode = searchParams.get('view') === 'read' ? 'read' : 'edit';
+  const rawView = searchParams.get('view');
+  const viewMode = rawView === 'read' ? 'read' : rawView === 'review' ? 'review' : 'edit';
   const setViewMode = useCallback((mode) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (mode === 'read') next.set('view', 'read'); else next.delete('view');
+      if (mode === 'read' || mode === 'review') next.set('view', mode); else next.delete('view');
       return next;
     }, { replace: true });
   }, [setSearchParams]);
@@ -433,6 +461,92 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
   };
 
+  // --- Phase 5 live mode ---
+
+  const liveEnabled = liveMode?.enabled === true;
+  const liveDebounceMs = Number.isInteger(liveMode?.debounceMs) ? liveMode.debounceMs : 2500;
+
+  // Snapshot the prose window around the caret for the live-suggest call. We
+  // send a bounded window (not the whole manuscript) — enough context for the
+  // director without shipping a long body on every pause.
+  const getCursorContext = useCallback(() => {
+    const ta = textareaRef.current;
+    if (!ta) return null;
+    const start = ta.selectionStart ?? body.length;
+    const end = ta.selectionEnd ?? start;
+    const WINDOW = 4000;
+    // Clamp each slice to the server's per-field caps (before/after 12k,
+    // selection 8k) so a huge selection can't 400 the request — the schema
+    // would reject it and surface as a red toast instead of a graceful notice.
+    return {
+      before: body.slice(Math.max(0, start - WINDOW), start),
+      after: body.slice(end, end + WINDOW),
+      selection: body.slice(start, end).slice(0, 8000),
+    };
+  }, [body]);
+
+  // Caret offset into the body for the live render preview's scene resolution.
+  // Falls back to end-of-body when the textarea isn't mounted (e.g. Read view).
+  const getCursorOffset = useCallback(() => {
+    const ta = textareaRef.current;
+    return ta?.selectionStart ?? body.length;
+  }, [body]);
+
+  // Insert a suggested snippet at the caret (replacing any selection), then
+  // restore focus + caret after the inserted text so the writer keeps flowing.
+  const insertAtCursor = useCallback((opt) => {
+    const ta = textareaRef.current;
+    const snippet = opt?.text || '';
+    if (!snippet) return;
+    const start = ta?.selectionStart ?? body.length;
+    const end = ta?.selectionEnd ?? start;
+    // Space-pad so an inserted snippet doesn't weld onto the preceding word.
+    const needsLeadingSpace = start > 0 && !/\s$/.test(body.slice(0, start));
+    const piece = (needsLeadingSpace ? ' ' : '') + snippet;
+    const next = body.slice(0, start) + piece + body.slice(end);
+    setBody(next);
+    const caret = start + piece.length;
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(caret, caret);
+    });
+    toast('Inserted — save to persist', { icon: '✍️' });
+  }, [body]);
+
+  // Debounce a suggest after the writer pauses typing. Only arms while live
+  // mode is on and we're in the edit textarea; cleared on every keystroke and
+  // on unmount so a deferred fire can't hit a dead/closed editor.
+  const scheduleLiveSuggest = useCallback(() => {
+    if (!liveEnabled || viewMode !== 'edit') return;
+    if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+    liveTimerRef.current = setTimeout(() => {
+      liveTimerRef.current = null;
+      if (mountedRef.current) liveTriggerRef.current?.();
+    }, liveDebounceMs);
+  }, [liveEnabled, viewMode, liveDebounceMs, mountedRef]);
+
+  useEffect(() => () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); }, []);
+
+  const toggleLiveMode = useCallback(async () => {
+    const nextEnabled = !liveEnabled;
+    // Optimistic flip; the PATCH returns the persisted liveMode (with defaults
+    // filled in for a first opt-in) which we fold back through onChange.
+    setLiveMode((prev) => ({ ...(prev || {}), enabled: nextEnabled }));
+    const updated = await updateWritersRoomWork(work.id, { liveMode: { enabled: nextEnabled } }).catch((err) => {
+      if (mountedRef.current) {
+        toast.error(`Live mode save failed: ${err.message}`);
+        setLiveMode(work.liveMode || null);
+      }
+      return null;
+    });
+    if (!updated || !mountedRef.current) return;
+    setLiveMode(updated.liveMode || null);
+    onChange?.({ ...updated, activeDraftBody: body });
+    toast.success(nextEnabled ? 'Live director on' : 'Live director off');
+  }, [liveEnabled, work.id, work.liveMode, body, onChange, mountedRef]);
+
   const commitStatus = async (next) => {
     if (next === status) return;
     setStatus(next);
@@ -690,6 +804,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           >
             <BookOpen size={11} /> Read
           </button>
+          <button
+            type="button"
+            aria-pressed={viewMode === 'review'}
+            onClick={() => setViewMode('review')}
+            className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
+              viewMode === 'review' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
+            title="Synced prose · script · media review"
+          >
+            <Columns3 size={11} /> Review
+          </button>
         </div>
         <button
           onClick={handleSave}
@@ -727,6 +852,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
                 <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
+                <MenuItem icon={Zap} label={liveEnabled ? 'Disable live director' : 'Enable live director'} active={liveEnabled} onClick={closeOverflowAnd(toggleLiveMode)} />
               </MenuSection>
               <MenuSection label="Open">
                 <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VERSIONS))} />
@@ -765,11 +891,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         />
       )}
 
-      {/* Mobile-only Writing/Storyboard toggle — desktop renders both side-by-side. */}
-      <div className="lg:hidden flex border-b border-port-border bg-port-bg/40 shrink-0">
-        <MobileTab active={mobileTab === MOBILE_TAB.WRITING} onClick={() => setMobileTab(MOBILE_TAB.WRITING)} icon={PenLine} label="Writing" />
-        <MobileTab active={mobileTab === MOBILE_TAB.STORYBOARD} onClick={() => setMobileTab(MOBILE_TAB.STORYBOARD)} icon={Clapperboard} label="Storyboard" />
-      </div>
+      {/* Mobile-only Writing/Storyboard toggle — desktop renders both side-by-side.
+          Review mode is a full-width surface with no storyboard sidebar, so the
+          toggle is irrelevant there. */}
+      {viewMode !== 'review' && (
+        <div className="lg:hidden flex border-b border-port-border bg-port-bg/40 shrink-0">
+          <MobileTab active={mobileTab === MOBILE_TAB.WRITING} onClick={() => setMobileTab(MOBILE_TAB.WRITING)} icon={PenLine} label="Writing" />
+          <MobileTab active={mobileTab === MOBILE_TAB.STORYBOARD} onClick={() => setMobileTab(MOBILE_TAB.STORYBOARD)} icon={Clapperboard} label="Storyboard" />
+        </div>
+      )}
 
       {/*
         When the render dock is visible (queue non-empty) it's `position: fixed`
@@ -783,8 +913,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         className="flex-1 flex flex-col lg:flex-row min-h-0"
         style={renderQueue.length ? { paddingBottom: 56 } : undefined}
       >
-        <div className={`relative min-h-0 flex-1 ${mobileTab === MOBILE_TAB.STORYBOARD ? 'hidden lg:block' : 'block'}`}>
-          {viewMode === 'read' ? (
+        <div className={`relative min-h-0 flex-1 ${viewMode !== 'review' && mobileTab === MOBILE_TAB.STORYBOARD ? 'hidden lg:block' : 'block'}`}>
+          {viewMode === 'review' ? (
+            <SyncedReview work={work} />
+          ) : viewMode === 'read' ? (
             <div ref={readerRef} className="w-full h-full">
               <ProseReader
                 body={body}
@@ -807,21 +939,25 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             <ProseEditor
               ref={textareaRef}
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => { setBody(e.target.value); scheduleLiveSuggest(); }}
               readingTheme={readingTheme}
               className="w-full h-full resize-none px-6 py-6 text-base focus:outline-none"
             />
           )}
-          <div
-            className={`absolute bottom-2 right-3 flex items-center gap-3 text-[11px] px-2 py-1 rounded pointer-events-none ${
-              readingTheme === 'light' ? 'text-gray-700 bg-[var(--wr-reading-paper)]/85' : 'text-gray-500 bg-port-bg/80'
-            }`}
-          >
-            <span>{wordCount.toLocaleString()} words</span>
-            {dirty && <span className="text-port-warning">● unsaved</span>}
-          </div>
+          {viewMode !== 'review' && (
+            <div
+              className={`absolute bottom-2 right-3 flex items-center gap-3 text-[11px] px-2 py-1 rounded pointer-events-none ${
+                readingTheme === 'light' ? 'text-gray-700 bg-[var(--wr-reading-paper)]/85' : 'text-gray-500 bg-port-bg/80'
+              }`}
+            >
+              <span>{wordCount.toLocaleString()} words</span>
+              {dirty && <span className="text-port-warning">● unsaved</span>}
+            </div>
+          )}
         </div>
 
+        {/* Review mode is a full-width synced surface — no storyboard sidebar. */}
+        {viewMode !== 'review' && (
         <div
           onMouseDown={onSplitMouseDown}
           onDoubleClick={() => {
@@ -834,13 +970,38 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           title="Drag to resize · double-click to reset"
           className="hidden lg:block w-1 shrink-0 cursor-col-resize bg-port-border hover:bg-port-accent/60 active:bg-port-accent transition-colors"
         />
+        )}
 
+        {viewMode !== 'review' && (
         <aside
           style={{ '--sidebar-w': `${sidebarWidth}px` }}
           className={`border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full flex-1 lg:flex-initial lg:w-[var(--sidebar-w)] lg:shrink-0 ${
             mobileTab === MOBILE_TAB.WRITING ? 'hidden lg:flex' : 'flex'
           }`}
         >
+          {liveEnabled && viewMode === 'edit' && (
+            <>
+              <LiveRenderPanel
+                workId={work.id}
+                liveMode={liveMode}
+                getCursorOffset={getCursorOffset}
+                body={body}
+                renderContext={liveRenderContext}
+                registerQueue={queueRegister}
+                onSceneImageAttached={handleSceneImageAttached}
+                workTitle={work.title}
+              />
+              <div className="shrink-0 max-h-[40%] min-h-0 border-b border-port-border overflow-hidden flex flex-col">
+                <LiveContinuationPanel
+                  workId={work.id}
+                  liveMode={liveMode}
+                  getCursorContext={getCursorContext}
+                  onInsert={insertAtCursor}
+                  registerTrigger={registerLiveTrigger}
+                />
+              </div>
+            </>
+          )}
           <StoryboardPanel
             work={work}
             characters={characters}
@@ -851,6 +1012,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onObjectsChange={setObjects}
             onRunObjects={() => runAnalysis(ANALYSIS_KIND.OBJECTS)}
             onScenesChange={setLatestScenes}
+            onLiveRenderContextChange={setLiveRenderContext}
+            registerSceneImageMerge={registerSceneImageMerge}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
@@ -869,6 +1032,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onTabChange={setSidebarTab}
           />
         </aside>
+        )}
       </div>
 
       <ProseTokenPopover

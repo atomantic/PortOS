@@ -9,6 +9,7 @@ import { LocalLlmTab } from '../components/settings/LocalLlmTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
+import { SecurityTab } from '../components/settings/SecurityTab';
 import { SharingTab } from '../components/settings/SharingTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
@@ -38,6 +39,7 @@ export default function Settings() {
       case 'database': return <DatabaseTab />;
       case 'embeddings': return <EmbeddingsTab />;
       case 'local-llm': return <LocalLlmTab />;
+      case 'security': return <SecurityTab />;
       case 'sharing': return <SharingTab />;
       case 'voice': return <VoiceTab />;
       case 'telegram': return <TelegramTab />;

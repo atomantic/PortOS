@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  COMM_DELTA_MIN,
+  COMM_DELTA_MAX,
+  BIG_FIVE_DELTA_MIN,
+  BIG_FIVE_DELTA_MAX,
+  EMOJI_USAGE_VALUES
+} from './personaTraitBlend.js';
 
 // Document category enum
 export const documentCategoryEnum = z.enum([
@@ -15,6 +22,12 @@ export const documentCategoryEnum = z.enum([
 
 // Test result enum
 export const testResultEnum = z.enum(['passed', 'partial', 'failed', 'pending']);
+
+// Values-alignment result enum (M34 P6)
+export const valuesTestResultEnum = z.enum(['aligned', 'partial', 'misaligned', 'pending']);
+
+// Adversarial-boundary result enum (M34 P6) — did the twin hold the line?
+export const adversarialTestResultEnum = z.enum(['held', 'partial', 'breached', 'pending']);
 
 // Export format enum
 export const exportFormatEnum = z.enum(['system_prompt', 'claude_md', 'json', 'individual']);
@@ -49,15 +62,65 @@ export const documentMetaSchema = z.object({
   weight: z.number().int().min(1).max(10).default(5)
 });
 
-// Test history entry schema
+// Test history entry schema. personaId/personaName are present only when the
+// run embodied a persona (P7); older entries predate the field, so both are
+// optional — Zod strips unknown keys, so they MUST be declared here or they'd
+// be silently dropped on the next loadMeta.
 export const testHistoryEntrySchema = z.object({
   runId: z.string().uuid(),
   providerId: z.string(),
   model: z.string(),
+  personaId: z.string().uuid().optional(),
+  personaName: z.string().optional(),
   score: z.number().min(0).max(1),
   passed: z.number().int().min(0),
   failed: z.number().int().min(0),
   partial: z.number().int().min(0),
+  total: z.number().int().min(0),
+  timestamp: z.string().datetime()
+});
+
+// Values-alignment run history entry (M34 P6). Same persona fields as above.
+export const valuesTestHistoryEntrySchema = z.object({
+  runId: z.string().uuid(),
+  providerId: z.string(),
+  model: z.string(),
+  personaId: z.string().uuid().optional(),
+  personaName: z.string().optional(),
+  score: z.number().min(0).max(1),
+  aligned: z.number().int().min(0),
+  partial: z.number().int().min(0),
+  misaligned: z.number().int().min(0),
+  total: z.number().int().min(0),
+  timestamp: z.string().datetime()
+});
+
+// Adversarial-boundary run history entry (M34 P6). Same persona fields as above.
+export const adversarialTestHistoryEntrySchema = z.object({
+  runId: z.string().uuid(),
+  providerId: z.string(),
+  model: z.string(),
+  personaId: z.string().uuid().optional(),
+  personaName: z.string().optional(),
+  score: z.number().min(0).max(1),
+  held: z.number().int().min(0),
+  partial: z.number().int().min(0),
+  breached: z.number().int().min(0),
+  total: z.number().int().min(0),
+  timestamp: z.string().datetime()
+});
+
+// Multi-turn conversation run history entry (M34 P6). Same persona fields as above.
+export const multiTurnTestHistoryEntrySchema = z.object({
+  runId: z.string().uuid(),
+  providerId: z.string(),
+  model: z.string(),
+  personaId: z.string().uuid().optional(),
+  personaName: z.string().optional(),
+  score: z.number().min(0).max(1),
+  consistent: z.number().int().min(0),
+  partial: z.number().int().min(0),
+  inconsistent: z.number().int().min(0),
   total: z.number().int().min(0),
   timestamp: z.string().datetime()
 });
@@ -85,9 +148,69 @@ export const enrichmentProgressSchema = z.object({
 // Digital Twin settings schema
 export const digitalTwinSettingsSchema = z.object({
   autoInjectToCoS: z.boolean().default(true),
-  maxContextTokens: z.number().int().min(1000).max(100000).default(4000)
+  maxContextTokens: z.number().int().min(1000).max(100000).default(4000),
+  // The persona currently driving the embodied-twin context (CoS agents, etc.).
+  // null/absent = no persona (base twin). Tolerate the UI sentinel for "deactivate".
+  activePersonaId: z.string().uuid().nullable().optional()
 });
 export const soulSettingsSchema = digitalTwinSettingsSchema; // Alias for backwards compatibility
+
+// --- Phase 7: Twin Personas (M34 P7) ---
+
+// Trait-blending rules (M34 P7). Beyond free-text instructions, a persona may
+// modulate the *base* twin's quantitative profile for its context: relative
+// nudges to formality/verbosity (the 1..10 communicationProfile scale, so a
+// ±9 delta can reach either end), absolute overrides for emoji usage and tone,
+// and directional Big-Five leans (0..1 scale → ±1 delta). All fields optional;
+// an instructions-only persona omits the whole object. The blend + directive
+// rendering live in `server/lib/personaTraitBlend.js`, which is the single
+// source for the delta bounds the schema and UI sliders both enforce.
+const bigFiveDelta = z.number().min(BIG_FIVE_DELTA_MIN).max(BIG_FIVE_DELTA_MAX);
+export const personaTraitAdjustmentsSchema = z.object({
+  formality: z.number().int().min(COMM_DELTA_MIN).max(COMM_DELTA_MAX).optional(),
+  verbosity: z.number().int().min(COMM_DELTA_MIN).max(COMM_DELTA_MAX).optional(),
+  emojiUsage: z.enum(EMOJI_USAGE_VALUES).optional(),
+  tone: z.string().max(100).optional(),
+  bigFive: z.object({
+    O: bigFiveDelta.optional(),
+    C: bigFiveDelta.optional(),
+    E: bigFiveDelta.optional(),
+    A: bigFiveDelta.optional(),
+    N: bigFiveDelta.optional()
+  }).optional()
+});
+
+// A persona is a named context variant. Its instructions are prepended to the
+// twin context so the embodied twin modulates voice/behavior for a context
+// (Professional, Casual, Family, …) without forking the underlying documents.
+export const personaSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  instructions: z.string().min(1).max(5000),
+  traitAdjustments: personaTraitAdjustmentsSchema.optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const createPersonaInputSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  instructions: z.string().min(1).max(5000),
+  traitAdjustments: personaTraitAdjustmentsSchema.optional()
+});
+
+export const updatePersonaInputSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
+  instructions: z.string().min(1).max(5000).optional(),
+  // nullable so the UI can clear adjustments back to an instructions-only persona
+  traitAdjustments: personaTraitAdjustmentsSchema.nullable().optional()
+});
+
+export const setActivePersonaInputSchema = z.object({
+  personaId: z.string().uuid().nullable()
+});
 
 // --- Phase 1: Quantitative Personality Modeling Schemas ---
 
@@ -105,7 +228,7 @@ export const communicationProfileSchema = z.object({
   formality: z.number().int().min(1).max(10).describe('1=very casual, 10=very formal'),
   verbosity: z.number().int().min(1).max(10).describe('1=terse, 10=elaborate'),
   avgSentenceLength: z.number().min(5).max(50).optional(),
-  emojiUsage: z.enum(['never', 'rare', 'occasional', 'frequent']).default('rare'),
+  emojiUsage: z.enum(EMOJI_USAGE_VALUES).default('rare'),
   preferredTone: z.string().max(100).optional(),
   distinctiveMarkers: z.array(z.string().max(200)).max(10).optional()
 });
@@ -158,8 +281,12 @@ export const digitalTwinMetaSchema = z.object({
   version: z.string().default('1.0.0'),
   documents: z.array(documentMetaSchema).default([]),
   testHistory: z.array(testHistoryEntrySchema).default([]),
+  valuesTestHistory: z.array(valuesTestHistoryEntrySchema).default([]),
+  adversarialTestHistory: z.array(adversarialTestHistoryEntrySchema).default([]),
+  multiTurnTestHistory: z.array(multiTurnTestHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
   settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
+  personas: z.array(personaSchema).default([]),
   traits: traitsSchema.optional(),
   confidence: confidenceSchema.optional()
 });
@@ -186,11 +313,28 @@ export const updateDocumentInputSchema = z.object({
   weight: z.number().int().min(1).max(10).optional()
 });
 
+// testIds is "all tests" when absent. The client API wrappers default the
+// argument to `null` (not `undefined`), so tolerate the null sentinel —
+// `.optional()` alone rejects `null` and would 400 a "run all" request.
+const optionalTestIds = z.preprocess(
+  v => v == null ? undefined : v,
+  z.array(z.number().int().min(1)).optional()
+);
+
+// Optional persona to embody for a test run. The UI's "Base twin" choice sends
+// '' (or omits it); a specific persona sends its uuid. Treat null/'' as absent
+// so a base-twin run validates instead of 400-ing on the sentinel.
+const optionalPersonaId = z.preprocess(
+  v => (v == null || v === '') ? undefined : v,
+  z.string().uuid().optional()
+);
+
 // Run tests input
 export const runTestsInputSchema = z.object({
   providerId: z.string().min(1),
   model: z.string().min(1),
-  testIds: z.array(z.number().int().min(1)).optional()
+  testIds: optionalTestIds,
+  personaId: optionalPersonaId
 });
 
 // Run multi-model tests input
@@ -199,7 +343,8 @@ export const runMultiTestsInputSchema = z.object({
     providerId: z.string().min(1),
     model: z.string().min(1)
   })).min(1).max(10),
-  testIds: z.array(z.number().int().min(1)).optional()
+  testIds: optionalTestIds,
+  personaId: optionalPersonaId
 });
 
 // Enrichment question input

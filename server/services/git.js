@@ -4,11 +4,35 @@ import { join } from 'path';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { listWorktrees } from './worktreeManager.js';
 import { execGit } from '../lib/execGit.js';
+import {
+  parseStatus,
+  parseDiffStat,
+  parseBranchVerboseLine,
+  parseSubmoduleStatusLine,
+  extractAgentSummary
+} from '../lib/gitOutputParsers.js';
+import {
+  parseGitRemote,
+  parseGitHubOwnerFromRemote,
+  pickGhAccountForOwner,
+  detectForgeCli,
+  parsePullRequestUrl
+} from '../lib/gitForge.js';
+import { PROTECTED_BRANCHES, validateFilePaths } from '../lib/gitArgs.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit };
-
-const PROTECTED_BRANCHES = ['main', 'master', 'dev', 'develop', 'release'];
+// Re-export the extracted pure helpers so existing
+// `import { … } from 'services/git.js'` call sites keep working.
+export {
+  parseStatus,
+  parseGitRemote,
+  parseGitHubOwnerFromRemote,
+  pickGhAccountForOwner,
+  detectForgeCli,
+  parsePullRequestUrl,
+  extractAgentSummary
+};
 
 // Like execGit but catches rejections (e.g. timeout) into a failed-result shape
 const execGitSafe = (args, cwd, options) =>
@@ -41,23 +65,6 @@ export async function getStatus(dir) {
     staged: files.filter(f => f.staged).length,
     unstaged: files.filter(f => !f.staged).length
   };
-}
-
-function parseStatus(status) {
-  const map = {
-    '??': 'untracked',
-    'A ': 'added',
-    'M ': 'modified (staged)',
-    ' M': 'modified',
-    'MM': 'modified (partial)',
-    'D ': 'deleted (staged)',
-    ' D': 'deleted',
-    'R ': 'renamed',
-    'C ': 'copied',
-    'AM': 'added (modified)',
-    'AD': 'added (deleted)'
-  };
-  return map[status] || status.trim();
 }
 
 /**
@@ -98,37 +105,7 @@ export async function getDiff(dir, staged = false) {
  */
 export async function getDiffStats(dir) {
   const result = await execGit(['diff', '--stat'], dir);
-  const statsLine = result.stdout.trim().split('\n').pop() || '';
-
-  const filesMatch = statsLine.match(/(\d+) files? changed/);
-  const insertionsMatch = statsLine.match(/(\d+) insertions?/);
-  const deletionsMatch = statsLine.match(/(\d+) deletions?/);
-
-  return {
-    files: filesMatch ? parseInt(filesMatch[1], 10) : 0,
-    insertions: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
-    deletions: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0
-  };
-}
-
-/**
- * Validate file paths to prevent command injection and path traversal
- * @param {string[]} files - Array of file paths
- * @returns {string[]} - Sanitized file paths
- */
-function validateFilePaths(files) {
-  const fileList = Array.isArray(files) ? files : [files];
-  return fileList.map(f => {
-    // Reject paths with null bytes or command separators
-    if (/[\0;|&`$]/.test(f)) {
-      throw new Error(`Invalid character in file path: ${f}`);
-    }
-    // Reject absolute paths or parent directory traversal
-    if (f.startsWith('/') || f.includes('..')) {
-      throw new Error(`Invalid file path: ${f}`);
-    }
-    return f;
-  });
+  return parseDiffStat(result.stdout);
 }
 
 /**
@@ -250,19 +227,11 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
   const statResult = await execGit(
     ['diff', '--stat', `${baseBranch}...${headBranch}`], dir, { ignoreExitCode: true }
   );
-  const statsLine = statResult.stdout.trim().split('\n').pop() || '';
-  const filesMatch = statsLine.match(/(\d+) files? changed/);
-  const insertionsMatch = statsLine.match(/(\d+) insertions?/);
-  const deletionsMatch = statsLine.match(/(\d+) deletions?/);
 
   return {
     ahead: commits.length,
     commits,
-    stats: {
-      files: filesMatch ? parseInt(filesMatch[1], 10) : 0,
-      insertions: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
-      deletions: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0
-    }
+    stats: parseDiffStat(statResult.stdout)
   };
 }
 
@@ -321,56 +290,6 @@ export async function createBranch(dir, branchName) {
 export async function checkout(dir, branchName) {
   await execGit(['checkout', branchName], dir);
   return { success: true, branch: branchName };
-}
-
-/**
- * Parse a git remote URL into `{ host, owner }`. Returns null for unparseable input.
- * Examples:
- *   git@github.com:atomantic/PortOS.git    → { host: 'github.com', owner: 'atomantic' }
- *   https://gitlab.com/group/sub/proj.git  → { host: 'gitlab.com', owner: 'group' }
- *   git@gitlab.example.com:foo/bar.git     → { host: 'gitlab.example.com', owner: 'foo' }
- */
-export function parseGitRemote(url) {
-  if (!url) return null;
-  // SSH: git@HOST:OWNER/REPO[.git]   (REPO can contain '/' for GitLab subgroups,
-  //                                   but we only need the top-level owner here)
-  const ssh = url.match(/^git@([^:]+):([^/]+)\/.+?(?:\.git)?$/);
-  if (ssh) return { host: ssh[1], owner: ssh[2] };
-  // HTTPS: https://HOST/OWNER/REPO[.git]
-  const https = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/.+?(?:\.git)?$/);
-  if (https) return { host: https[1], owner: https[2] };
-  return null;
-}
-
-/**
- * Back-compat: returns just the owner login when the remote is on github.com.
- */
-export function parseGitHubOwnerFromRemote(url) {
-  const parsed = parseGitRemote(url);
-  return parsed?.host === 'github.com' ? parsed.owner : null;
-}
-
-/**
- * Pick which logged-in gh/glab account should auth against a repo owned by `ownerLogin`.
- * Case-insensitive exact match; returns null if no logged-in account matches the owner.
- */
-export function pickGhAccountForOwner(ownerLogin, availableAccounts) {
-  if (!ownerLogin || !availableAccounts?.length) return null;
-  const lower = ownerLogin.toLowerCase();
-  return availableAccounts.find(a => a.toLowerCase() === lower) || null;
-}
-
-/**
- * Pick which forge CLI to use for a given remote host.
- *   github.com         → 'gh'
- *   gitlab.com / *gitlab* → 'glab'   (covers self-hosted GitLab like gitlab.example.com)
- *   anything else      → 'gh'        (default; harmless when gh isn't authed for that host)
- */
-export function detectForgeCli(host) {
-  if (!host) return 'gh';
-  if (host === 'github.com') return 'gh';
-  if (host === 'gitlab.com' || /(^|\.)gitlab\./i.test(host)) return 'glab';
-  return 'gh';
 }
 
 function spawnCli(cmd, args, options = {}) {
@@ -479,73 +398,6 @@ export async function createPR(dir, { title, body, base, head }) {
       resolve({ success: false, error: `${cli} not available: ${err.message}`, ...meta });
     });
   });
-}
-
-/**
- * Parse a PR / MR URL into { host, owner, repo, number }. Returns null on bad input.
- * Handles GitHub (`/pull/N`) and GitLab (`/-/merge_requests/N`) URLs, including
- * GitLab projects nested in subgroups (the entire group path becomes `owner`)
- * and URLs with trailing segments such as `/files`, `/commits`, `?query`, `#hash`.
- */
-export function parsePullRequestUrl(url) {
-  if (!url || typeof url !== 'string') return null;
-
-  let parsed;
-  // new URL throws on malformed input; we want a structured null instead so a try
-  // wrapper here is the right call (the project's "no try/catch" rule covers
-  // request handlers, not URL validation helpers).
-  try { parsed = new URL(url); } catch { return null; }
-
-  // Only forge web URLs are valid input — reject file://, ftp://, javascript:,
-  // etc., which can otherwise sneak through to downstream `gh api --hostname`
-  // or `glab` calls with a misleading or empty host.
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-
-  // `new URL` accepts `https:///path` and `http://:8080/...` — both yield an
-  // empty hostname. Reject those: a host-less PR URL is meaningless.
-  if (!parsed.hostname) return null;
-
-  // Reject explicit ports (`https://github.com:8443/...`). We use
-  // `parsed.hostname` below (not `host`), so a custom port would be silently
-  // dropped and route the request to the wrong server. Custom-port forges
-  // aren't supported until the port is plumbed through a separate field.
-  if (parsed.port) return null;
-
-  const host = parsed.hostname;
-  const segments = parsed.pathname.split('/').filter(Boolean);
-
-  // GitHub: /<owner>/<repo>/pull/<number>[/<more>]
-  // GitHub PR URLs are STRICTLY two segments before `pull` — anything else
-  // (e.g. /owner/repo/extra/pull/1) is invalid and would silently mis-parse
-  // if we just took the last segment as `repo`. Require segments[2] === 'pull'.
-  if (segments.length >= 4 && segments[2] === 'pull') {
-    const number = Number(segments[3]);
-    if (Number.isInteger(number) && number > 0) {
-      return { host, owner: segments[0], repo: segments[1], number };
-    }
-  }
-
-  // GitLab: /<group>[/<subgroup>...]/<project>/-/merge_requests/<number>[/<more>]
-  // Locate the `-/merge_requests/<n>` triple anchored at any depth.
-  for (let i = segments.length - 3; i >= 2; i--) {
-    if (segments[i] === '-' && segments[i + 1] === 'merge_requests') {
-      const number = Number(segments[i + 2]);
-      if (Number.isInteger(number) && number > 0) {
-        const project = segments.slice(0, i);
-        if (project.length >= 2) {
-          // owner = full group/subgroup path, repo = final project segment
-          return {
-            host,
-            owner: project.slice(0, -1).join('/'),
-            repo: project[project.length - 1],
-            number,
-          };
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 /**
@@ -666,58 +518,6 @@ export async function suggestPRTitle(dir, baseBranch, headBranch, fallbackText) 
   return firstLine.trim().substring(0, 100) || 'CoS automated task';
 }
 
-/**
- * Extract a meaningful implementation summary from raw agent output.
- * Agents typically end their output with a summary of what was implemented.
- * This function finds the last tool-call artifact in the tail of the output
- * and returns everything after it, cleaned up.
- * @param {string} output - Raw agent output
- * @returns {string|null} Cleaned summary text, or null if nothing usable
- */
-export function extractAgentSummary(output) {
-  if (!output || output.length < 50) return null;
-
-  // Take the last ~4000 chars where the summary typically lives
-  const tail = output.slice(-4000);
-  const lines = tail.split('\n');
-
-  // Find the last tool-call artifact line index.
-  // Everything after it is the agent's final summary.
-  let lastToolLine = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const trimmed = lines[i].trimStart();
-    if (trimmed.startsWith('→') || trimmed.startsWith('🔧') || /^\s*\$ /.test(lines[i])) {
-      lastToolLine = i;
-      break;
-    }
-  }
-
-  // Extract everything after the last tool line
-  const summaryLines = lastToolLine >= 0
-    ? lines.slice(lastToolLine + 1)
-    : lines;
-
-  // Trim leading/trailing blank lines
-  while (summaryLines.length && !summaryLines[0].trim()) summaryLines.shift();
-  while (summaryLines.length && !summaryLines[summaryLines.length - 1].trim()) summaryLines.pop();
-
-  // Strip a leading "Summary" heading the agent may have written itself
-  // (e.g. "## Summary", "# Summary", "Summary:"). Without this, the PR body
-  // ends up with two stacked "Summary" headings — generatePRDescription wraps
-  // the extracted text in its own "## Summary" section.
-  while (summaryLines.length && /^\s*(#{1,6}\s*)?summary\s*:?\s*$/i.test(summaryLines[0])) {
-    summaryLines.shift();
-    while (summaryLines.length && !summaryLines[0].trim()) summaryLines.shift();
-  }
-
-  const summary = summaryLines.join('\n').trim();
-
-  // Must have meaningful content (at least a sentence)
-  if (summary.length < 30) return null;
-
-  return summary;
-}
-
 export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   if (symRef.stdout?.trim()) {
@@ -799,19 +599,7 @@ export async function getBranches(dir) {
     { ignoreExitCode: true }
   );
 
-  const branches = result.stdout.trim().split('\n').filter(Boolean).map(line => {
-    const [head, name, upstream, track] = line.split('|');
-    const aheadMatch = track?.match(/ahead (\d+)/);
-    const behindMatch = track?.match(/behind (\d+)/);
-
-    return {
-      name,
-      current: head === '*',
-      tracking: upstream || null,
-      ahead: aheadMatch ? parseInt(aheadMatch[1], 10) : 0,
-      behind: behindMatch ? parseInt(behindMatch[1], 10) : 0
-    };
-  });
+  const branches = result.stdout.trim().split('\n').filter(Boolean).map(parseBranchVerboseLine);
 
   return branches;
 }
@@ -1268,14 +1056,6 @@ export async function getGitInfo(dir) {
     devBranch: repoBranches.devBranch,
     hasChangelog: hasChangelogDir(dir)
   };
-}
-
-const SUBMODULE_STATUS_RE = /^([+ \-U])([0-9a-f]+)\s+(\S+)/;
-
-function parseSubmoduleStatusLine(line) {
-  const match = line.match(SUBMODULE_STATUS_RE);
-  if (!match) return null;
-  return { statusChar: match[1], commit: match[2], path: match[3] };
 }
 
 /**

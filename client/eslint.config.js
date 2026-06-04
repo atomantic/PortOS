@@ -23,6 +23,7 @@ const browserGlobals = {
   MessageEvent: 'readonly', BroadcastChannel: 'readonly',
   HTMLElement: 'readonly', HTMLInputElement: 'readonly', HTMLCanvasElement: 'readonly',
   HTMLVideoElement: 'readonly', HTMLTextAreaElement: 'readonly',
+  HTMLMediaElement: 'readonly', HTMLAudioElement: 'readonly',
   Element: 'readonly', Node: 'readonly', NodeList: 'readonly', Text: 'readonly',
   MutationObserver: 'readonly', IntersectionObserver: 'readonly',
   ResizeObserver: 'readonly',

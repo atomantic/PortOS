@@ -57,6 +57,7 @@ async function parseZipText(arrayBuffer, ext = '.txt') {
 import * as api from '../../../services/api';
 import GenomeCategoryCard from '../GenomeCategoryCard';
 import EpigeneticTracker from '../EpigeneticTracker';
+import ProvenanceChip from '../../ui/ProvenanceChip';
 
 const CATEGORY_META = {
   longevity:          { emoji: '\u2728', label: 'Longevity',            color: 'purple' },
@@ -444,6 +445,16 @@ export default function GenomeTab() {
 
   return (
     <div className="space-y-6">
+      {/* Provenance — genome markers are population associations, not diagnoses */}
+      <div className="flex items-center gap-2 text-xs text-gray-500">
+        <span>Marker insights</span>
+        <ProvenanceChip
+          level="inferred"
+          explainer="Each marker links your variants to traits via published population studies — associations and tendencies, not a clinical diagnosis."
+          whatWouldChange="Stronger research on a variant, or pairing it with your blood and lifestyle data, sharpens what it means for you."
+        />
+      </div>
+
       {/* Summary Dashboard */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="SNPs Loaded" value={summary.snpCount?.toLocaleString()} />

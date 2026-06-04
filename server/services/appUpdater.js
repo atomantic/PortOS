@@ -1,45 +1,19 @@
-import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { readFile } from 'fs/promises';
 import * as gitService from './git.js';
 import * as pm2Service from './pm2.js';
+import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 
-const IS_WIN32 = process.platform === 'win32';
-const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
-const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
-const MAX_OUTPUT_BYTES = 64 * 1024;
 const CMD_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * Run a command in `cwd`, throwing on timeout, spawn error, or non-zero exit.
+ * Thin wrapper over the shared `bufferedSpawnOrThrow` adapter.
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
 function runCommand(cmd, args, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: needsShell(cmd), windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        if (IS_WIN32 && child.pid) {
-          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
-        } else {
-          child.kill('SIGTERM');
-        }
-        reject(new Error(`${cmd} timed out after ${CMD_TIMEOUT_MS / 1000}s`));
-      }
-    }, CMD_TIMEOUT_MS);
-    child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES); });
-    child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES); });
-    child.on('close', code => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        if (code !== 0) reject(new Error(stderr.trim() || `${cmd} exited with code ${code}`));
-        else resolve({ stdout, stderr });
-      }
-    });
-    child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); reject(err); } });
-  });
+  return bufferedSpawnOrThrow(cmd, args, { cwd, timeoutMs: CMD_TIMEOUT_MS });
 }
 
 // Per-app lock to prevent concurrent updates

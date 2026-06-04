@@ -225,6 +225,70 @@ describe('xcodeScripts', () => {
       expect(script).toContain('#!/bin/bash');
       expect(script).toContain('MyApp');
     });
+
+    // The five UI-automation helpers are built from the shared AppleScript
+    // builders in xcodeScriptBuilders.js. These snapshot-style assertions pin
+    // the exact emitted osascript fragments so a builder change that alters
+    // the generated AppleScript fails loudly.
+    it('emits setup_window with the System Events tell wrapper', () => {
+      const script = generateMacScreenshotScript('MyApp', 'net.test.MyApp');
+      expect(script).toContain(
+        'setup_window() {\n' +
+        '    osascript -e "\n' +
+        '    tell application \\"System Events\\"\n' +
+        '        tell process \\"MyApp\\"\n' +
+        '            if (count of windows) > 0 then\n' +
+        '                set position of first window to {100, 100}\n' +
+        '                set size of first window to {${WINDOW_WIDTH}, ${WINDOW_HEIGHT}}\n' +
+        '            end if\n' +
+        '        end tell\n' +
+        '    end tell" 2>/dev/null\n' +
+        '}'
+      );
+    });
+
+    it('emits click_sidebar with select row and || true redirect', () => {
+      const script = generateMacScreenshotScript('MyApp', 'net.test.MyApp');
+      expect(script).toContain(
+        '    osascript -e "\n' +
+        '    tell application \\"System Events\\"\n' +
+        '        tell process \\"MyApp\\"\n' +
+        '            tell outline 1 of scroll area 1 of group 1 of splitter group 1 of group 1 of window 1\n' +
+        '                select row $row\n' +
+        '            end tell\n' +
+        '        end tell\n' +
+        '    end tell" 2>/dev/null || true'
+      );
+    });
+
+    it('emits click_at with a leading activate tell', () => {
+      const script = generateMacScreenshotScript('MyApp', 'net.test.MyApp');
+      expect(script).toContain(
+        '    osascript -e "\n' +
+        '    tell application \\"MyApp\\" to activate\n' +
+        '    tell application \\"System Events\\"\n' +
+        '        tell process \\"MyApp\\"\n' +
+        '            set winPos to position of window 1\n' +
+        '            set absX to (item 1 of winPos) + $x\n' +
+        '            set absY to (item 2 of winPos) + $y\n' +
+        '            click at {absX, absY}\n' +
+        '        end tell\n' +
+        '    end tell" 2>/dev/null || true'
+      );
+    });
+
+    it('emits the single-quoted activate line in capture_window', () => {
+      const script = generateMacScreenshotScript('MyApp', 'net.test.MyApp');
+      expect(script).toContain(
+        `    osascript -e 'tell application "MyApp" to activate' 2>/dev/null`
+      );
+    });
+
+    it('interpolates the target name into all process tells', () => {
+      const script = generateMacScreenshotScript('Cool_App', 'net.test.CoolApp');
+      expect(script).toContain('tell process \\"Cool_App\\"');
+      expect(script).not.toContain('tell process \\"MyApp\\"');
+    });
   });
 
   describe('installScripts', () => {

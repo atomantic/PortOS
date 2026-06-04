@@ -152,7 +152,14 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   if (typeof content !== 'string') {
     return { error: 'Provider returned a malformed (non-JSON or unexpected) response body' };
   }
-  return { text: content };
+  // OpenAI-compatible bodies report token counts under `usage`; surface the completion
+  // token count so the AI Core landmark can size its activity beam by output volume
+  // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
+  const completionTokens = Number(data.usage?.completion_tokens);
+  return {
+    text: content,
+    tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
+  };
 }
 
 /**
@@ -168,9 +175,15 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
  * Pass `op` + `opLabel` to surface live status toasts in the UI via the
  * `ai:status` Socket.IO channel. The op slug groups all phase events under
  * one toast id so "loading model → calling → done" updates the same toast.
+ *
+ * Pass `appId` and/or `workspacePath` when the call originates on behalf of a
+ * managed app or CoS-agent workspace — the CyberCity AI Core aims its activity
+ * beam at that building (falling back to a generic radial beam when neither is
+ * supplied). Output token counts from the provider are reported on completion
+ * so the beam's thickness can track tokens/sec.
  */
 export async function callProviderAISimple(provider, model, prompt, options = {}) {
-  const { temperature = 0.3, max_tokens = 1000, op, opLabel } = options;
+  const { temperature = 0.3, max_tokens = 1000, op, opLabel, appId, workspacePath } = options;
   if (provider.type !== 'api') {
     return { error: 'This operation requires an API-based provider' };
   }
@@ -187,12 +200,24 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     providerId: provider.id,
     providerName: provider.name,
     model,
+    appId,
+    workspacePath,
     silent: !op
   });
 
   const doneLabel = effectiveLabel.replace(/…$/, '');
   const startMs = Date.now();
   const elapsedSec = () => ((Date.now() - startMs) / 1000).toFixed(1);
+  // Token-throughput extras for the completion event — `tokensPerSec` powers the AI Core
+  // beam thickness. Omitted entirely when the provider didn't report token usage so the
+  // client can distinguish "unknown" from a real zero. This is a coarse end-to-end rate
+  // (elapsed since the op started, so on the model-load / LM-Studio-retry paths it folds in
+  // load + retry time and reads slightly low) — adequate for a relative beam-width cue.
+  const throughput = (tokens) => {
+    if (!Number.isFinite(tokens)) return {};
+    const secs = Math.max((Date.now() - startMs) / 1000, 0.001);
+    return { tokens, tokensPerSec: Math.round(tokens / secs) };
+  };
 
   if (isOllamaProvider(provider)) {
     statusOp.update('provider:starting', 'Starting Ollama if needed…', { providerId: provider.id });
@@ -206,7 +231,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
 
   const first = await postChatCompletion(provider, model, prompt, opts);
   if (!first.error) {
-    statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`);
+    statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(first.tokens));
     return { text: first.text };
   }
 
@@ -216,7 +241,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
       statusOp.update('start', `Calling ${provider.name || provider.id} (${loaded})…`, { model: loaded });
       const retry = await postChatCompletion(provider, loaded, prompt, opts);
       if (!retry.error) {
-        statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: loaded });
+        statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: loaded, ...throughput(retry.tokens) });
         return { text: retry.text };
       }
       statusOp.error(retry.error, { model: loaded });

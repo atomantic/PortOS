@@ -20,8 +20,16 @@ socket.on('disconnect', () => {
   // Connection lost - Socket.IO will attempt reconnection automatically
 });
 
-socket.on('connect_error', () => {
-  // Connection error - Socket.IO will retry automatically
+socket.on('connect_error', (err) => {
+  // Auth gate rejected the handshake (server: lib/authGate.js socketAuthGate).
+  // Bounce to /login so the user can sign back in; skip if already there.
+  if (err?.data?.code === 'AUTH_REQUIRED' && typeof window !== 'undefined') {
+    if (!window.location.pathname.startsWith('/login')) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.replace(`/login?next=${next}`);
+    }
+  }
+  // Other connection errors: Socket.IO will retry automatically.
 });
 
 // Embedded build id from the served index.html. The server injects a

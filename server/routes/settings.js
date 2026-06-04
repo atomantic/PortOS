@@ -100,7 +100,14 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.catalogUserTypes !== undefined) {
     validateRequest(catalogUserTypesSettingsSchema, req.body.catalogUserTypes);
   }
-  const merged = await updateSettings(req.body);
+  // Strip `secrets` from the incoming PUT body so an authenticated session
+  // (or stolen cookie) can't disable the auth gate or clobber other secrets
+  // by sending `{ "secrets": { ... } }` directly to /api/settings — that
+  // would bypass the current-password proof the /api/auth/password routes
+  // require. Secrets are write-only through their dedicated routes
+  // (/api/auth/password, /api/github/secrets, etc.).
+  const { secrets: _ignoredSecrets, ...settingsPatch } = req.body || {};
+  const merged = await updateSettings(settingsPatch);
   // The queue caches codex.parallelLimit in-process; sync it from the
   // merged value so a save takes effect without a restart and without
   // re-reading the file.

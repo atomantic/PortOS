@@ -14,6 +14,21 @@ import CityBillboards from './CityBillboards';
 import CityShootingStars from './CityShootingStars';
 import CityVolumetricLights from './CityVolumetricLights';
 import CitySkyline from './CitySkyline';
+import CityFederationHorizon from './CityFederationHorizon';
+import CityBackupVault from './CityBackupVault';
+import CityTaskQueue from './CityTaskQueue';
+import CityHealthTower from './CityHealthTower';
+import CityProductivityDistrict from './CityProductivityDistrict';
+import CityActivityHeatmap from './CityActivityHeatmap';
+import CityTaskFlowRiver from './CityTaskFlowRiver';
+import CityGoalMonuments from './CityGoalMonuments';
+import CityArtifacts from './CityArtifacts';
+import CitySeasonalDecor from './CitySeasonalDecor';
+import CityEasterEggs from './CityEasterEggs';
+import CityVoiceMarker from './CityVoiceMarker';
+import CityMemoryDistrict from './CityMemoryDistrict';
+import CityJiraDistrict from './CityJiraDistrict';
+import CityAiCore from './CityAiCore';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
@@ -21,10 +36,12 @@ import CityEffects from './CityEffects';
 import CityClouds from './CityClouds';
 import CitySignalBeacons from './CitySignalBeacons';
 import CitySky from './CitySky';
+import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
+import CityPhotoCamera from './CityPhotoCamera';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, productivityData, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -63,15 +80,35 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       dpr={dpr}
       shadows={false}
       style={{ background: '#030308', cursor: explorationMode ? 'crosshair' : 'auto' }}
-      gl={{ antialias: true }}
+      // preserveDrawingBuffer lets photo mode read the frame back via toDataURL. It's a
+      // WebGL context-creation attribute, so it can't be toggled at runtime without recreating
+      // the renderer (which would flash the scene) — we accept it always-on. The cost on modern
+      // GPUs is a small per-frame copy; negligible against this scene's particle/bloom load.
+      gl={{ antialias: true, preserveDrawingBuffer: true }}
     >
       <CitySky settings={settings} />
       <CityClouds settings={settings} />
       <CityLights settings={settings} />
+      <CityEnergyOverlay chronotype={chronotype} settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />
       {!explorationMode && <CityCelestial settings={settings} />}
       <CitySkyline />
+      <CityFederationHorizon instances={instances} settings={settings} />
+      <CityBackupVault backupStatus={backupStatus} settings={settings} />
+      <CityTaskQueue cosTasks={cosTasks} settings={settings} />
+      <CityHealthTower healthMetrics={healthMetrics} settings={settings} />
+      <CityProductivityDistrict productivityData={productivityData} settings={settings} />
+      <CityActivityHeatmap calendarData={activityCalendar} settings={settings} />
+      <CityTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={settings} />
+      <CityGoalMonuments goals={goals} settings={settings} />
+      <CityArtifacts character={character} goals={goals} productivityData={productivityData} settings={settings} />
+      <CitySeasonalDecor settings={settings} />
+      <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={settings} />
+      <CityVoiceMarker voiceState={voiceState} settings={settings} />
+      <CityMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={settings} />
+      <CityJiraDistrict jiraTickets={jiraTickets} settings={settings} />
+      <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={settings} />
       <CityGround settings={settings} />
 
       <BuildingCluster
@@ -84,7 +121,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
       />
-      <CityDataStreams positions={positions} />
+      <CityDataStreams positions={positions} apps={apps} agentMap={agentMap} />
       <CityTraffic positions={positions} />
       <CityBillboards
         positions={positions}
@@ -112,7 +149,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
           active={explorationMode}
         />
       )}
-      {!explorationMode && !transitioning && (
+      {!explorationMode && !transitioning && !photoMode && (
         <OrbitControls
           maxPolarAngle={Math.PI / 2.2}
           minDistance={5}
@@ -125,6 +162,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         active={explorationMode}
         onTransitionComplete={handleTransitionComplete}
       />
+      <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} />
     </Canvas>
   );
 }

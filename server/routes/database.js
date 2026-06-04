@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
 
@@ -207,7 +207,7 @@ router.get('/status', asyncHandler(async (req, res) => {
 router.post('/switch', asyncHandler(async (req, res) => {
   const { target, migrate } = req.body;
   if (!target || !['docker', 'native'].includes(target)) {
-    return res.status(400).json({ error: 'target must be "docker" or "native"' });
+    throw new ServerError('target must be "docker" or "native"', { status: 400 });
   }
 
   const io = req.app.get('io');
@@ -218,9 +218,9 @@ router.post('/switch', asyncHandler(async (req, res) => {
     const result = await runDbScript(['migrate']);
     if (result.exitCode !== 0) {
       emit('error', { message: 'Migration failed' });
-      return res.status(500).json({
-        error: 'Migration failed',
-        details: result.stderr || result.stdout
+      throw new ServerError('Migration failed', {
+        status: 500,
+        context: { details: result.stderr || result.stdout }
       });
     }
     emit('complete', { message: `Migration to ${target} complete` });
@@ -232,18 +232,18 @@ router.post('/switch', asyncHandler(async (req, res) => {
   const switchResult = await runDbScript([target === 'docker' ? 'use-docker' : 'use-native']);
   if (switchResult.exitCode !== 0) {
     emit('error', { message: 'Switch failed' });
-    return res.status(500).json({
-      error: 'Switch failed',
-      details: switchResult.stderr || switchResult.stdout
+    throw new ServerError('Switch failed', {
+      status: 500,
+      context: { details: switchResult.stderr || switchResult.stdout }
     });
   }
 
   const startResult = await runDbScript(['start']);
   if (startResult.exitCode !== 0) {
     emit('error', { message: `Failed to start ${target} database` });
-    return res.status(500).json({
-      error: `Failed to start ${target} database`,
-      details: startResult.stderr || startResult.stdout
+    throw new ServerError(`Failed to start ${target} database`, {
+      status: 500,
+      context: { details: startResult.stderr || startResult.stdout }
     });
   }
 
@@ -306,7 +306,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
   const exportResult = await runDbScript(['export', `sync-${Date.now()}`]);
   if (exportResult.exitCode !== 0) {
     emit('error', { message: 'Export failed' });
-    return res.status(500).json({ error: 'Export failed', details: exportResult.stderr || exportResult.stdout });
+    throw new ServerError('Export failed', { status: 500, context: { details: exportResult.stderr || exportResult.stdout } });
   }
   const exportLines = exportResult.stdout.trim().split('\n');
   const dumpFile = exportLines[exportLines.length - 1]?.trim();
@@ -319,7 +319,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
   ], 5_000, pgEnv(targetPort));
   if (readyResult.exitCode !== 0) {
     emit('error', { message: `${targetMode} database not running on port ${targetPort}. Start it first.` });
-    return res.status(400).json({ error: `${targetMode} database not running on port ${targetPort}. Start it first.` });
+    throw new ServerError(`${targetMode} database not running on port ${targetPort}. Start it first.`, { status: 400 });
   }
 
   // Ensure target has the portos role and database (native pg may lack the role)
@@ -355,7 +355,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
 
   if (importResult.exitCode !== 0) {
     emit('error', { message: `Import into ${targetMode} failed` });
-    return res.status(500).json({ error: `Import into ${targetMode} failed`, details: importResult.stderr || importResult.stdout });
+    throw new ServerError(`Import into ${targetMode} failed`, { status: 500, context: { details: importResult.stderr || importResult.stdout } });
   }
 
   emit('complete', { message: `Data synced to ${targetMode}` });
@@ -366,7 +366,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
 router.post('/start', asyncHandler(async (req, res) => {
   const { backend } = req.body;
   if (!backend || !['docker', 'native'].includes(backend)) {
-    return res.status(400).json({ error: 'backend must be "docker" or "native"' });
+    throw new ServerError('backend must be "docker" or "native"', { status: 400 });
   }
 
   if (backend === 'docker') {
@@ -383,7 +383,7 @@ router.post('/start', asyncHandler(async (req, res) => {
 router.post('/stop', asyncHandler(async (req, res) => {
   const { backend } = req.body;
   if (!backend || !['docker', 'native'].includes(backend)) {
-    return res.status(400).json({ error: 'backend must be "docker" or "native"' });
+    throw new ServerError('backend must be "docker" or "native"', { status: 400 });
   }
 
   if (backend === 'docker') {
@@ -400,14 +400,14 @@ router.post('/stop', asyncHandler(async (req, res) => {
 router.post('/destroy', asyncHandler(async (req, res) => {
   const { backend } = req.body;
   if (!backend || !['docker', 'native'].includes(backend)) {
-    return res.status(400).json({ error: 'backend must be "docker" or "native"' });
+    throw new ServerError('backend must be "docker" or "native"', { status: 400 });
   }
 
   // Safety: don't destroy the active backend
   const statusResult = await runDbScript(['status']);
   const currentMode = parseDbMode(statusResult.stdout);
   if (backend === currentMode) {
-    return res.status(400).json({ error: 'Cannot destroy the active backend. Switch to the other backend first.' });
+    throw new ServerError('Cannot destroy the active backend. Switch to the other backend first.', { status: 400 });
   }
 
   if (backend === 'docker') {
@@ -438,9 +438,9 @@ router.post('/setup-native', asyncHandler(async (req, res) => {
   const result = await runDbScript(['setup-native']);
   if (result.exitCode !== 0) {
     emitProgress(io, 'error', 'Native setup failed');
-    return res.status(500).json({
-      error: 'Native PostgreSQL setup failed',
-      details: result.stderr || result.stdout
+    throw new ServerError('Native PostgreSQL setup failed', {
+      status: 500,
+      context: { details: result.stderr || result.stdout }
     });
   }
 
@@ -463,7 +463,7 @@ router.post('/export', asyncHandler(async (req, res) => {
       '-h', 'localhost', '-p', port, '-U', pgUser
     ], 5_000, env);
     if (readyResult.exitCode !== 0) {
-      return res.status(400).json({ error: `${backend} database not running on port ${port}` });
+      throw new ServerError(`${backend} database not running on port ${port}`, { status: 400 });
     }
     const dumpDir = join(rootDir, 'data', 'db-dumps');
     await runCmd('mkdir', ['-p', dumpDir], 5_000);
@@ -475,7 +475,7 @@ router.post('/export', asyncHandler(async (req, res) => {
       '--no-owner', '--no-privileges', '--if-exists', '--clean', '-f', dumpFile
     ], 120_000, env);
     if (result.exitCode !== 0) {
-      return res.status(500).json({ error: 'Export failed', details: result.stderr || result.stdout });
+      throw new ServerError('Export failed', { status: 500, context: { details: result.stderr || result.stdout } });
     }
     return res.json({ success: true, dumpFile });
   }
@@ -483,9 +483,9 @@ router.post('/export', asyncHandler(async (req, res) => {
   // Default: export from active backend via db.sh
   const result = await runDbScript(['export']);
   if (result.exitCode !== 0) {
-    return res.status(500).json({
-      error: 'Export failed',
-      details: result.stderr || result.stdout
+    throw new ServerError('Export failed', {
+      status: 500,
+      context: { details: result.stderr || result.stdout }
     });
   }
   const dumpLines = result.stdout.trim().split('\n');

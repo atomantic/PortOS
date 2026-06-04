@@ -71,7 +71,7 @@ router.post('/projects/:id/render', asyncHandler(async (req, res) => {
 
 router.get('/:jobId/events', (req, res) => {
   const ok = attachSseClient(req.params.jobId, res);
-  if (!ok) res.status(404).json({ error: 'Job not found or expired' });
+  if (!ok) throw new ServerError('Job not found or expired', { status: 404 });
 });
 
 router.post('/:jobId/cancel', (req, res) => {

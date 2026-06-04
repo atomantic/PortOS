@@ -38,7 +38,7 @@ export const clearHfToken = () => request('/image-gen/setup/hf-token', { method:
 
 // Video gen
 export const getVideoGenStatus = () => request('/video-gen/status');
-export const listVideoModels = () => request('/video-gen/models');
+export const listVideoModels = (options) => request('/video-gen/models', options);
 // `{ models: [...], textEncoder: { repo, cached, sizeBytes } }`. Same shape
 // contract as the image variant + a text-encoder block since the active
 // encoder is a separate multi-GB pull.

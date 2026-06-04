@@ -107,6 +107,67 @@ describe('applyPromptReplaceMigration opt-ins', () => {
       ).rejects.toThrow(/ENOENT/);
     });
   });
+
+  describe('multi-file scan', () => {
+    // The per-file scan runs in parallel (Promise.all). These assert the
+    // post-flight counter accumulation stays correct across files that land in
+    // different branches — distinct outcomes must each be counted exactly once.
+    const NAMES = ['pipeline-a.md', 'pipeline-b.md', 'pipeline-c.md'];
+    const multiOpts = {
+      accepted: Object.fromEntries(NAMES.map((n) => [n, [md5(BODY_OLD)]])),
+      current: Object.fromEntries(NAMES.map((n) => [n, md5(BODY_NEW)])),
+      label: 'multi',
+      customizedHint: () => '',
+    };
+
+    it('accumulates each file into its own counter across distinct outcomes', async () => {
+      // a → old hash + sample present → updated
+      writeFileSync(join(stagesDir, 'pipeline-a.md'), BODY_OLD);
+      writeFileSync(join(sampleDir, 'pipeline-a.md'), BODY_NEW);
+      // b → already at current hash → alreadyCurrent
+      writeFileSync(join(stagesDir, 'pipeline-b.md'), BODY_NEW);
+      // c → customized (matches neither) → skipped
+      writeFileSync(join(stagesDir, 'pipeline-c.md'), BODY_CUSTOM);
+
+      const result = await applyPromptReplaceMigration({ rootDir, ...multiOpts });
+      expect(result).toEqual({ updated: 1, alreadyCurrent: 1, skipped: 1, created: 0, retired: 0 });
+      expect(readFileSync(join(stagesDir, 'pipeline-a.md'), 'utf-8')).toBe(BODY_NEW);
+      expect(readFileSync(join(stagesDir, 'pipeline-c.md'), 'utf-8')).toBe(BODY_CUSTOM);
+    });
+
+    it('updates every file when all are at the accepted-old hash', async () => {
+      for (const name of NAMES) {
+        writeFileSync(join(stagesDir, name), BODY_OLD);
+        writeFileSync(join(sampleDir, name), BODY_NEW);
+      }
+      const result = await applyPromptReplaceMigration({ rootDir, ...multiOpts });
+      expect(result).toEqual({ updated: 3, alreadyCurrent: 0, skipped: 0, created: 0, retired: 0 });
+      for (const name of NAMES) {
+        expect(readFileSync(join(stagesDir, name), 'utf-8')).toBe(BODY_NEW);
+      }
+    });
+
+    it('fail-stops before any write when one file has a missing sample', async () => {
+      // Regression for the parallel-scan failure semantics: the plan phase
+      // reads every file concurrently, but a single rejection (here, an
+      // accepted-old file whose sample is gone → ENOENT) must abort the whole
+      // migration BEFORE the apply phase mutates ANY file — so the other
+      // updatable file is left untouched, not nondeterministically written.
+      writeFileSync(join(stagesDir, 'pipeline-a.md'), BODY_OLD);
+      writeFileSync(join(sampleDir, 'pipeline-a.md'), BODY_NEW); // would update
+      writeFileSync(join(stagesDir, 'pipeline-b.md'), BODY_OLD); // sample missing → throws
+      writeFileSync(join(stagesDir, 'pipeline-c.md'), BODY_OLD);
+      writeFileSync(join(sampleDir, 'pipeline-c.md'), BODY_NEW); // would update
+
+      await expect(
+        applyPromptReplaceMigration({ rootDir, ...multiOpts }),
+      ).rejects.toThrow(/ENOENT/);
+
+      // No write landed — every data file still holds its pre-migration body.
+      expect(readFileSync(join(stagesDir, 'pipeline-a.md'), 'utf-8')).toBe(BODY_OLD);
+      expect(readFileSync(join(stagesDir, 'pipeline-c.md'), 'utf-8')).toBe(BODY_OLD);
+    });
+  });
 });
 
 describe('readLayoutsDoc / writeLayoutsDoc', () => {

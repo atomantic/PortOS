@@ -3,114 +3,44 @@
  *
  * Core CRUD and search operations for the CoS memory system.
  * Stores facts, learnings, observations, decisions, preferences, and context.
+ *
+ * Orchestration only: persistence + caches + the write mutex live in
+ * `memoryStore.js`; pure index projection/filter/sort/RRF helpers live in
+ * `../lib/memoryQuery.js`. This module wires those primitives into the public
+ * CRUD/search API and emits cosEvents. Public exports are unchanged so all
+ * import sites (and `memoryBackend.js`'s dynamic import) keep working.
  */
 
-import { writeFile, readdir, rm } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { cosEvents } from './cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
-import { ensureDir, ensureDirs, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
-import { createMutex } from '../lib/asyncMutex.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
+import {
+  withMemoryLock,
+  loadIndex,
+  saveIndex,
+  loadEmbeddings,
+  saveEmbeddings,
+  loadMemory,
+  saveMemory,
+  deleteMemoryFiles,
+  invalidateCaches
+} from './memoryStore.js';
+import {
+  projectIndexMeta,
+  filterMemoryIndex,
+  compareMemoryEntries,
+  passesSearchMetaFilters,
+  passesHybridMetaFilters,
+  fuseRankingsRRF
+} from '../lib/memoryQuery.js';
 
 export { DEFAULT_MEMORY_CONFIG };
 
-const MEMORY_DIR = PATHS.memory;
-const INDEX_FILE = join(MEMORY_DIR, 'index.json');
-const EMBEDDINGS_FILE = join(MEMORY_DIR, 'embeddings.json');
-const MEMORIES_DIR = join(MEMORY_DIR, 'memories');
-
-// In-memory caches
-let indexCache = null;
-let embeddingsCache = null;
-
-// Mutex lock for state operations
-const withMemoryLock = createMutex();
-
-/**
- * Ensure memory directories exist
- */
-async function ensureDirectories() {
-  await ensureDirs([MEMORY_DIR, MEMORIES_DIR]);
-}
-
-/**
- * Load memory index
- */
-async function loadIndex() {
-  if (indexCache) return indexCache;
-
-  await ensureDirectories();
-
-  const defaultIndex = { version: 1, lastUpdated: new Date().toISOString(), count: 0, memories: [] };
-  indexCache = await readJSONFile(INDEX_FILE, defaultIndex);
-  return indexCache;
-}
-
-/**
- * Save memory index
- */
-async function saveIndex(index) {
-  await ensureDirectories();
-  index.lastUpdated = new Date().toISOString();
-  indexCache = index;
-  await writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
-}
-
-/**
- * Load embeddings
- */
-async function loadEmbeddings() {
-  if (embeddingsCache) return embeddingsCache;
-
-  await ensureDirectories();
-
-  const defaultEmbeddings = { model: null, dimension: 0, vectors: {} };
-  embeddingsCache = await readJSONFile(EMBEDDINGS_FILE, defaultEmbeddings);
-  return embeddingsCache;
-}
-
-/**
- * Save embeddings
- */
-async function saveEmbeddings(embeddings) {
-  await ensureDirectories();
-  embeddingsCache = embeddings;
-  await writeFile(EMBEDDINGS_FILE, JSON.stringify(embeddings));
-}
-
-/**
- * Load full memory by ID
- */
-async function loadMemory(id) {
-  const memoryFile = join(MEMORIES_DIR, id, 'memory.json');
-  return readJSONFile(memoryFile, null);
-}
-
-/**
- * Save full memory
- */
-async function saveMemory(memory) {
-  const memoryDir = join(MEMORIES_DIR, memory.id);
-  if (!existsSync(memoryDir)) {
-    await ensureDir(memoryDir);
-  }
-  await writeFile(join(memoryDir, 'memory.json'), JSON.stringify(memory, null, 2));
-}
-
-/**
- * Delete memory files
- */
-async function deleteMemoryFiles(id) {
-  const memoryDir = join(MEMORIES_DIR, id);
-  if (existsSync(memoryDir)) {
-    await rm(memoryDir, { recursive: true });
-  }
-}
+// Re-export the cache invalidator so existing import sites keep working.
+export { invalidateCaches };
 
 /**
  * Create a new memory
@@ -150,17 +80,7 @@ export async function createMemory(data, embedding = null) {
     await saveMemory(memory);
 
     // Add to index (lightweight metadata only)
-    index.memories.push({
-      id: memory.id,
-      type: memory.type,
-      category: memory.category,
-      tags: memory.tags,
-      summary: memory.summary,
-      importance: memory.importance,
-      createdAt: memory.createdAt,
-      status: memory.status,
-      sourceAppId: memory.sourceAppId
-    });
+    index.memories.push(projectIndexMeta(memory));
     index.count = index.memories.length;
     await saveIndex(index);
 
@@ -212,39 +132,6 @@ export async function getMemory(id) {
   });
 }
 
-/**
- * Filter memory index entries.
- */
-function filterMemoryIndex(memories, options = {}) {
-  // Filter by status
-  const status = options.status || 'active';
-  let filtered = memories.filter(m => m.status === status);
-
-  // Filter by types
-  if (options.types && options.types.length > 0) {
-    filtered = filtered.filter(m => options.types.includes(m.type));
-  }
-
-  // Filter by categories
-  if (options.categories && options.categories.length > 0) {
-    filtered = filtered.filter(m => options.categories.includes(m.category));
-  }
-
-  // Filter by tags (any match)
-  if (options.tags && options.tags.length > 0) {
-    filtered = filtered.filter(m => m.tags.some(t => options.tags.includes(t)));
-  }
-
-  // Filter by app
-  if (options.appId === '__not_brain') {
-    filtered = filtered.filter(m => m.sourceAppId !== 'brain');
-  } else if (options.appId) {
-    filtered = filtered.filter(m => m.sourceAppId === options.appId);
-  }
-
-  return filtered;
-}
-
 export async function countMemories(options = {}) {
   const index = await loadIndex();
   return filterMemoryIndex(index.memories, options).length;
@@ -260,38 +147,7 @@ export async function getMemories(options = {}) {
   // Sort
   const sortBy = options.sortBy || 'createdAt';
   const sortOrder = options.sortOrder || 'desc';
-  memories.sort((a, b) => {
-    const aRaw = a[sortBy];
-    const bRaw = b[sortBy];
-
-    // Missing values sort last
-    const aMissing = aRaw === null || aRaw === undefined;
-    const bMissing = bRaw === null || bRaw === undefined;
-    if (aMissing && bMissing) return 0;
-    if (aMissing) return 1;
-    if (bMissing) return -1;
-
-    // Compare as dates if both parse as valid timestamps
-    const aTime = (typeof aRaw === 'string' || aRaw instanceof Date) ? Date.parse(aRaw) : NaN;
-    const bTime = (typeof bRaw === 'string' || bRaw instanceof Date) ? Date.parse(bRaw) : NaN;
-    if (!Number.isNaN(aTime) && !Number.isNaN(bTime)) {
-      const diff = aTime - bTime;
-      return sortOrder === 'desc' ? (diff === 0 ? 0 : diff < 0 ? 1 : -1) : (diff === 0 ? 0 : diff < 0 ? -1 : 1);
-    }
-
-    // Numeric comparison
-    if (typeof aRaw === 'number' && typeof bRaw === 'number') {
-      const diff = aRaw - bRaw;
-      return sortOrder === 'desc' ? (diff === 0 ? 0 : diff < 0 ? 1 : -1) : (diff === 0 ? 0 : diff < 0 ? -1 : 1);
-    }
-
-    // String fallback
-    const aStr = String(aRaw);
-    const bStr = String(bRaw);
-    if (aStr === bStr) return 0;
-    const cmp = aStr < bStr ? -1 : 1;
-    return sortOrder === 'desc' ? -cmp : cmp;
-  });
+  memories.sort(compareMemoryEntries(sortBy, sortOrder));
 
   // Paginate
   const offset = options.offset || 0;
@@ -330,17 +186,7 @@ export async function updateMemory(id, updates) {
     const index = await loadIndex();
     const idx = index.memories.findIndex(m => m.id === id);
     if (idx !== -1) {
-      index.memories[idx] = {
-        id: memory.id,
-        type: memory.type,
-        category: memory.category,
-        tags: memory.tags,
-        summary: memory.summary,
-        importance: memory.importance,
-        createdAt: memory.createdAt,
-        status: memory.status,
-        sourceAppId: memory.sourceAppId
-      };
+      index.memories[idx] = projectIndexMeta(memory);
       await saveIndex(index);
     }
 
@@ -545,15 +391,7 @@ export async function searchMemories(queryEmbedding, options = {}) {
   results = results
     .map(r => {
       const meta = indexMap.get(r.id);
-      if (!meta || meta.status !== 'active') return null;
-
-      // Apply type/category/tag/app filters
-      if (options.types && options.types.length > 0 && !options.types.includes(meta.type)) return null;
-      if (options.categories && options.categories.length > 0 && !options.categories.includes(meta.category)) return null;
-      if (options.tags && options.tags.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return null;
-      if (options.appId === '__not_brain' && meta.sourceAppId === 'brain') return null;
-      if (options.appId && options.appId !== '__not_brain' && meta.sourceAppId !== options.appId) return null;
-
+      if (!passesSearchMetaFilters(meta, options)) return null;
       return { ...meta, similarity: r.similarity };
     })
     .filter(Boolean);
@@ -592,38 +430,14 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
     }))
   }
 
-  // Apply Reciprocal Rank Fusion (RRF)
-  // RRF score = sum(1 / (k + rank)) across all rankings
-  const RRF_K = 60 // Standard RRF constant
-  const rrfScores = new Map()
-
-  // Add BM25 contributions
-  bm25Results.forEach((result, rank) => {
-    const current = rrfScores.get(result.id) || { bm25Rank: null, vectorRank: null, rrfScore: 0 }
-    current.bm25Rank = rank + 1
-    current.rrfScore += ftsWeight / (RRF_K + rank + 1)
-    rrfScores.set(result.id, current)
-  })
-
-  // Add vector contributions
-  vectorResults.forEach((result, rank) => {
-    const current = rrfScores.get(result.id) || { bm25Rank: null, vectorRank: null, rrfScore: 0 }
-    current.vectorRank = rank + 1
-    current.rrfScore += vectorWeight / (RRF_K + rank + 1)
-    rrfScores.set(result.id, current)
-  })
+  // Apply Reciprocal Rank Fusion (RRF) to merge BM25 + vector rankings
+  const rrfScores = fuseRankingsRRF(bm25Results, vectorResults, { ftsWeight, vectorWeight })
 
   // Filter and sort by RRF score
   let results = Array.from(rrfScores.entries())
     .map(([id, data]) => {
       const meta = indexMap.get(id)
-      if (!meta || meta.status !== 'active') return null
-
-      // Apply type/category/tag/app filters
-      if (options.types?.length > 0 && !options.types.includes(meta.type)) return null
-      if (options.categories?.length > 0 && !options.categories.includes(meta.category)) return null
-      if (options.tags?.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return null
-      if (options.appId && meta.sourceAppId !== options.appId) return null
+      if (!passesHybridMetaFilters(meta, options)) return null
 
       return {
         ...meta,
@@ -1043,14 +857,6 @@ export async function getStats() {
     byCategory,
     lastUpdated: index.lastUpdated
   };
-}
-
-/**
- * Invalidate caches (call after external changes)
- */
-export function invalidateCaches() {
-  indexCache = null;
-  embeddingsCache = null;
 }
 
 /**

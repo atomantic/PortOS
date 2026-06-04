@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
+import { activateAppLine, osascriptSystemEvents } from './xcodeScriptBuilders.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -822,43 +823,43 @@ get_window_id() {
 
 # Position and resize window
 setup_window() {
-    osascript -e "
-    tell application \\"System Events\\"
-        tell process \\"${targetName}\\"
-            if (count of windows) > 0 then
-                set position of first window to {100, 100}
-                set size of first window to {\${WINDOW_WIDTH}, \${WINDOW_HEIGHT}}
-            end if
-        end tell
-    end tell" 2>/dev/null
+${osascriptSystemEvents(targetName, {
+    redirect: ' 2>/dev/null',
+    body: [
+      '            if (count of windows) > 0 then',
+      '                set position of first window to {100, 100}',
+      '                set size of first window to {${WINDOW_WIDTH}, ${WINDOW_HEIGHT}}',
+      '            end if'
+    ]
+  })}
 }
 
 # Click a sidebar item by row number
 click_sidebar() {
     local row="$1"
-    osascript -e "
-    tell application \\"System Events\\"
-        tell process \\"${targetName}\\"
-            tell outline 1 of scroll area 1 of group 1 of splitter group 1 of group 1 of window 1
-                select row $row
-            end tell
-        end tell
-    end tell" 2>/dev/null || true
+${osascriptSystemEvents(targetName, {
+    redirect: ' 2>/dev/null || true',
+    body: [
+      '            tell outline 1 of scroll area 1 of group 1 of splitter group 1 of group 1 of window 1',
+      '                select row $row',
+      '            end tell'
+    ]
+  })}
 }
 
 # Click at a position in the window (relative to window top-left, in points)
 click_at() {
     local x="$1" y="$2"
-    osascript -e "
-    tell application \\"${targetName}\\" to activate
-    tell application \\"System Events\\"
-        tell process \\"${targetName}\\"
-            set winPos to position of window 1
-            set absX to (item 1 of winPos) + $x
-            set absY to (item 2 of winPos) + $y
-            click at {absX, absY}
-        end tell
-    end tell" 2>/dev/null || true
+${osascriptSystemEvents(targetName, {
+    activate: true,
+    redirect: ' 2>/dev/null || true',
+    body: [
+      '            set winPos to position of window 1',
+      '            set absX to (item 1 of winPos) + $x',
+      '            set absY to (item 2 of winPos) + $y',
+      '            click at {absX, absY}'
+    ]
+  })}
 }
 
 # Go back via Cmd+[ keyboard shortcut
@@ -874,7 +875,7 @@ go_back() {
 # Take screenshot of the app window
 capture_window() {
     local output_path="$1"
-    osascript -e 'tell application "${targetName}" to activate' 2>/dev/null
+    ${activateAppLine(targetName)} 2>/dev/null
     sleep 0.5
     local wid
     wid=$(get_window_id)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hashUpstream, computeStaleSteps } from './storyBuilderIntegrity.js';
+import { hashUpstream, computeStaleSteps, computeSyncDrift } from './storyBuilderIntegrity.js';
 
 describe('storyBuilderIntegrity — hashUpstream', () => {
   it('is deterministic for the same inputs', () => {
@@ -71,5 +71,48 @@ describe('storyBuilderIntegrity — computeStaleSteps', () => {
     expect(computeStaleSteps(null, {})).toEqual([]);
     expect(computeStaleSteps({}, {})).toEqual([]);
     expect(computeStaleSteps({ steps: {} }, { a: 'b' })).toEqual([]);
+  });
+});
+
+describe('storyBuilderIntegrity — computeSyncDrift', () => {
+  const session = {
+    steps: {
+      idea: { locked: true, upstreamHash: 'h-idea' },
+      plotArc: { locked: false, upstreamHash: 'h-arc' },
+      readerMap: { locked: true, upstreamHash: 'h-reader' },
+    },
+  };
+
+  it('reports drift when a locked step\'s live hash differs from the synced baseline', () => {
+    const live = { idea: 'h-idea', readerMap: 'h-reader-CHANGED' };
+    const synced = { idea: 'h-idea', readerMap: 'h-reader' };
+    expect(computeSyncDrift(session, live, synced)).toBe(true);
+  });
+
+  it('reports no drift when every locked step matches the baseline', () => {
+    const live = { idea: 'h-idea', readerMap: 'h-reader' };
+    expect(computeSyncDrift(session, live, live)).toBe(false);
+  });
+
+  it('ignores unlocked-step divergence', () => {
+    const live = { idea: 'h-idea', plotArc: 'h-arc-CHANGED', readerMap: 'h-reader' };
+    const synced = { idea: 'h-idea', plotArc: 'h-arc', readerMap: 'h-reader' };
+    expect(computeSyncDrift(session, live, synced)).toBe(false);
+  });
+
+  it('treats a baseline missing a locked step\'s hash as drift', () => {
+    const live = { idea: 'h-idea', readerMap: 'h-reader' };
+    expect(computeSyncDrift(session, live, {})).toBe(true);
+  });
+
+  it('skips locked steps with no live hash available', () => {
+    const live = { idea: 'h-idea' }; // readerMap has no live hash
+    const synced = { idea: 'h-idea' };
+    expect(computeSyncDrift(session, live, synced)).toBe(false);
+  });
+
+  it('returns false for an empty/missing session', () => {
+    expect(computeSyncDrift(null, {}, {})).toBe(false);
+    expect(computeSyncDrift({ steps: {} }, { a: 'b' }, {})).toBe(false);
   });
 });

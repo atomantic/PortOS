@@ -34,6 +34,7 @@ import { composeStyledPrompt, composeCanonStyledPrompt } from '../../lib/compose
 import { composeCleanPlatePrompt } from '../../lib/cleanPlatePrompt';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
+import { useCanonPatch } from '../../hooks/useCanonPatch';
 import CanonCard from '../pipeline/CanonCard';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { universeStylePreset } from '../../lib/universeStylePreset';
@@ -593,18 +594,9 @@ export default function UniverseCanonSection({
   // (setting intExt + timeOfDay chips, primaryImageRef pinning, wardrobe
   // edits). Optimistic — UI updates before the server roundtrip so chip
   // clicks feel instant.
-  const handlePatchEntry = useCallback(async (kind, entryId, patch) => {
-    if (!universe || !patch || typeof patch !== 'object') return;
-    const capturedId = universeId;
-    const kindKey = kind.key;
-    const list = (universe[kindKey] || []).map((e) =>
-      e.id === entryId ? { ...e, ...patch } : e
-    );
-    onUniverseChange({ ...universe, [kindKey]: list });
-    const updated = await updateUniverse(universeId, { [kindKey]: list })
-      .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
-    if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
-  }, [universe, universeId, onUniverseChange, mountedRef]);
+  const { patchEntry: handlePatchEntry } = useCanonPatch({
+    universe, apply: onUniverseChange, mountedRef,
+  });
 
   if (!universe) return null;
 

@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
-import { generatePipelineVisualImage } from '../../../services/api';
+import { generatePipelineVisualImage, listVideoModels } from '../../../services/api';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
 import ScenePreview from '../../creative-director/ScenePreview';
+import ModelSelect from '../../ModelSelect';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
@@ -33,6 +34,54 @@ const STATUS_LABEL = {
   paused: 'Paused',
 };
 
+// Shared inline render-settings controls — aspect ratio, quality, and (when
+// the video-model list loaded) the video model. Rendered identically in the
+// initial-start and restart-confirm toolbars so the two paths can't drift.
+const SELECT_CLS = 'bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300';
+function RenderControls({ aspectRatio, setAspectRatio, quality, setQuality, modelId, setModelId, videoModels, disabled }) {
+  return (
+    <>
+      <select
+        value={aspectRatio}
+        onChange={(e) => setAspectRatio(e.target.value)}
+        disabled={disabled}
+        aria-label="Aspect ratio"
+        title="Aspect ratio for the rendered scenes"
+        className={SELECT_CLS}
+      >
+        <option value="16:9">16:9</option>
+        <option value="9:16">9:16</option>
+        <option value="1:1">1:1</option>
+      </select>
+      <select
+        value={quality}
+        onChange={(e) => setQuality(e.target.value)}
+        disabled={disabled}
+        aria-label="Render quality"
+        title="Render quality — higher = slower + more GPU time"
+        className={SELECT_CLS}
+      >
+        <option value="draft">draft</option>
+        <option value="standard">standard</option>
+        <option value="high">high</option>
+      </select>
+      {videoModels.length > 0 && (
+        <ModelSelect
+          models={videoModels}
+          value={modelId}
+          onChange={(e) => setModelId(e.target.value)}
+          getLabel={(m) => m.name || m.id}
+          disabled={disabled}
+          emptyOption="Default model"
+          ariaLabel="Video model"
+          title="Video model used to render each scene (Default follows the server setting)"
+          className={`${SELECT_CLS} max-w-[180px]`}
+        />
+      )}
+    </>
+  );
+}
+
 export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   const stage = issue.stages?.episodeVideo || {};
   const cdProjectId = stage.cdProjectId || null;
@@ -45,6 +94,21 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   // for an unstarted episodeVideo stage.
   const [aspectRatio, setAspectRatio] = useState(stage.aspectRatio || '16:9');
   const [quality, setQuality] = useState(stage.quality || 'standard');
+  // '' = use the server/settings default video model. A persisted concrete id
+  // (set after a render starts) restores the user's prior choice on reload.
+  const [modelId, setModelId] = useState(stage.modelId || '');
+
+  // Load the video-model list once for the picker. Secondary control — a fetch
+  // failure just hides the model select (the user still gets the server
+  // default), so swallow the error rather than toasting.
+  const [videoModels, setVideoModels] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    listVideoModels({ silent: true })
+      .then((models) => { if (!cancelled) setVideoModels(Array.isArray(models) ? models : []); })
+      .catch(() => { if (!cancelled) setVideoModels([]); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Poll while a project id is bound. Pauses on hidden tab via the hook's
   // visibility short-circuit; identical snapshots dedup via the compare option
@@ -88,6 +152,9 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   const [runSubmit, submitting] = useAsyncAction(
     async ({ force }) => {
       const payload = { aspectRatio, quality };
+      // Omit modelId on the "Default model" sentinel so the server resolves
+      // its own default (videoGen.defaultModelId → registry default).
+      if (modelId) payload.modelId = modelId;
       if (force) payload.force = true;
       return generatePipelineVisualImage(issue.id, 'episodeVideo', payload).catch((err) => {
         // Re-throw with a force-aware fallback so useAsyncAction's toaster
@@ -123,9 +190,12 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
       cdProjectId: result.cdProjectId,
       // Mirror the server's persisted render settings on the client-side
       // issue model so a same-session navigate-away-and-back doesn't reset
-      // the restart pickers to defaults before a full refetch lands.
+      // the restart pickers to defaults before a full refetch lands. modelId
+      // mirrors the request value ('' when the user left it on Default);
+      // a full refetch later replaces it with the server-resolved concrete id.
       aspectRatio,
       quality,
+      modelId: modelId || null,
     });
   };
 
@@ -154,30 +224,12 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
         </div>
         {!cdProjectId ? (
           <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={aspectRatio}
-              onChange={(e) => setAspectRatio(e.target.value)}
-              disabled={submitting}
-              aria-label="Aspect ratio"
-              title="Aspect ratio for the rendered scenes"
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
-            >
-              <option value="16:9">16:9</option>
-              <option value="9:16">9:16</option>
-              <option value="1:1">1:1</option>
-            </select>
-            <select
-              value={quality}
-              onChange={(e) => setQuality(e.target.value)}
-              disabled={submitting}
-              aria-label="Render quality"
-              title="Render quality — higher = slower + more GPU time"
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
-            >
-              <option value="draft">draft</option>
-              <option value="standard">standard</option>
-              <option value="high">high</option>
-            </select>
+            <RenderControls
+              aspectRatio={aspectRatio} setAspectRatio={setAspectRatio}
+              quality={quality} setQuality={setQuality}
+              modelId={modelId} setModelId={setModelId}
+              videoModels={videoModels} disabled={submitting}
+            />
             <button
               type="button"
               onClick={() => submit({ force: false })}
@@ -192,28 +244,12 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
         ) : confirmRestart ? (
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-port-warning">Start a new CD project?</span>
-            <select
-              value={aspectRatio}
-              onChange={(e) => setAspectRatio(e.target.value)}
-              disabled={submitting}
-              aria-label="Aspect ratio"
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
-            >
-              <option value="16:9">16:9</option>
-              <option value="9:16">9:16</option>
-              <option value="1:1">1:1</option>
-            </select>
-            <select
-              value={quality}
-              onChange={(e) => setQuality(e.target.value)}
-              disabled={submitting}
-              aria-label="Render quality"
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
-            >
-              <option value="draft">draft</option>
-              <option value="standard">standard</option>
-              <option value="high">high</option>
-            </select>
+            <RenderControls
+              aspectRatio={aspectRatio} setAspectRatio={setAspectRatio}
+              quality={quality} setQuality={setQuality}
+              modelId={modelId} setModelId={setModelId}
+              videoModels={videoModels} disabled={submitting}
+            />
             <button
               type="button"
               onClick={() => submit({ force: true })}

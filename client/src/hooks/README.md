@@ -89,6 +89,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useKeyboardControls` | Keyboard binding for CyberCity mode toggle. | CyberCity-specific. |
 | `useKeyboardHelp` | Esc closes, even from inputs/textareas. | Help/cheatsheet modals. |
 | `useLockToggle` | Optimistic-PATCH lock toggle. | New "lock this field/stage/arc" button — use this, do not re-implement. |
+| `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
 | `useScrollLock` | Body-scroll lock with ref-count. | Modals, drawers, lightboxes. |
 | `useSwipeNav` | Horizontal swipe prev/next. | Mobile swipe between siblings. |
 | `useAsyncAction` | `running` state + toast-on-error. | Buttons that await an async action. |
@@ -105,12 +106,14 @@ grep -i "what you want to do" client/src/hooks/README.md
 |---|---|---|
 | `useAppDeploy` | Stream `deploy.sh` output via Socket.IO. | App deployment surfaces only. |
 | `useAppOperation` | Socket-based app ops (update, standardize) with step tracking. | App operations UI. |
+| `useCanonPatch` | Optimistic canon-entry patch: rebuild the kind list with one entry mutated, apply locally, PATCH the universe, re-apply the server copy. Targets + staleness-guards on the loaded record's `universe.id` so a mid-flight universe swap can't cross-PATCH or resurrect stale state. `apply` is `setUniverse` or `onUniverseChange`. | Inline canon-field edits on a universe (UniverseCanonSection, NounsStage). Don't re-roll the optimistic-then-confirm dance. |
 | `useCityAudio` | CyberCity ambient audio. | CyberCity only. |
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useCodeReviewDefaults` | Global Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model) via a small Provider/hook pair. | TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown. |
 | `useCatalogTypes` | Catalog ingredient type registry (system + user-defined) merged with the static fallback via a Provider/hook pair; synchronous fallback to the built-in six so first render never blanks. | Catalog list/picker/editor; anywhere the catalog type list/lookup is needed. |
 | `useDeathClock` | 1-second countdown for death-clock display. | Mortality / death-clock surfaces. |
+| `useGoalDetail` | All state + handlers backing the GoalDetailPanel (edit form, todos, milestones, plan/phases, check-ins, progress log, activity/calendar links). Loads activities + subcalendars on mount. | GoalDetailPanel composition shell; not intended for reuse outside the goals panel. |
 | `useNextEvalCountdown` | 1-second countdown to the next CoS evaluation tick. | Chief of Staff "next eval in Xs" displays. |
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useRecordMerge` | Duplicate Universe/Series merge flow: open → dry-run preview → resolve field conflicts → execute, with an `onMerged` refresh callback. Drives `<MergeModal>`. | Surfacing the merge-duplicates UI anywhere (Sharing → Duplicates, Universes page). Don't re-implement the preview/execute dance. |

@@ -18,15 +18,42 @@ export const deleteDigitalTwinDocument = (id) => request(`/digital-twin/document
 
 // Digital Twin - Testing
 export const getDigitalTwinTests = () => request('/digital-twin/tests');
-export const runDigitalTwinTests = (providerId, model, testIds = null) => request('/digital-twin/tests/run', {
+export const runDigitalTwinTests = (providerId, model, testIds = null, personaId = null) => request('/digital-twin/tests/run', {
   method: 'POST',
-  body: JSON.stringify({ providerId, model, testIds })
+  body: JSON.stringify({ providerId, model, testIds, personaId })
 });
-export const runDigitalTwinMultiTests = (providers, testIds = null) => request('/digital-twin/tests/run-multi', {
+export const runDigitalTwinMultiTests = (providers, testIds = null, personaId = null) => request('/digital-twin/tests/run-multi', {
   method: 'POST',
-  body: JSON.stringify({ providers, testIds })
+  body: JSON.stringify({ providers, testIds, personaId })
 });
 export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/tests/history?limit=${limit}`);
+
+// Digital Twin - Values-Alignment Testing (M34 P6)
+export const getValuesAlignmentTests = () => request('/digital-twin/values-tests');
+export const runValuesAlignmentTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/values-tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds, personaId }),
+  ...options
+});
+export const getValuesAlignmentTestHistory = (limit = 10) => request(`/digital-twin/values-tests/history?limit=${limit}`);
+
+// Digital Twin - Adversarial Boundary Testing (M34 P6)
+export const getAdversarialTests = (options = {}) => request('/digital-twin/adversarial-tests', options);
+export const runAdversarialTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/adversarial-tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds, personaId }),
+  ...options
+});
+export const getAdversarialTestHistory = (limit = 10, options = {}) => request(`/digital-twin/adversarial-tests/history?limit=${limit}`, options);
+
+// Digital Twin - Multi-Turn Conversation Testing (M34 P6)
+export const getMultiTurnTests = (options = {}) => request('/digital-twin/multi-turn-tests', options);
+export const runMultiTurnTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/multi-turn-tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds, personaId }),
+  ...options
+});
+export const getMultiTurnTestHistory = (limit = 10, options = {}) => request(`/digital-twin/multi-turn-tests/history?limit=${limit}`, options);
 
 // Digital Twin - Enrichment
 export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enrich/categories');
@@ -52,6 +79,23 @@ export const getDigitalTwinSettings = (options) => request('/digital-twin/settin
 export const updateDigitalTwinSettings = (settings) => request('/digital-twin/settings', {
   method: 'PUT',
   body: JSON.stringify(settings)
+});
+
+// Digital Twin - Personas (M34 P7)
+export const getDigitalTwinPersonas = (options) => request('/digital-twin/personas', options);
+export const getActiveDigitalTwinPersona = (options) => request('/digital-twin/personas/active', options);
+export const createDigitalTwinPersona = (data) => request('/digital-twin/personas', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateDigitalTwinPersona = (id, data) => request(`/digital-twin/personas/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteDigitalTwinPersona = (id) => request(`/digital-twin/personas/${id}`, { method: 'DELETE' });
+export const setActiveDigitalTwinPersona = (personaId) => request('/digital-twin/personas/active', {
+  method: 'PUT',
+  body: JSON.stringify({ personaId })
 });
 
 // Digital Twin - Validation & Analysis

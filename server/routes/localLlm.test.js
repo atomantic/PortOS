@@ -75,6 +75,58 @@ describe('local LLM playground routes', () => {
     });
   });
 
+  it('streams tokens then a terminal result frame as NDJSON', async () => {
+    runLocalLlmTest.mockImplementation(async ({ onToken }) => {
+      onToken('Hel');
+      onToken('lo');
+      return { backend: 'ollama', modelId: 'llama3.2', text: 'Hello', runId: 'run-1' };
+    });
+
+    const res = await request(makeApp())
+      .post('/api/local-llm/test/stream')
+      .send({ backend: 'ollama', modelId: 'llama3.2', prompt: 'Say hello' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/x-ndjson/);
+    const frames = res.text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(frames).toEqual([
+      { type: 'token', delta: 'Hel' },
+      { type: 'token', delta: 'lo' },
+      { type: 'result', result: { backend: 'ollama', modelId: 'llama3.2', text: 'Hello', runId: 'run-1' } },
+    ]);
+  });
+
+  it('emits exactly one terminal result frame (no extra 500) when the run resolves an in-stream error', async () => {
+    // A timed-out/aborted run resolves an { error, text } result rather than
+    // throwing — the route must surface it as the single terminal frame.
+    runLocalLlmTest.mockResolvedValue({
+      backend: 'ollama', modelId: 'llama3.2', error: 'Timed out after 5000ms', text: 'partial',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/local-llm/test/stream')
+      .send({ backend: 'ollama', modelId: 'llama3.2', prompt: 'Say hello' });
+
+    expect(res.status).toBe(200);
+    const frames = res.text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(frames).toEqual([
+      { type: 'result', result: { backend: 'ollama', modelId: 'llama3.2', error: 'Timed out after 5000ms', text: 'partial' } },
+    ]);
+  });
+
+  it('converts a pre-stream provider throw into a terminal error result frame (no 500 after headers)', async () => {
+    runLocalLlmTest.mockRejectedValue(new Error('Local provider "ollama" is not configured'));
+
+    const res = await request(makeApp())
+      .post('/api/local-llm/test/stream')
+      .send({ backend: 'ollama', modelId: 'llama3.2', prompt: 'Say hello' });
+
+    expect(res.status).toBe(200); // headers flushed before the throw — never a JSON 500
+    const frames = res.text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ type: 'result', result: { error: 'Local provider "ollama" is not configured', text: '' } });
+  });
+
   it('compares models in the requested execution mode', async () => {
     compareLocalLlmModels.mockResolvedValue({
       mode: 'parallel',
@@ -173,7 +225,11 @@ describe('local LLM memory-management routes', () => {
       .send({ backend: 'ollama', modelId: 'llama3.2' });
 
     expect(res.status).toBe(502);
-    expect(res.body).toEqual({ error: 'Ollama unreachable', modelId: 'llama3.2' });
+    // Standard error envelope (errorHandler): message in `error`, machine code
+    // derived from status, the modelId carried in `context` for diagnostics.
+    expect(res.body.error).toBe('Ollama unreachable');
+    expect(res.body.code).toBe('BAD_GATEWAY');
+    expect(res.body.context).toEqual({ modelId: 'llama3.2' });
     expect(unloadModel).toHaveBeenCalledWith('llama3.2');
   });
 

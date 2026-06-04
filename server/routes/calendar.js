@@ -132,7 +132,7 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const status = await calendarSync.getSyncStatus(req.params.accountId);
-  if (!status) return res.status(404).json({ error: 'Account not found' });
+  if (!status) throw new ServerError('Account not found', { status: 404 });
   res.json(status);
 }));
 
@@ -140,7 +140,7 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 router.get('/events', asyncHandler(async (req, res) => {
   const { accountId, search, startDate, endDate } = req.query;
   if (accountId && !UUID_RE.test(accountId)) {
-    return res.status(400).json({ error: 'Invalid accountId format' });
+    throw new ServerError('Invalid accountId format', { status: 400 });
   }
   const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
   const result = await calendarSync.getEvents({
@@ -156,10 +156,10 @@ router.get('/events', asyncHandler(async (req, res) => {
 
 router.get('/events/:accountId/:eventId', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.accountId)) {
-    return res.status(400).json({ error: 'Invalid accountId format' });
+    throw new ServerError('Invalid accountId format', { status: 400 });
   }
   const event = await calendarSync.getEvent(req.params.accountId, req.params.eventId);
-  if (!event) return res.status(404).json({ error: 'Event not found' });
+  if (!event) throw new ServerError('Event not found', { status: 404 });
   res.json(event);
 }));
 
@@ -238,7 +238,7 @@ router.post('/google/auth/credentials', asyncHandler(async (req, res) => {
 
 router.get('/google/auth/url', asyncHandler(async (req, res) => {
   const result = await googleAuth.getAuthUrl();
-  if (result.error) return res.status(400).json({ error: result.error });
+  if (result.error) throw new ServerError(result.error, { status: 400 });
   res.json(result);
 }));
 
@@ -336,7 +336,12 @@ router.get('/debug/token-status', asyncHandler(async (req, res) => {
 router.post('/debug/test-token', asyncHandler(async (req, res) => {
   const provider = 'outlook';
   const tokenResult = await getToken(provider);
-  if (tokenResult.error) return res.status(503).json(tokenResult);
+  if (tokenResult.error) {
+    throw new ServerError(tokenResult.message || tokenResult.error, {
+      status: 503,
+      context: { reason: tokenResult.error, provider: tokenResult.provider }
+    });
+  }
 
   const decoded = tokenResult.decoded || {};
   const tokenInfo = {

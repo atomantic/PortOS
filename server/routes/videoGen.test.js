@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } })),
@@ -172,6 +173,7 @@ describe('videoGen routes', () => {
     app = express();
     app.use(express.json());
     app.use('/api/video-gen', videoGenRoutes);
+    app.use(errorMiddleware);
     vi.clearAllMocks();
     // Reset the upload holder so a test that set a pending upload but
     // bailed before the route consumed it can't leak into the next test.

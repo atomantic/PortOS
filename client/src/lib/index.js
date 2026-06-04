@@ -6,6 +6,7 @@
 export * from './canonPrompt.js';
 export * from './cleanPlatePrompt.js';
 export * from './composeStyledPrompt.js';
+export * from './personaTraitBlend.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
 export * from './sheetPointers.js';
@@ -33,9 +34,11 @@ export * from './graphSimulation.js';
 // === Generic UI / collection utilities ===
 export * from './audioRecorder.js';
 export * from './clientErrorReporter.js';
+export * from './clinicianReport.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';
 export * from './genUtils.js';
+export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';
 export * from './localLlmTargetKey.js';
 export * from './loopbackHost.js';
@@ -47,4 +50,5 @@ export * from './voiceLabel.js';
 
 // === Page-scoped pure helpers ===
 export * from './universeBuilderExpand.js';
+export * from './wrSceneCursor.js';
 export * from './writingGuide.js';

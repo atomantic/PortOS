@@ -20,7 +20,15 @@ async function saveDrafts(drafts) {
 export async function listDrafts(filters = {}) {
   let drafts = await loadDrafts();
   if (filters.accountId) drafts = drafts.filter(d => d.accountId === filters.accountId);
-  if (filters.status) drafts = drafts.filter(d => d.status === filters.status);
+  if (filters.status) {
+    // `status` accepts a single value or an array (OR filter), so callers like
+    // the review-queue aggregator can push a multi-status query down to the
+    // data layer instead of loading every draft and filtering in memory.
+    // An explicit empty array means "match no status" → returns nothing,
+    // rather than collapsing back to "no filter".
+    const wanted = Array.isArray(filters.status) ? filters.status : [filters.status];
+    drafts = drafts.filter(d => wanted.includes(d.status));
+  }
   return drafts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 

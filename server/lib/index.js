@@ -98,9 +98,13 @@ export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
 
 // === Process execution ===
+export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
+export * from './gitArgs.js';
+export * from './gitForge.js';
+export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
 export * from './processEnv.js';
 export * from './pythonSetup.js';
@@ -122,6 +126,7 @@ export * from './tailscale.js';
 
 // === Search & indexing ===
 export * from './bm25.js';
+export * from './memoryQuery.js';
 export * from './memoryStats.js';
 export * from './vectorMath.js';
 
@@ -141,6 +146,7 @@ export * from './localLlmDisk.js';
 export * from './issueLength.js';
 export * from './mediaItemKey.js';
 export * from './navManifest.js';
+export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
@@ -156,6 +162,7 @@ export * from './timezone.js';
 
 // === General utilities ===
 export * from './asyncMutex.js';
+export * from './authGate.js';
 export * from './errorHandler.js';
 export * from './mapWithConcurrency.js';
 export * from './objects.js';

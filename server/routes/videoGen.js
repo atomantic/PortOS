@@ -384,9 +384,9 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
 
 router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   const model = listVideoModels().find((m) => m.id === req.params.modelId);
-  if (!model) return res.status(404).json({ error: `Unknown video model: ${req.params.modelId}` });
+  if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404 });
   const repo = repoForModel(model);
-  if (!repo) return res.status(400).json({ error: `Model "${model.id}" has no HuggingFace repo on file.`, code: 'NO_REPO_FOR_MODEL' });
+  if (!repo) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   await startHfDownloadStream({ req, res, repo });
 }));
 
@@ -397,7 +397,7 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
   // Local-path encoders (LM Studio) are not downloadable — they're served
   // off disk and the status endpoint already reports cached: true for them.
   if (!isHfRepoId(repo)) {
-    return res.status(400).json({ error: 'Active text encoder is a local-path entry, not an HF repo.', code: 'NOT_DOWNLOADABLE' });
+    throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
   }
   await startHfDownloadStream({ req, res, repo });
 }));
@@ -788,7 +788,7 @@ router.get('/active', (_req, res) => {
 
 router.get('/:jobId/events', (req, res) => {
   const ok = attachSseClient(req.params.jobId, res);
-  if (!ok) res.status(404).json({ error: 'Job not found or expired' });
+  if (!ok) throw new ServerError('Job not found or expired', { status: 404 });
 });
 
 router.post('/cancel', asyncHandler(async (req, res) => {

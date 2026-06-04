@@ -1,19 +1,11 @@
 import { useMemo } from 'react';
 import { getBuildingHeight, BOROUGH_PARAMS } from './cityConstants';
+import { hashString } from '../../utils/hashString';
 import Building from './Building';
 import AgentEntity from './AgentEntity';
 import ProcessBuilding from './ProcessBuilding';
 
-const hashString = (str) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-};
-
-export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false }) {
+export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false, settings }) {
   const agentData = agentMap.get(app.id);
   const agents = agentData?.agents || [];
   const height = getBuildingHeight(app);
@@ -75,6 +67,7 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
           agent={agent}
           position={[position.x, height + 1.5 + i * 1.0, position.z]}
           index={i}
+          settings={settings}
         />
       ))}
     </group>

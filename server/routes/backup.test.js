@@ -71,7 +71,9 @@ describe('backup routes', () => {
       getSettings.mockResolvedValue({ backup: {} });
       const res = await request(buildApp()).post('/api/backup/run');
       expect(res.status).toBe(400);
-      expect(res.body.error).toBe('BACKUP_NOT_CONFIGURED');
+      // Standard error envelope: machine code in `code`, human text in `error`.
+      expect(res.body.code).toBe('BACKUP_NOT_CONFIGURED');
+      expect(res.body.error).toBe('No backup destination configured in settings');
       expect(backup.runBackup).not.toHaveBeenCalled();
     });
 

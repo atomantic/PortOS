@@ -44,7 +44,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `storyBible.js` | Canonical Character / Place / Object shapes + `BIBLE_LIMITS`. |
 | `storyArc.js` | Canonical Arc + Season + Reader-Map shapes for pipeline arc planning. |
 | `storyBuilderSteps.js` | Unified Story Builder ordered step definitions + helpers (`STEPS`, `STEP_IDS`, `STEP_STATUSES`, `isValidStepId`, `stepIndex`). |
-| `storyBuilderIntegrity.js` | Pure staleness hashing for the Story Builder (`hashUpstream`, `computeStaleSteps`). |
+| `storyBuilderIntegrity.js` | Pure staleness hashing for the Story Builder (`hashUpstream`, `computeStaleSteps`, `computeSyncDrift`). |
 | `canonPrompt.js` | Per-kind field-precedence rules; SHORT/RICH/PREVIEW spec tables; `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` / `descriptorForCanonEntry`. |
 | `scenePrompt.js` | Scene-prompt composer + bible matchers (chars/places/objects in text). |
 | `sceneExtractor.js` | Split prose or teleplay into scene list via LLM. |
@@ -95,7 +95,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `collectionStore.js` | Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type, schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` / `loadAll` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` / `verifySchemaVersion`. Per-id write queue means writes to different records don't serialize; `saveOneNow` is for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store, ...])` logs schema-version mismatches. |
+| `collectionStore.js` | Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type, schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` / `loadAll` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` / `verifySchemaVersion`. Per-id write queue means writes to different records don't serialize; `saveOneNow` is for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store, ...])` logs schema-version mismatches. **Type-index `config` slot** holds cross-record state (see the `TypeIndexConfig` typedef + header convention): `{ runs?: [], featureFlags?: {}, lockPolicies?: {} }` — `runs` is the shipped slot (universeBuilder's capped history log), the other two are reserved names; consumers may add their own keys but should reuse a reserved name when it fits and document the shape next to the consumer. `saveTypeIndex({ config })` shallow-merges `config` one level deep (a patched `runs` replaces the whole array), so a read-modify-write of a slot must load → mutate a copy → write inside `queueTypeIndexWrite(fn)`. |
 | `conflictJournal.js` | Non-blocking edit-conflict journal for cross-install LWW merges. `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite) archives the losing local version when a true 3-way divergence is detected (`detectConflict` via per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash; `flushBaseHashes()` persists the batched base-hash side store; `withBaseHashFlushBatch(fn)` defers every interior flush so an await-separated multi-record push loop (peer:online convergence) collapses N `sync_base_hashes.json` rewrites into one terminal write (re-entrant; flushes in `finally`). `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned (called from every `pruneTombstoned*` path — universe/series/issue/collection) so the side store doesn't grow without bound; `pruneOrphanedBaseHashes(resolves)` is the backstop sweep (`resolves(kind,id) => bool`; unknown kinds kept) that drops keys whose record no longer resolves, wired into the tombstone GC sweep. `conflictJournalStore()` is the `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no `dismissed` status). Local-only — never crosses the wire. |
 | `schemaVersions.js` | Cross-instance sync version contract. `PORTOS_SCHEMA_VERSIONS` (frozen map of `{ category: layoutVersion }`), `RECORD_KIND_SCHEMA_CATEGORIES` (frozen map of federated record kind → the schema categories it writes), `buildPortosMeta()` (envelope for every outbound sync payload), `compareSchemaVersions(sender, receiver)` returning `{ ahead, behind, compatible }`, `scopeVersionDiff(diff, categories)` (restrict that diff to the categories a specific transfer touches), and `formatVersionGap()` for UI/log lines. Receivers gate `applyIncomingPush` / share-bucket import / snapshot apply per-category on the scoped comparator result so an upgraded sender can't corrupt a downstream peer — and a bump to one category doesn't sever sync of the others. |
 | `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, `expandHome` (`~/foo` → absolute), JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
@@ -110,9 +110,13 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `bufferedSpawn.js` | `bufferedSpawn(cmd, args, opts)` (structured non-throwing result) + `bufferedSpawnOrThrow` (throwing adapter), plus `killProcessTree`, `needsShell`, `IS_WIN32`, `WIN_CMD_SHIMS`, `MAX_OUTPUT_BYTES` — shared buffered-spawn machinery with capped stdout/stderr, timeout-kill, and Windows `taskkill /T /F` tree-kill. Used by `appBuilder.js` and `appUpdater.js`. |
 | `commandSecurity.js` | Allowlist of safe shell commands. |
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
 | `ffmpeg.js` | Shared ffmpeg helpers (videoGen + videoTimeline). |
+| `gitArgs.js` | `PROTECTED_BRANCHES`, `validateFilePaths(files)` — pure command-arg builders/validators for `git.js` (reject injection/traversal in staged paths). |
+| `gitForge.js` | `parseGitRemote`, `parseGitHubOwnerFromRemote`, `pickGhAccountForOwner`, `detectForgeCli`, `parsePullRequestUrl` — pure GitHub/GitLab remote + PR/MR URL parsers and forge/account selectors used by `git.js`. |
+| `gitOutputParsers.js` | `parseStatus`, `parseDiffStat`, `parseBranchVerboseLine`, `parseSubmoduleStatusLine`/`SUBMODULE_STATUS_RE`, `extractAgentSummary` — pure parsers turning git command output into structured data for `git.js`. |
 | `gitRemote.js` | `getOriginInfo`, `parseGitRemoteUrl`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — classifies the local `origin` remote vs the upstream atomantic/PortOS repo. Used by the update flow to detect forks. |
 | `processEnv.js` | `stripDebugMallocEnv(env)` — drop macOS `Malloc*` debug env vars before spawning a child. Pinokio-launched PortOS exports `MallocStackLogging`/`MallocScribble`/etc. that flood Python subprocess stderr with `can't turn off malloc stack logging` lines; route every Node→Python spawn through this. No-op on Linux/Windows. |
 | `pythonSetup.js` | Python venv / runner setup helpers. |
@@ -141,6 +145,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `bm25.js` | BM25 ranking + inverted-index helpers. |
 | `vectorMath.js` | Vector math utilities (cosine, etc.). |
+| `memoryQuery.js` | Pure memory-index helpers: meta projection, filter/sort, search/hybrid meta filters, RRF fusion. |
 | `memoryStats.js` | macOS-correct memory accounting (handles "Pages free" quirk). |
 
 ## Extraction & parsing
@@ -168,6 +173,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
+| `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
@@ -189,6 +195,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
+| `authGate.js` | Express + Socket.IO middleware that gates `/api/*` and `/data/*` behind the password set in `settings.secrets.auth`. No-op when auth is off; emits 401 `AUTH_REQUIRED` (or plain text for `/data/*`) when on and the request has no valid session token. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
 | `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |

@@ -7,7 +7,7 @@ import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instances.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 
@@ -261,7 +261,7 @@ router.put('/health/thresholds', asyncHandler(async (req, res) => {
   };
   for (const [k, v] of Object.entries(incoming)) {
     if (!Number.isFinite(v)) {
-      return res.status(400).json({ error: `Invalid threshold value for ${k}` });
+      throw new ServerError(`Invalid threshold value for ${k}`, { status: 400 });
     }
   }
   const next = {
@@ -271,10 +271,10 @@ router.put('/health/thresholds', asyncHandler(async (req, res) => {
     diskCritical: clamp(Math.round(incoming.diskCritical), 50, 99)
   };
   if (next.memoryWarn >= next.memoryCritical) {
-    return res.status(400).json({ error: 'memoryWarn must be less than memoryCritical' });
+    throw new ServerError('memoryWarn must be less than memoryCritical', { status: 400 });
   }
   if (next.diskWarn >= next.diskCritical) {
-    return res.status(400).json({ error: 'diskWarn must be less than diskCritical' });
+    throw new ServerError('diskWarn must be less than diskCritical', { status: 400 });
   }
 
   // Merge the health thresholds against the freshest snapshot inside the write

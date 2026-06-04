@@ -80,7 +80,7 @@ function ticketSummary(ticket, extraFields = []) {
  * with ticket keys inline so the UI can link them.
  * Falls back to a plain bullet list if AI is unavailable.
  */
-async function generateNarrativeSummary(appName, completed, inProgress, blocked, todo) {
+async function generateNarrativeSummary(appName, completed, inProgress, blocked, todo, appId) {
   const sections = [];
   if (completed.length > 0) {
     sections.push(`COMPLETED (last 7 days):\n${completed.map(t => `- ${t.key}: ${t.summary}`).join('\n')}`);
@@ -135,7 +135,10 @@ ${ticketData}`;
   for (const provider of candidates) {
     const aiResult = await callProviderAISimple(provider, provider.lightModel || provider.defaultModel, prompt, {
       temperature: 0.3,
-      max_tokens: 1500
+      max_tokens: 1500,
+      // Associate this call with the app it's reporting on so the CyberCity AI Core aims
+      // its activity beam at that building.
+      appId
     }).catch(err => ({ error: err.message }));
 
     if (!aiResult.error) return aiResult.text.trim();
@@ -202,7 +205,7 @@ export async function generateReport(appId, app) {
     t.status?.toLowerCase().includes('block') ||
     (t.priority === 'Highest' && t.statusCategory === 'To Do')
   );
-  const statusSummary = await generateNarrativeSummary(app.name, recentlyCompleted, inProgress, blocked, todo);
+  const statusSummary = await generateNarrativeSummary(app.name, recentlyCompleted, inProgress, blocked, todo, appId);
 
   const report = {
     appId,

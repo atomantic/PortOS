@@ -11,7 +11,7 @@ import StyleProbeImage from '../components/universe/StyleProbeImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
-  Plus, RefreshCw, Loader2, ExternalLink, Wand2,
+  Plus, RefreshCw, Loader2, ExternalLink, Wand2, Cloud, CloudOff,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
@@ -21,6 +21,7 @@ import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
+  setStorySessionSync, reconcileStorySession,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
   getProviders, updateUniverse,
@@ -972,16 +973,19 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const [steps, setSteps] = useState([]);
   const [session, setSession] = useState(null);
   const [staleSteps, setStaleSteps] = useState([]);
+  const [syncDrift, setSyncDrift] = useState(false);
   const [universe, setUniverse] = useState(null);
   const [series, setSeries] = useState(null);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   const reload = useCallback(async () => {
     const s = await getStorySession(storyId, { silent: true }).catch(() => null);
     if (!s) { setSession(null); setLoading(false); return; }
     setSession(s);
     setStaleSteps(s.staleSteps || []);
+    setSyncDrift(s.syncDrift === true);
     // These GETs own their fallback (.catch → null/[]), so silence the helper's
     // default error toast — otherwise a transient failure double-toasts.
     const [u, ser] = await Promise.all([
@@ -1090,6 +1094,40 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     if (updated) setSession((prev) => (prev ? { ...prev, llm: updated.llm } : prev));
   };
 
+  // Cross-machine resume (#730). The sync/reconcile routes return the full
+  // recomputed session view (staleSteps + syncDrift), not just the record —
+  // because toggling sync or reconciling shifts the staleness baseline, which
+  // can change which steps read as stale. Merge the whole view so the step rail
+  // and the drift indicator both update reactively, no full refetch.
+  const applySessionView = (view) => {
+    setSession((prev) => (prev ? { ...prev, ...view } : view));
+    setStaleSteps(view.staleSteps || []);
+    setSyncDrift(view.syncDrift === true);
+  };
+
+  const toggleSync = async () => {
+    if (!session || syncBusy) return;
+    const next = session.sync !== true;
+    setSyncBusy(true);
+    const view = await setStorySessionSync(storyId, next, { silent: true })
+      .catch(() => null)
+      .finally(() => setSyncBusy(false));
+    if (!view) { toast.error('Failed to update cross-machine resume'); return; }
+    applySessionView(view);
+    toast.success(next ? 'Cross-machine resume enabled' : 'Cross-machine resume disabled');
+  };
+
+  const reconcile = async () => {
+    if (!session || session.sync !== true || syncBusy) return;
+    setSyncBusy(true);
+    const view = await reconcileStorySession(storyId, { silent: true })
+      .catch(() => null)
+      .finally(() => setSyncBusy(false));
+    if (!view) { toast.error('Failed to reconcile'); return; }
+    applySessionView(view);
+    toast.success('Re-baselined to this machine');
+  };
+
   if (loading) return <div className="p-6 text-gray-400 flex items-center gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Loading…</div>;
   if (!session) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
 
@@ -1110,6 +1148,53 @@ function StoryBuilderDetail({ storyId, stepParam }) {
             onChange={saveLlm}
           />
         </header>
+
+        {/* Cross-machine resume (#730): opt this session into peer sync so it can
+            resume on another federated machine, and re-baseline its staleness
+            against the current machine's live records. Local-only is the default. */}
+        <div className="mb-4 flex items-center flex-wrap gap-x-3 gap-y-2 text-sm bg-port-card border border-port-border rounded-lg px-3 py-2">
+          <button
+            type="button"
+            onClick={toggleSync}
+            disabled={syncBusy}
+            aria-pressed={session.sync === true}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded border disabled:opacity-50 ${
+              session.sync === true
+                ? 'border-port-accent text-port-accent bg-port-bg'
+                : 'border-port-border text-gray-400 hover:text-white'
+            }`}
+            title="Toggle whether this session resumes across your federated machines"
+          >
+            {syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : (session.sync === true ? <Cloud className="w-4 h-4" /> : <CloudOff className="w-4 h-4" />)}
+            {session.sync === true ? 'Cross-machine resume on' : 'Cross-machine resume off'}
+          </button>
+
+          {session.sync === true && (
+            <>
+              <span className="text-xs text-gray-500">
+                {syncDrift
+                  ? 'This machine’s records have drifted from the synced baseline.'
+                  : 'Baseline matches this machine.'}
+              </span>
+              <button
+                type="button"
+                onClick={reconcile}
+                disabled={syncBusy || !syncDrift}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded border disabled:opacity-40 ${
+                  syncDrift
+                    ? 'border-port-warning text-port-warning hover:bg-port-bg'
+                    : 'border-port-border text-gray-500'
+                }`}
+                title={syncDrift
+                  ? 'Adopt this machine’s current records as the new staleness baseline'
+                  : 'Nothing to reconcile — the baseline already matches this machine'}
+              >
+                {syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Reconcile
+              </button>
+            </>
+          )}
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
           {/* Step rail */}

@@ -39,7 +39,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   universes: 5,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
-  pipelineIssues: 1,
+  // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
+  // audio, issue #863). Additive, but version-gated for the same reason
+  // `pipelineSeries 1→2` (readerMap) is: an older, audioMode/cues-unaware peer
+  // that receives and re-sanitizes the record would silently strip the new
+  // fields and last-writer-wins the loss back onto the newer peer. Bumping
+  // makes the older peer reject the ahead-version issue transfer instead.
+  // Per-category gate → only issue sync pauses with old peers; series/universes
+  // keep flowing.
+  pipelineIssues: 2,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
@@ -140,6 +148,21 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // receiver still accepts ≤v7 senders (sender-behind); their envelopes carry no
   // `catalogTypes` block and the receiver applies the other kinds as before.
   catalog: 8,
+  // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
+  // local-only by default and excluded from sync; only `sync: true` sessions
+  // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
+  // record type (not a sibling doc on an existing bundle), so it gets its own
+  // per-category gate: a sender ahead on `storyBuilder` would push a session
+  // shape an older receiver's `sanitizeSession` would silently strip and then
+  // LWW back, so a v1 sender pushing to a ≤v0 (pre-feature) receiver is
+  // sender-ahead on `storyBuilder` and gets a 412 — only the storyBuilder
+  // category pauses; every other category keeps flowing (per-category gate via
+  // scopeVersionDiff). A v1 receiver still accepts a ≤v0 sender (sender-behind):
+  // pre-feature peers never send a `storyBuilder` snapshot at all, so there's
+  // nothing to gate. The FIRST incompatible session-shape change MUST bump this
+  // to 2 then (where a v1 peer would round-trip the new shape through an
+  // unaware sanitizer).
+  storyBuilder: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -178,6 +201,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   mediaCollection: Object.freeze(['mediaCollections']),
   'cat-ingredient': Object.freeze(['catalog']),
   'cat-scrap': Object.freeze(['catalog']),
+  storyBuilder: Object.freeze(['storyBuilder']),
 });
 
 /**

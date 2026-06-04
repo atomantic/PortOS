@@ -44,6 +44,7 @@ import * as appUpdater from './appUpdater.js';
 import * as appDeployer from './appDeployer.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
 import { getBuildId } from '../lib/buildId.js';
+import { authEvents, extractToken, isAuthEnabled, verifySession } from './auth.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -83,8 +84,43 @@ function registerSubscriber(socket, namespace, set) {
 }
 
 export function initSocket(io) {
+  // Auth-state changes (first-time enable, rotation, disable) all funnel
+  // through revokeAllSessions in services/auth.js, which fires this event.
+  // Disconnect every currently-connected socket so clients re-handshake
+  // against the fresh session store — sockets accepted before the change
+  // would otherwise keep emitting privileged events on their stale
+  // handshake-time auth grant.
+  authEvents.on('sessions:revoked-all', () => {
+    console.log(`🔐 Auth state changed — disconnecting all sockets`);
+    if (typeof io.disconnectSockets === 'function') io.disconnectSockets(true);
+  });
+
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
+    // Per-event auth re-check: the handshake gate (lib/authGate.js
+    // socketAuthGate) only runs once at connection time. If a session
+    // expires or is revoked while the socket is open, the next inbound
+    // event re-verifies and kicks the socket. Cheap (hashed-Map lookup),
+    // and no-op when auth is off. Guarded for tests that pass a mock
+    // socket without the `use` middleware hook.
+    if (typeof socket.use === 'function') {
+      socket.use(async ([_event, ..._args], next) => {
+        // Fail closed: if isAuthEnabled / verifySession throw (e.g. a
+        // transient settings.json read error) we MUST disconnect rather
+        // than skip the check by neither calling next nor disconnecting,
+        // which would silently stall the event and leave the socket
+        // attached on stale credentials.
+        try {
+          if (!(await isAuthEnabled())) return next();
+          const token = extractToken({ headers: socket.handshake?.headers || {} });
+          if (await verifySession(token)) return next();
+          socket.disconnect(true);
+        } catch (err) {
+          console.error(`❌ Socket auth middleware error: ${err?.message ?? err}`);
+          socket.disconnect(true);
+        }
+      });
+    }
     registerVoiceHandlers(socket);
 
     // Tell the client what build the server is on. The client compares this

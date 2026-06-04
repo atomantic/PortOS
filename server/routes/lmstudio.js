@@ -7,7 +7,7 @@
 import { Router } from 'express'
 import * as lmStudioManager from '../services/lmStudioManager.js'
 import * as localThinking from '../services/localThinking.js'
-import { asyncHandler } from '../lib/errorHandler.js'
+import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 
 const router = Router()
 
@@ -33,10 +33,7 @@ router.get('/models', asyncHandler(async (req, res) => {
   const available = await lmStudioManager.checkLMStudioAvailable()
 
   if (!available) {
-    return res.status(503).json({
-      error: 'LM Studio not available',
-      available: false
-    })
+    throw new ServerError('LM Studio not available', { status: 503, context: { available: false } })
   }
 
   const models = await lmStudioManager.getLoadedModels(true)
@@ -58,7 +55,7 @@ router.post('/download', asyncHandler(async (req, res) => {
   const { modelId } = req.body
 
   if (!modelId) {
-    return res.status(400).json({ error: 'modelId is required' })
+    throw new ServerError('modelId is required', { status: 400 })
   }
 
   const result = await lmStudioManager.downloadModel(modelId)
@@ -73,7 +70,7 @@ router.post('/load', asyncHandler(async (req, res) => {
   const { modelId } = req.body
 
   if (!modelId) {
-    return res.status(400).json({ error: 'modelId is required' })
+    throw new ServerError('modelId is required', { status: 400 })
   }
 
   const result = await lmStudioManager.loadModel(modelId)
@@ -88,7 +85,7 @@ router.post('/unload', asyncHandler(async (req, res) => {
   const { modelId } = req.body
 
   if (!modelId) {
-    return res.status(400).json({ error: 'modelId is required' })
+    throw new ServerError('modelId is required', { status: 400 })
   }
 
   const result = await lmStudioManager.unloadModel(modelId)
@@ -103,7 +100,7 @@ router.post('/completion', asyncHandler(async (req, res) => {
   const { prompt, model, maxTokens, temperature, systemPrompt } = req.body
 
   if (!prompt) {
-    return res.status(400).json({ error: 'prompt is required' })
+    throw new ServerError('prompt is required', { status: 400 })
   }
 
   const result = await lmStudioManager.quickCompletion(prompt, {
@@ -124,7 +121,7 @@ router.post('/analyze-task', asyncHandler(async (req, res) => {
   const { description, id, metadata } = req.body
 
   if (!description) {
-    return res.status(400).json({ error: 'description is required' })
+    throw new ServerError('description is required', { status: 400 })
   }
 
   const analysis = await localThinking.analyzeTask({
@@ -144,7 +141,7 @@ router.post('/classify-memory', asyncHandler(async (req, res) => {
   const { content } = req.body
 
   if (!content) {
-    return res.status(400).json({ error: 'content is required' })
+    throw new ServerError('content is required', { status: 400 })
   }
 
   const classification = await localThinking.classifyMemory(content)
@@ -159,7 +156,7 @@ router.post('/embeddings', asyncHandler(async (req, res) => {
   const { text, model } = req.body
 
   if (!text) {
-    return res.status(400).json({ error: 'text is required' })
+    throw new ServerError('text is required', { status: 400 })
   }
 
   const result = await lmStudioManager.getEmbeddings(text, { model })

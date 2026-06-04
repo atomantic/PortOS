@@ -179,6 +179,12 @@ const sanitizeSeries = (raw) => {
     // existing series keep their on-disk + wire-checksum shape. See
     // syncWire.sanitizeRecordForWire for the wire-side enforcement.
     ...(raw.ephemeral === true ? { ephemeral: true } : {}),
+    // Importer-orphan marker (issue #727). Stamped only by analyzeImport on a
+    // brand-new shell so the orphan-shell GC can tell an abandoned analyze from
+    // a user's deliberately-private empty series (also `ephemeral`).
+    // commitImport clears it. Server-set only — never from a route body — and
+    // persisted only when true so every other record's shape stays stable.
+    ...(raw.importDraft === true ? { importDraft: true } : {}),
   };
 };
 
@@ -220,6 +226,8 @@ export async function createSeries(input = {}) {
     createdAt: now,
     updatedAt: now,
     ephemeral: input.ephemeral === true,
+    // Importer-orphan marker (issue #727) — see sanitizeSeries.
+    importDraft: input.importDraft === true,
   });
   await store().saveOne(created.id, created);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
@@ -234,6 +242,13 @@ export async function createSeries(input = {}) {
     ).catch((err) => {
       console.log(`⚠️ series: auto-subscribe after create failed: ${err.message}`);
     });
+  }
+  // Reconcile a draft parent universe (issue #851) when a committed (non-draft,
+  // non-ephemeral) series is created already linked to it — the create-time
+  // twin of the updateSeries link path. See reconcileDraftParentUniverse and
+  // `isPromotingChild` for the gating contract.
+  if (created.universeId && isPromotingChild(created)) {
+    await reconcileDraftParentUniverse(created.universeId);
   }
   return created;
 }
@@ -281,6 +296,49 @@ export async function insertSeriesWithId(input = {}) {
   return next;
 }
 
+/**
+ * Whether linking `series` to a parent universe should promote a draft parent
+ * (issue #851). True only for a series that is BOTH non-draft AND non-ephemeral:
+ *
+ *   - `importDraft !== true` — an import-draft series linked to a draft universe
+ *     must NOT promote it; that's commitImport's job.
+ *   - `ephemeral !== true` — a deliberately-private (kept-local) series carries
+ *     no syncing work, so promoting (and thereby un-privatizing) its parent
+ *     would push peers a universe whose only child never syncs. Only a series
+ *     that itself reaches peers should pull its draft parent into sync.
+ */
+const isPromotingChild = (series) => series?.importDraft !== true && series?.ephemeral !== true;
+
+/**
+ * Promote an import-draft universe to a normal, syncing record when a
+ * committed (non-draft, non-ephemeral) series gets linked to it outside the
+ * commitImport path (issue #851). Mirrors commitImport's promotion: clears BOTH
+ * `importDraft` and `ephemeral` through `updateUniverse` so the
+ * ephemeral→non-ephemeral peer re-subscribe wiring fires.
+ *
+ * Gated STRICTLY on the parent's `importDraft === true` — a user's
+ * deliberately-private (`ephemeral`-only) universe must never be un-privatized
+ * as a side effect of linking a series, exactly as commitImport gates its own
+ * promotion. (Caller gates the child via `isPromotingChild`.)
+ *
+ * Best-effort: runs outside any write queue and swallows + logs failures so a
+ * universe-side error never fails the series link that triggered it. The
+ * dynamic import dodges the static cycle (universeBuilder imports listSeries
+ * from this module).
+ */
+async function reconcileDraftParentUniverse(universeId) {
+  await import('../universeBuilder.js')
+    .then(async ({ getUniverse, updateUniverse }) => {
+      const universe = await getUniverse(universeId).catch(() => null);
+      if (universe?.importDraft !== true) return;
+      await updateUniverse(universeId, { ephemeral: false, importDraft: false });
+      console.log(`🔗 series: promoted import-draft universe ${universeId.slice(0, 8)} — committed series linked outside commitImport`);
+    })
+    .catch((err) => {
+      console.log(`⚠️ series: reconcile draft parent universe ${universeId.slice(0, 8)} failed: ${err.message}`);
+    });
+}
+
 export async function updateSeries(id, patch = {}) {
   // Pre-B.4 canon (characters/settings/objects) lives on the universe, not the
   // series — but a stale browser tab can still POST a legacy series shape and
@@ -290,7 +348,7 @@ export async function updateSeries(id, patch = {}) {
   if (legacyFields.length > 0) {
     console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
   }
-  const { merged, nameChanged, prevEphemeral, nextEphemeral } = await store().queueRecordWrite(id, async () => {
+  const { merged, nameChanged, prevEphemeral, nextEphemeral, linkedUniverseId } = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
@@ -330,11 +388,19 @@ export async function updateSeries(id, patch = {}) {
       // Local-only "don't sync" marker — sanitizer normalizes anything
       // non-true back to absent.
       ...('ephemeral' in patch ? { ephemeral: patch.ephemeral } : {}),
+      // Importer-orphan marker (issue #727) — commitImport clears it via
+      // `{ importDraft: false }`; sanitizer normalizes non-true back to absent.
+      ...('importDraft' in patch ? { importDraft: patch.importDraft } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
     if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
     await store().saveOneNow(next.id, next);
+    // Surface the universe this series ends up linked to ONLY when (a) this
+    // PATCH set/changed the link and (b) the series itself qualifies to promote
+    // its parent (committed AND syncing — see isPromotingChild). The post-queue
+    // side effect reconciles a draft parent universe (issue #851) — see below.
+    const linkChanged = 'universeId' in patch && next.universeId && next.universeId !== cur.universeId;
     return {
       merged: next,
       nameChanged: next.name !== cur.name,
@@ -342,6 +408,7 @@ export async function updateSeries(id, patch = {}) {
       // side effects can wire subscribe / unsubscribe.
       prevEphemeral: cur.ephemeral === true,
       nextEphemeral: next.ephemeral === true,
+      linkedUniverseId: (linkChanged && isPromotingChild(next)) ? next.universeId : null,
     };
   });
   // Ephemeral lifecycle wiring — see updateUniverse for the rationale. false→true
@@ -375,6 +442,20 @@ export async function updateSeries(id, patch = {}) {
     await renameCollectionForSeries(merged.id, merged.name).catch((err) => {
       console.error(`❌ series-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
     });
+  }
+  // Reconcile a draft parent universe (issue #851). When a committed (non-
+  // draft, non-ephemeral) series is linked to an import-draft universe WITHOUT
+  // going through commitImport, the universe stays `ephemeral` + `importDraft`
+  // forever and silently never syncs — even though it now holds real committed
+  // work that reaches peers (see isPromotingChild for the child gate). Mirror
+  // commitImport's promotion exactly: clear BOTH flags via updateUniverse so
+  // the ephemeral→non-ephemeral peer re-subscribe fires and the now-real
+  // universe reaches every peer. Best-effort + outside the series write queue
+  // (it touches a different record); a failure must not fail the series link.
+  // Dynamic import to dodge the static cycle (universeBuilder imports this
+  // module's listSeries).
+  if (linkedUniverseId) {
+    await reconcileDraftParentUniverse(linkedUniverseId);
   }
   emitRecordUpdated('series', merged.id);
   return merged;
@@ -516,6 +597,9 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
       if (!sanitized) return;
       // Strip inbound `ephemeral` — see mergeUniversesFromSync.
       if ('ephemeral' in sanitized) delete sanitized.ephemeral;
+      // Strip inbound `importDraft` (issue #727) — local-only GC marker; a peer
+      // must not be able to mark our records GC-eligible.
+      if ('importDraft' in sanitized) delete sanitized.importDraft;
       const local = await store().loadOne(sanitized.id);
       if (!local) {
         // See universeBuilder.mergeUniversesFromSync — no local means no

@@ -105,14 +105,24 @@ describe('tuiHandshake.inferTuiCommand', () => {
 });
 
 describe('tuiHandshake.applyCommandDefaults', () => {
-  it('injects `--ask-for-approval never` for codex when not already present', () => {
+  it('injects `--dangerously-bypass-approvals-and-sandbox` for codex when not already present', () => {
     expect(applyCommandDefaults('codex', ['exec', '-'])).toEqual([
-      '--ask-for-approval', 'never', 'exec', '-',
+      '--dangerously-bypass-approvals-and-sandbox', 'exec', '-',
     ]);
   });
 
   it('passes codex args through unchanged when --ask-for-approval is already present', () => {
     const args = ['--ask-for-approval', 'auto-edit', 'exec', '-'];
+    expect(applyCommandDefaults('codex', args)).toBe(args);
+  });
+
+  it('passes codex args through unchanged when --sandbox is already present', () => {
+    const args = ['--sandbox', 'workspace-write', 'exec', '-'];
+    expect(applyCommandDefaults('codex', args)).toBe(args);
+  });
+
+  it('does not duplicate the bypass flag when codex args already pin it', () => {
+    const args = ['--dangerously-bypass-approvals-and-sandbox', 'exec', '-'];
     expect(applyCommandDefaults('codex', args)).toBe(args);
   });
 
@@ -153,7 +163,7 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const provider = { id: 'codex' };
     const out = buildTuiInvocation(provider, null);
     expect(out.command).toBe('codex');
-    expect(out.args).toEqual(['--ask-for-approval', 'never']);
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
   });
 
   it('appends --model when caller passes a model and provider.args has no model flag', () => {
@@ -178,7 +188,7 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     // resolveCliModel(CODEX_CONFIGURED_DEFAULT) returns null → no flag.
     const provider = { id: 'codex', args: ['exec', '-'] };
     const out = buildTuiInvocation(provider, CODEX_CONFIGURED_DEFAULT);
-    expect(out.args).toEqual(['--ask-for-approval', 'never', 'exec', '-']);
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', 'exec', '-']);
   });
 
   it('skips --model injection when model is null/undefined/empty', () => {

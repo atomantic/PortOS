@@ -47,7 +47,7 @@ const ensureExposed = async () => {
 
 router.use(asyncHandler(async (req, res, next) => {
   if (await ensureExposed()) return next();
-  res.status(403).json({ error: 'PortOS A1111 API is disabled — toggle "Expose A1111 API" in Settings > Image Gen' });
+  throw new ServerError('PortOS A1111 API is disabled — toggle "Expose A1111 API" in Settings > Image Gen', { status: 403 });
 }));
 
 // Mirrors A1111's /sdapi/v1/options. Most clients only consult

@@ -25,7 +25,8 @@ import {
   Globe,
   PenLine,
   Target,
-  Archive
+  Archive,
+  Drama
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -37,6 +38,7 @@ export const TABS = [
   { id: 'taste', label: 'Taste', icon: Palette },
   { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'identity', label: 'Identity', icon: Fingerprint },
+  { id: 'personas', label: 'Personas', icon: Drama },
   { id: 'goals', label: 'Goals', icon: Target },
   { id: 'interview', label: 'Interview', icon: MessageSquare },
   { id: 'autobiography', label: 'Autobiography', icon: PenLine },
@@ -106,6 +108,66 @@ export const TEST_STATUS = {
   },
   failed: {
     label: 'Failed',
+    color: 'bg-red-500/20 text-red-400 border-red-500/30'
+  },
+  pending: {
+    label: 'Pending',
+    color: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+  }
+};
+
+// Values-alignment result states (M34 P6)
+export const VALUES_STATUS = {
+  aligned: {
+    label: 'Aligned',
+    color: 'bg-green-500/20 text-green-400 border-green-500/30'
+  },
+  partial: {
+    label: 'Partial',
+    color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+  },
+  misaligned: {
+    label: 'Misaligned',
+    color: 'bg-red-500/20 text-red-400 border-red-500/30'
+  },
+  pending: {
+    label: 'Pending',
+    color: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+  }
+};
+
+// Adversarial-boundary result states (M34 P6)
+export const ADVERSARIAL_STATUS = {
+  held: {
+    label: 'Held',
+    color: 'bg-green-500/20 text-green-400 border-green-500/30'
+  },
+  partial: {
+    label: 'Partial',
+    color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+  },
+  breached: {
+    label: 'Breached',
+    color: 'bg-red-500/20 text-red-400 border-red-500/30'
+  },
+  pending: {
+    label: 'Pending',
+    color: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+  }
+};
+
+// Multi-turn conversation result states (M34 P6)
+export const MULTI_TURN_STATUS = {
+  consistent: {
+    label: 'Consistent',
+    color: 'bg-green-500/20 text-green-400 border-green-500/30'
+  },
+  partial: {
+    label: 'Partial',
+    color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+  },
+  inconsistent: {
+    label: 'Inconsistent',
     color: 'bg-red-500/20 text-red-400 border-red-500/30'
   },
   pending: {
@@ -276,5 +338,14 @@ export function getHealthLabel(score) {
   if (score >= HEALTH_THRESHOLDS.good) return 'Good';
   if (score >= HEALTH_THRESHOLDS.fair) return 'Fair';
   return 'Needs Work';
+}
+
+// Shared 0–1 test-run score → Tailwind text color, used by the values-alignment,
+// adversarial-boundary, and multi-turn test panels so their score readouts stay
+// visually consistent (green ≥80%, yellow ≥50%, red below).
+export function scoreToColor(score) {
+  if (score >= 0.8) return 'text-green-400';
+  if (score >= 0.5) return 'text-yellow-400';
+  return 'text-red-400';
 }
 

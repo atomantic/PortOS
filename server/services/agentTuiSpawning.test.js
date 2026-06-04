@@ -142,21 +142,21 @@ describe('agent TUI spawning', () => {
     }, 'codex-configured-default');
 
     expect(config.command).toBe('codex');
-    expect(config.args).toEqual(['--ask-for-approval', 'never']);
-    expect(config.commandLine).toBe('codex --ask-for-approval never');
+    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
+    expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox');
   });
 
-  it('injects --ask-for-approval never for codex TUI when not already set', () => {
+  it('injects --dangerously-bypass-approvals-and-sandbox for codex TUI when not already set', () => {
     const config = buildTuiSpawnConfig({
       id: 'codex-tui',
       command: 'codex',
       type: 'tui',
       args: ['--cd', '/tmp/work']
     }, null);
-    expect(config.args).toEqual(['--ask-for-approval', 'never', '--cd', '/tmp/work']);
+    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '--cd', '/tmp/work']);
   });
 
-  it('does not duplicate --ask-for-approval when the provider config already pins it', () => {
+  it('does not inject the bypass flag when the provider config already pins an approval policy', () => {
     const config = buildTuiSpawnConfig({
       id: 'codex-tui',
       command: 'codex',
@@ -166,7 +166,7 @@ describe('agent TUI spawning', () => {
     expect(config.args).toEqual(['--ask-for-approval', 'on-failure']);
   });
 
-  it('does not inject --ask-for-approval for non-codex TUI commands', () => {
+  it('does not inject the bypass flag for non-codex TUI commands', () => {
     const config = buildTuiSpawnConfig({
       id: 'claude-code-tui',
       command: 'claude',
@@ -215,8 +215,8 @@ describe('agent TUI spawning', () => {
 
   it('omits the --model flag when model is null/empty', () => {
     const config = buildTuiSpawnConfig({ id: 'codex-tui', command: 'codex', type: 'tui', args: [] }, null);
-    expect(config.args).toEqual(['--ask-for-approval', 'never']);
-    expect(config.commandLine).toBe('codex --ask-for-approval never');
+    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
+    expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox');
   });
 });
 

@@ -208,6 +208,43 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[strIdx + 2]).toBe('0.5');
   });
 
+  it('threads --kv-repo for the bf16 model so reference editing loads the kv sibling repo', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      referenceImagePaths: ['/safe/path/ref-a.png'],
+      referenceImageStrengths: [1.0],
+      model: {
+        id: 'flux2-klein-9b-bf16',
+        runner: 'flux2',
+        quantization: 'none',
+        repo: 'black-forest-labs/FLUX.2-klein-9B',
+        kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
+      },
+    });
+    // --repo stays the base bf16 repo; --kv-repo carries the kv sibling so the
+    // runner can swap only for the reference-editing path.
+    expect(args[args.indexOf('--repo') + 1]).toBe('black-forest-labs/FLUX.2-klein-9B');
+    expect(args).toContain('--kv-repo');
+    expect(args[args.indexOf('--kv-repo') + 1]).toBe('black-forest-labs/FLUX.2-klein-9B-kv');
+    expect(args).toContain('--reference-images');
+  });
+
+  it('omits --kv-repo when the model has no kvRepo field', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'flux2-klein-4b',
+        runner: 'flux2',
+        quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      },
+    });
+    expect(args).not.toContain('--kv-repo');
+  });
+
   it('omits --reference-images entirely when no reference paths are supplied', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     const { args } = buildArgs({

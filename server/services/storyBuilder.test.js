@@ -57,7 +57,7 @@ describe('storyBuilder — CRUD', () => {
     expect(series.premise).toBe('a foundry city goes silent');
   });
 
-  it('import mode does not mint shells and marks all steps ready', async () => {
+  it('import mode does not mint shells and marks only importer-filled steps ready', async () => {
     const universe = await universeSvc.createUniverse({ name: 'U' });
     const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
     const s = await sb.createStorySession({
@@ -65,8 +65,17 @@ describe('storyBuilder — CRUD', () => {
     });
     expect(s.universeId).toBe(universe.id);
     expect(s.seriesId).toBe(series.id);
-    expect(s.steps.idea.status).toBe('ready');
-    expect(s.steps.readerMap.status).toBe('ready');
+    // Steps the importer populates open "ready" for review.
+    for (const id of sb.IMPORT_READY_STEPS) {
+      expect(s.steps[id].status).toBe('ready');
+    }
+    expect(sb.IMPORT_READY_STEPS).toEqual(['idea', 'plotArc', 'characters', 'issues']);
+    // The importer never extracts an aesthetic or a reader map, and production
+    // is the downstream render step — they must stay pending, not show empty
+    // content under a misleading "Ready" badge (#728).
+    expect(s.steps.universeAesthetic.status).toBe('pending');
+    expect(s.steps.readerMap.status).toBe('pending');
+    expect(s.steps.production.status).toBe('pending');
   });
 
   it('rejects a blank title', async () => {
@@ -121,7 +130,22 @@ describe('storyBuilder — lock state machine + gating', () => {
     // `buildUpstreamInputs`) surfaces as a failure on this line instead of
     // silently passing a shape-only regex. A buggy impl that always stamped
     // `hashUpstream('idea', null)` would now fail.
-    const expectedHash = hashUpstream('idea', { intakeMode: 'seed', seedIdea: 'seed' });
+    // The idea step's hash now folds in its OWN outputs (#731) — the idea-expand
+    // results on the just-minted universe/series — alongside its upstream inputs.
+    // Derive the expected own-output projection from the live records so the
+    // assertion stays correct if seed-minting defaults change, while still
+    // failing loudly if the idea step's INPUT set drifts.
+    const universe = await universeSvc.getUniverse(s.universeId);
+    const series = await seriesSvc.getSeries(s.seriesId);
+    const expectedHash = hashUpstream('idea', {
+      intakeMode: 'seed',
+      seedIdea: 'seed',
+      ownOutputs: {
+        starterPrompt: universe.starterPrompt || '',
+        seriesLogline: series.logline || '',
+        seriesPremise: series.premise || '',
+      },
+    });
     expect(locked.steps.idea.upstreamHash).toBe(expectedHash);
     // Sanity: the derived hash is still the documented 64-char hex shape.
     expect(expectedHash).toMatch(/^[0-9a-f]{64}$/);
@@ -198,6 +222,250 @@ describe('storyBuilder — integrity / staleness', () => {
     await universeSvc.updateUniverse(s.universeId, { starterPrompt: 'starter v2' });
     view = await sb.getStorySessionView(s.id);
     expect(view.staleSteps).toContain('universeAesthetic');
+  });
+
+  it('flags a locked universeAesthetic stale when its OWN output is edited out-of-band (#731)', async () => {
+    // The session lock only gates the wizard — the universe record stays
+    // editable in Universe Builder. Before #731, mutating universe.logline (an
+    // aesthetic-step OUTPUT, not an upstream input) left the locked aesthetic
+    // step un-flagged because the hash only tracked upstream inputs. Now the
+    // step fingerprints its own outputs, so any post-lock edit flags it stale.
+    const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
+    await universeSvc.updateUniverse(s.universeId, {
+      logline: 'a world of salt and rust', premise: 'the foundry goes silent',
+    });
+    await sb.lockStep(s.id, 'universeAesthetic');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('universeAesthetic');
+    // Edit the locked step's own logline directly (out-of-band, e.g. Universe Builder).
+    await universeSvc.updateUniverse(s.universeId, { logline: 'a CHANGED world of salt and rust' });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('universeAesthetic');
+  });
+
+  it('flags a locked plotArc stale when the arc itself is edited out-of-band (#731)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // updateSeries respects series.locked.arc set by lockStep, but a direct edit
+    // that clears the lock + rewrites the arc still surfaces as stale on read.
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'REWRITTEN spine', summary: 'sum' }, locked: {},
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
+  });
+
+  it('flags a locked characters step stale when a character is added out-of-band (#731)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'the foundry forewoman' }],
+    });
+    await sb.lockStep(s.id, 'characters');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('characters');
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [
+        { name: 'Ada', physicalDescription: 'the foundry forewoman' },
+        { name: 'Rook', physicalDescription: 'the rival' },
+      ],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('characters');
+  });
+
+  it('flags a locked characters step stale when a character body field is edited out-of-band (#731)', async () => {
+    // The cast fingerprint must track the canon body fields (physicalDescription,
+    // personality, role, …), not just name — editing a locked character's
+    // description in Universe Builder is exactly the out-of-band case #731 targets.
+    const s = await sb.createStorySession({ title: 'X' });
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'tall, soot-streaked', personality: 'guarded' }],
+    });
+    await sb.lockStep(s.id, 'characters');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('characters');
+    // Same name + count, only the body changes.
+    await universeSvc.updateUniverse(s.universeId, {
+      characters: [{ name: 'Ada', physicalDescription: 'CHANGED — gaunt, grease-stained', personality: 'guarded' }],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('characters');
+  });
+
+  it('flags a locked plotArc step stale when a season is edited out-of-band (#731)', async () => {
+    // The plotArc step persists the season breakdown, so editing a season's
+    // editorial content (here its synopsis) must flag the locked step stale even
+    // though the arc core fields are untouched.
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum' },
+      seasons: [{ number: 1, title: 'Vol 1', synopsis: 'the foundry goes silent' }],
+    });
+    await sb.lockStep(s.id, 'plotArc');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Edit only the season synopsis (arc core unchanged); the arc lock that
+    // lockStep set is cleared so updateSeries accepts the season edit.
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum' }, locked: {},
+      seasons: [{ number: 1, title: 'Vol 1', synopsis: 'CHANGED — the foundry roars back to life' }],
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
+  });
+});
+
+describe('storyBuilder — sync-safe staleness (#730)', () => {
+  it('sessions are local-only (sync:false) by default and carry no baseline', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    expect(s.sync).toBe(false);
+    expect(s.syncedHashes).toBeUndefined();
+  });
+
+  it('a peer universe edit does NOT false-positive-stale a synced session', async () => {
+    // The exact #730 case: a sync-enabled session locks a step, then a peer's
+    // universe edit lands via universe sync (modeled here as a direct
+    // out-of-band updateSeries). A LOCAL-only session would flag stale (#731);
+    // a synced session keys staleness off its carried baseline, so it does not.
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum', readerMap: { hooks: [{ label: 'h' }] } },
+    });
+    await sb.lockStep(s.id, 'readerMap');
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.session.sync).toBe(true);
+    expect(view.staleSteps).not.toContain('readerMap');
+    // Peer edits the upstream arc out-of-band (universe/series sync) — no
+    // session action touched the baseline, so it must NOT flag stale.
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'PEER-CHANGED spine', summary: 'sum', readerMap: { hooks: [{ label: 'h' }] } },
+      locked: {},
+    });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('readerMap');
+  });
+
+  it('the SAME out-of-band edit DOES flag stale for a local-only session', async () => {
+    // Mirror of the case above with sync OFF — confirms we only suppressed the
+    // false-positive for synced sessions, not the genuine #731 detection.
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'spine', summary: 'sum', readerMap: { hooks: [{ label: 'h' }] } },
+    });
+    await sb.lockStep(s.id, 'readerMap');
+    await seriesSvc.updateSeries(s.seriesId, {
+      arc: { logline: 'CHANGED spine', summary: 'sum', readerMap: { hooks: [{ label: 'h' }] } },
+      locked: {},
+    });
+    const view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('readerMap');
+  });
+
+  it('reconcile re-snapshots the baseline so a genuine drift surfaces', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    // Drift the upstream out-of-band; synced session ignores it until reconcile.
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'DRIFTED', summary: 'sum' }, locked: {} });
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Reconcile adopts the current live records as the new baseline. The locked
+    // step's frozen upstreamHash no longer matches → it surfaces as stale.
+    await sb.reconcileStorySession(s.id);
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
+  });
+
+  it('view reports syncDrift when live records diverge from the synced baseline, and clears it on reconcile (#730)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    // Baseline freshly captured at lock → no drift yet.
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(false);
+    // A peer edit moves the live records but not the carried baseline → drift.
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'DRIFTED', summary: 'sum' }, locked: {} });
+    view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(true);
+    // Reconcile adopts the live records as the new baseline → drift clears.
+    await sb.reconcileStorySession(s.id);
+    view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(false);
+  });
+
+  it('a local-only session always reports syncDrift:false', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'CHANGED', summary: 'sum' }, locked: {} });
+    const view = await sb.getStorySessionView(s.id);
+    expect(view.syncDrift).toBe(false);
+  });
+
+  it('turning sync OFF reverts to live-diff staleness and drops the baseline', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await sb.lockStep(s.id, 'plotArc');
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'CHANGED', summary: 'sum' }, locked: {} });
+    // Synced: not stale (baseline frozen).
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Flip sync off → baseline gone, live-diff resumes → stale.
+    const off = await sb.setStorySessionSync(s.id, false);
+    expect(off.sync).toBe(false);
+    expect(off.syncedHashes).toBeUndefined();
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).toContain('plotArc');
+  });
+
+  it('locking a step does NOT re-baseline OTHER already-locked steps', async () => {
+    // Regression: locking step C must re-baseline only C, not move every locked
+    // step's baseline to the current (possibly peer-edited) records — otherwise
+    // a peer edit suppressed for an earlier-locked step would resurface as stale
+    // the moment any unrelated step is locked, the exact #730 false-positive.
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await universeSvc.updateUniverse(s.universeId, {
+      logline: 'a world of salt', premise: 'the foundry goes silent',
+    });
+    await sb.lockStep(s.id, 'plotArc'); // baseline[plotArc] = live now
+    // Peer edits the arc out-of-band — suppressed for the synced session.
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'PEER spine', summary: 'sum' }, locked: {} });
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Lock an UNRELATED step. The buggy whole-map merge would move
+    // baseline[plotArc] to the peer-edited arc → plotArc would flag stale.
+    await sb.lockStep(s.id, 'universeAesthetic');
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    expect(view.staleSteps).not.toContain('universeAesthetic');
+  });
+
+  it('reconcile rejects a local-only session (it is a re-baseline, not an enable)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    expect(s.sync).toBe(false);
+    await expect(sb.reconcileStorySession(s.id)).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+  });
+
+  it('sanitizer drops bogus / unknown-step entries from a hand-edited syncedHashes', async () => {
+    const cleaned = sb.sanitizeSession({
+      id: 'stb-x', title: 'X', sync: true,
+      syncedHashes: {
+        plotArc: 'a'.repeat(64), // valid
+        readerMap: 'not-a-hash', // dropped (not 64-hex)
+        bogusStep: 'b'.repeat(64), // dropped (unknown step id)
+      },
+    });
+    expect(cleaned.sync).toBe(true);
+    expect(cleaned.syncedHashes).toEqual({ plotArc: 'a'.repeat(64) });
   });
 });
 
@@ -575,5 +843,109 @@ describe('generateIssuesFromArc (issues step)', () => {
     await seedSeasons(s.seriesId, [{ number: 1, title: 'Vol 1', synopsis: 'a' }]);
     await expect(sb.generateIssuesFromArc(s.id, { seasonId: 'season-nope' }))
       .rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+  });
+});
+
+describe('storyBuilder — cross-machine sync wire (#730)', () => {
+  it('listSyncableSessionsForWire excludes local-only sessions and includes only sync:true', async () => {
+    const local = await sb.createStorySession({ title: 'Local only' });
+    const synced = await sb.createStorySession({ title: 'Synced' });
+    await sb.setStorySessionSync(synced.id, true);
+
+    const wire = await sb.listSyncableSessionsForWire();
+    const ids = wire.map((s) => s.id);
+    expect(ids).toContain(synced.id);
+    expect(ids).not.toContain(local.id);
+    // The wire form must never carry a peer-local marker.
+    expect(wire.every((s) => !('ephemeral' in s))).toBe(true);
+    // Deterministic ordering by id for a stable checksum.
+    expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('sanitizeSessionForWire returns null for a non-sync session and for a non-tombstone ephemeral session', () => {
+    expect(sb.sanitizeSessionForWire({ id: 'stb-x', title: 'T', sync: false })).toBeNull();
+    expect(sb.sanitizeSessionForWire({ id: 'stb-y', title: 'T', sync: true, ephemeral: true })).toBeNull();
+    const ok = sb.sanitizeSessionForWire({ id: 'stb-z', title: 'T', sync: true });
+    expect(ok).toMatchObject({ id: 'stb-z', sync: true });
+  });
+
+  it('merge adopts a new remote sync session verbatim', async () => {
+    const remote = {
+      id: 'stb-remote-1', title: 'From peer', intakeMode: 'seed',
+      sync: true, syncedHashes: {}, currentStep: 'idea',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const res = await sb.mergeStorySessionsFromSync([remote]);
+    expect(res).toEqual({ applied: true, count: 1 });
+    const got = await sb.getStorySession('stb-remote-1');
+    expect(got.title).toBe('From peer');
+    expect(got.sync).toBe(true);
+  });
+
+  it('merge is LWW on updatedAt — newer remote wins, older remote is a no-op', async () => {
+    const base = {
+      id: 'stb-lww', title: 'v1', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await sb.mergeStorySessionsFromSync([base]);
+    // Older remote → ignored.
+    const older = await sb.mergeStorySessionsFromSync([{ ...base, title: 'stale', updatedAt: '2025-12-31T00:00:00.000Z' }]);
+    expect(older.applied).toBe(false);
+    expect((await sb.getStorySession('stb-lww')).title).toBe('v1');
+    // Newer remote → wins.
+    const newer = await sb.mergeStorySessionsFromSync([{ ...base, title: 'v2', updatedAt: '2026-02-01T00:00:00.000Z' }]);
+    expect(newer.applied).toBe(true);
+    expect((await sb.getStorySession('stb-lww')).title).toBe('v2');
+  });
+
+  it('merge refuses to re-sync a session the local user turned local-only', async () => {
+    const synced = await sb.createStorySession({ title: 'Was synced' });
+    await sb.setStorySessionSync(synced.id, true);
+    // User disables sync locally (now sync:false, local-only).
+    await sb.setStorySessionSync(synced.id, false);
+    // A stale peer push for the same id must NOT flip it back on or overwrite it.
+    const res = await sb.mergeStorySessionsFromSync([{
+      id: synced.id, title: 'peer wins?', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: synced.createdAt, updatedAt: '2030-01-01T00:00:00.000Z',
+    }]);
+    expect(res.applied).toBe(false);
+    const got = await sb.getStorySession(synced.id);
+    expect(got.sync).toBe(false);
+    expect(got.title).toBe('Was synced');
+  });
+
+  it('merge refuses a remote session that is not sync-enabled', async () => {
+    const res = await sb.mergeStorySessionsFromSync([{
+      id: 'stb-not-synced', title: 'sneaky', sync: false,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    }]);
+    expect(res.applied).toBe(false);
+    await expect(sb.getStorySession('stb-not-synced')).rejects.toMatchObject({ code: sb.ERR_NOT_FOUND });
+  });
+
+  it('merge is first-wins within a batch for a duplicate id', async () => {
+    const dupA = {
+      id: 'stb-dup', title: 'first', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-03-01T00:00:00.000Z',
+    };
+    const dupB = { ...dupA, title: 'second', updatedAt: '2026-04-01T00:00:00.000Z' };
+    await sb.mergeStorySessionsFromSync([dupA, dupB]);
+    // first-wins dedup keeps dupA despite dupB's newer timestamp.
+    expect((await sb.getStorySession('stb-dup')).title).toBe('first');
+  });
+
+  it('merge converges a tombstone for a synced session', async () => {
+    const base = {
+      id: 'stb-tomb', title: 'doomed', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await sb.mergeStorySessionsFromSync([base]);
+    const res = await sb.mergeStorySessionsFromSync([{
+      ...base, deleted: true, deletedAt: '2026-05-01T00:00:00.000Z', updatedAt: '2026-05-01T00:00:00.000Z',
+    }]);
+    expect(res.applied).toBe(true);
+    await expect(sb.getStorySession('stb-tomb')).rejects.toMatchObject({ code: sb.ERR_NOT_FOUND });
+    const withDeleted = await sb.getStorySession('stb-tomb', { includeDeleted: true });
+    expect(withDeleted.deleted).toBe(true);
   });
 });

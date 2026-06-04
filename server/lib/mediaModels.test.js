@@ -451,6 +451,59 @@ describe('mediaModels registry', () => {
     expect(qwenEdit.editOnly).toBe(false);
   });
 
+  // kvRepo — bf16 multi-reference editing loads the `-kv` sibling repo. Backfilled
+  // at load like cfgDisabled/editOnly, plus a durable migration (064).
+
+  it('fresh install: flux2-klein-9b-bf16 ships with kvRepo set to the kv sibling repo', async () => {
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const bf16 = getImageModels().find((m) => m.id === 'flux2-klein-9b-bf16');
+    expect(bf16).toBeDefined();
+    expect(bf16.kvRepo).toBe('black-forest-labs/FLUX.2-klein-9B-kv');
+  });
+
+  it('backfills kvRepo onto a pre-flag flux2-klein-9b-bf16 entry (no migration needed)', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'black-forest-labs/FLUX.2-klein-9B', steps: 20, guidance: 3.5 },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+    }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const bf16 = getImageModels().find((m) => m.id === 'flux2-klein-9b-bf16');
+    expect(bf16.kvRepo).toBe('black-forest-labs/FLUX.2-klein-9B-kv');
+  });
+
+  it('preserves an explicit kvRepo user override (including empty-string clear)', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'black-forest-labs/FLUX.2-klein-9B', steps: 20, guidance: 3.5, kvRepo: '' },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+    }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const bf16 = getImageModels().find((m) => m.id === 'flux2-klein-9b-bf16');
+    expect(bf16.kvRepo).toBe('');
+  });
+
+  it('does NOT inject kvRepo when repo points at a fork (fork-preservation, mirrors migration 064)', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'flux2-klein-9b-bf16', name: 'Flux 2 Klein 9B (bf16)', runner: 'flux2', quantization: 'none', repo: 'my-fork/FLUX.2-klein-9B', steps: 20, guidance: 3.5 },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+    }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const bf16 = getImageModels().find((m) => m.id === 'flux2-klein-9b-bf16');
+    expect('kvRepo' in bf16).toBe(false);
+  });
+
   it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.

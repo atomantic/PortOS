@@ -117,8 +117,10 @@ describe('POST /api/code-review/local', () => {
       .send({ backend: 'lmstudio', model: 'm', diff: 'diff --git a b' })
 
     expect(res.status).toBe(502)
-    expect(res.body.ok).toBe(false)
+    // Standard error envelope: the failure message lands in `error`, and the
+    // reviewer backend/model carry through in `context` for diagnostics.
     expect(res.body.error).toMatch(/lmstudio API error/)
+    expect(res.body.context).toEqual({ backend: 'lmstudio', model: 'm' })
   })
 
   it('returns 200 with findings on success', async () => {

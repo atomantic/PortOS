@@ -540,14 +540,36 @@ Exit criteria:
 
 Goal: evolve from manual passes to controlled live assistance.
 
-- Optional live story continuation suggestions while writing.
-- Optional render previews on selected scenes.
+- Optional live story continuation suggestions while writing. **[shipped]**
+- Optional render previews on selected scenes. *(planned)*
 - Creative Director can propose next beats, alternate scenes, and visual
-  treatments from the active cursor context.
-- Add throttling, debouncing, budget controls, and explicit opt-in per work.
+  treatments from the active cursor context. *(planned)*
+- Add throttling, debouncing, budget controls, and explicit opt-in per work. **[shipped]**
 
 This phase should wait until manual analysis quality, mapping, and render costs
 are proven.
+
+**Shipped (live continuation slice):** the editor has an opt-in "Live Director"
+mode (per work, off by default) that, while the writer pauses, asks for 2–4
+short continuation options from the prose around the cursor — beats to take,
+ready-to-insert prose snippets, or dialogue lines. Suggestions surface in a side
+panel; `prose`/`dialogue` options insert at the caret. Controls:
+
+- Per-work opt-in toggle (work menu → "Enable live director").
+- A client debounce after typing stops (`liveMode.debounceMs`, default 2.5s) so
+  no call fires on every keystroke.
+- A server-enforced daily call budget (`liveMode.dailyCallBudget`, default 100,
+  `0` = unlimited) that rolls over at UTC midnight. Opt-in and budget are
+  enforced server-side, not just in the UI — the debounce is convenience only.
+
+Backed by the `writers-room-continue` prompt stage (quick tier) and
+`server/services/writersRoom/liveDirector.js`; per-work live config persists on
+the work manifest.
+
+**Still planned for this phase:** live render previews on selected scenes from
+the cursor context, and a Creative Director bridge that proposes next
+beats/alternate scenes/visual treatments (injecting into a CD treatment) rather
+than only prose continuations.
 
 ## Test Plan
 

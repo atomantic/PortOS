@@ -70,16 +70,30 @@ export function inferTuiCommand(id) {
   return 'claude';
 }
 
-// Codex TUI blocks on every tool approval without `--ask-for-approval never`.
-// No human-at-keyboard for headless calls (one-shot OR agent), so inject it.
+// Codex TUI blocks on every tool approval AND sandboxes file/network writes
+// unless we run it fully bypassed. There's no human-at-keyboard for headless
+// calls (one-shot OR agent), so inject the full-yolo flag — the same posture
+// the CLI/exec path uses in `agentCliSpawning.js`. The bypass flag is mutually
+// exclusive with `--ask-for-approval` / `--sandbox`, so don't add it when the
+// provider config already pins an approval/sandbox/bypass policy of its own.
 export function applyCommandDefaults(command, args) {
-  if (command === 'codex' && !args.includes('--ask-for-approval')) {
-    return ['--ask-for-approval', 'never', ...args];
+  if (command === 'codex' && !codexHasApprovalPolicy(args)) {
+    return ['--dangerously-bypass-approvals-and-sandbox', ...args];
   }
   if (isAntigravityCommand(command)) {
     return ensureAntigravityTuiArgs(args);
   }
   return args;
+}
+
+// True when the codex argv already declares an approval/sandbox posture, so
+// injecting `--dangerously-bypass-approvals-and-sandbox` would collide with it.
+function codexHasApprovalPolicy(args) {
+  return args.some(arg =>
+    arg === '--ask-for-approval' || arg === '-a' || arg.startsWith('-a=') || arg.startsWith('--ask-for-approval=') ||
+    arg === '--sandbox' || arg === '-s' || arg.startsWith('-s=') || arg.startsWith('--sandbox=') ||
+    arg === '--dangerously-bypass-approvals-and-sandbox' || arg === '--yolo'
+  );
 }
 
 /**

@@ -3,14 +3,52 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
+import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
+
+/**
+ * Resolve the persona to apply for this prompt. `personaId` may be a specific
+ * id, the string 'active' (resolve from settings.activePersonaId), or
+ * undefined/null (no persona). Returns the persona record or null — callers
+ * that build the *base* twin (enrichment, trait analysis) pass nothing and get
+ * the un-flavored context; embody paths (CoS agents) pass 'active'.
+ */
+function resolvePersona(meta, personaId) {
+  if (personaId === undefined || personaId === null) return null;
+  const id = personaId === 'active' ? meta.settings?.activePersonaId : personaId;
+  if (!id) return null;
+  const personas = Array.isArray(meta.personas) ? meta.personas : [];
+  return personas.find(p => p.id === id) || null;
+}
+
+/**
+ * Build the persona preamble. Beyond the free-text instructions, a persona may
+ * carry `traitAdjustments` that blend against the base twin's quantitative
+ * `traits` (communicationProfile + bigFive) into a Communication Calibration
+ * directive (P7 trait-blending). `baseTraits` is the un-flavored twin profile;
+ * the directive renders relative to it, falling back to directional intent when
+ * a baseline value is missing.
+ */
+function buildPersonaPreamble(persona, baseTraits) {
+  if (!persona?.instructions) return '';
+  const desc = persona.description ? `${persona.description}\n` : '';
+  const calibration = renderTraitBlendDirective(baseTraits, persona.traitAdjustments, persona.name);
+  const calibrationBlock = calibration ? `\n\n${calibration}` : '';
+  return `# Active Persona: ${persona.name}\n${desc}\n${persona.instructions}${calibrationBlock}\n\n---\n\n`;
+}
 
 export async function getDigitalTwinForPrompt(options = {}) {
-  const { maxTokens = 4000 } = options;
+  const { maxTokens = 4000, personaId } = options;
   const meta = await loadMeta();
 
   if (!meta.settings.autoInjectToCoS) {
     return '';
   }
+
+  // A persona's instructions are always included (they're the active directive)
+  // and prepended before the documents, counting toward the token budget. When
+  // the persona carries trait adjustments, they blend against the base twin's
+  // quantitative traits into a Communication Calibration directive.
+  const preamble = buildPersonaPreamble(resolvePersona(meta, personaId), meta.traits);
 
   // Get enabled documents sorted by weight (desc) then priority (asc)
   // Higher weight = more important = included first
@@ -23,8 +61,8 @@ export async function getDigitalTwinForPrompt(options = {}) {
       return a.priority - b.priority; // Then by priority
     });
 
-  let output = '';
-  let tokenCount = 0;
+  let output = preamble;
+  let tokenCount = preamble.length;
   const maxChars = maxTokens * 4; // Rough char-to-token estimate
 
   for (const doc of docs) {

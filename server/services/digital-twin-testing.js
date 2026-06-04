@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI } from './digital-twin-helpers.js';
+import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 
@@ -40,9 +40,12 @@ export async function parseTestSuite() {
   return tests;
 }
 
-export async function runTests(providerId, model, testIds = null) {
+export async function runTests(providerId, model, testIds = null, personaId = null) {
   const tests = await parseTestSuite();
-  const soulContext = await getDigitalTwinForPrompt();
+  // When a persona is selected the embodied context is flavored with that
+  // persona's instructions, so the suite measures how the twin behaves *as*
+  // that persona (P7 "per-persona testing"); with none it tests the base twin.
+  const soulContext = await getDigitalTwinForPrompt(personaId ? { personaId } : {});
 
   const provider = await getProviderById(providerId);
   if (!provider || !provider.enabled) {
@@ -66,11 +69,14 @@ export async function runTests(providerId, model, testIds = null) {
     else if (result.result === 'partial') partial++;
   }
 
-  // Save to history
+  const meta = await loadMeta();
+
+  // Save to history (attributed to the persona it embodied, if any)
   const historyEntry = {
     runId: generateId(),
     providerId,
     model,
+    ...resolveTestPersona(meta.personas, personaId),
     score: testsToRun.length > 0 ? (passed + partial * 0.5) / testsToRun.length : 0,
     passed,
     failed,
@@ -79,7 +85,6 @@ export async function runTests(providerId, model, testIds = null) {
     timestamp: now()
   };
 
-  const meta = await loadMeta();
   meta.testHistory.unshift(historyEntry);
   meta.testHistory = meta.testHistory.slice(0, 50); // Keep last 50 runs
   await saveMeta(meta);
@@ -145,28 +150,11 @@ async function scoreTestResponse(test, response, providerId, model) {
   const result = await callProviderAI(provider, model, prompt);
 
   if (!result.error && result.text) {
-    return parseScoreResponse(result.text);
+    return parseScorerVerdict(result.text, ['passed', 'failed']);
   }
 
   // Default fallback
   return { result: 'partial', reasoning: 'Unable to score - defaulting to partial' };
-}
-
-function parseScoreResponse(response) {
-  const lower = response.toLowerCase();
-
-  let result = 'partial';
-  if (lower.includes('"result": "passed"') || lower.includes('result: passed')) {
-    result = 'passed';
-  } else if (lower.includes('"result": "failed"') || lower.includes('result: failed')) {
-    result = 'failed';
-  }
-
-  // Extract reasoning
-  const reasoningMatch = response.match(/"reasoning":\s*"([^"]+)"/);
-  const reasoning = reasoningMatch ? reasoningMatch[1] : response.substring(0, 200);
-
-  return { result, reasoning };
 }
 
 export async function getTestHistory(limit = 10) {

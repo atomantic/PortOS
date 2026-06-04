@@ -38,7 +38,7 @@ export const getMemoryTimeline = (options = {}) => {
   if (options.limit) params.set('limit', options.limit);
   return request(`/memory/timeline?${params}`);
 };
-export const getMemoryGraph = () => request('/memory/graph');
+export const getMemoryGraph = (options = {}) => request('/memory/graph', options);
 export const getMemoryStats = () => request('/memory/stats');
 export const getRelatedMemories = (id, limit = 10) => request(`/memory/${id}/related?limit=${limit}`);
 export const linkMemories = (sourceId, targetId) => request('/memory/link', {

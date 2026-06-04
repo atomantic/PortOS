@@ -22,7 +22,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
   });
 
   it('declares pipeline collection layout versions', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(1);
+    // pipelineIssues bumped to 2 when stages.audio.audioMode + cues[] were added.
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(2);
     // pipelineSeries bumped to 2 when series.arc.readerMap was added.
     expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(2);
   });
@@ -37,7 +38,7 @@ describe('buildPortosMeta', () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.schemaVersions.universes).toBe(5);
-    expect(meta.schemaVersions.pipelineIssues).toBe(1);
+    expect(meta.schemaVersions.pipelineIssues).toBe(2);
     expect(meta.schemaVersions.pipelineSeries).toBe(2);
   });
 
@@ -191,7 +192,7 @@ describe('scopeVersionDiff', () => {
     // Sender is ahead on mediaCollections only; a universe transfer scopes to
     // ['universes'] and stays compatible even though the union diff is not.
     const union = compareSchemaVersions(
-      { universes: 5, pipelineSeries: 2, pipelineIssues: 1, mediaCollections: 2 },
+      { universes: 5, pipelineSeries: 2, pipelineIssues: 2, mediaCollections: 2 },
       PORTOS_SCHEMA_VERSIONS,
     );
     expect(union.compatible).toBe(false); // mediaCollections 2 > 1

@@ -87,6 +87,7 @@ const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
 const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
+const Login = lazyWithReload(() => import('./pages/Login'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -158,6 +159,7 @@ export default function App() {
     <CatalogTypesProvider>
     <Suspense fallback={<PageLoader />}>
       <Routes>
+        <Route path="/login" element={<Login />} />
         <Route path="/ambient" element={<Ambient />} />
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />

@@ -38,6 +38,12 @@ const ICONS = {
  * @param {string} [init.providerId]
  * @param {string} [init.providerName]
  * @param {string} [init.model]
+ * @param {string} [init.appId]         — managed-app id this call works on behalf of
+ * @param {string} [init.workspacePath] — CoS-agent workspace this call works on behalf of
+ *
+ * `appId`/`workspacePath` let the CyberCity AI Core aim its activity beam at the
+ * originating building; ops with neither get the generic radial beam. Token counts
+ * (`tokens` / `tokensPerSec`) arrive later via the `complete` phase's `extra`.
  */
 export function startAIOp(init) {
   const id = randomUUID();
@@ -48,6 +54,8 @@ export function startAIOp(init) {
     providerId: init.providerId,
     providerName: init.providerName,
     model: init.model,
+    appId: init.appId,
+    workspacePath: init.workspacePath,
     silent: !!init.silent
   };
 
