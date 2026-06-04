@@ -171,6 +171,34 @@ function CyberCityInner() {
     60_000,
   );
 
+  // JIRA sprint district: the set of apps with JIRA wired up (each carries instanceId+projectKey),
+  // collapsed to a stable signature that gates and re-triggers the poll only when that set changes.
+  const jiraAppsKey = useMemo(
+    () => (apps || [])
+      .filter(a => a?.jira?.enabled && a.jira.instanceId && a.jira.projectKey)
+      .map(a => `${a.jira.instanceId}/${a.jira.projectKey}`)
+      .sort().join(','),
+    [apps]
+  );
+  // Fetch each enabled app's current-sprint tickets and merge; the helper dedupes by key. Skip
+  // the poll entirely when no app has JIRA configured. Keyed on `jiraAppsKey` so the closure (and
+  // poll) refresh when JIRA apps appear/disappear.
+  const fetchSprintTickets = useCallback(async () => {
+    const specs = (apps || [])
+      .filter(a => a?.jira?.enabled && a.jira.instanceId && a.jira.projectKey)
+      .map(a => ({ instanceId: a.jira.instanceId, projectKey: a.jira.projectKey }));
+    if (specs.length === 0) return [];
+    const batches = await Promise.all(
+      specs.map(j => api.getMySprintTickets(j.instanceId, j.projectKey, { silent: true }).catch(() => []))
+    );
+    return batches.flat();
+  }, [apps]);
+  const { data: jiraTickets } = useAutoRefetch(
+    fetchSprintTickets,
+    120_000,
+    { enabled: jiraAppsKey.length > 0 },
+  );
+
   const handleBuildingClick = useCallback((app) => {
     if (app?.id) {
       navigate(`/apps/${app.id}`);
@@ -235,6 +263,7 @@ function CyberCityInner() {
         chronotype={chronotypeData}
         memoryGraph={memoryGraph}
         inboxDepth={inboxData?.counts?.needs_review ?? 0}
+        jiraTickets={jiraTickets}
         photoMode={photoMode}
         photoPresetId={photoPresetId}
         onPhotoCaptureReady={handlePhotoCaptureReady}

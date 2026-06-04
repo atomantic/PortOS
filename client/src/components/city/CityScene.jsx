@@ -27,6 +27,7 @@ import CitySeasonalDecor from './CitySeasonalDecor';
 import CityEasterEggs from './CityEasterEggs';
 import CityVoiceMarker from './CityVoiceMarker';
 import CityMemoryDistrict from './CityMemoryDistrict';
+import CityJiraDistrict from './CityJiraDistrict';
 import CityAiCore from './CityAiCore';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
@@ -40,7 +41,7 @@ import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 import CityPhotoCamera from './CityPhotoCamera';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -106,6 +107,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={settings} />
       <CityVoiceMarker voiceState={voiceState} settings={settings} />
       <CityMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={settings} />
+      <CityJiraDistrict jiraTickets={jiraTickets} settings={settings} />
       <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={settings} />
       <CityGround settings={settings} />
 
