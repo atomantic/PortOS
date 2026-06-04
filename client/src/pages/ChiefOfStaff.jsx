@@ -688,7 +688,13 @@ export default function ChiefOfStaff() {
             />
 
             {hasCanvasAvatar && (
-              <div className="absolute inset-0 z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
+              // Cap the full-bleed avatar canvas to the panel's BASE height
+              // (the same min-h the panel starts at) and anchor it to the top.
+              // The panel itself uses min-h so it can grow to fit the stats grid
+              // + event log without clipping; without this cap the inset-0 canvas
+              // grows with the panel on desktop, dragging the framed avatar down
+              // into the stats grid below it.
+              <div className="absolute inset-0 lg:bottom-auto lg:h-[min(460px,calc(100vh-1rem))] xl:h-[min(620px,calc(100vh-1rem))] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
                 {renderAvatar(true)}
               </div>
             )}
