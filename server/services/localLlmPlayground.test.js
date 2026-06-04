@@ -166,6 +166,19 @@ describe('runLocalLlmTest timeout/abort contract', () => {
     expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ output: 'Done.', success: true, exitCode: 0 }));
   });
 
+  it('forwards each content delta to onToken as it streams (streaming route)', async () => {
+    stubStream(makeReader([sse({ content: 'Hel' }), sse({ content: 'lo' })], { abort: false }));
+    const tokens = [];
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: (delta) => tokens.push(delta),
+    });
+
+    expect(tokens).toEqual(['Hel', 'lo']);
+    expect(result.text).toBe('Hello');
+  });
+
   it('forwards a client cancel onto the upstream fetch so the reader tears down early', async () => {
     let capturedSignal = null;
     global.fetch = vi.fn().mockImplementation((_url, init) => {

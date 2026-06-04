@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, API_BASE } from './apiCore.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.
 // Installed models per backend come back inside getLocalLlmStatus().
@@ -64,3 +64,56 @@ export const testLocalLlmModel = (payload, options) =>
 
 export const compareLocalLlmModels = (payload, options) =>
   request('/local-llm/compare', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+// Streaming variant of testLocalLlmModel. POSTs the same payload but reads the
+// NDJSON response body so `onToken(delta)` fires per content chunk for live
+// rendering. Resolves with the terminal result object (same shape as
+// testLocalLlmModel, including `error`/`text` for a timed-out partial). The
+// caller passes `signal` to cancel — aborting rejects the read with AbortError,
+// which the caller should swallow when `signal.aborted` (intentional cancel).
+// Can't use the EventSource-based useSseProgress hook here: that's GET-only and
+// this request carries a prompt body.
+export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
+  const response = await fetch(`${API_BASE}/local-llm/test/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok || !response.body?.getReader) {
+    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+
+  const consume = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let frame;
+    try { frame = JSON.parse(trimmed); } catch { return; }
+    if (frame.type === 'token') onToken?.(frame.delta || '');
+    else if (frame.type === 'result') result = frame.result;
+  };
+
+  // Always release the reader on every exit — a clean finish, a thrown
+  // AbortError on cancel, or a mid-stream throw — so a non-abort error doesn't
+  // leave the stream dangling (mirrors apiAsk.js / apiOpenClaw.js).
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) consume(line);
+    }
+    if (buffer.trim()) consume(buffer);
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return result;
+}

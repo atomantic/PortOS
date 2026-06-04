@@ -6,6 +6,7 @@ vi.mock('../services/api', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
   testLocalLlmModel: vi.fn(),
+  streamLocalLlmTest: vi.fn(),
   compareLocalLlmModels: vi.fn(),
 }));
 
