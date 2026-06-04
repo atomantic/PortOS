@@ -332,7 +332,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
         type="button"
         aria-label={pinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
-        className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 focus:opacity-100'}`}
+        className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
       >
         {pinned ? <PinOff size={14} /> : <Pin size={14} />}
       </button>
@@ -812,31 +812,16 @@ export default function Layout() {
                 ? location.pathname === child.to
                 : isActive(child.to);
               const grandChildren = Array.isArray(child.grandChildren) ? child.grandChildren : [];
+              const childIsPinned = isPinned(child.to);
               return (
                 <div key={child.to} className="min-w-0">
-                  <div className="group min-w-0 flex items-stretch">
-                    <NavLink
-                      to={child.to}
-                      end={child.end}
-                      onClick={() => setMobileOpen(false)}
-                      className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors min-w-0 ${
-                        childActive
-                          ? 'bg-port-accent/10 text-port-accent'
-                          : 'text-gray-500 hover:text-white hover:bg-port-border/50'
-                      }`}
-                    >
-                      <ChildIcon size={16} className="shrink-0" />
-                      <span className="min-w-0 truncate">{child.label}</span>
-                    </NavLink>
-                    <button
-                      type="button"
-                      aria-label={isPinned(child.to) ? `Unpin ${child.label}` : `Pin ${child.label}`}
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); isPinned(child.to) ? unpin(child.to) : pin(child.to); }}
-                      className={`px-2 rounded-lg hover:bg-port-border/50 ${isPinned(child.to) ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 focus:opacity-100'}`}
-                    >
-                      {isPinned(child.to) ? <PinOff size={14} /> : <Pin size={14} />}
-                    </button>
-                  </div>
+                  <WorkingSetRow
+                    entry={{ path: child.to, label: child.label, icon: ChildIcon }}
+                    pinned={childIsPinned}
+                    onTogglePin={() => (childIsPinned ? unpin(child.to) : pin(child.to))}
+                    onNavigate={() => setMobileOpen(false)}
+                    isActive={childActive}
+                  />
                   {grandChildren.length > 0 && (
                     <div className="ml-6 mt-0.5 mb-1 border-l border-port-border/50 pl-2 min-w-0">
                       {grandChildren.map((gc) => {
