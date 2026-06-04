@@ -1,7 +1,7 @@
 import { Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
-import { getSettings, updateSettings } from './services/api';
+import { getSettings, updateSettings, getSelfInstance } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
 import Dashboard from './pages/Dashboard';
@@ -153,8 +153,21 @@ function useTimezoneBootstrap() {
   }, []);
 }
 
+// Stamp the machine's instance name into the browser tab so multiple federated
+// installs are distinguishable at a glance — "PortOS: {name}". Falls back to the
+// static "PortOS" title (set in index.html) when the name is missing/unfetchable.
+function useDocumentTitle() {
+  useEffect(() => {
+    getSelfInstance({ silent: true }).then((self) => {
+      const name = self?.name?.trim();
+      if (name) document.title = `PortOS: ${name}`;
+    }).catch(() => null);
+  }, []);
+}
+
 export default function App() {
   useTimezoneBootstrap();
+  useDocumentTitle();
   return (
     <CatalogTypesProvider>
     <Suspense fallback={<PageLoader />}>

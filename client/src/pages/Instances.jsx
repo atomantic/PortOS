@@ -234,6 +234,7 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
     if (!name.trim()) return;
     const result = await updateSelfInstance({ name: name.trim() }).catch(() => null);
     if (!result) return;
+    document.title = `PortOS: ${name.trim()}`;
     onUpdate();
     setEditing(false);
     toast.success('Instance name updated');
