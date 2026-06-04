@@ -771,6 +771,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // from `keyframes` even when caller omitted `mode`, so without this the
     // history entry would say 'text' for a multi-keyframe render.
     mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
+    // Stamp the experimental fast-path so A/B analysis can tell a two-stage
+    // render apart from a user who happened to pick 8 steps — comparing it
+    // against the default Standard render is the whole point of the knob.
+    ...(t2vTwoStage ? { twoStageT2v: true, stage2Steps: actualStage2Steps } : {}),
     ...(hidden ? { hidden: true } : {}),
   };
   const job = { ...meta, clients: [], status: 'running' };
