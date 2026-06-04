@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { CITY_COLORS, cityDayMix, mixHex, seededRand, smoothstepRange } from './cityConstants';
 
@@ -75,6 +75,10 @@ function TerrainPlane({ dayMix }) {
     depthWrite: true,
   }), [dayMix]);
 
+  // R3F doesn't dispose a material handed in via the `material` prop, so free the
+  // prior one when dayMix flips (Day/Night toggle) and on unmount.
+  useEffect(() => () => material.dispose(), [material]);
+
   return (
     <mesh
       rotation={[-Math.PI / 2, 0, 0]}
@@ -110,6 +114,10 @@ function Mountain({ mountain, dayMix }) {
     geom.computeVertexNormals();
     return geom;
   }, [dayMix, mountain.height, mountain.light, mountain.radius, mountain.sides, mountain.snow]);
+
+  // Attached via <primitive object={geometry}>, which R3F never auto-disposes —
+  // free the prior cone when dayMix rebuilds it, and on unmount.
+  useEffect(() => () => geometry.dispose(), [geometry]);
 
   return (
     <group position={mountain.position} rotation={[0, mountain.rotation, 0]} scale={mountain.scale}>

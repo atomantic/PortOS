@@ -44,6 +44,7 @@ import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 import CityPhotoCamera from './CityPhotoCamera';
 import { cityDayMix } from './cityConstants';
+import ErrorBoundary from '../ErrorBoundary';
 
 export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background }) {
   const [positions, setPositions] = useState(null);
@@ -106,12 +107,15 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       {showGradientBackground && <color attach="background" args={[background || '#030308']} />}
       {/* Mount the galaxy dome only at night — keeps its 2.8MB texture from being
           fetched/decoded in full daylight, where it's fully faded out anyway.
-          Wrapped in Suspense so the useLoader texture fetch can't suspend the
-          whole canvas tree while it streams in. */}
+          Suspense keeps the useLoader fetch from suspending the whole canvas while
+          it streams in; the error boundary degrades to the plain dark sky if the
+          texture is missing/corrupt (e.g. a partial checkout) instead of crashing. */}
       {!showGradientBackground && (
-        <Suspense fallback={null}>
-          <CityGalaxySky settings={settings} />
-        </Suspense>
+        <ErrorBoundary fallback={null}>
+          <Suspense fallback={null}>
+            <CityGalaxySky settings={settings} />
+          </Suspense>
+        </ErrorBoundary>
       )}
       <CitySky settings={settings} />
       <CityClouds settings={settings} />
