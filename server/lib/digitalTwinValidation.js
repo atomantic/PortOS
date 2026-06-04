@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  COMM_DELTA_MIN,
+  COMM_DELTA_MAX,
+  BIG_FIVE_DELTA_MIN,
+  BIG_FIVE_DELTA_MAX,
+  EMOJI_USAGE_VALUES
+} from './personaTraitBlend.js';
 
 // Document category enum
 export const documentCategoryEnum = z.enum([
@@ -150,6 +157,29 @@ export const soulSettingsSchema = digitalTwinSettingsSchema; // Alias for backwa
 
 // --- Phase 7: Twin Personas (M34 P7) ---
 
+// Trait-blending rules (M34 P7). Beyond free-text instructions, a persona may
+// modulate the *base* twin's quantitative profile for its context: relative
+// nudges to formality/verbosity (the 1..10 communicationProfile scale, so a
+// ±9 delta can reach either end), absolute overrides for emoji usage and tone,
+// and directional Big-Five leans (0..1 scale → ±1 delta). All fields optional;
+// an instructions-only persona omits the whole object. The blend + directive
+// rendering live in `server/lib/personaTraitBlend.js`, which is the single
+// source for the delta bounds the schema and UI sliders both enforce.
+const bigFiveDelta = z.number().min(BIG_FIVE_DELTA_MIN).max(BIG_FIVE_DELTA_MAX);
+export const personaTraitAdjustmentsSchema = z.object({
+  formality: z.number().int().min(COMM_DELTA_MIN).max(COMM_DELTA_MAX).optional(),
+  verbosity: z.number().int().min(COMM_DELTA_MIN).max(COMM_DELTA_MAX).optional(),
+  emojiUsage: z.enum(EMOJI_USAGE_VALUES).optional(),
+  tone: z.string().max(100).optional(),
+  bigFive: z.object({
+    O: bigFiveDelta.optional(),
+    C: bigFiveDelta.optional(),
+    E: bigFiveDelta.optional(),
+    A: bigFiveDelta.optional(),
+    N: bigFiveDelta.optional()
+  }).optional()
+});
+
 // A persona is a named context variant. Its instructions are prepended to the
 // twin context so the embodied twin modulates voice/behavior for a context
 // (Professional, Casual, Family, …) without forking the underlying documents.
@@ -158,6 +188,7 @@ export const personaSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
   instructions: z.string().min(1).max(5000),
+  traitAdjustments: personaTraitAdjustmentsSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -165,13 +196,16 @@ export const personaSchema = z.object({
 export const createPersonaInputSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
-  instructions: z.string().min(1).max(5000)
+  instructions: z.string().min(1).max(5000),
+  traitAdjustments: personaTraitAdjustmentsSchema.optional()
 });
 
 export const updatePersonaInputSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
-  instructions: z.string().min(1).max(5000).optional()
+  instructions: z.string().min(1).max(5000).optional(),
+  // nullable so the UI can clear adjustments back to an instructions-only persona
+  traitAdjustments: personaTraitAdjustmentsSchema.nullable().optional()
 });
 
 export const setActivePersonaInputSchema = z.object({
@@ -194,7 +228,7 @@ export const communicationProfileSchema = z.object({
   formality: z.number().int().min(1).max(10).describe('1=very casual, 10=very formal'),
   verbosity: z.number().int().min(1).max(10).describe('1=terse, 10=elaborate'),
   avgSentenceLength: z.number().min(5).max(50).optional(),
-  emojiUsage: z.enum(['never', 'rare', 'occasional', 'frequent']).default('rare'),
+  emojiUsage: z.enum(EMOJI_USAGE_VALUES).default('rare'),
   preferredTone: z.string().max(100).optional(),
   distinctiveMarkers: z.array(z.string().max(200)).max(10).optional()
 });

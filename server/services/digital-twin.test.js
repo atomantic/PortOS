@@ -1478,6 +1478,56 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result).not.toContain('Active Persona');
       expect(result).toContain('Soul content');
     });
+
+    it('renders a Communication Calibration directive when the persona carries trait adjustments (P7)', async () => {
+      const persona = {
+        id: 'p1', name: 'Professional', instructions: 'Be concise and formal.',
+        traitAdjustments: { formality: 3, verbosity: -2, bigFive: { A: 0.3 } },
+        createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z'
+      };
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 })],
+        personas: [persona],
+        traits: { communicationProfile: { formality: 4, verbosity: 7 }, bigFive: { A: 0.5 } },
+        settings: { autoInjectToCoS: true, maxContextTokens: 4000, activePersonaId: 'p1' }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        if (filePath.includes('SOUL.md')) return 'Soul content';
+        return '';
+      });
+
+      const result = await getDigitalTwinForPrompt({ personaId: 'active' });
+      expect(result).toContain('# Active Persona: Professional');
+      expect(result).toContain('## Communication Calibration (Professional context)');
+      expect(result).toContain('Formality: 4 → 7'); // 4 + 3 = 7
+      expect(result).toContain('Verbosity: 7 → 5'); // 7 - 2 = 5, "more concise"
+      expect(result).toContain('Soul content');
+    });
+
+    it('omits the calibration directive for an instructions-only persona', async () => {
+      const persona = {
+        id: 'p1', name: 'Casual', instructions: 'Be relaxed.',
+        createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z'
+      };
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 })],
+        personas: [persona],
+        traits: { communicationProfile: { formality: 4 } },
+        settings: { autoInjectToCoS: true, maxContextTokens: 4000, activePersonaId: 'p1' }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        if (filePath.includes('SOUL.md')) return 'Soul content';
+        return '';
+      });
+
+      const result = await getDigitalTwinForPrompt({ personaId: 'active' });
+      expect(result).toContain('# Active Persona: Casual');
+      expect(result).not.toContain('Communication Calibration');
+    });
   });
 
   // ==========================================================================
@@ -1523,6 +1573,28 @@ Forgets the budget and recommends lodging that exceeds it.
     it('throws when updating a missing persona', async () => {
       await setupMetaFile(makeMeta());
       await expect(updatePersona('does-not-exist', { name: 'x' })).rejects.toThrow();
+    });
+
+    it('stores traitAdjustments on create and omits the key when absent (P7)', async () => {
+      await setupMetaFile(makeMeta());
+      const withAdj = await createPersona({ name: 'Pro', instructions: 'go', traitAdjustments: { formality: 3 } });
+      expect(withAdj.traitAdjustments).toEqual({ formality: 3 });
+      const without = await createPersona({ name: 'Plain', instructions: 'go' });
+      expect(without.traitAdjustments).toBeUndefined();
+    });
+
+    it('updates, preserves (absent), and clears (null) traitAdjustments (P7)', async () => {
+      await setupMetaFile(makeMeta());
+      const persona = await createPersona({ name: 'A', instructions: 'one', traitAdjustments: { formality: 2 } });
+      // Absent → preserved.
+      const preserved = await updatePersona(persona.id, { instructions: 'two' });
+      expect(preserved.traitAdjustments).toEqual({ formality: 2 });
+      // Object → replaced.
+      const replaced = await updatePersona(persona.id, { traitAdjustments: { verbosity: -3 } });
+      expect(replaced.traitAdjustments).toEqual({ verbosity: -3 });
+      // Null → cleared back to instructions-only.
+      const cleared = await updatePersona(persona.id, { traitAdjustments: null });
+      expect(cleared.traitAdjustments).toBeUndefined();
     });
 
     it('sets and reads back the active persona', async () => {

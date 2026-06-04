@@ -6,6 +6,7 @@
 export * from './canonPrompt.js';
 export * from './cleanPlatePrompt.js';
 export * from './composeStyledPrompt.js';
+export * from './personaTraitBlend.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
 export * from './sheetPointers.js';

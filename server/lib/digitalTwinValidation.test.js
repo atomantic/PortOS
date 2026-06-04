@@ -3,7 +3,10 @@ import {
   runTestsInputSchema,
   runMultiTestsInputSchema,
   createPersonaInputSchema,
+  updatePersonaInputSchema,
   setActivePersonaInputSchema,
+  personaTraitAdjustmentsSchema,
+  personaSchema,
   digitalTwinSettingsSchema,
   testHistoryEntrySchema,
   valuesTestHistoryEntrySchema
@@ -129,5 +132,59 @@ describe('persona input schemas', () => {
     expect(digitalTwinSettingsSchema.safeParse({ activePersonaId: uuid }).success).toBe(true);
     expect(digitalTwinSettingsSchema.safeParse({ activePersonaId: null }).success).toBe(true);
     expect(digitalTwinSettingsSchema.safeParse({}).success).toBe(true);
+  });
+});
+
+// Trait-blending (M34 P7) — personas may carry structured `traitAdjustments`.
+// The schema must survive a meta round-trip (Zod strips unknown keys, so a
+// missing field would silently drop the adjustments on load), bound the deltas,
+// and let an update clear them with an explicit null.
+describe('persona trait-blending schema', () => {
+  const uuid = '11111111-1111-4111-8111-111111111111';
+
+  it('accepts a full set of in-range adjustments', () => {
+    const parsed = personaTraitAdjustmentsSchema.safeParse({
+      formality: 5, verbosity: -3, emojiUsage: 'frequent', tone: 'warm', bigFive: { A: 0.4, E: -0.2 }
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts an empty adjustments object (instructions-only persona)', () => {
+    expect(personaTraitAdjustmentsSchema.safeParse({}).success).toBe(true);
+  });
+
+  it('rejects out-of-range communication deltas', () => {
+    expect(personaTraitAdjustmentsSchema.safeParse({ formality: 10 }).success).toBe(false);
+    expect(personaTraitAdjustmentsSchema.safeParse({ verbosity: -10 }).success).toBe(false);
+    expect(personaTraitAdjustmentsSchema.safeParse({ formality: 2.5 }).success).toBe(false);
+  });
+
+  it('rejects out-of-range big-five deltas and bad emoji enums', () => {
+    expect(personaTraitAdjustmentsSchema.safeParse({ bigFive: { O: 1.5 } }).success).toBe(false);
+    expect(personaTraitAdjustmentsSchema.safeParse({ emojiUsage: 'sometimes' }).success).toBe(false);
+  });
+
+  it('round-trips traitAdjustments on a full persona record', () => {
+    const persona = {
+      id: uuid, name: 'Pro', instructions: 'be sharp',
+      traitAdjustments: { formality: 4, bigFive: { C: 0.3 } },
+      createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z'
+    };
+    const parsed = personaSchema.parse(persona);
+    expect(parsed.traitAdjustments).toEqual({ formality: 4, bigFive: { C: 0.3 } });
+  });
+
+  it('still validates a persona with no traitAdjustments (legacy)', () => {
+    const parsed = personaSchema.parse({
+      id: uuid, name: 'Pro', instructions: 'be sharp',
+      createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z'
+    });
+    expect(parsed.traitAdjustments).toBeUndefined();
+  });
+
+  it('lets create accept traitAdjustments and update clear them with null', () => {
+    expect(createPersonaInputSchema.safeParse({ name: 'A', instructions: 'go', traitAdjustments: { formality: 2 } }).success).toBe(true);
+    expect(updatePersonaInputSchema.safeParse({ traitAdjustments: null }).success).toBe(true);
+    expect(updatePersonaInputSchema.safeParse({ traitAdjustments: { verbosity: 3 } }).success).toBe(true);
   });
 });

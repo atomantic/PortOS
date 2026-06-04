@@ -25,7 +25,7 @@ export async function getPersonaById(id) {
   return personas.find(p => p.id === id) || null;
 }
 
-export async function createPersona({ name, description, instructions }) {
+export async function createPersona({ name, description, instructions, traitAdjustments }) {
   const meta = await loadMeta();
   if (!Array.isArray(meta.personas)) meta.personas = [];
 
@@ -35,6 +35,7 @@ export async function createPersona({ name, description, instructions }) {
     name,
     ...(description ? { description } : {}),
     instructions,
+    ...(traitAdjustments ? { traitAdjustments } : {}),
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -57,6 +58,15 @@ export async function updatePersona(id, updates) {
   if (updates.name !== undefined) persona.name = updates.name;
   if (updates.description !== undefined) persona.description = updates.description;
   if (updates.instructions !== undefined) persona.instructions = updates.instructions;
+  // traitAdjustments: absent (undefined) preserves the original; an explicit
+  // null clears it back to an instructions-only persona; an object replaces it.
+  if (updates.traitAdjustments !== undefined) {
+    if (updates.traitAdjustments === null) {
+      delete persona.traitAdjustments;
+    } else {
+      persona.traitAdjustments = updates.traitAdjustments;
+    }
+  }
   persona.updatedAt = now();
 
   await saveMeta(meta);

@@ -173,6 +173,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
+| `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |

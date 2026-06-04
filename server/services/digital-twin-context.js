@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
+import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
 
 /**
  * Resolve the persona to apply for this prompt. `personaId` may be a specific
@@ -19,10 +20,20 @@ function resolvePersona(meta, personaId) {
   return personas.find(p => p.id === id) || null;
 }
 
-function buildPersonaPreamble(persona) {
+/**
+ * Build the persona preamble. Beyond the free-text instructions, a persona may
+ * carry `traitAdjustments` that blend against the base twin's quantitative
+ * `traits` (communicationProfile + bigFive) into a Communication Calibration
+ * directive (P7 trait-blending). `baseTraits` is the un-flavored twin profile;
+ * the directive renders relative to it, falling back to directional intent when
+ * a baseline value is missing.
+ */
+function buildPersonaPreamble(persona, baseTraits) {
   if (!persona?.instructions) return '';
   const desc = persona.description ? `${persona.description}\n` : '';
-  return `# Active Persona: ${persona.name}\n${desc}\n${persona.instructions}\n\n---\n\n`;
+  const calibration = renderTraitBlendDirective(baseTraits, persona.traitAdjustments, persona.name);
+  const calibrationBlock = calibration ? `\n\n${calibration}` : '';
+  return `# Active Persona: ${persona.name}\n${desc}\n${persona.instructions}${calibrationBlock}\n\n---\n\n`;
 }
 
 export async function getDigitalTwinForPrompt(options = {}) {
@@ -34,8 +45,10 @@ export async function getDigitalTwinForPrompt(options = {}) {
   }
 
   // A persona's instructions are always included (they're the active directive)
-  // and prepended before the documents, counting toward the token budget.
-  const preamble = buildPersonaPreamble(resolvePersona(meta, personaId));
+  // and prepended before the documents, counting toward the token budget. When
+  // the persona carries trait adjustments, they blend against the base twin's
+  // quantitative traits into a Communication Calibration directive.
+  const preamble = buildPersonaPreamble(resolvePersona(meta, personaId), meta.traits);
 
   // Get enabled documents sorted by weight (desc) then priority (asc)
   // Higher weight = more important = included first
