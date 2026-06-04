@@ -20,10 +20,7 @@ export default function MobileApproveFlow() {
       return null;
     });
     setBusyId(null);
-    if (!result || result.error) {
-      if (result?.error) toast.error(result.error);
-      return;
-    }
+    if (!result) return; // approve rejects on failure → handled by the catch above
     toast.success('Approved');
     refetch();
   };

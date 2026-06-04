@@ -33,9 +33,10 @@ export default function MobileLogFlow() {
   const { data: customDrinks } = useAutoRefetch(() => api.getCustomDrinks({ silent: true }), 300_000);
   const { data: customNicotine } = useAutoRefetch(() => api.getCustomNicotineProducts({ silent: true }), 300_000);
 
-  const logDrink = async (drink) => {
-    const key = `${drink.name}-${drink.oz}-${drink.abv}`;
-    setBusy(key);
+  // busyKey uniquely identifies the tapped button (value signature + index) so
+  // two presets with identical values don't disable together during one tap.
+  const logDrink = async (drink, busyKey) => {
+    setBusy(busyKey);
     // silent: this flow owns the error toast in the catch below.
     const result = await api.logAlcoholDrink({ name: drink.name, oz: drink.oz, abv: drink.abv }, { silent: true }).catch((err) => {
       toast.error(`Log failed: ${err.message}`);
@@ -46,9 +47,8 @@ export default function MobileLogFlow() {
     flash(`${drink.name} logged`);
   };
 
-  const logNic = async (product) => {
-    const key = `${product.product}-${product.mgPerUnit}`;
-    setBusy(key);
+  const logNic = async (product, busyKey) => {
+    setBusy(busyKey);
     // silent: this flow owns the error toast in the catch below.
     const result = await api.logNicotine({ product: product.product, mgPerUnit: product.mgPerUnit }, { silent: true }).catch((err) => {
       toast.error(`Log failed: ${err.message}`);
@@ -69,20 +69,16 @@ export default function MobileLogFlow() {
   // Normalize both kinds into one button shape { key, label, detail, onTap }
   // so a single grid renders either tab.
   const buttons = tab === 'alcohol'
-    ? [...DRINK_PRESETS, ...(Array.isArray(customDrinks) ? customDrinks : [])].map((d) => ({
-      key: `${d.name}-${d.oz}-${d.abv}`,
-      label: d.name,
-      detail: `${d.oz}oz · ${d.abv}%`,
-      onTap: () => logDrink(d),
-    }))
+    ? [...DRINK_PRESETS, ...(Array.isArray(customDrinks) ? customDrinks : [])].map((d, i) => {
+      const key = `${d.name}-${d.oz}-${d.abv}-${i}`;
+      return { key, label: d.name, detail: `${d.oz}oz · ${d.abv}%`, onTap: () => logDrink(d, key) };
+    })
     : [...NICOTINE_PRESETS, ...(Array.isArray(customNicotine)
       ? customNicotine.map((p) => ({ product: p.name, mgPerUnit: p.mgPerUnit }))
-      : [])].map((p) => ({
-      key: `${p.product}-${p.mgPerUnit}`,
-      label: p.product,
-      detail: `${p.mgPerUnit}mg`,
-      onTap: () => logNic(p),
-    }));
+      : [])].map((p, i) => {
+      const key = `${p.product}-${p.mgPerUnit}-${i}`;
+      return { key, label: p.product, detail: `${p.mgPerUnit}mg`, onTap: () => logNic(p, key) };
+    });
 
   return (
     <div className="space-y-4">
@@ -98,9 +94,9 @@ export default function MobileLogFlow() {
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        {buttons.map((b, i) => (
+        {buttons.map((b) => (
           <button
-            key={`${b.key}-${i}`}
+            key={b.key}
             onClick={b.onTap}
             disabled={busy === b.key}
             className="flex min-h-[72px] flex-col items-center justify-center rounded-xl border border-port-border bg-port-card disabled:opacity-50"
