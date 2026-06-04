@@ -5,6 +5,8 @@
 // finished, lit buildings. Tickets are gathered across every JIRA-enabled app, deduped by key.
 // No three.js / React imports so the topology is unit-testable (mirrors cityTaskQueue.js etc.).
 
+import { gridIndexToPosition, tallyByKey, scaleMetricToHeight } from './cityDistrictLayout';
+
 export const JIRA_DISTRICT = {
   // North-east-of-north: a yard between the goal monuments (NE, +30,-40) and downtown, on the
   // -X side so it doesn't collide with the artifact hall (+44,-28) or memory district (-44,-30).
@@ -37,7 +39,7 @@ export function ticketState(ticket) {
 // floor when the ticket carries no estimate so every ticket is at least a visible crate.
 export function structureHeight(storyPoints) {
   const pts = Number.isFinite(storyPoints) && storyPoints > 0 ? storyPoints : 1;
-  return Math.min(JIRA_DISTRICT.maxHeight, 0.9 + Math.log2(1 + pts) * 1.1);
+  return scaleMetricToHeight(pts, { max: JIRA_DISTRICT.maxHeight, k: 1.1, base: 0.9 });
 }
 
 // Dedupe tickets across apps by key (the same JIRA ticket can surface under two apps that share a
@@ -59,20 +61,17 @@ export function dedupeAndSort(tickets) {
 
 // Grid position for the i-th structure in the yard: rows wrap toward -Z, centered on the base X.
 export function structurePosition(index, opts = {}) {
-  const base = opts.base || JIRA_DISTRICT.base;
-  const columns = opts.columns ?? JIRA_DISTRICT.columns;
-  const spacing = opts.spacing ?? JIRA_DISTRICT.spacing;
-  const col = index % columns;
-  const row = Math.floor(index / columns);
-  const offsetX = ((columns - 1) * spacing) / 2;
-  return [base[0] + col * spacing - offsetX, base[1], base[2] - row * spacing];
+  return gridIndexToPosition(index, {
+    base: opts.base || JIRA_DISTRICT.base,
+    columns: opts.columns ?? JIRA_DISTRICT.columns,
+    spacing: opts.spacing ?? JIRA_DISTRICT.spacing,
+    rowDir: -1, // rows pile toward -Z so the yard reads receding from the viewer
+  });
 }
 
 // Tally tickets by bucket — drives the district label ("3/8 DONE") and per-state counts.
 export function tallyStates(tickets) {
-  const counts = { todo: 0, inProgress: 0, done: 0 };
-  for (const t of Array.isArray(tickets) ? tickets : []) counts[ticketState(t)] += 1;
-  return counts;
+  return tallyByKey(tickets, ticketState, ['todo', 'inProgress', 'done']);
 }
 
 // Full derived view-model for the component: positioned structures (capped, overflow summarized)

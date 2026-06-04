@@ -1,4 +1,5 @@
 import { BUILDING_PARAMS, DISTRICT_PARAMS } from './cityConstants';
+import { autoColumns, gridIndexToPosition } from '../../utils/cityDistrictLayout';
 
 const STATUS_ORDER = { online: 0, stopped: 1, not_started: 2, not_found: 3 };
 
@@ -20,36 +21,27 @@ export const computeCityLayout = (apps) => {
   const positions = new Map();
   const { spacing } = BUILDING_PARAMS;
 
-  // Downtown district (active apps) centered at origin
-  const activeCols = Math.max(1, Math.ceil(Math.sqrt(active.length)));
+  // Downtown district (active apps): a roughly-square grid centered on the origin (both axes).
+  const activeCols = autoColumns(active.length);
   const activeRows = Math.ceil(active.length / activeCols);
-  const activeOffsetX = ((activeCols - 1) * spacing) / 2;
-  const activeOffsetZ = ((activeRows - 1) * spacing) / 2;
 
   active.forEach((app, i) => {
-    const col = i % activeCols;
-    const row = Math.floor(i / activeCols);
-    positions.set(app.id, {
-      x: col * spacing - activeOffsetX,
-      z: row * spacing - activeOffsetZ,
-      district: 'downtown',
-    });
+    const [x, , z] = gridIndexToPosition(i, { columns: activeCols, spacing, rowCount: activeRows });
+    positions.set(app.id, { x, z, district: 'downtown' });
   });
 
-  // Warehouse district (archived apps) offset along +Z
+  // Warehouse district (archived apps): X-centered grid offset along +Z from downtown.
   if (archived.length > 0) {
-    const archiveCols = Math.max(1, Math.ceil(Math.sqrt(archived.length)));
-    const archiveOffsetX = ((archiveCols - 1) * spacing) / 2;
+    const archiveCols = autoColumns(archived.length);
     const warehouseZ = activeRows * spacing / 2 + DISTRICT_PARAMS.gap;
 
     archived.forEach((app, i) => {
-      const col = i % archiveCols;
-      const row = Math.floor(i / archiveCols);
-      positions.set(app.id, {
-        x: col * spacing - archiveOffsetX,
-        z: warehouseZ + row * spacing,
-        district: 'warehouse',
+      const [x, , z] = gridIndexToPosition(i, {
+        columns: archiveCols,
+        spacing,
+        base: [0, 0, warehouseZ],
       });
+      positions.set(app.id, { x, z, district: 'warehouse' });
     });
   }
 
