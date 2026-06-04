@@ -39,7 +39,7 @@ export { cosEvents, emitLog };
 export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, getAgentPrompt, terminateAgent, pauseAgent, killAgent, sendBtwToAgent, getAgentProcessStats, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
-export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
+export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
 
 // Health monitoring (imported for internal use by start()/init() and re-exported
 // for backward compat with `import * as cos` and the cos route handlers)
