@@ -72,6 +72,25 @@ describe('askPromote.promoteLatestAssistantTurn', () => {
     expect(result).toMatchObject({ target: 'task', ref: { type: 'task', id: 'task-1' } });
   });
 
+  it('logs the latest answer as a goal progress entry with the supplied goalId', async () => {
+    convs.getConversation.mockResolvedValue({ id: 'conv-1', turns: [
+      { id: 't2', role: 'assistant', content: 'progress note' },
+    ] });
+    identityService.addProgressEntry.mockResolvedValue({ id: 'entry-1' });
+
+    const result = await promoteLatestAssistantTurn({ conversationId: 'conv-1', target: 'goal', goalId: 'g1' });
+    expect(identityService.addProgressEntry).toHaveBeenCalledWith('g1', expect.objectContaining({ note: 'progress note' }));
+    expect(convs.setPromoted).toHaveBeenCalledWith('conv-1', true);
+    expect(result).toMatchObject({ target: 'goal', ref: { type: 'goal', id: 'g1', entryId: 'entry-1' } });
+  });
+
+  it('404s when the goal target references a missing goal', async () => {
+    convs.getConversation.mockResolvedValue({ id: 'conv-1', turns: [{ id: 't2', role: 'assistant', content: 'note' }] });
+    identityService.addProgressEntry.mockResolvedValue(null);
+    await expect(promoteLatestAssistantTurn({ conversationId: 'conv-1', target: 'goal', goalId: 'gone' }))
+      .rejects.toMatchObject({ status: 404 });
+  });
+
   it('404s when the conversation has no assistant turn', async () => {
     convs.getConversation.mockResolvedValue({ id: 'conv-1', turns: [{ id: 't1', role: 'user', content: 'q' }] });
     await expect(promoteLatestAssistantTurn({ conversationId: 'conv-1', target: 'brain' }))

@@ -30,6 +30,7 @@ import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import * as proactiveAlerts from './proactiveAlerts.js';
 import * as backup from './backup.js';
+import * as identity from './identity.js';
 import { promoteLatestAssistantTurn } from './askPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -55,6 +56,21 @@ async function getAlertsCached() {
 // Test seam: drop the alerts cache so a suite can assert fresh per-case data.
 export function __resetAlertsCache() {
   alertsCache = { data: null, timestamp: 0 };
+}
+
+// Active goals are fetched once per buildQueue() (not per Ask row) so the
+// inline goal picker on Ask rows has targets to offer. getGoals() lazily
+// migrates the store, so we read it once and reuse the result while gathering.
+// A goal-store failure degrades to "no goal targets" rather than sinking Ask.
+async function getActiveGoalOptions() {
+  const data = await identity.getGoals().catch((err) => {
+    console.error(`❌ Review queue: goal options failed: ${err.message}`);
+    return null;
+  });
+  const goals = Array.isArray(data?.goals) ? data.goals : [];
+  return goals
+    .filter((g) => g.status === 'active' && typeof g.id === 'string' && g.id)
+    .map((g) => ({ id: g.id, title: g.title || '(untitled goal)' }));
 }
 
 /**
@@ -112,11 +128,14 @@ const PRODUCERS = [
     },
     // Inline promote targets the UI can offer without a per-turn drill-down.
     // The queue picks the conversation's latest assistant turn server-side, so
-    // brain/task need no extra choice; goal needs a goalId, so it stays a
-    // drill-down only.
+    // brain/task need no extra choice. `goal` also promotes the latest turn but
+    // needs a goalId, so the row additionally carries `goalOptions` and the UI
+    // renders a goal picker; goal is only offered when at least one active goal
+    // exists (gatherContext.goalOptions, populated once per buildQueue).
     promoteTargets: ['brain', 'task'],
-    map(conv) {
+    map(conv, index, ctx) {
       const turnCount = Number.isFinite(conv.turnCount) ? conv.turnCount : null;
+      const goalOptions = Array.isArray(ctx?.goalOptions) ? ctx.goalOptions : [];
       return {
         id: `ask:${conv.id}`,
         title: 'Ask answer ready to promote',
@@ -124,6 +143,10 @@ const PRODUCERS = [
         timestamp: conv.updatedAt || conv.createdAt || null,
         severity: 'normal',
         drillTo: `/ask/${conv.id}`,
+        // Only advertise the goal target (and its picker options) when there's
+        // at least one active goal to promote into — an empty picker would be a
+        // dead-end button.
+        ...(goalOptions.length ? { promoteTargets: ['brain', 'task', 'goal'], goalOptions } : {}),
         ...(turnCount != null ? { meta: { turnCount } } : {})
       };
     }
@@ -262,22 +285,28 @@ const SEVERITY_ORDER = { critical: 0, high: 1, normal: 2 };
  * Gather one producer into normalized, capped rows. Never throws — a failing
  * producer degrades to `{ items: [], total: 0, error }` so the aggregate still
  * returns the healthy sources.
+ *
+ * `ctx` carries cross-producer data computed once per buildQueue (e.g. the
+ * active-goal options the Ask producer's goal picker offers), passed through to
+ * `map`. A row's `map()` may also override `promoteTargets` (the Ask row adds
+ * `goal` only when goals exist), so the map result is spread AFTER the
+ * producer-level default.
  */
-async function gatherProducer(producer) {
+async function gatherProducer(producer, ctx = {}) {
   const raw = await producer.gather();
   const list = Array.isArray(raw) ? raw : [];
   const items = list.slice(0, PER_SOURCE_LIMIT).map((item, index) => ({
     source: producer.source,
     sourceLabel: producer.label,
-    ...producer.map(item, index),
-    // Inline-action verb when the producer declares one resolve primitive; the
-    // UI shows an accept/promote button only for rows that carry it.
-    ...(producer.action && producer.resolve ? { action: producer.action } : {}),
-    // Inline promote targets (Ask rows) — the UI renders a compact target
-    // picker for rows that carry a non-empty list.
+    // Producer-level default promote targets — the row's map() may override
+    // this (Ask adds `goal` + `goalOptions` when active goals exist).
     ...(Array.isArray(producer.promoteTargets) && producer.promoteTargets.length
       ? { promoteTargets: producer.promoteTargets }
-      : {})
+      : {}),
+    ...producer.map(item, index, ctx),
+    // Inline-action verb when the producer declares one resolve primitive; the
+    // UI shows an accept/promote button only for rows that carry it.
+    ...(producer.action && producer.resolve ? { action: producer.action } : {})
   }));
   return { items, total: list.length };
 }
@@ -309,15 +338,24 @@ export async function resolveQueueItem(queueItemId) {
   return { source, id: queueItemId, resolved: true };
 }
 
+// Targets the queue can promote an Ask answer into directly. brain/task pick
+// the latest assistant turn with no extra input; goal additionally needs a
+// goalId (the row carries `goalOptions` so the UI can supply it). Goal is in
+// the allow-list even though the row only advertises it when active goals
+// exist — a request with a stale goalId still validates here and 404s in the
+// orchestration if the goal is gone.
+const ASK_PROMOTE_TARGETS = ['brain', 'task', 'goal'];
+
 /**
  * Promote an Ask queue row's latest assistant answer into a chosen target
- * (brain/task). `queueItemId` is the row id (`ask:<conversationId>`); `target`
- * must be one of the Ask producer's declared `promoteTargets`. The service
- * picks the conversation's latest assistant turn so the client doesn't carry
- * turn ids — a conversation with no assistant answer 404s. Reuses the same
- * promote orchestration the per-turn Ask route uses (no duplication).
+ * (brain/task/goal). `queueItemId` is the row id (`ask:<conversationId>`);
+ * `target` must be one of `ASK_PROMOTE_TARGETS`. For the `goal` target,
+ * `goalId` is required (validated, then resolved against the goal store).
+ * The service picks the conversation's latest assistant turn so the client
+ * doesn't carry turn ids — a conversation with no assistant answer 404s.
+ * Reuses the same promote orchestration the per-turn Ask route uses.
  */
-export async function promoteAskQueueItem(queueItemId, target) {
+export async function promoteAskQueueItem(queueItemId, target, goalId) {
   const sep = String(queueItemId).indexOf(':');
   const source = sep === -1 ? queueItemId : queueItemId.slice(0, sep);
   const conversationId = sep === -1 ? '' : queueItemId.slice(sep + 1);
@@ -325,12 +363,14 @@ export async function promoteAskQueueItem(queueItemId, target) {
   if (source !== 'ask') {
     throw new ServerError(`Promote is only supported for Ask rows, got "${source}"`, { status: 400, code: 'BAD_REQUEST' });
   }
-  const allowed = PRODUCERS_BY_SOURCE.ask.promoteTargets || [];
-  if (!allowed.includes(target)) {
+  if (!ASK_PROMOTE_TARGETS.includes(target)) {
     throw new ServerError(`Unsupported promote target "${target}" for Ask`, { status: 400, code: 'BAD_REQUEST' });
   }
+  if (target === 'goal' && !goalId) {
+    throw new ServerError('goalId is required to promote into a goal', { status: 400, code: 'VALIDATION_ERROR' });
+  }
 
-  const result = await promoteLatestAssistantTurn({ conversationId, target });
+  const result = await promoteLatestAssistantTurn({ conversationId, target, goalId });
   return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };
 }
 
@@ -341,8 +381,13 @@ export async function promoteAskQueueItem(queueItemId, target) {
  * a source that failed to load.
  */
 export async function buildQueue() {
+  // Fetch active goals once (not per Ask row) so the goal picker on Ask rows
+  // has targets. A failure here degrades to no goal targets, not a sunk queue.
+  const goalOptions = await getActiveGoalOptions();
+  const ctx = { goalOptions };
+
   const results = await Promise.all(PRODUCERS.map(async (producer) => {
-    return gatherProducer(producer)
+    return gatherProducer(producer, ctx)
       .then(r => ({ source: producer.source, label: producer.label, ...r, error: null }))
       .catch(err => {
         console.error(`❌ Review queue: ${producer.source} source failed: ${err.message}`);

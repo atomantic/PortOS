@@ -18,11 +18,12 @@ export const resolveReviewQueueItem = (id, options = {}) => request('/review/que
   body: JSON.stringify({ id }),
   ...options
 });
-// Promote an Ask row's latest assistant answer into Brain or a CoS task in
-// place (id is `ask:<conversationId>`, target is 'brain' | 'task')
-export const promoteAskReviewQueueItem = (id, target, options = {}) => request('/review/queue/promote-ask', {
+// Promote an Ask row's latest assistant answer into Brain, a CoS task, or a
+// Goal's progress in place (id is `ask:<conversationId>`, target is
+// 'brain' | 'task' | 'goal'; goalId is required for the 'goal' target).
+export const promoteAskReviewQueueItem = (id, target, { goalId, ...options } = {}) => request('/review/queue/promote-ask', {
   method: 'POST',
-  body: JSON.stringify({ id, target }),
+  body: JSON.stringify({ id, target, ...(goalId ? { goalId } : {}) }),
   ...options
 });
 export const createReviewTodo = (data) => request('/review/todo', {

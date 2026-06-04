@@ -12,6 +12,9 @@ const backup = { getState: vi.fn() };
 // stack in transitively (askPromote imports all three). The promoteAskQueueItem
 // suite drives this mock directly.
 const askPromote = { promoteLatestAssistantTurn: vi.fn() };
+// getGoals feeds the Ask row's inline goal picker (goalOptions); default to no
+// active goals so existing cases see the brain/task-only target list.
+const identity = { getGoals: vi.fn() };
 
 vi.mock('./brain.js', () => brain);
 vi.mock('./askConversations.js', () => askConversations);
@@ -19,6 +22,7 @@ vi.mock('./cosTaskStore.js', () => cosTaskStore);
 vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
 vi.mock('./backup.js', () => backup);
+vi.mock('./identity.js', () => identity);
 vi.mock('./askPromote.js', () => askPromote);
 
 const { buildQueue, resolveQueueItem, promoteAskQueueItem, __resetAlertsCache } = await import('./reviewQueue.js');
@@ -31,6 +35,7 @@ function resetEmpty() {
   messageDrafts.listDrafts.mockResolvedValue([]);
   proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
+  identity.getGoals.mockResolvedValue({ goals: [] });
 }
 
 describe('reviewQueue.buildQueue', () => {
@@ -209,8 +214,36 @@ describe('reviewQueue.buildQueue', () => {
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     const queue = await buildQueue();
-    expect(queue.items.find(i => i.source === 'ask').promoteTargets).toEqual(['brain', 'task']);
+    const ask = queue.items.find(i => i.source === 'ask');
+    // No active goals → goal target is not offered and no picker options ride along.
+    expect(ask.promoteTargets).toEqual(['brain', 'task']);
+    expect(ask.goalOptions).toBeUndefined();
     expect(queue.items.find(i => i.source === 'brain').promoteTargets).toBeUndefined();
+  });
+
+  it('adds the goal target + active-goal options to Ask rows when goals exist', async () => {
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    identity.getGoals.mockResolvedValue({
+      goals: [
+        { id: 'g1', title: 'Ship inbox zero', status: 'active' },
+        { id: 'g2', title: 'Archived idea', status: 'archived' }, // filtered out (not active)
+        { title: 'No id', status: 'active' }                       // filtered out (no id)
+      ]
+    });
+    const queue = await buildQueue();
+    const ask = queue.items.find(i => i.source === 'ask');
+    expect(ask.promoteTargets).toEqual(['brain', 'task', 'goal']);
+    expect(ask.goalOptions).toEqual([{ id: 'g1', title: 'Ship inbox zero' }]);
+  });
+
+  it('degrades to no goal target when the goal store fails', async () => {
+    askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1 }]);
+    identity.getGoals.mockRejectedValue(new Error('goals unreadable'));
+    const queue = await buildQueue();
+    const ask = queue.items.find(i => i.source === 'ask');
+    // Ask still surfaces; just without the goal option.
+    expect(ask.promoteTargets).toEqual(['brain', 'task']);
+    expect(ask.goalOptions).toBeUndefined();
   });
 });
 
@@ -222,14 +255,26 @@ describe('reviewQueue.promoteAskQueueItem', () => {
   it('promotes the latest assistant turn to brain via the shared promote helper', async () => {
     askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'brain', ref: { type: 'brain', id: 'note-1' } });
     const result = await promoteAskQueueItem('ask:conv-1', 'brain');
-    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-1', target: 'brain' });
+    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-1', target: 'brain', goalId: undefined });
     expect(result).toMatchObject({ source: 'ask', id: 'ask:conv-1', promoted: true, target: 'brain', ref: { type: 'brain', id: 'note-1' } });
   });
 
   it('promotes to task target', async () => {
     askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'task', ref: { type: 'task', id: 't-1' } });
     await promoteAskQueueItem('ask:conv-2', 'task');
-    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-2', target: 'task' });
+    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-2', target: 'task', goalId: undefined });
+  });
+
+  it('promotes to a goal target with the supplied goalId', async () => {
+    askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'goal', ref: { type: 'goal', id: 'g1', entryId: 'e1' } });
+    const result = await promoteAskQueueItem('ask:conv-9', 'goal', 'g1');
+    expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-9', target: 'goal', goalId: 'g1' });
+    expect(result).toMatchObject({ source: 'ask', id: 'ask:conv-9', promoted: true, target: 'goal' });
+  });
+
+  it('rejects a goal target with no goalId (400) before touching the helper', async () => {
+    await expect(promoteAskQueueItem('ask:conv-1', 'goal')).rejects.toMatchObject({ status: 400 });
+    expect(askPromote.promoteLatestAssistantTurn).not.toHaveBeenCalled();
   });
 
   it('rejects a non-ask row with a 400', async () => {
@@ -237,8 +282,8 @@ describe('reviewQueue.promoteAskQueueItem', () => {
     expect(askPromote.promoteLatestAssistantTurn).not.toHaveBeenCalled();
   });
 
-  it('rejects an unsupported target (goal) with a 400', async () => {
-    await expect(promoteAskQueueItem('ask:conv-1', 'goal')).rejects.toMatchObject({ status: 400 });
+  it('rejects a genuinely unsupported target with a 400', async () => {
+    await expect(promoteAskQueueItem('ask:conv-1', 'calendar')).rejects.toMatchObject({ status: 400 });
     expect(askPromote.promoteLatestAssistantTurn).not.toHaveBeenCalled();
   });
 

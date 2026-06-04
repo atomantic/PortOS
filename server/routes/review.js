@@ -65,17 +65,23 @@ router.post('/queue/resolve', asyncHandler(async (req, res) => {
 
 const promoteAskQueueSchema = z.object({
   id: z.string().min(1).max(500),
-  target: z.enum(['brain', 'task'])
+  target: z.enum(['brain', 'task', 'goal']),
+  // Required when target === 'goal' (cross-field rule below); the row supplies
+  // it from the goal picker. Ignored for brain/task.
+  goalId: z.string().min(1).max(200).optional()
+}).refine((v) => v.target !== 'goal' || !!v.goalId, {
+  message: 'goalId is required when target is "goal"',
+  path: ['goalId']
 });
 
 // POST /api/review/queue/promote-ask — promote an Ask row's latest assistant
-// answer into Brain or a CoS task, in place, without leaving the Review Hub.
-// The `id` is the row's `ask:<conversationId>`; the service finds the latest
-// assistant turn so the client doesn't track turn ids. Goal targets stay a
-// drill-down (they need a goalId choice the queue row can't supply).
+// answer into Brain, a CoS task, or a Goal's progress, in place, without
+// leaving the Review Hub. The `id` is the row's `ask:<conversationId>`; the
+// service finds the latest assistant turn so the client doesn't track turn ids.
+// Goal promotion supplies a `goalId` picked inline from the row's goalOptions.
 router.post('/queue/promote-ask', asyncHandler(async (req, res) => {
-  const { id, target } = validateRequest(promoteAskQueueSchema, req.body);
-  const result = await promoteAskQueueItem(id, target);
+  const { id, target, goalId } = validateRequest(promoteAskQueueSchema, req.body);
+  const result = await promoteAskQueueItem(id, target, goalId);
   res.json(result);
 }));
 

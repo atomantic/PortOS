@@ -220,11 +220,11 @@ export default function Review() {
     if (ok) handleQueueDismiss(item.id);
   };
 
-  const handleQueuePromoteAsk = async (item, target) => {
+  const handleQueuePromoteAsk = async (item, target, goalId) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
-    const ok = await api.promoteAskReviewQueueItem(item.id, target).then(() => true).catch(() => false);
+    const ok = await api.promoteAskReviewQueueItem(item.id, target, goalId ? { goalId } : {}).then(() => true).catch(() => false);
     setResolvingQueueIds(prev => {
       const next = new Set(prev);
       next.delete(item.id);
@@ -547,13 +547,18 @@ function QueueMetaChips({ meta }) {
 }
 
 // Promote-target label for the Ask picker buttons.
-const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task' };
+const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task', goal: 'Goal' };
 
 function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
   const promoteTargets = Array.isArray(item.promoteTargets) ? item.promoteTargets : [];
+  const goalOptions = Array.isArray(item.goalOptions) ? item.goalOptions : [];
+  // The goal target needs a goalId, so it's rendered as a picker rather than a
+  // one-click button — split it out from the simple brain/task targets.
+  const simpleTargets = promoteTargets.filter(t => t !== 'goal');
+  const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
@@ -590,7 +595,7 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
             {item.action}
           </button>
         )}
-        {promoteTargets.length > 0 && onPromoteAsk && promoteTargets.map(target => (
+        {onPromoteAsk && simpleTargets.map(target => (
           <button
             key={target}
             onClick={() => onPromoteAsk(item, target)}
@@ -602,6 +607,28 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
             {PROMOTE_TARGET_LABEL[target] || target}
           </button>
         ))}
+        {showGoalPicker && onPromoteAsk && (
+          <label className="inline-flex items-center gap-1 text-xs">
+            <span className="sr-only">Promote the latest answer to a goal</span>
+            <select
+              defaultValue=""
+              disabled={resolving}
+              onChange={(e) => {
+                const goalId = e.target.value;
+                if (!goalId) return;
+                onPromoteAsk(item, 'goal', goalId);
+                e.target.value = '';
+              }}
+              className="px-2 py-1 rounded-md text-xs font-medium text-port-accent bg-port-accent/10 hover:bg-port-accent/20 border border-port-accent/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+              title="Promote the latest answer into a goal's progress"
+            >
+              <option value="">→ Goal…</option>
+              {goalOptions.map(g => (
+                <option key={g.id} value={g.id}>{g.title}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           onClick={() => onDrill(item)}
           className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"

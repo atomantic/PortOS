@@ -115,11 +115,12 @@ export async function promoteTurnById({ conversationId, turnId, target, priority
 
 /**
  * Promote the conversation's *latest* assistant turn — the entry point the
- * Review Queue uses, so the client doesn't need to know turn ids. Restricted
- * to brain/task targets (goal needs a goalId the queue row can't supply; the
- * user drills into /ask for that). 404s when no assistant turn exists.
+ * Review Queue uses, so the client doesn't need to know turn ids. Supports
+ * brain/task/goal; the `goal` target requires a `goalId` (the queue row carries
+ * `goalOptions` so the UI can supply it, then delegates the goal-not-found 404
+ * to promoteTurnContent). 404s when no assistant turn exists.
  */
-export async function promoteLatestAssistantTurn({ conversationId, target, priority }) {
+export async function promoteLatestAssistantTurn({ conversationId, target, priority, goalId }) {
   const conv = await convs.getConversation(conversationId);
   if (!conv) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -128,5 +129,5 @@ export async function promoteLatestAssistantTurn({ conversationId, target, prior
     throw new ServerError('Conversation has no assistant answer to promote', { status: 404, code: 'NO_ASSISTANT_TURN' });
   }
 
-  return promoteTurnContent({ conversationId, turn, target, priority });
+  return promoteTurnContent({ conversationId, turn, target, priority, goalId });
 }
