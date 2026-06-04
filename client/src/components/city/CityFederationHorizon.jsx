@@ -22,10 +22,16 @@ function FederationBridge({ from, color, broken, intensity }) {
       0.6,
       from[2] + dir.z * (1.5 + FEDERATION.bridgeReach),
     );
-    const geom = new THREE.BufferGeometry().setFromPoints([start, end]);
-    geom.computeLineDistances(); // required for the dashed (broken) material
-    return geom;
+    return new THREE.BufferGeometry().setFromPoints([start, end]);
   }, [from]);
+
+  // computeLineDistances lives on the Line OBJECT, not on BufferGeometry — calling it on the
+  // geometry throws ("computeLineDistances is not a function") and crashes the whole canvas. The
+  // dashed (broken) material needs per-vertex line distances, so compute them on the line ref
+  // after it mounts / whenever the geometry or broken state changes.
+  useEffect(() => {
+    if (broken) lineRef.current?.computeLineDistances();
+  }, [geometry, broken]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
