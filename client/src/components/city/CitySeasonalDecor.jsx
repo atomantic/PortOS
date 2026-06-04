@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
 import { useTimeTick } from '../../hooks/useTimeTick';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeSeasonalDecor, SEASONAL_DECOR } from '../../utils/citySeasonalDecor';
 
 // CyberCity's seasonal decorations (roadmap 3.5 follow-up, #824): date-driven city dressing
@@ -58,6 +58,7 @@ export default function CitySeasonalDecor({ date, settings }) {
 
   // Honor the quality dial: drop the bob/shimmer on the lowest preset, keep the static glow.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   if (!decor.hasData) return null;
 
@@ -70,9 +71,9 @@ export default function CitySeasonalDecor({ date, settings }) {
       ))}
 
       {/* Season/holiday banner high above the city center so it reads as ambient context. */}
-      <Text position={[base[0], 34, base[2]]} fontSize={1.6} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={40}>
+      <CityLabel position={[base[0], 34, base[2]]} fontSize={1.6} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={40}>
         {label}
-      </Text>
+      </CityLabel>
     </group>
   );
 }

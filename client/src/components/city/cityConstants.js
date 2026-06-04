@@ -295,6 +295,29 @@ export const cityDayMix = (settings) => {
   return smoothstepRange(0.35, 1, preset?.daylightFactor ?? 0);
 };
 
+// Drei <Text> props for an informational in-world label that stays legible in both
+// the night-neon scene AND the bright daytime scene. At night (dayMix→0) the label
+// keeps its neon fill with no outline, so the established look is untouched. As day
+// ramps up (dayMix→1) the fill lerps toward a dark ink — readable against the bright
+// sky and sunlit mid-tone facades where a glowing neon fill just washes out — and a
+// light outline halo fades in to lift the glyphs off whatever's behind them. The ink
+// keeps a hint of the label's hue so day labels stay loosely color-coded by status.
+// Continuous in dayMix so it degrades gracefully if an intermediate time-of-day is
+// ever re-enabled (today dayMix is strictly 0 or 1). Decorative neon signage is NOT
+// a caller — it is meant to dim in daylight like real neon.
+export const cityLabelColors = (neonColor, dayMix = 0) => {
+  const d = Math.max(0, Math.min(1, dayMix || 0));
+  const darkInk = mixHex('#0d1422', neonColor, 0.22);
+  return {
+    color: mixHex(neonColor, darkInk, d),
+    outlineColor: '#eef4ff',
+    // Percentage strings are relative to fontSize, so the halo scales with each label.
+    // At night d=0 → "0.00%", which drei treats as a zero-width (i.e. no) outline.
+    outlineWidth: `${(d * 9).toFixed(2)}%`,
+    outlineOpacity: d * 0.85,
+  };
+};
+
 // Get a deterministic neon accent color per app (for windows/decorations)
 export const getAccentColor = (app) => {
   const hash = hashString(app.name || app.id);

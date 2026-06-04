@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeJiraDistrict, JIRA_DISTRICT } from '../../utils/cityJiraDistrict';
 
 // CyberCity's JIRA sprint district (roadmap 3.7): the current sprint's tickets become a small
@@ -67,6 +67,7 @@ export default function CityJiraDistrict({ jiraTickets, settings }) {
   const pulseRef = useRef();
 
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   // The first in-progress structure carries a breathing scaffold glow (one ref mutation/frame).
   const pulseKey = useMemo(
@@ -98,18 +99,18 @@ export default function CityJiraDistrict({ jiraTickets, settings }) {
 
       {/* Overflow marker — tickets past the render cap */}
       {overflow > 0 && overflowPosition && (
-        <Text position={[overflowPosition[0], 1.4, overflowPosition[2]]} fontSize={0.5} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
+        <CityLabel position={[overflowPosition[0], 1.4, overflowPosition[2]]} fontSize={0.5} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
           {`+${overflow} MORE`}
-        </Text>
+        </CityLabel>
       )}
 
       {/* District title + sprint progress */}
-      <Text position={[base[0], 12, base[2] - 2]} fontSize={1.2} color="#3b82f6" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
+      <CityLabel position={[base[0], 12, base[2] - 2]} fontSize={1.2} color="#3b82f6" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
         SPRINT
-      </Text>
-      <Text position={[base[0], 11.1, base[2] - 2]} fontSize={0.72} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
+      </CityLabel>
+      <CityLabel position={[base[0], 11.1, base[2] - 2]} fontSize={0.72} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
         {`${counts.done}/${total} DONE · ${counts.inProgress} IN PROGRESS`}
-      </Text>
+      </CityLabel>
     </group>
   );
 }

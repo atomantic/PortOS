@@ -1,8 +1,8 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { CITY_COLORS, PROCESS_BUILDING_PARAMS, PIXEL_FONT_URL, mixHex } from './cityConstants';
+import CityLabel from './CityLabel';
 
 const STATUS_COLORS = {
   online: '#06b6d4',
@@ -82,11 +82,12 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
         <meshBasicMaterial color={color} transparent opacity={0.4 * dimMul * (1 - dayMix * 0.6)} />
       </mesh>
 
-      {/* Process name on front face */}
-      <Text
+      {/* Process name on front face (dark ink + halo by day) */}
+      <CityLabel
         position={[0, height * 0.7, depth / 2 + 0.02]}
         fontSize={0.1}
         color={color}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -94,7 +95,7 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
         maxWidth={width * 0.85}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
       {/* Blinking tip light */}
       <mesh ref={blinkRef} position={[0, height + 0.12, 0]}>

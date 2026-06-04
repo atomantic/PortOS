@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, CITY_COLORS, getBuildingColor } from './cityConstants';
-import { getTheme } from '../../themes/portosThemes';
+import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, cityLabelColors, CITY_COLORS, getBuildingColor } from './cityConstants';
+import { getTheme, THEMES } from '../../themes/portosThemes';
 
 describe('deriveCityPalette', () => {
   it('derives the accent hex from a theme --port-accent triplet', () => {
@@ -49,6 +49,29 @@ describe('deriveCityPalette', () => {
     expect(resolveCityTimeOfDay('night', true)).toEqual({ daytime: false, presetKey: 'sunset' });
   });
 
+  it('derives a valid palette for every shipped theme (4 day + 4 night)', () => {
+    const themes = Object.values(THEMES);
+    const day = themes.filter((t) => t.mode === 'day');
+    const night = themes.filter((t) => t.mode === 'night');
+    // The City must support all 8 PortOS themes — 4 day, 4 night.
+    expect(day).toHaveLength(4);
+    expect(night).toHaveLength(4);
+
+    for (const theme of themes) {
+      const p = deriveCityPalette(theme);
+      expect(p.themeId).toBe(theme.id);
+      expect(p.isDay).toBe(theme.mode === 'day');
+      // Accent is parsed to a concrete hex (never left as a raw triplet/empty).
+      expect(p.accent).toMatch(/^#[0-9a-f]{6}$/);
+      // Day surround is a bright sky; night surround is a near-black void — and the
+      // two are always distinct so the backdrop actually swaps with time of day.
+      expect(p.dayBackground).toMatch(/^#[0-9a-f]{6}$/);
+      expect(p.nightBackground).toMatch(/^#[0-9a-f]{6}$/);
+      expect(p.dayBackground).not.toBe(p.nightBackground);
+      expect(p.background).toBe(p.isDay ? p.dayBackground : p.nightBackground);
+    }
+  });
+
   it('opts CRT effects in per theme family', () => {
     // terminal (Phosphor) — full CRT
     expect(deriveCityPalette(getTheme('black-ice-terminal-day')).crt)
@@ -62,6 +85,33 @@ describe('deriveCityPalette', () => {
     // glass — fully clean, no CRT
     expect(deriveCityPalette(getTheme('lumen-glass')).crt)
       .toEqual({ scanlines: false, glow: false, vignette: false });
+  });
+});
+
+describe('cityLabelColors', () => {
+  it('keeps the neon fill and adds no outline at night (dayMix 0)', () => {
+    const c = cityLabelColors('#06b6d4', 0);
+    expect(c.color).toBe('#06b6d4'); // untouched neon
+    expect(c.outlineWidth).toBe('0.00%'); // drei reads a 0% outline as none
+    expect(c.outlineOpacity).toBe(0);
+  });
+
+  it('darkens the fill toward ink and fades in a light outline by day (dayMix 1)', () => {
+    const c = cityLabelColors('#06b6d4', 1);
+    // Fill lands on the dark ink (a near-black tinted 22% toward the label hue),
+    // i.e. clearly darker than the original neon so it reads on a bright sky.
+    expect(c.color).not.toBe('#06b6d4');
+    const lum = parseInt(c.color.slice(1, 3), 16) + parseInt(c.color.slice(3, 5), 16) + parseInt(c.color.slice(5, 7), 16);
+    expect(lum).toBeLessThan(180); // dark ink (~140), far below the neon's ~400
+    expect(c.outlineColor).toBe('#eef4ff');
+    expect(c.outlineWidth).toBe('9.00%');
+    expect(c.outlineOpacity).toBeCloseTo(0.85);
+  });
+
+  it('clamps out-of-range / missing dayMix', () => {
+    expect(cityLabelColors('#06b6d4', 2).outlineOpacity).toBeCloseTo(0.85);
+    expect(cityLabelColors('#06b6d4', -1).outlineWidth).toBe('0.00%');
+    expect(cityLabelColors('#06b6d4').color).toBe('#06b6d4'); // undefined → night
   });
 });
 

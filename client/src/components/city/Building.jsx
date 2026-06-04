@@ -1,8 +1,8 @@
 import { useRef, useState, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { getBuildingColor, getBuildingHeight, getAccentColor, CITY_COLORS, BUILDING_PARAMS, PIXEL_FONT_URL, mixHex } from './cityConstants';
+import CityLabel from './CityLabel';
 import HolographicPanel from './HolographicPanel';
 import BuildingHologram from './BuildingHologram';
 
@@ -421,11 +421,12 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         </>
       )}
 
-      {/* Building name on front face - pixel font */}
-      <Text
+      {/* Building name on front face - pixel font (dark ink + halo by day) */}
+      <CityLabel
         position={[0, height * 0.88, depth / 2 + 0.02]}
         fontSize={0.2}
         color={edgeColor}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -433,13 +434,14 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         maxWidth={width * 0.9}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
       {/* Building name on back face */}
-      <Text
+      <CityLabel
         position={[0, height * 0.88, -(depth / 2 + 0.02)]}
         fontSize={0.2}
         color={edgeColor}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -448,13 +450,14 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         maxWidth={width * 0.9}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
       {/* Name on left side */}
-      <Text
+      <CityLabel
         position={[-(width / 2 + 0.02), height * 0.88, 0]}
         fontSize={0.18}
         color={accentColor}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -463,7 +466,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         maxWidth={depth * 0.85}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
       {/* Base glow circle - wider and brighter (night only) */}
       {!daytime && (

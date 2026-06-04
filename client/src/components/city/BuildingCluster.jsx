@@ -1,11 +1,12 @@
 import { useMemo, useEffect } from 'react';
-import { Text } from '@react-three/drei';
 import { computeCityLayout } from './cityLayout';
-import { DISTRICT_PARAMS, PIXEL_FONT_URL } from './cityConstants';
+import { DISTRICT_PARAMS, PIXEL_FONT_URL, cityDayMix } from './cityConstants';
 import Borough from './Borough';
+import CityLabel from './CityLabel';
 
 export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady, playSfx, settings, proximityAppId, dimmedAppIds }) {
   const positions = useMemo(() => computeCityLayout(apps), [apps]);
+  const dayMix = cityDayMix(settings);
 
   // Notify parent when positions change (for data streams, roads, traffic)
   useEffect(() => {
@@ -44,18 +45,19 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPos
         );
       })}
 
-      {/* Warehouse district label - pixel font */}
+      {/* Warehouse district label - pixel font (dark ink + halo by day) */}
       {hasArchived && (
-        <Text
+        <CityLabel
           position={[0, 1.5, warehouseMinZ - 2]}
           fontSize={0.8}
           color="#475569"
+          dayMix={dayMix}
           anchorX="center"
           anchorY="middle"
           font={PIXEL_FONT_URL}
         >
           ARCHIVE DISTRICT
-        </Text>
+        </CityLabel>
       )}
     </group>
   );

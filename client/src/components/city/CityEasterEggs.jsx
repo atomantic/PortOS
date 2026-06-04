@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
 import { useTimeTick } from '../../hooks/useTimeTick';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeEasterEggs, EGGS } from '../../utils/cityEasterEggs';
 
 // CyberCity's easter eggs (roadmap 3.5 follow-up, #824): rare, hidden emblems that only appear
@@ -10,7 +10,7 @@ import { computeEasterEggs, EGGS } from '../../utils/cityEasterEggs';
 // clean-sweep goal board). Tucked in a quiet far corner so they read as a discovery, not a
 // featured district. Each egg is a small glowing icosahedron with a tiny glyph label; they bob
 // (each on its own phase offset) gated on the quality dial (mirrors CityArtifacts).
-function Egg({ egg, animate }) {
+function Egg({ egg, animate, dayMix = 0 }) {
   const { color, label, hint, position, phase } = egg;
   const s = EGGS.size;
   const ref = useRef();
@@ -35,15 +35,15 @@ function Egg({ egg, animate }) {
         <pointLight color={color} intensity={1.1} distance={8} />
 
         {/* Tiny glyph so the egg hints at what it is without spelling it out. */}
-        <Text position={[0, s + 0.5, 0]} fontSize={0.45} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={6}>
+        <CityLabel position={[0, s + 0.5, 0]} fontSize={0.45} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={6}>
           {label}
-        </Text>
+        </CityLabel>
 
         {/* A muted hint sits below the glyph — the discovery payoff up close, kept small and dim
             so eggs still read as "hidden" from across the city. */}
-        <Text position={[0, s - 0.4, 0]} fontSize={0.28} color="#64748b" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={8}>
+        <CityLabel position={[0, s - 0.4, 0]} fontSize={0.28} color="#64748b" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={8}>
           {hint}
-        </Text>
+        </CityLabel>
       </group>
     </group>
   );
@@ -61,6 +61,7 @@ export default function CityEasterEggs({ date, character, goals, productivityDat
 
   // Honor the quality dial: drop the bob on the lowest preset, keep the static glow.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   if (!cluster.hasData) return null;
 
@@ -69,13 +70,13 @@ export default function CityEasterEggs({ date, character, goals, productivityDat
   return (
     <group>
       {eggs.map((egg) => (
-        <Egg key={egg.id} egg={egg} animate={animate} />
+        <Egg key={egg.id} egg={egg} animate={animate} dayMix={dayMix} />
       ))}
 
       {/* A faint marker so a found cluster has a label, kept small to preserve the "hidden" feel. */}
-      <Text position={[base[0], 6, base[2]]} fontSize={0.7} color="#64748b" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+      <CityLabel position={[base[0], 6, base[2]]} fontSize={0.7} color="#64748b" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
         :)
-      </Text>
+      </CityLabel>
     </group>
   );
 }

@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeTaskQueue, TASK_QUEUE } from '../../utils/cityTaskQueue';
 
 // CyberCity's CoS task-queue silhouette (roadmap 2.2): a warehouse east of downtown with
@@ -32,6 +32,7 @@ export default function CityTaskQueue({ cosTasks, settings }) {
   // Honor the quality dial: drop the roof-light pulse on the lowest preset, but keep the
   // static glow so the queue state stays legible.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   useFrame(({ clock }) => {
     if (!animate || !roofRef.current) return;
@@ -87,12 +88,12 @@ export default function CityTaskQueue({ cosTasks, settings }) {
         )}
 
         {/* Label + count sublabel above the stack */}
-        <Text position={[0, stackTop + crateSize * (overflow ? 1.2 : 0.9), 0]} fontSize={1.1} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        <CityLabel position={[0, stackTop + crateSize * (overflow ? 1.2 : 0.9), 0]} fontSize={1.1} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
           COS QUEUE
-        </Text>
-        <Text position={[0, stackTop + crateSize * (overflow ? 0.6 : 0.3), 0]} fontSize={0.8} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        </CityLabel>
+        <CityLabel position={[0, stackTop + crateSize * (overflow ? 0.6 : 0.3), 0]} fontSize={0.8} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
           {sublabel}
-        </Text>
+        </CityLabel>
       </group>
     </group>
   );

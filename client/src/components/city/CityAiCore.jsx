@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeAiCore, computeAiCoreBeams, AI_CORE } from '../../utils/cityAiCore';
 
 // CyberCity's AI Core landmark (roadmap 2.1): a slender central spire above downtown from
@@ -81,6 +81,7 @@ export default function CityAiCore({ aiActivity, positions, apps, settings }) {
   const apexRef = useRef();
 
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
   const { position, height, apexY, color } = core;
 
   // Per-op beams: targeted at the originating building when known, radial otherwise.
@@ -122,13 +123,13 @@ export default function CityAiCore({ aiActivity, positions, apps, settings }) {
         ))}
       </group>
       {/* Label above the apex */}
-      <Text position={[0, apexY + 2.6, 0]} fontSize={1.4} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+      <CityLabel position={[0, apexY + 2.6, 0]} fontSize={1.4} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
         AI CORE
-      </Text>
+      </CityLabel>
       {core.busy && (
-        <Text position={[0, apexY + 1.5, 0]} fontSize={0.85} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        <CityLabel position={[0, apexY + 1.5, 0]} fontSize={0.85} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
           {`${core.activeCount} ACTIVE`}
-        </Text>
+        </CityLabel>
       )}
     </group>
   );

@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeVoiceMarker } from '../../utils/cityVoiceMarker';
 
 // CyberCity's voice-agent district marker (roadmap 2.4): a modest ground-level beacon
@@ -16,6 +16,7 @@ export default function CityVoiceMarker({ voiceState, settings }) {
   // Honor the quality dial: drop the beacon pulse on the lowest preset, but keep the
   // static glow so the voice state stays legible.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   useFrame(({ clock }) => {
     if (!animate || !orbRef.current) return;
@@ -50,12 +51,12 @@ export default function CityVoiceMarker({ voiceState, settings }) {
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={marker.intensity} toneMapped={false} />
       </mesh>
       {/* Label + live-state sublabel above the beacon */}
-      <Text position={[0, poleHeight + beaconRadius * 0.6 + 1.6, 0]} fontSize={1} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={16}>
+      <CityLabel position={[0, poleHeight + beaconRadius * 0.6 + 1.6, 0]} fontSize={1} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={16}>
         VOICE
-      </Text>
-      <Text position={[0, poleHeight + beaconRadius * 0.6 + 0.9, 0]} fontSize={0.7} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={16}>
+      </CityLabel>
+      <CityLabel position={[0, poleHeight + beaconRadius * 0.6 + 0.9, 0]} fontSize={0.7} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={16}>
         {label}
-      </Text>
+      </CityLabel>
     </group>
   );
 }
