@@ -48,10 +48,13 @@ describe('client/src/utils/ barrel', () => {
     }
   });
 
-  it('every non-test .js file has a README row', () => {
+  it('every non-test .js file has a backtick-wrapped README row', () => {
+    // Require the documented-row form (`module`) rather than a bare substring,
+    // so a name appearing only in prose — or as a substring of a longer name —
+    // can't satisfy the catalog-coverage guard.
     for (const f of sourceFiles) {
       const base = f.replace(/\.js$/, '');
-      expect(README_SRC, `missing README entry for ${f}`).toContain(base);
+      expect(README_SRC, `missing README row for ${f}`).toContain('`' + base + '`');
     }
   });
 

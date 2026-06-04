@@ -1,9 +1,10 @@
 # client/src/utils/ — pure formatting & compute helpers
 
-Pure, side-effect-free helpers used by pages, components, and hooks: formatters, time math,
-small functional utilities, and the CyberCity scene-compute functions. **Before writing a
-helper here, grep this catalog first** — many domain patterns already have one. When you add
-a new module, add it to `index.js` AND add a row here.
+Lightweight, mostly-pure helpers used by pages, components, and hooks: formatters, time math,
+small functional utilities, the CyberCity scene-compute functions, and a few thin
+browser-storage / file-read / module-loading helpers. **Before writing a helper here, grep
+this catalog first** — many domain patterns already have one. When you add a new module, add
+it to `index.js` AND add a row here.
 
 State + lifecycle hooks live in `client/src/hooks/`. Shared client helpers with prompt/canon
 logic (and server mirrors) live in `client/src/lib/`. HTTP/socket clients live in
