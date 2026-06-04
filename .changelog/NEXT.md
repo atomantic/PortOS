@@ -46,6 +46,7 @@
 
 ## Changed
 
+- **[issue-726]** Documented the storage layer's per-collection `config` slot convention so future features reuse a consistent shape — internal maintenance change with no behavior difference.
 - **[issue-730] Groundwork for cross-machine Story Builder sessions** — Story Builder sessions stay private to one machine, but the staleness model that powers the "needs another look" warnings on locked steps is now sync-safe: when a session opts into cross-machine resume, those warnings follow a snapshot the session carries with it instead of re-checking the live world, so a change another of your machines makes to the same universe won't make every locked step look stale once the session can travel between machines. Internal foundation — the cross-machine sync itself lands in a follow-up.
 - **[issue-736] Whole-episode audio strategy design** — design groundwork for driving an episode's soundtrack from its narrative arc instead of a single looped clip, introducing a user-selectable audio mode (per-clip, silent, generated, or uploaded track) with per-arc generated cues; ships as a design record only, no behavior change yet.
 - **[issue-738] Cross-Domain Insights Engine design** — design groundwork for narrative insights connecting genome, health, taste, and creative output, including a dismissable/acceptable insight model and a structured facts table feeding the LLM.
