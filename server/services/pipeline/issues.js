@@ -392,7 +392,7 @@ const sanitizeVisualStage = (raw, stageId = null) => {
 // flashback voice, etc.).
 const AUDIO_LINE_TEXT_MAX = 4000;
 const AUDIO_LINES_MAX = 1000;
-const AUDIO_FILENAME_MAX = 500;
+export const AUDIO_FILENAME_MAX = 500;
 const AUDIO_LINE_ID_MAX = 80;
 // Cap a per-line VO offset at a generous episode length so a corrupted record
 // can't push an `adelay` filter into absurd territory. Two hours is far beyond
@@ -439,6 +439,63 @@ const sanitizeMusicTrack = (raw) => {
   return { source, trackFilename, label };
 };
 
+// Which strategy drives the episode's non-dialogue audio (whole-episode audio,
+// issue #863 / design doc 2026-06-03-whole-episode-audio-strategy.md):
+//   per-clip       — keep each stitched clip's own soundtrack (today's default)
+//   silent         — strip any bed
+//   generated      — assemble the arc-driven cues[] onto the timeline
+//   uploaded-track — loop the single `music` pointer under the whole episode
+export const AUDIO_MODES = Object.freeze(['per-clip', 'silent', 'generated', 'uploaded-track']);
+// Read-side default: an absent / unknown audioMode collapses to 'per-clip' —
+// today's behavior — so an un-migrated record (or one synced from an older,
+// audioMode-unaware peer) reads correctly before migration 067 stamps the
+// explicit value. Never let "absent" become a wrong mode (CLAUDE.md sentinel
+// discipline).
+export const sanitizeAudioMode = (raw) => (AUDIO_MODES.includes(raw) ? raw : 'per-clip');
+
+// Per-cue field caps. Exported so the route's light Zod arm references the
+// same numbers (the sanitizer below is authoritative; the route only guards
+// against payload ballooning) and can't silently drift if these change.
+export const AUDIO_CUE_ID_MAX = 80;
+export const AUDIO_CUE_LABEL_MAX = 200;
+export const AUDIO_CUE_PROMPT_MAX = 8000;
+export const AUDIO_CUE_ENGINE_MAX = 80;
+export const AUDIO_CUES_MAX = 200;
+
+// Per-cue gain override. `null` = "use the stage / global default", distinct
+// from `0` ("muted"). Clamped to a sane 0..4 range so a corrupted value can't
+// blow out the mix.
+const sanitizeCueGain = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.min(n, 4);
+};
+
+const sanitizeAudioCue = (raw, i) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = trimTo(raw.id, AUDIO_CUE_ID_MAX) || `cue-${String(i + 1).padStart(3, '0')}`;
+  return {
+    id,
+    label: trimTo(raw.label, AUDIO_CUE_LABEL_MAX) || null,
+    prompt: trimTo(raw.prompt, AUDIO_CUE_PROMPT_MAX) || null,
+    // Engine id (musicgen | audioldm2 | suno | …). Free-form trimmed string so
+    // a future pluggable engine works without a sanitizer change — the render
+    // route resolves it against the live ENGINES registry. null = "unset".
+    engine: trimTo(raw.engine, AUDIO_CUE_ENGINE_MAX) || null,
+    // Reuse sanitizeLineOffset for cue timing: identical null-vs-0 sentinel
+    // ("not placed yet" vs "plays at start") and 2h cap as VO line offsets.
+    // durationSec is "not rendered yet" (null) → actual length once rendered.
+    startSec: sanitizeLineOffset(raw.startSec),
+    endSec: sanitizeLineOffset(raw.endSec),
+    trackFilename: isStr(raw.trackFilename) && raw.trackFilename
+      ? raw.trackFilename.slice(0, AUDIO_FILENAME_MAX)
+      : null,
+    durationSec: sanitizeLineOffset(raw.durationSec),
+    gain: sanitizeCueGain(raw.gain),
+  };
+};
+
 const sanitizeAudioStage = (raw) => {
   // `canonExtraction` is text-stage-only (see sanitizeTextStage) — the audio
   // shape never carries it.
@@ -449,6 +506,10 @@ const sanitizeAudioStage = (raw) => {
       ? raw.lines.slice(0, AUDIO_LINES_MAX).map(sanitizeAudioLine).filter(Boolean)
       : [],
     music: sanitizeMusicTrack(raw?.music),
+    audioMode: sanitizeAudioMode(raw?.audioMode),
+    cues: Array.isArray(raw?.cues)
+      ? raw.cues.slice(0, AUDIO_CUES_MAX).map(sanitizeAudioCue).filter(Boolean)
+      : [],
   };
 };
 

@@ -301,6 +301,28 @@ const stageInputSchema = z.object({
   locked: z.boolean().optional(),
 });
 
+// Strict base arm for the stage-record union below — a bare text-stage patch
+// (only base fields) validates here, but a payload carrying any visual/audio
+// extra key fails this arm and is routed to the matching specific arm instead
+// of being silently key-stripped. The non-strict `stageInputSchema` stays the
+// `.extend()` base for the specific arms (they re-apply `.strict()` themselves).
+const baseStageStrictSchema = stageInputSchema.strict();
+
+// Light per-cue arm for the audio stage (issue #863). The service-side
+// `sanitizeAudioCue` enforces the real shape (ids, time sentinels, gain clamp);
+// here we only bound sizes so a corrupt payload can't balloon the request.
+const audioCueInputSchema = z.object({
+  id: z.string().trim().max(issuesSvc.AUDIO_CUE_ID_MAX).optional(),
+  label: z.string().max(issuesSvc.AUDIO_CUE_LABEL_MAX).nullable().optional(),
+  prompt: z.string().max(issuesSvc.AUDIO_CUE_PROMPT_MAX).nullable().optional(),
+  engine: z.string().trim().max(issuesSvc.AUDIO_CUE_ENGINE_MAX).nullable().optional(),
+  startSec: z.number().nullable().optional(),
+  endSec: z.number().nullable().optional(),
+  trackFilename: z.string().trim().max(issuesSvc.AUDIO_FILENAME_MAX).nullable().optional(),
+  durationSec: z.number().nullable().optional(),
+  gain: z.number().nullable().optional(),
+}).strip();
+
 // Visual stage records also accept pages/scenes/cdProjectId/videoPath — those
 // are arbitrary structured artifacts written by the visual UI. Keep the
 // validation light here so the artifact shape can evolve without a schema
@@ -338,17 +360,27 @@ const visualStageInputSchema = stageInputSchema.extend({
     imageJobId: z.string().trim().max(200).nullable().optional(),
     prompt: z.string().max(16_000).nullable().optional(),
   }).nullable().optional(),
-});
+}).strict();
 
-// Audio stage payloads carry lines[] (voice-over per dialogue line) + a
-// nullable music descriptor. Light validation — the sanitizer in
-// services/pipeline/issues.js enforces per-line + per-music shape. Without
-// this arm in the union below, audio PATCHes silently fall through to the
-// base stageInputSchema and Zod strips lines[]/music.
+// Audio stage payloads carry lines[] (voice-over per dialogue line), a nullable
+// music descriptor, the whole-episode `audioMode` selector, and arc-driven
+// `cues[]` (issue #863). Light validation — the sanitizer in
+// services/pipeline/issues.js enforces per-line / per-music / per-cue shape.
+// Without this arm in the union below, audio PATCHes fall through and the
+// base/visual arms strip lines/music/audioMode/cues.
+//
+// `.strict()` is load-bearing here: the union arms below all share the same
+// optional base fields, so a plain object parses against *any* arm and Zod's
+// default key-stripping would let an audio payload match the visual arm FIRST,
+// silently dropping audioMode/cues. Strict arms reject unknown keys, so an
+// audio payload (with audioMode/cues/lines/music) only validates against THIS
+// arm and reaches the audio sanitizer intact.
 const audioStageInputSchema = stageInputSchema.extend({
   lines: z.array(z.any()).max(1000).optional(),
   music: z.any().nullable().optional(),
-});
+  audioMode: z.enum(issuesSvc.AUDIO_MODES).optional(),
+  cues: z.array(audioCueInputSchema).max(issuesSvc.AUDIO_CUES_MAX).optional(),
+}).strict();
 
 const issuePatchSchema = z.object({
   title: z.string().trim().min(1).max(issuesSvc.TITLE_MAX).optional(),
@@ -365,14 +397,16 @@ const issuePatchSchema = z.object({
   lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
   pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
   minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
-  // Use visualStageInputSchema as the union arm so visual-stage payloads keep
-  // their `scenes` / `pages` / `cdProjectId` / `videoPath` fields. The schema
-  // is a superset of stageInputSchema (those four are optional additions), so
-  // text-stage patches still validate. Z.union picks the first schema that
-  // succeeds — stageInputSchema first would silently strip the visual fields.
-  // Union order matters: Zod picks the first arm that succeeds, so the
-  // more-specific schemas (visual, audio) must precede the bare base.
-  stages: z.record(z.string(), z.union([visualStageInputSchema, audioStageInputSchema, stageInputSchema])).optional(),
+  // Stage-record arms are all `.strict()` (see audioStageInputSchema above):
+  // every arm shares the same optional base fields, so a non-strict arm would
+  // accept (and key-strip) a payload meant for a sibling arm. With strict arms
+  // a payload only validates against the arm whose extra keys it actually
+  // carries — visual payloads (pages/scenes/…) reach the visual arm, audio
+  // payloads (lines/music/audioMode/cues) reach the audio arm, and bare
+  // text-stage patches (status/output/locked only) fall through to the base.
+  // Order is now defensive rather than load-bearing, but we still place the
+  // more-specific arms first; the bare base last.
+  stages: z.record(z.string(), z.union([visualStageInputSchema, audioStageInputSchema, baseStageStrictSchema])).optional(),
   ephemeral: z.boolean().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 

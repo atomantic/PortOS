@@ -1079,7 +1079,7 @@ describe('pipeline issues service', () => {
       expect(i.stages.audio).toEqual({
         status: 'empty', input: '', output: '', lastRunId: null,
         errorMessage: '', updatedAt: null, lines: [], music: null, locked: false,
-        runHistory: [],
+        runHistory: [], audioMode: 'per-clip', cues: [],
       });
     });
 
@@ -1139,6 +1139,73 @@ describe('pipeline issues service', () => {
       expect(stage.lines).toHaveLength(1);
       expect(stage.lines[0].text).toBe('fresh text');
       expect(stage.lines[0].characterId).toBe('chr-9');
+    });
+
+    it('defaults audioMode to per-clip and keeps known values', async () => {
+      const def = await makeIssue({ lines: [] });
+      expect(def.stages.audio.audioMode).toBe('per-clip');
+      for (const mode of ['silent', 'generated', 'uploaded-track', 'per-clip']) {
+        const i = await makeIssue({ audioMode: mode });
+        expect(i.stages.audio.audioMode).toBe(mode);
+      }
+    });
+
+    it('coerces unknown / non-string audioMode to per-clip', async () => {
+      for (const bogus of ['made-up', 42, null, {}, '']) {
+        const i = await makeIssue({ audioMode: bogus });
+        expect(i.stages.audio.audioMode).toBe('per-clip');
+      }
+    });
+
+    it('round-trips cues[] with auto-assigned ids and time/render sentinels', async () => {
+      const i = await makeIssue({
+        audioMode: 'generated',
+        cues: [
+          { label: 'Act I', prompt: 'warm pads', engine: 'audioldm2', startSec: 0, endSec: 84.5 },
+          { id: 'cue-custom', prompt: 'tense strings', gain: 0.5 },
+        ],
+      });
+      const cues = i.stages.audio.cues;
+      expect(cues).toHaveLength(2);
+      expect(cues[0]).toEqual({
+        id: 'cue-001', label: 'Act I', prompt: 'warm pads', engine: 'audioldm2',
+        startSec: 0, endSec: 84.5, trackFilename: null, durationSec: null, gain: null,
+      });
+      expect(cues[1].id).toBe('cue-custom');
+      // null = "not placed / not rendered yet"; gain 0.5 preserved.
+      expect(cues[1].startSec).toBeNull();
+      expect(cues[1].endSec).toBeNull();
+      expect(cues[1].trackFilename).toBeNull();
+      expect(cues[1].durationSec).toBeNull();
+      expect(cues[1].gain).toBe(0.5);
+    });
+
+    it('cue gain distinguishes null (default) from 0 (muted) and clamps the range', async () => {
+      const i = await makeIssue({
+        cues: [
+          { prompt: 'a' },              // gain omitted → null
+          { prompt: 'b', gain: 0 },     // intentional mute → 0
+          { prompt: 'c', gain: 99 },    // clamped to 4
+          { prompt: 'd', gain: -1 },    // negative → null
+        ],
+      });
+      expect(i.stages.audio.cues.map((c) => c.gain)).toEqual([null, 0, 4, null]);
+    });
+
+    it('caps cues[] at the max (slice before sanitize, mirroring lines[])', async () => {
+      const huge = Array.from({ length: 300 }, (_, n) => ({ prompt: `cue ${n}` }));
+      const i = await makeIssue({ cues: huge });
+      expect(i.stages.audio.cues).toHaveLength(200);
+    });
+
+    it('drops non-object cues', async () => {
+      const i = await makeIssue({ cues: [{ prompt: 'keep' }, null, 'nope', 42, { prompt: 'also keep' }] });
+      expect(i.stages.audio.cues.map((c) => c.prompt)).toEqual(['keep', 'also keep']);
+    });
+
+    it('non-array cues collapses to []', async () => {
+      const i = await makeIssue({ cues: 'not-an-array' });
+      expect(i.stages.audio.cues).toEqual([]);
     });
   });
 

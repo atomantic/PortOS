@@ -39,7 +39,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   universes: 5,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
-  pipelineIssues: 1,
+  // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
+  // audio, issue #863). Additive, but version-gated for the same reason
+  // `pipelineSeries 1→2` (readerMap) is: an older, audioMode/cues-unaware peer
+  // that receives and re-sanitizes the record would silently strip the new
+  // fields and last-writer-wins the loss back onto the newer peer. Bumping
+  // makes the older peer reject the ahead-version issue transfer instead.
+  // Per-category gate → only issue sync pauses with old peers; series/universes
+  // keep flowing.
+  pipelineIssues: 2,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip

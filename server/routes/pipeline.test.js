@@ -1809,6 +1809,44 @@ describe('pipeline routes', () => {
     expect(r.body.stages.idea.status).toBe('empty');
   });
 
+  it('PATCH /issues/:id audio payload survives the union (audioMode + cues not stripped)', async () => {
+    // Regression for the #736-flagged union-arm hazard: the all-optional visual
+    // arm could match an audio payload first and strip audioMode/cues. The
+    // strict union arms must route the payload to the audio arm intact.
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
+    const r = await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        audio: {
+          status: 'edited',
+          audioMode: 'generated',
+          lines: [{ text: 'Hello.' }],
+          cues: [{ label: 'Act I', prompt: 'warm pads', engine: 'audioldm2', startSec: 0, endSec: 30 }],
+        },
+      },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.stages.audio.audioMode).toBe('generated');
+    expect(r.body.stages.audio.cues).toHaveLength(1);
+    expect(r.body.stages.audio.cues[0]).toMatchObject({
+      label: 'Act I', prompt: 'warm pads', engine: 'audioldm2', startSec: 0, endSec: 30,
+    });
+    expect(r.body.stages.audio.lines).toHaveLength(1);
+  });
+
+  it('PATCH /issues/:id visual payload still reaches the visual arm (scenes preserved)', async () => {
+    // The strictness change must not regress visual-stage routing.
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
+    const r = await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { storyboards: { status: 'edited', scenes: [{ id: 's1', summary: 'open' }] } },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.stages.storyboards.scenes).toHaveLength(1);
+  });
+
   it('PATCH /series/:id accepts arc payload', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });

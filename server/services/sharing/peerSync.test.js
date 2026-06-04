@@ -2547,7 +2547,7 @@ describe('peerSync', () => {
           record: { id: 's1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 3 } },
         });
         expect(mergeSeriesFromSync).toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
@@ -2562,10 +2562,10 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 3 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 2, receiverV: 1 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 3, receiverV: 2 }]);
         expect(mergeSeriesFromSync).not.toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
       });
@@ -2616,10 +2616,10 @@ describe('peerSync', () => {
           issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 2 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 3 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 2, receiverV: 1 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'pipelineIssues', senderV: 3, receiverV: 2 }]);
         expect(mergeSeriesFromSync).not.toHaveBeenCalled();
         expect(mergeIssuesFromSync).not.toHaveBeenCalled();
       });
