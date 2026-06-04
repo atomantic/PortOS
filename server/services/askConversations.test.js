@@ -140,13 +140,23 @@ describe('askConversations', () => {
       await convs.appendTurn(answered.id, { role: 'user', content: 'q' });
       await convs.appendTurn(answered.id, { role: 'assistant', content: 'a' });
 
+      // A blank/whitespace-only assistant turn (stream interrupted after only
+      // whitespace deltas) is NOT promotable — promoteLatestAssistantTurn trims
+      // content — so it must not count toward assistantTurnCount either.
+      const blankAnswer = await convs.createConversation({ title: 'blank answer' });
+      await convs.appendTurn(blankAnswer.id, { role: 'user', content: 'q' });
+      await convs.appendTurn(blankAnswer.id, { role: 'assistant', content: '   ' });
+
       const summaries = await convs.listConversations();
       const u = summaries.find((s) => s.id === userOnly.id);
       const a = summaries.find((s) => s.id === answered.id);
+      const blank = summaries.find((s) => s.id === blankAnswer.id);
       expect(u.turnCount).toBe(1);
       expect(u.assistantTurnCount).toBe(0);
       expect(a.turnCount).toBe(2);
       expect(a.assistantTurnCount).toBe(1);
+      expect(blank.turnCount).toBe(2);
+      expect(blank.assistantTurnCount).toBe(0);
     });
 
     it('prunes non-promoted conversations older than 30 days', async () => {
