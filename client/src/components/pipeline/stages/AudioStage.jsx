@@ -162,6 +162,9 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // once the list has landed.
   useEffect(() => {
     if (audioMode === 'generated') void loadGenerators();
+    // Drop a pending re-derive confirm when leaving generated mode so it can't
+    // resurface unprompted on return.
+    else setConfirmRederive(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioMode]);
 
@@ -241,6 +244,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
     const id = cue?.engine || defaultEngineId;
     return genEngines.find((e) => e.id === id) || cueEngine;
   };
+  // Render-all is enabled when at least one cue has a renderable prompt (a typed
+  // draft counts) AND its own engine is installed — matching what the handler
+  // actually iterates, so the gate doesn't block valid non-default/draft cases.
+  const hasRenderableCue = cues.some((c, i) => {
+    const p = cuePromptDrafts[i] !== undefined ? cuePromptDrafts[i] : (c.prompt || '');
+    return p.trim() && engineForCue(c)?.ready;
+  });
 
   // Persist a new whole-episode audio mode via the existing issue PATCH route,
   // then lift the returned issue so the UI reflects the saved mode.
@@ -288,30 +298,37 @@ export default function AudioStage({ issue, onStageUpdate }) {
     void runGenerateCues(false);
   };
 
-  // Per-cue prompt edit, serialized onto the shared tail. Returns the promise
-  // for this save so callers (Render) can await the exact write they triggered.
+  // Refresh latestCuesRef from a server response's stage.cues. Both the prompt
+  // save AND the render must call this so a chained write never PATCHes a stale
+  // full array — e.g. a render stamps trackFilename/durationSec, and a later
+  // prompt save would erase them if it rebuilt the patch from a pre-render ref.
+  const adoptCues = (stage) => {
+    if (Array.isArray(stage?.cues)) latestCuesRef.current = stage.cues;
+  };
+
+  // Per-cue prompt edit, serialized onto the shared tail. Resolves to a
+  // discriminated result so callers (Render) can tell success/no-op from a
+  // failed save: `{ ok: true }` (saved or no-op) | `{ ok: false }` (PATCH
+  // failed — the caller must keep the draft and not render stale text).
   // The patch is built INSIDE the tail from `latestCuesRef` so a save chained
-  // behind another sees the prior save's lifted result, not a stale snapshot.
+  // behind another sees the prior write's lifted result, not a stale snapshot.
   const saveCuePrompt = (cueIdx, prompt) => {
     setSavingCueIdxs((prev) => new Set(prev).add(cueIdx));
     const run = cueSaveTailRef.current.then(async () => {
       const base = latestCuesRef.current;
-      if (!base[cueIdx] || base[cueIdx].prompt === prompt) return null; // gone/no-op
+      if (!base[cueIdx] || base[cueIdx].prompt === prompt) return { ok: true, noop: true }; // gone/no-op
       const nextCues = base.map((c, i) => (i === cueIdx ? { ...c, prompt } : c));
       const updated = await updatePipelineIssue(
         issue.id,
         { stages: { audio: { cues: nextCues } } },
         { silent: true },
       ).catch((err) => { toast.error(err.message || 'Failed to save cue prompt'); return null; });
-      if (updated) {
-        // Keep the ref fresh within the tail before the next save reads it —
-        // React's lifted-state re-render is async.
-        latestCuesRef.current = Array.isArray(updated.stages?.audio?.cues)
-          ? updated.stages.audio.cues
-          : latestCuesRef.current;
-        onStageUpdate?.('audio', updated.stages?.audio, updated);
-      }
-      return updated;
+      if (!updated) return { ok: false };
+      // Keep the ref fresh within the tail before the next write reads it —
+      // React's lifted-state re-render is async.
+      adoptCues(updated.stages?.audio);
+      onStageUpdate?.('audio', updated.stages?.audio, updated);
+      return { ok: true, noop: false };
     }).finally(() => {
       setSavingCueIdxs((prev) => { const next = new Set(prev); next.delete(cueIdx); return next; });
     });
@@ -321,13 +338,15 @@ export default function AudioStage({ issue, onStageUpdate }) {
     return run;
   };
 
-  const handleCuePromptBlur = (cueIdx) => {
+  const handleCuePromptBlur = async (cueIdx) => {
     const draft = cuePromptDrafts[cueIdx];
     if (draft === undefined) return;
     const dropDraft = () => setCuePromptDrafts((prev) => { const next = { ...prev }; delete next[cueIdx]; return next; });
     if (draft === (cues[cueIdx]?.prompt || '')) { dropDraft(); return; }
-    void saveCuePrompt(cueIdx, draft);
-    dropDraft();
+    const res = await saveCuePrompt(cueIdx, draft);
+    // Only drop the draft once the save lands — a failed PATCH keeps the user's
+    // text in the box so it isn't silently lost.
+    if (res.ok) dropDraft();
   };
 
   // Render one cue. `promptOverride` (from Render-all) lets a not-yet-blurred
@@ -338,7 +357,11 @@ export default function AudioStage({ issue, onStageUpdate }) {
   const renderOneCue = async (cueIdx, promptOverride) => {
     const draft = promptOverride !== undefined ? promptOverride : cuePromptDrafts[cueIdx];
     if (draft !== undefined && draft !== (latestCuesRef.current[cueIdx]?.prompt || '')) {
-      await saveCuePrompt(cueIdx, draft);
+      const res = await saveCuePrompt(cueIdx, draft);
+      // Abort if the prompt save failed — rendering would synth stale text and
+      // the draft must survive so the user can retry. The error toast already
+      // fired inside saveCuePrompt.
+      if (!res.ok) return false;
       setCuePromptDrafts((prev) => { const next = { ...prev }; delete next[cueIdx]; return next; });
     } else {
       // No new draft — still drain any in-flight save for this cue.
@@ -357,7 +380,12 @@ export default function AudioStage({ issue, onStageUpdate }) {
     });
     setRenderingCues((prev) => { const next = new Set(prev); next.delete(cueIdx); return next; });
     if (!result) return false;
-    if (result.issue) onStageUpdate?.('audio', result.stage, result.issue);
+    // Adopt the render's stamped cues (trackFilename/durationSec) so a later
+    // prompt save doesn't PATCH them away from a pre-render snapshot.
+    if (result.issue) {
+      adoptCues(result.stage);
+      onStageUpdate?.('audio', result.stage, result.issue);
+    }
     return true;
   };
 
@@ -689,12 +717,12 @@ export default function AudioStage({ issue, onStageUpdate }) {
                 <button
                   type="button"
                   onClick={handleRenderAllCues}
-                  disabled={renderingAllCues || derivingCues || audioModeSaving || !cueEngineReady || !cues.some((c) => c.prompt)}
+                  disabled={renderingAllCues || derivingCues || audioModeSaving || !hasRenderableCue}
                   title={!enginesLoaded
                     ? 'Checking generator engine…'
-                    : (!cueEngineReady
-                      ? `${cueEngine?.name || 'The music engine'} isn't installed — render is unavailable`
-                      : 'Render every cue that has a prompt')}
+                    : (hasRenderableCue
+                      ? 'Render every cue that has a prompt on an installed engine'
+                      : "No cue has a prompt on an installed engine yet")}
                   className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
                 >
                   {renderingAllCues ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -751,9 +779,9 @@ export default function AudioStage({ issue, onStageUpdate }) {
                           id={`cue-prompt-${i}`}
                           value={promptValue}
                           onChange={(e) => setCuePromptDrafts((prev) => ({ ...prev, [i]: e.target.value }))}
-                          onBlur={() => handleCuePromptBlur(i)}
+                          onBlur={() => void handleCuePromptBlur(i)}
                           rows={2}
-                          maxLength={800}
+                          maxLength={2000}
                           placeholder="e.g. warm ambient pads, slow build"
                           className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                         />

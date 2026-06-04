@@ -193,6 +193,56 @@ describe('AudioStage — whole-episode audio (#863)', () => {
     rerender(<AudioStage issue={issue} onStageUpdate={onStageUpdate} />);
   });
 
+  it('aborts the render and keeps the draft when the pre-render prompt save fails', async () => {
+    const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'old' }];
+    const issue = makeIssue({ audioMode: 'generated', cues });
+    updatePipelineIssue.mockRejectedValue(new Error('boom'));
+    render(<AudioStage issue={issue} onStageUpdate={() => {}} />);
+    await waitFor(() => expect(listPipelineMusicGenerators).toHaveBeenCalled());
+
+    const cueItem = screen.getByText('Act I').closest('li');
+    const ta = within(cueItem).getByRole('textbox');
+    await userEvent.clear(ta);
+    await userEvent.type(ta, 'new draft');
+    await userEvent.click(within(cueItem).getByRole('button', { name: /Render/i }));
+
+    // Render must NOT fire (save failed → stale text would otherwise render).
+    await waitFor(() => expect(updatePipelineIssue).toHaveBeenCalled());
+    expect(renderPipelineAudioCue).not.toHaveBeenCalled();
+    // Draft survives so the edit isn't lost.
+    expect(ta).toHaveValue('new draft');
+  });
+
+  it('does not clobber a rendered cue track when a later prompt save runs', async () => {
+    const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'p' }];
+    const issue = makeIssue({ audioMode: 'generated', cues });
+    // The render stamps trackFilename onto the cue and lifts it back.
+    const renderedCues = [{ ...cues[0], trackFilename: 'cue.wav', durationSec: 10 }];
+    renderPipelineAudioCue.mockResolvedValue({
+      issue: makeIssue({ audioMode: 'generated', cues: renderedCues }),
+      stage: { cues: renderedCues },
+      cueIdx: 0,
+      cue: renderedCues[0],
+    });
+    updatePipelineIssue.mockImplementation((_id, patch) =>
+      Promise.resolve(makeIssue({ audioMode: 'generated', cues: patch.stages.audio.cues })));
+    render(<AudioStage issue={issue} onStageUpdate={() => {}} />);
+    await waitFor(() => expect(listPipelineMusicGenerators).toHaveBeenCalled());
+
+    const cueItem = screen.getByText('Act I').closest('li');
+    await userEvent.click(within(cueItem).getByRole('button', { name: /Render/i }));
+    await waitFor(() => expect(renderPipelineAudioCue).toHaveBeenCalled());
+
+    // Now edit the prompt — the resulting PATCH must carry the rendered
+    // trackFilename, proving the save merged against the post-render array.
+    const ta = within(cueItem).getByRole('textbox');
+    await userEvent.type(ta, ' more');
+    ta.blur();
+    await waitFor(() => expect(updatePipelineIssue).toHaveBeenCalled());
+    const savedCues = updatePipelineIssue.mock.calls.at(-1)[1].stages.audio.cues;
+    expect(savedCues[0].trackFilename).toBe('cue.wav');
+  });
+
   it('disables cue render when the engine is not installed', async () => {
     listPipelineMusicGenerators.mockResolvedValue(NOT_READY_ENGINE);
     const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'warm pads', startSec: 0, endSec: 10 }];
