@@ -319,6 +319,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
     <div className="group mx-2 flex items-stretch min-w-0">
       <NavLink
         to={entry.path}
+        end={entry.end}
         onClick={onNavigate}
         className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors min-w-0 ${
           isActive ? 'bg-port-accent/10 text-port-accent' : 'text-gray-400 hover:text-white hover:bg-port-border/50'
@@ -575,7 +576,7 @@ export default function Layout() {
     const map = new Map();
     const addLeaf = (leaf) => {
       if (leaf?.to && !map.has(leaf.to)) {
-        map.set(leaf.to, { path: leaf.to, label: leaf.label, icon: leaf.icon });
+        map.set(leaf.to, { path: leaf.to, label: leaf.label, icon: leaf.icon, end: leaf.end });
       }
     };
     resolvedNavItems.forEach((item) => {
@@ -833,7 +834,7 @@ export default function Layout() {
               return (
                 <div key={child.to} className="min-w-0">
                   <WorkingSetRow
-                    entry={{ path: child.to, label: child.label, icon: ChildIcon }}
+                    entry={{ path: child.to, label: child.label, icon: ChildIcon, end: child.end }}
                     pinned={childIsPinned}
                     onTogglePin={() => (childIsPinned ? unpin(child.to) : pin(child.to))}
                     onNavigate={() => setMobileOpen(false)}
@@ -955,7 +956,7 @@ export default function Layout() {
                 <div className="mb-2">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Pinned</div>
                   {pinned.map((entry) => (
-                    <WorkingSetRow key={`pin-${entry.path}`} entry={entry} pinned onTogglePin={() => unpin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={isActive(entry.path)} />
+                    <WorkingSetRow key={`pin-${entry.path}`} entry={entry} pinned onTogglePin={() => unpin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
                   ))}
                 </div>
               )}
@@ -963,7 +964,7 @@ export default function Layout() {
                 <div className="mb-2">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Recent</div>
                   {recent.map((entry) => (
-                    <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={isActive(entry.path)} />
+                    <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
                   ))}
                 </div>
               )}
