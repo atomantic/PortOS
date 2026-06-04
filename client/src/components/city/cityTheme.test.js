@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor } from './cityConstants';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, seededRand, smoothstepRange, cityDayMix } from './cityConstants';
 
 const hexLum = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -204,5 +204,66 @@ describe('applyCityBrandColors', () => {
     applyCityBrandColors(deriveCityPalette(getTheme('classic-midnight')));
     // classic-midnight accent is 59 130 246 -> #3b82f6, not a blend of green+blue
     expect(CITY_COLORS.ground).toBe('#3b82f6');
+  });
+});
+
+describe('seededRand', () => {
+  it('is deterministic for a given seed', () => {
+    const a = seededRand(42);
+    const b = seededRand(42);
+    const seqA = [a(), a(), a(), a(), a()];
+    const seqB = [b(), b(), b(), b(), b()];
+    expect(seqA).toEqual(seqB);
+  });
+
+  it('produces different streams for different seeds', () => {
+    const a = seededRand(42);
+    const b = seededRand(137);
+    expect(a()).not.toBe(b());
+  });
+
+  it('yields values in [0, 1)', () => {
+    const r = seededRand(3187);
+    for (let i = 0; i < 100; i++) {
+      const v = r();
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(1);
+    }
+  });
+
+  it('matches the original inline LCG it replaced', () => {
+    // Reference: the exact expression copy-pasted across the city components.
+    let s = 77;
+    const ref = () => { s = (s * 16807) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
+    const r = seededRand(77);
+    expect([r(), r(), r()]).toEqual([ref(), ref(), ref()]);
+  });
+});
+
+describe('smoothstepRange', () => {
+  it('clamps below edge0 to 0 and above edge1 to 1', () => {
+    expect(smoothstepRange(0.35, 1, 0.2)).toBe(0);
+    expect(smoothstepRange(0.35, 1, 1)).toBe(1);
+    expect(smoothstepRange(0.35, 1, 2)).toBe(1);
+  });
+
+  it('returns the Hermite midpoint at the center', () => {
+    expect(smoothstepRange(0, 1, 0.5)).toBeCloseTo(0.5, 10);
+  });
+
+  it('guards against a zero-width range', () => {
+    expect(smoothstepRange(0.5, 0.5, 0.4)).toBe(0);
+    expect(smoothstepRange(0.5, 0.5, 0.6)).toBe(1);
+  });
+});
+
+describe('cityDayMix', () => {
+  it('is 1 in full daylight and 0 at night', () => {
+    expect(cityDayMix({ timeOfDay: 'noon' })).toBe(1);
+    expect(cityDayMix({ timeOfDay: 'sunset' })).toBe(0);
+  });
+
+  it('defaults to the night preset when unset', () => {
+    expect(cityDayMix(undefined)).toBe(0);
   });
 });

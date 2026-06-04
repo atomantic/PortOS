@@ -164,6 +164,7 @@ export default function CityEffects({ settings }) {
   // Daytime fades the heavy night atmospherics (bloom, grain, chromatic aberration,
   // blue grade) so noon reads as clear daylight rather than a hazy dusk.
   const dayMix = cityDayMix(settings);
+  const effectiveExposure = sceneExposure * (1 + (1 - dayMix) * 0.55);
   const caBase = bloomStrength >= 0.6 ? 0.005 : 0.003;
 
   useEffect(() => {
@@ -190,8 +191,8 @@ export default function CityEffects({ settings }) {
     // Exposure pass — always added, enabled/disabled via ref to avoid
     // recreating the composer when the slider is dragged
     const exposurePass = new ShaderPass(ExposureShader);
-    exposurePass.enabled = sceneExposure !== 1.0;
-    exposurePass.uniforms.uExposure.value = sceneExposure;
+    exposurePass.enabled = effectiveExposure !== 1.0;
+    exposurePass.uniforms.uExposure.value = effectiveExposure;
     exposurePassRef.current = exposurePass;
     composer.addPass(exposurePass);
 
@@ -225,13 +226,13 @@ export default function CityEffects({ settings }) {
     return () => {
       composer.dispose();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- sceneExposure intentionally omitted; updated via exposurePassRef in useFrame to avoid recreating the composer on slider drag
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- effectiveExposure intentionally omitted; updated via exposurePassRef in useFrame to avoid recreating the composer on slider drag
   }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, chromaticAberration, filmGrain, colorGrading]);
 
   useFrame(({ clock }) => {
     if (exposurePassRef.current) {
-      exposurePassRef.current.enabled = sceneExposure !== 1.0;
-      exposurePassRef.current.uniforms.uExposure.value = sceneExposure;
+      exposurePassRef.current.enabled = effectiveExposure !== 1.0;
+      exposurePassRef.current.uniforms.uExposure.value = effectiveExposure;
     }
     if (grainPassRef.current) {
       grainPassRef.current.uniforms.uTime.value = clock.getElapsedTime();

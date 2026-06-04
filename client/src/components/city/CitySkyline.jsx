@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
+import { cityDayMix, seededRand } from './cityConstants';
 
 // Distant cyberpunk skyline silhouettes with neon trim
 // Creates a ring of faint skyscraper outlines around the city perimeter
@@ -18,11 +19,12 @@ const SKYLINE_FRAG = `
   uniform vec3 uColor;
   uniform vec3 uAccent;
   uniform float uMaxHeight;
+  uniform float uDayMix;
   varying vec2 vUv;
   varying float vHeight;
   void main() {
     // Dark body that fades near top
-    float bodyAlpha = 0.15 * (1.0 - vUv.y * 0.5);
+    float bodyAlpha = mix(0.15, 0.035, uDayMix) * (1.0 - vUv.y * 0.5);
 
     // Window dots - grid of small lit windows
     float cellX = fract(vUv.x * 8.0);
@@ -33,18 +35,21 @@ const SKYLINE_FRAG = `
     float lit = step(0.55, fract(sin(floor(vUv.x * 8.0) * 127.1 + floor(vUv.y * 20.0) * 311.7) * 43758.5453));
     window *= lit;
 
-    vec3 color = mix(vec3(0.02, 0.02, 0.05), uAccent, window * 0.5);
-    float alpha = bodyAlpha + window * 0.15;
+    vec3 nightBase = vec3(0.02, 0.02, 0.05);
+    vec3 dayBase = vec3(0.58, 0.70, 0.78);
+    vec3 color = mix(nightBase, dayBase, uDayMix);
+    color = mix(color, uAccent, window * mix(0.5, 0.15, uDayMix));
+    float alpha = bodyAlpha + window * mix(0.15, 0.035, uDayMix);
 
     // Neon trim at top edge
     float topLine = smoothstep(0.98, 1.0, vUv.y);
     color = mix(color, uAccent, topLine);
-    alpha = max(alpha, topLine * 0.4);
+    alpha = max(alpha, topLine * mix(0.4, 0.12, uDayMix));
 
     // Neon trim at bottom
     float bottomLine = smoothstep(0.02, 0.0, vUv.y);
     color = mix(color, uColor, bottomLine);
-    alpha = max(alpha, bottomLine * 0.3);
+    alpha = max(alpha, bottomLine * mix(0.3, 0.08, uDayMix));
 
     // Fade with distance (atmospheric perspective)
     alpha *= 0.7;
@@ -54,7 +59,7 @@ const SKYLINE_FRAG = `
 `;
 
 // Create a single skyline building silhouette
-function DistantBuilding({ position, width, height, color, accent }) {
+function DistantBuilding({ position, width, height, color, accent, dayMix }) {
   const colorVec = useMemo(() => new THREE.Color(color), [color]);
   const accentVec = useMemo(() => new THREE.Color(accent), [accent]);
 
@@ -68,6 +73,7 @@ function DistantBuilding({ position, width, height, color, accent }) {
           uColor: { value: colorVec },
           uAccent: { value: accentVec },
           uMaxHeight: { value: height },
+          uDayMix: { value: dayMix },
         }}
         transparent
         side={THREE.DoubleSide}
@@ -77,15 +83,15 @@ function DistantBuilding({ position, width, height, color, accent }) {
   );
 }
 
-export default function CitySkyline() {
+export default function CitySkyline({ settings }) {
+  const dayMix = cityDayMix(settings);
   const buildings = useMemo(() => {
     const result = [];
     const colors = ['#06b6d4', '#ec4899', '#8b5cf6', '#3b82f6', '#22c55e', '#f97316'];
     const accents = ['#06b6d4', '#ec4899', '#8b5cf6', '#3b82f6', '#f43f5e', '#a855f7'];
 
     // Seeded random for consistent skyline
-    let s = 42;
-    const rand = () => { s = (s * 16807 + 0) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
+    const rand = seededRand(42);
 
     const radius = 55;
     const count = 60;
@@ -123,6 +129,7 @@ export default function CitySkyline() {
           height={b.height}
           color={b.color}
           accent={b.accent}
+          dayMix={dayMix}
         />
       ))}
     </group>

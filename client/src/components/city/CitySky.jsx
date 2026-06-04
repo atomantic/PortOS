@@ -36,9 +36,11 @@ const SkyDomeShader = {
     uniform vec3 uMidSky;
     uniform vec3 uHorizonHigh;
     uniform vec3 uHorizonLow;
+    uniform vec3 uBelowHorizon;
     uniform vec3 uSunDirection;
     uniform float uSunIntensity;
     uniform float uIsMoon;
+    uniform float uOpacity;
     uniform float uTime;
     varying vec3 vWorldPosition;
 
@@ -87,11 +89,13 @@ const SkyDomeShader = {
       float n = noise(dir.xz * 3.0 + uTime * 0.02) * 0.03;
       color += n;
 
-      // Below horizon: fade to dark
-      float belowFade = smoothstep(0.0, -0.05, dir.y);
-      color = mix(color, vec3(0.01, 0.01, 0.03), belowFade);
+      // Below horizon: fade to dark. smoothstep requires edge0 < edge1;
+      // reverse the result instead of reversing the edges, which is undefined
+      // in GLSL and can blow the sky out on some WebGL implementations.
+      float belowFade = 1.0 - smoothstep(-0.05, 0.0, dir.y);
+      color = mix(color, uBelowHorizon, belowFade);
 
-      gl_FragColor = vec4(color, 1.0);
+      gl_FragColor = vec4(color, uOpacity);
     }
   `,
 };
@@ -113,16 +117,20 @@ const getPresetColors = (name, skyTheme) => {
   const cacheKey = `${skyTheme}:${name}:${accent}`;
   if (!presetColors[cacheKey]) {
     const p = getTimeOfDayPreset(name, skyTheme);
+    const isBrightDay = (p.daylightFactor ?? 0) >= 0.75;
+    const belowHorizon = isBrightDay ? p.horizonLow : '#03030a';
     presetColors[cacheKey] = {
       zenith: new THREE.Color(tintTowardAccent(p.zenith, 0.16)),
       midSky: new THREE.Color(tintTowardAccent(p.midSky, 0.12)),
       horizonHigh: new THREE.Color(p.horizonHigh),
       horizonLow: new THREE.Color(p.horizonLow),
+      belowHorizon: new THREE.Color(belowHorizon),
       sunCore: new THREE.Color(p.sunCore),
       sunGlow: new THREE.Color(p.sunGlow),
       sunLight: new THREE.Color(p.sunLight),
       hour: p.hour,
       sunIntensity: p.sunIntensity,
+      overlayOpacity: isBrightDay ? 1.0 : 0.26,
       sunScale: p.sunScale,
       isMoon: p.isMoon,
     };
@@ -213,12 +221,17 @@ export default function CitySky({ settings }) {
         uMidSky: { value: preset.midSky.clone() },
         uHorizonHigh: { value: preset.horizonHigh.clone() },
         uHorizonLow: { value: preset.horizonLow.clone() },
+        uBelowHorizon: { value: preset.belowHorizon.clone() },
         uSunDirection: { value: new THREE.Vector3(...initPos).normalize() },
         uSunIntensity: { value: preset.sunIntensity },
         uIsMoon: { value: preset.isMoon ? 1.0 : 0.0 },
+        uOpacity: { value: preset.overlayOpacity },
         uTime: { value: 0 },
       },
       side: THREE.BackSide,
+      transparent: true,
+      opacity: preset.overlayOpacity,
+      blending: THREE.NormalBlending,
       depthWrite: false,
     });
   }, []);
@@ -255,11 +268,14 @@ export default function CitySky({ settings }) {
     lerpColor(skyMaterial.uniforms.uMidSky.value, skyMaterial.uniforms.uMidSky.value, preset.midSky, lerpFactor);
     lerpColor(skyMaterial.uniforms.uHorizonHigh.value, skyMaterial.uniforms.uHorizonHigh.value, preset.horizonHigh, lerpFactor);
     lerpColor(skyMaterial.uniforms.uHorizonLow.value, skyMaterial.uniforms.uHorizonLow.value, preset.horizonLow, lerpFactor);
+    lerpColor(skyMaterial.uniforms.uBelowHorizon.value, skyMaterial.uniforms.uBelowHorizon.value, preset.belowHorizon, lerpFactor);
 
     // Update sun direction directly from arc position
     skyMaterial.uniforms.uSunDirection.value.copy(bodyDir);
     skyMaterial.uniforms.uSunIntensity.value += (preset.sunIntensity - skyMaterial.uniforms.uSunIntensity.value) * lerpFactor;
     skyMaterial.uniforms.uIsMoon.value += ((preset.isMoon ? 1.0 : 0.0) - skyMaterial.uniforms.uIsMoon.value) * lerpFactor;
+    skyMaterial.uniforms.uOpacity.value += (preset.overlayOpacity - skyMaterial.uniforms.uOpacity.value) * lerpFactor;
+    skyMaterial.opacity = skyMaterial.uniforms.uOpacity.value;
     skyMaterial.uniforms.uTime.value = clock.getElapsedTime();
 
     // Move celestial body mesh
@@ -292,8 +308,11 @@ export default function CitySky({ settings }) {
 
   return (
     <group>
+      {/* Dome radius must exceed the CityLandscape mountain ring (~1210 max extent)
+          so the horizon mountains sit INSIDE the dome and aren't occluded by the
+          opaque daytime sky. Kept under the camera far plane (2000). */}
       <mesh material={skyMaterial}>
-        <sphereGeometry args={[500, 32, 32]} />
+        <sphereGeometry args={[1600, 32, 32]} />
       </mesh>
       <CelestialBody groupRef={bodyGroupRef} />
       <directionalLight

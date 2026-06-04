@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, mixHex, tintStructure } from './cityConstants';
 import CityLabel from './CityLabel';
 import { computeAiCore, computeAiCoreBeams, AI_CORE } from '../../utils/cityAiCore';
 
@@ -73,16 +73,51 @@ function TargetedBeam({ target, thickness, color, seed }) {
   );
 }
 
+function SpireLightRings({ height, color, dayMix }) {
+  const rings = useMemo(() => {
+    const count = Math.max(7, Math.floor(height / 1.6));
+    return Array.from({ length: count }, (_, i) => {
+      const ratio = (i + 1) / (count + 1);
+      return {
+        key: `ring-${i}`,
+        y: ratio * height,
+        radius: 1.4 + (0.5 - 1.4) * ratio + 0.04,
+        opacity: (i === count - 1 ? 0.58 : 0.28 + (i % 3) * 0.08) * (1 - dayMix * 0.7),
+      };
+    });
+  }, [dayMix, height]);
+
+  return (
+    <group>
+      {rings.map((ring) => (
+        <mesh key={ring.key} position={[0, ring.y, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[ring.radius, 0.025, 6, 8]} />
+          <meshBasicMaterial color={mixHex('#f8fbff', color, 0.36)} transparent opacity={ring.opacity} toneMapped={false} depthWrite={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 export default function CityAiCore({ aiActivity, positions, apps, settings }) {
   const core = useMemo(
     () => computeAiCore(aiActivity?.ops, aiActivity?.lastStartTs ?? 0),
     [aiActivity],
   );
   const apexRef = useRef();
+  const apexGlowRef = useRef();
 
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
   const dayMix = cityDayMix(settings);
   const { position, height, apexY, color } = core;
+  const orbColor = core.busy ? color : mixHex('#67e8f9', color, 0.28);
+  const orbEmissive = (core.busy ? 0.85 : 0.48) + core.intensity * 0.45;
+  const orbGlowOpacity = (0.14 + core.intensity * 0.08) * (1 - dayMix * 0.45);
+  const nightSpireBase = mixHex(tintStructure('#2a416c'), color, 0.24);
+  const daySpireBase = mixHex('#707988', color, 0.1);
+  const spireBodyColor = mixHex(nightSpireBase, daySpireBase, dayMix);
+  const spireEdgeOpacity = 0.24 + (1 - dayMix) * 0.28;
+  const spireGlowColor = mixHex('#7dd3fc', orbColor, 0.5);
 
   // Per-op beams: targeted at the originating building when known, radial otherwise.
   // While flaring with no live op (a fast call that already cleared) keep one radial pulse.
@@ -99,7 +134,12 @@ export default function CityAiCore({ aiActivity, positions, apps, settings }) {
     // Busy core pulses faster; a flare spikes it; idle breathes slowly.
     const speed = core.busy ? 2.4 : core.flaring ? 3.2 : 0.7;
     const pulse = 0.5 + ((Math.sin(clock.getElapsedTime() * speed) + 1) / 2) * 0.6;
-    apexRef.current.material.emissiveIntensity = pulse * (core.intensity + 0.3);
+    apexRef.current.material.emissiveIntensity = orbEmissive + pulse * (core.busy ? 0.35 : 0.16);
+    if (apexGlowRef.current) {
+      apexGlowRef.current.material.opacity = orbGlowOpacity + pulse * 0.04;
+      const scale = 1 + pulse * 0.04;
+      apexGlowRef.current.scale.setScalar(scale);
+    }
   });
 
   return (
@@ -107,13 +147,44 @@ export default function CityAiCore({ aiActivity, positions, apps, settings }) {
       {/* Slender spire body — tapered so it reads as a tower, not a column */}
       <mesh position={[0, height / 2, 0]}>
         <cylinderGeometry args={[0.5, 1.4, height, 8]} />
-        <meshStandardMaterial color={tintStructure('#0a0f1c')} emissive={color} emissiveIntensity={0.1 + core.intensity * 0.15} metalness={0.7} roughness={0.4} />
+        <meshStandardMaterial
+          color={spireBodyColor}
+          emissive={spireGlowColor}
+          emissiveIntensity={0.55 + core.intensity * 0.35}
+          metalness={0.45}
+          roughness={0.46}
+          toneMapped={false}
+        />
       </mesh>
+      <mesh position={[0, height / 2, 0]}>
+        <cylinderGeometry args={[0.52, 1.43, height + 0.04, 8]} />
+        <meshBasicMaterial
+          color={color}
+          wireframe
+          transparent
+          opacity={spireEdgeOpacity}
+          toneMapped={false}
+          depthWrite={false}
+        />
+      </mesh>
+      <SpireLightRings height={height} color={color} dayMix={dayMix} />
       {/* Apex orb — the live AI-activity indicator */}
       <mesh ref={apexRef} position={[0, apexY, 0]}>
         <icosahedronGeometry args={[1.6, 1]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={core.intensity} toneMapped={false} />
+        <meshStandardMaterial color={orbColor} emissive={orbColor} emissiveIntensity={orbEmissive} roughness={0.28} metalness={0.15} toneMapped={false} />
       </mesh>
+      <mesh ref={apexGlowRef} position={[0, apexY, 0]}>
+        <sphereGeometry args={[1.95, 24, 16]} />
+        <meshBasicMaterial
+          color={orbColor}
+          transparent
+          opacity={orbGlowOpacity}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      <pointLight position={[0, apexY, 0]} color={orbColor} intensity={0.85 + core.intensity * 0.8} distance={22} decay={2} />
       {/* Activity beams emanate from the apex while AI work is in flight */}
       <group position={[0, apexY, 0]}>
         {beams.map((b, i) => (
@@ -123,11 +194,33 @@ export default function CityAiCore({ aiActivity, positions, apps, settings }) {
         ))}
       </group>
       {/* Label above the apex */}
-      <CityLabel position={[0, apexY + 2.6, 0]} fontSize={1.4} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+      <CityLabel
+        position={[0, apexY + 4.25, 0]}
+        fontSize={1.15}
+        color={orbColor}
+        dayMix={dayMix}
+        anchorX="center"
+        anchorY="middle"
+        font={PIXEL_FONT_URL}
+        maxWidth={20}
+        renderOrder={40}
+        material-depthTest={false}
+      >
         AI CORE
       </CityLabel>
       {core.busy && (
-        <CityLabel position={[0, apexY + 1.5, 0]} fontSize={0.85} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        <CityLabel
+          position={[0, apexY + 3.15, 0]}
+          fontSize={0.75}
+          color="#94a3b8"
+          dayMix={dayMix}
+          anchorX="center"
+          anchorY="middle"
+          font={PIXEL_FONT_URL}
+          maxWidth={20}
+          renderOrder={40}
+          material-depthTest={false}
+        >
           {`${core.activeCount} ACTIVE`}
         </CityLabel>
       )}

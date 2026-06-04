@@ -78,25 +78,27 @@ export const CITY_COLORS = {
       ambientIntensity: 0.35,
     },
     sunset: {
-      hour: 18,
-      zenith: '#050520',
-      midSky: '#1a0a2e',
-      horizonHigh: '#ff4060',
-      horizonLow: '#ff8040',
-      sunCore: '#ffaa44',
-      sunGlow: '#ff6080',
-      sunLight: '#ffccaa',
-      sunIntensity: 1.5,
-      sunScale: 1.0,
-      isMoon: false,
+      // Theme-night preset: moonlit cyber-night, not blackout. The city should
+      // feel nocturnal while still being readable from moonlight and neon bounce.
+      hour: 12,
+      zenith: '#071329',
+      midSky: '#0b1f38',
+      horizonHigh: '#251445',
+      horizonLow: '#080917',
+      sunCore: '#d9ecff',
+      sunGlow: '#7bbcff',
+      sunLight: '#8fc7ff',
+      sunIntensity: 1.1,
+      sunScale: 0.72,
+      isMoon: true,
       daylightFactor: 0.2,
-      groundColor: '#1a1830',
+      groundColor: '#283246',
       groundRoughness: 0.75,
-      hemiSkyColor: '#ff6644',
-      hemiGroundColor: '#151520',
-      hemiIntensity: 0.4,
-      ambientColor: '#1a1a3a',
-      ambientIntensity: 0.2,
+      hemiSkyColor: '#5c8ac6',
+      hemiGroundColor: '#121626',
+      hemiIntensity: 1.1,
+      ambientColor: '#1b2a4a',
+      ambientIntensity: 0.55,
     },
     midnight: {
       hour: 0,
@@ -402,10 +404,21 @@ export const tintStructure = (hex) => tintTowardAccent(hex, 0.22);
 
 // GLSL-style smoothstep with an edge remap (distinct from the plain Hermite
 // smoothstep(t) in utils/easing.js — different arity, kept local on purpose).
-const smoothstepRange = (a, b, x) => {
+export const smoothstepRange = (a, b, x) => {
   if (a === b) return x < a ? 0 : 1;
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
+};
+
+// Deterministic Park-Miller LCG. Returns a () => [0,1) generator seeded from an
+// integer — the shared form of the inline seeded-random used across city scenery
+// so a given seed always yields the same building/terrain layout.
+export const seededRand = (seed) => {
+  let s = seed;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s & 0x7fffffff) / 2147483647;
+  };
 };
 
 // The city renders just two times of day — day and night — and follows the active

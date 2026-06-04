@@ -6,6 +6,10 @@ import {
   getPairedThemeId,
   normalizeThemeId,
 } from '../themes/portosThemes';
+import {
+  STORAGE_KEY as CITY_SETTINGS_KEY,
+  TIME_OF_DAY_AUTO_EVENT as CITY_TIME_OF_DAY_AUTO_EVENT,
+} from './useCitySettings';
 
 const STORAGE_KEY = 'portos-theme';
 
@@ -31,6 +35,17 @@ const loadTheme = () => {
   return normalized;
 };
 
+const resetCityTimeOfDayOverride = () => {
+  try {
+    const raw = localStorage.getItem(CITY_SETTINGS_KEY);
+    const citySettings = raw ? JSON.parse(raw) : {};
+    localStorage.setItem(CITY_SETTINGS_KEY, JSON.stringify({ ...citySettings, timeOfDay: 'auto' }));
+    window.dispatchEvent(new Event(CITY_TIME_OF_DAY_AUTO_EVENT));
+  } catch {
+    // Theme switching should still work if city settings are unavailable/corrupt.
+  }
+};
+
 export default function useTheme() {
   const [themeId, setThemeId] = useState(() => {
     const id = loadTheme();
@@ -48,6 +63,7 @@ export default function useTheme() {
         const currentSaved = normalizeThemeId(localStorage.getItem(STORAGE_KEY));
         if (serverTheme && serverTheme !== currentSaved) {
           localStorage.setItem(STORAGE_KEY, serverTheme);
+          resetCityTimeOfDayOverride();
           applyTheme(serverTheme);
           setThemeId(serverTheme);
         }
@@ -59,6 +75,7 @@ export default function useTheme() {
     userPickedRef.current = true;
     const normalized = normalizeThemeId(id);
     localStorage.setItem(STORAGE_KEY, normalized);
+    resetCityTimeOfDayOverride();
     applyTheme(normalized);
     setThemeId(normalized);
     fetch('/api/settings', {

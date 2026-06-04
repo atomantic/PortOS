@@ -1,7 +1,7 @@
 import { useRef, useState, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { getBuildingColor, getBuildingHeight, getAccentColor, CITY_COLORS, BUILDING_PARAMS, PIXEL_FONT_URL, mixHex, tintStructure } from './cityConstants';
+import { getBuildingColor, getBuildingHeight, getAccentColor, BUILDING_PARAMS, PIXEL_FONT_URL, mixHex, tintStructure, seededRand } from './cityConstants';
 import CityLabel from './CityLabel';
 import HolographicPanel from './HolographicPanel';
 import BuildingHologram from './BuildingHologram';
@@ -100,13 +100,13 @@ const createWindowTexture = (accentColor, width, height, seed) => {
   canvas.height = px * rowCount;
   const ctx = canvas.getContext('2d');
 
-  // Dark base (tinted toward the theme accent, luminance preserved)
-  ctx.fillStyle = tintStructure('#050510');
+  // Dark, but not black: facades need enough albedo for moon/neon bounce to
+  // reveal them. The theme tint keeps the texture in-family.
+  ctx.fillStyle = tintStructure('#24324f');
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Seeded random for consistent patterns
-  let s = seed;
-  const rand = () => { s = (s * 16807 + 0) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
+  const rand = seededRand(seed);
 
   // Draw random ambient windows (dimmer background pattern)
   for (let r = 1; r < rowCount - 1; r++) {
@@ -122,11 +122,35 @@ const createWindowTexture = (accentColor, width, height, seed) => {
         } else if (bright > 0.3) {
           ctx.fillStyle = accentColor + '20';
         } else {
-          ctx.fillStyle = tintStructure('#0a0f1e');
+          ctx.fillStyle = tintStructure('#1d2b4a');
         }
         ctx.fillRect(c * px + 1, r * px + 1, px - 2, px - 2);
       }
     }
+  }
+
+  // Thin horizontal floor-light rows. These make large faces read as stacked
+  // occupied floors instead of a single blank slab, especially in night mode.
+  for (let r = 2; r < rowCount - 1; r += 3) {
+    const warmRow = rand() > 0.55;
+    const rowAlpha = rand() > 0.7 ? 0.44 : 0.28;
+    ctx.fillStyle = warmRow
+      ? `rgba(234, 244, 255, ${rowAlpha})`
+      : accentColor + (rowAlpha > 0.35 ? '70' : '45');
+
+    for (let c = 1; c < cols - 1; c++) {
+      if (rand() < 0.24) continue;
+      ctx.fillRect(c * px + 1, r * px + 3, px - 2, 2);
+    }
+  }
+
+  // Occasional brighter architectural bands, like stacked balcony/maintenance
+  // strips, to echo the city-light reference without covering every floor.
+  for (let r = 4 + (seed % 3); r < rowCount - 2; r += 8) {
+    ctx.fillStyle = accentColor + '85';
+    ctx.fillRect(0, r * px + 2, canvas.width, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(0, r * px + 1, canvas.width, 1);
   }
 
   // Draw pixel art icon mural centered on face
@@ -267,6 +291,56 @@ function NeonEdgeStrip({ position, height, color, delay, dimMul = 1 }) {
   );
 }
 
+function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMul = 1 }) {
+  const bands = useMemo(() => {
+    const rand = seededRand(seed + 97);
+    const floorCount = Math.max(4, Math.min(14, Math.floor(height / 1.05)));
+    const next = [];
+
+    for (let i = 1; i <= floorCount; i++) {
+      const y = (i / (floorCount + 1)) * height;
+      const isCrown = i === floorCount || i === floorCount - 1;
+      const show = isCrown || i % 3 === seed % 3 || rand() > 0.48;
+      if (!show) continue;
+
+      next.push({
+        key: `${i}-${Math.round(y * 100)}`,
+        y,
+        color: rand() > 0.45 ? mixHex('#f8fbff', accentColor, 0.28) : color,
+        opacity: isCrown ? 0.78 : 0.34 + rand() * 0.22,
+        thickness: isCrown ? 0.055 : 0.032,
+      });
+    }
+
+    return next;
+  }, [accentColor, color, height, seed]);
+
+  return (
+    <group>
+      {bands.map((band) => {
+        const horizontalGeo = [width * 0.96, band.thickness, 0.035];
+        const verticalGeo = [0.035, band.thickness, depth * 0.96];
+        const faces = [
+          { pos: [0, band.y, depth / 2 + 0.035], geo: horizontalGeo },
+          { pos: [0, band.y, -(depth / 2 + 0.035)], geo: horizontalGeo },
+          { pos: [width / 2 + 0.035, band.y, 0], geo: verticalGeo },
+          { pos: [-(width / 2 + 0.035), band.y, 0], geo: verticalGeo },
+        ];
+        return (
+          <group key={band.key}>
+            {faces.map((face, i) => (
+              <mesh key={i} position={face.pos}>
+                <boxGeometry args={face.geo} />
+                <meshBasicMaterial color={band.color} transparent opacity={band.opacity * dimMul} toneMapped={false} depthWrite={false} />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
 export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0 }) {
   const meshRef = useRef();
   const glowRef = useRef();
@@ -294,7 +368,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   // Mid-tone facade (not near-white) so strong daylight lands around a clean gray
   // rather than clipping to white; a touch of the status color keeps variety.
   const dayFacade = mixHex('#9aa0ac', edgeColor, 0.12);
-  const bodyColor = mixHex(CITY_COLORS.buildingBody, dayFacade, dayMix);
+  const nightFacade = mixHex(app.archived ? '#273247' : '#26375d', edgeColor, app.archived ? 0.12 : 0.2);
+  const bodyColor = mixHex(nightFacade, dayFacade, dayMix);
   const edgeLineColor = daytime ? mixHex('#4a4f57', edgeColor, 0.15) : edgeColor;
 
   // Name hash for seeded randomness
@@ -359,14 +434,15 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       >
         <boxGeometry args={[width, height, depth]} />
         <meshStandardMaterial
-          color={bodyColor}
+          color={daytime ? bodyColor : '#ffffff'}
           emissive={edgeColor}
-          emissiveIntensity={0.35 * neonBrightness * dimMul * (1 - dayMix * 0.9)}
+          emissiveIntensity={0.7 * neonBrightness * dimMul * (1 - dayMix * 0.88)}
           map={daytime ? undefined : windowTexture}
-          roughness={daytime ? 0.9 : 1}
-          metalness={daytime ? 0.05 : 0}
+          emissiveMap={daytime ? undefined : windowTexture}
+          roughness={daytime ? 0.9 : 0.78}
+          metalness={daytime ? 0.05 : 0.08}
           transparent
-          opacity={(app.archived ? 0.6 : 0.95) * dimMul}
+          opacity={(app.archived ? 0.78 : 1) * dimMul}
         />
       </mesh>
 
@@ -419,6 +495,19 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           <NeonEdgeStrip position={[width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={2} dimMul={dimMul} />
           <NeonEdgeStrip position={[-width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={3} dimMul={dimMul} />
         </>
+      )}
+
+      {/* Lit floor bands stay on even for archived buildings so dark towers remain readable. */}
+      {!daytime && (
+        <FloorLightBands
+          width={width}
+          depth={depth}
+          height={height}
+          color={app.archived ? '#94a3b8' : edgeColor}
+          accentColor={app.archived ? '#64748b' : accentColor}
+          seed={seed}
+          dimMul={dimMul * (app.archived ? 0.58 : 1)}
+        />
       )}
 
       {/* Building name on front face - pixel font (dark ink + halo by day) */}

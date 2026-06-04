@@ -1,16 +1,18 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import PlayerAvatar from './PlayerAvatar';
 
-const WALK_SPEED = 8;
-const SPRINT_SPEED = 14;
-const CAMERA_DISTANCE = 5;
-const CAMERA_LERP = 0.08;
+const WALK_SPEED = 10;
+const SPRINT_SPEED = 20;
+const VERTICAL_SPEED = 8;
 const BUILDING_EXCLUSION_RADIUS = 3.5;
 const PROXIMITY_DISTANCE = 6;
-const WORLD_BOUND = 55;
-const HEAD_HEIGHT = 1.4;
+const WORLD_BOUND = 180;
+const EYE_HEIGHT = 1.6;
+const MAX_CAMERA_HEIGHT = 160;
+const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
+const MOUSE_SENSITIVITY = 0.002;
+const PITCH_LIMIT = Math.PI / 2 - 0.02;
 
 export default function PlayerController({
   keysRef,
@@ -23,13 +25,10 @@ export default function PlayerController({
   const { camera, gl } = useThree();
   const playerPos = useRef(new THREE.Vector3(0, 0, 0));
   const yawRef = useRef(0); // Facing toward city center (-Z direction)
-  const pitchRef = useRef(0.3);
-  const isMovingRef = useRef(false);
-  const facingAngleRef = useRef(0);
+  const pitchRef = useRef(0);
   const lastSpawnRef = useRef(null);
   const pointerLockedRef = useRef(false);
   const proximityAppRef = useRef(null);
-  const avatarGroupRef = useRef();
 
   // Initialize spawn position
   useEffect(() => {
@@ -42,8 +41,9 @@ export default function PlayerController({
       positions?.forEach((pos) => {
         if (pos.z > maxZ) maxZ = pos.z;
       });
-      playerPos.current.set(0, 0, maxZ + 8);
+      playerPos.current.set(0, EYE_HEIGHT, maxZ + 8);
       yawRef.current = 0; // Forward = (0, 0, -1), facing toward city center
+      pitchRef.current = 0;
     }
   }, [active, positions]);
 
@@ -59,9 +59,9 @@ export default function PlayerController({
 
   const handleMouseMove = useCallback((e) => {
     if (!pointerLockedRef.current || !active) return;
-    yawRef.current -= e.movementX * 0.002;
-    pitchRef.current += e.movementY * 0.002;
-    pitchRef.current = Math.max(-0.1, Math.min(1.2, pitchRef.current));
+    yawRef.current -= e.movementX * MOUSE_SENSITIVITY;
+    pitchRef.current -= e.movementY * MOUSE_SENSITIVITY;
+    pitchRef.current = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitchRef.current));
   }, [active]);
 
   useEffect(() => {
@@ -90,11 +90,11 @@ export default function PlayerController({
     };
   }, [active, gl.domElement, handleClick, handlePointerLockChange, handleMouseMove]);
 
-  // E key for building interaction
+  // F key for building interaction. E is vertical up in free-look controls.
   useEffect(() => {
     if (!active) return;
     const handleKeyDown = (e) => {
-      if (e.key.toLowerCase() === 'e' && proximityAppRef.current) {
+      if (e.key.toLowerCase() === 'f' && proximityAppRef.current) {
         onBuildingClick?.(proximityAppRef.current);
       }
     };
@@ -108,6 +108,7 @@ export default function PlayerController({
     const keys = keysRef.current;
     const isSprinting = keys.has('shift');
     const speed = (isSprinting ? SPRINT_SPEED : WALK_SPEED) * delta;
+    const verticalSpeed = (isSprinting ? SPRINT_SPEED : VERTICAL_SPEED) * delta;
 
     // Movement direction relative to camera yaw
     const forward = new THREE.Vector3(-Math.sin(yawRef.current), 0, -Math.cos(yawRef.current));
@@ -119,45 +120,47 @@ export default function PlayerController({
     if (keys.has('a') || keys.has('arrowleft')) moveDir.sub(right);
     if (keys.has('d') || keys.has('arrowright')) moveDir.add(right);
 
-    const moving = moveDir.lengthSq() > 0;
-    isMovingRef.current = moving;
+    const hasHorizontal = moveDir.lengthSq() > 0;
+    const verticalDir = (keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0);
+    const moving = hasHorizontal || verticalDir !== 0;
 
     if (moving) {
-      moveDir.normalize().multiplyScalar(speed);
+      if (hasHorizontal) moveDir.normalize().multiplyScalar(speed);
       const nextPos = playerPos.current.clone().add(moveDir);
-      nextPos.y = 0;
+      nextPos.y += verticalDir * verticalSpeed;
 
-      // Update facing angle to movement direction
-      facingAngleRef.current = Math.atan2(moveDir.x, moveDir.z);
-
-      // Collision detection with buildings
+      // Collision detection with buildings — skipped above rooftop height so the
+      // player can fly over the city.
       let blocked = false;
-      positions?.forEach((pos) => {
-        const dx = nextPos.x - pos.x;
-        const dz = nextPos.z - pos.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist < BUILDING_EXCLUSION_RADIUS) {
-          // Slide along boundary tangent
-          const nx = dx / dist;
-          const nz = dz / dist;
-          const dot = moveDir.x * nx + moveDir.z * nz;
-          if (dot < 0) {
-            // Moving toward building - project movement onto tangent
-            nextPos.x = playerPos.current.x + (moveDir.x - dot * nx) * 0.8;
-            nextPos.z = playerPos.current.z + (moveDir.z - dot * nz) * 0.8;
-            // Re-check distance after slide
-            const dx2 = nextPos.x - pos.x;
-            const dz2 = nextPos.z - pos.z;
-            if (Math.sqrt(dx2 * dx2 + dz2 * dz2) < BUILDING_EXCLUSION_RADIUS) {
-              blocked = true;
+      if (hasHorizontal && nextPos.y < BUILDING_FLYOVER_HEIGHT) {
+        positions?.forEach((pos) => {
+          const dx = nextPos.x - pos.x;
+          const dz = nextPos.z - pos.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          if (dist < BUILDING_EXCLUSION_RADIUS) {
+            // Slide along boundary tangent
+            const nx = dx / dist;
+            const nz = dz / dist;
+            const dot = moveDir.x * nx + moveDir.z * nz;
+            if (dot < 0) {
+              // Moving toward building - project movement onto tangent
+              nextPos.x = playerPos.current.x + (moveDir.x - dot * nx) * 0.8;
+              nextPos.z = playerPos.current.z + (moveDir.z - dot * nz) * 0.8;
+              // Re-check distance after slide
+              const dx2 = nextPos.x - pos.x;
+              const dz2 = nextPos.z - pos.z;
+              if (Math.sqrt(dx2 * dx2 + dz2 * dz2) < BUILDING_EXCLUSION_RADIUS) {
+                blocked = true;
+              }
             }
           }
-        }
-      });
+        });
+      }
 
       if (!blocked) {
         // World bounds
         nextPos.x = Math.max(-WORLD_BOUND, Math.min(WORLD_BOUND, nextPos.x));
+        nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
         nextPos.z = Math.max(-WORLD_BOUND, Math.min(WORLD_BOUND, nextPos.z));
         playerPos.current.copy(nextPos);
       }
@@ -168,8 +171,9 @@ export default function PlayerController({
     let nearestDist = PROXIMITY_DISTANCE;
     positions?.forEach((pos, appId) => {
       const dx = playerPos.current.x - pos.x;
+      const dy = playerPos.current.y - ((pos.height ?? 4) * 0.5);
       const dz = playerPos.current.z - pos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist < nearestDist) {
         nearestDist = dist;
         const app = apps?.find(a => a.id === appId);
@@ -182,39 +186,17 @@ export default function PlayerController({
       onBuildingProximity?.(nearestApp);
     }
 
-    // Camera follow - spherical offset from player
-    const camX = playerPos.current.x + Math.sin(yawRef.current) * Math.cos(pitchRef.current) * CAMERA_DISTANCE;
-    const camY = Math.max(0.5, playerPos.current.y + HEAD_HEIGHT + Math.sin(pitchRef.current) * CAMERA_DISTANCE);
-    const camZ = playerPos.current.z + Math.cos(yawRef.current) * Math.cos(pitchRef.current) * CAMERA_DISTANCE;
-
-    const targetCamPos = new THREE.Vector3(camX, camY, camZ);
-    camera.position.lerp(targetCamPos, CAMERA_LERP);
-
-    const lookTarget = new THREE.Vector3(
-      playerPos.current.x,
-      playerPos.current.y + HEAD_HEIGHT,
-      playerPos.current.z,
+    camera.position.copy(playerPos.current);
+    const lookDir = new THREE.Vector3(
+      -Math.sin(yawRef.current) * Math.cos(pitchRef.current),
+      Math.sin(pitchRef.current),
+      -Math.cos(yawRef.current) * Math.cos(pitchRef.current),
     );
+    const lookTarget = playerPos.current.clone().add(lookDir);
     camera.lookAt(lookTarget);
-
-    // Update avatar position
-    if (avatarGroupRef.current) {
-      avatarGroupRef.current.position.set(
-        playerPos.current.x,
-        playerPos.current.y,
-        playerPos.current.z,
-      );
-    }
   });
 
   if (!active) return null;
 
-  return (
-    <group ref={avatarGroupRef}>
-      <PlayerAvatar
-        isMovingRef={isMovingRef}
-        facingAngleRef={facingAngleRef}
-      />
-    </group>
-  );
+  return null;
 }

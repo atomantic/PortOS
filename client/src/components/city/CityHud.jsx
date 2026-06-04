@@ -39,8 +39,9 @@ function ControlsHint({ visible }) {
         </div>
         <div className="font-pixel text-[8px] text-gray-500 tracking-wide space-y-1">
           <div>MOUSE: LOOK AROUND (CLICK TO LOCK)</div>
+          <div>WASD: MOVE · Q/E: DOWN/UP</div>
           <div>SHIFT: SPRINT</div>
-          <div>E: INTERACT WITH BUILDING</div>
+          <div>F: INTERACT WITH BUILDING</div>
           <div>TAB: FLY OUT</div>
         </div>
       </div>
@@ -88,44 +89,6 @@ function HudCorner({ position = 'tl', color = 'cyan' }) {
       className={`absolute w-2 h-2 ${corners[position]} border-${color}-400/60`}
       style={{ borderWidth: '1px' }}
     />
-  );
-}
-
-// Glitch text effect - brief visual corruption
-function GlitchTitle({ text, className }) {
-  const [glitching, setGlitching] = useState(false);
-  const intervalRef = useRef(null);
-
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      if (Math.random() > 0.92) {
-        setGlitching(true);
-        setTimeout(() => setGlitching(false), 100 + Math.random() * 150);
-      }
-    }, 2000);
-    return () => clearInterval(intervalRef.current);
-  }, []);
-
-  return (
-    <div className={`relative ${className}`}>
-      <span className={glitching ? 'opacity-0' : ''}>{text}</span>
-      {glitching && (
-        <>
-          <span
-            className="absolute inset-0 text-red-400/60"
-            style={{ transform: 'translateX(2px)' }}
-          >
-            {text}
-          </span>
-          <span
-            className="absolute inset-0 text-cyan-400/60"
-            style={{ transform: 'translateX(-2px)' }}
-          >
-            {text}
-          </span>
-        </>
-      )}
-    </div>
   );
 }
 
@@ -366,19 +329,8 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
         </div>
       </div>
 
-      {/* Top-center: CyberCity title with glitch effect */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
-        <GlitchTitle
-          text="CITY"
-          className="font-pixel text-cyan-400/50 text-sm tracking-[0.4em]"
-        />
-        <div className="font-pixel text-[8px] text-cyan-400/20 tracking-[0.2em] text-center mt-0.5">
-          v{totalApps}.{activeApps}.{activeAgentCount}
-        </div>
-      </div>
-
       {filter && onFilterChange && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2">
+        <div className="absolute top-3 left-1/2 -translate-x-1/2">
           <CityFilterBar
             filter={filter}
             onChange={onFilterChange}

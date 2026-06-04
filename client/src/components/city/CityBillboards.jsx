@@ -110,20 +110,20 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
   return (
     <group ref={groupRef} position={position} rotation={rotation}>
       {/* Billboard background panel (front face only) */}
-      <mesh>
+      <mesh renderOrder={20}>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial color="#080820" transparent opacity={0.85} />
+        <meshBasicMaterial color="#111a36" transparent opacity={0.94} toneMapped={false} />
       </mesh>
 
       {/* Solid back blocker to prevent mirrored text bleed-through */}
-      <mesh position={[0, 0, -0.01]}>
+      <mesh position={[0, 0, -0.01]} renderOrder={19}>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial color="#080820" side={THREE.BackSide} />
+        <meshBasicMaterial color="#060a18" side={THREE.BackSide} toneMapped={false} />
       </mesh>
 
       {/* Neon border frame */}
-      <mesh ref={borderRef} geometry={borderGeom} position={[0, 0, 0.01]}>
-        <meshBasicMaterial color={color} transparent opacity={0.4} />
+      <mesh ref={borderRef} geometry={borderGeom} position={[0, 0, 0.01]} renderOrder={21}>
+        <meshBasicMaterial color={color} transparent opacity={0.7} toneMapped={false} />
       </mesh>
 
       {/* Top label */}
@@ -131,6 +131,9 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
         position={[0, height / 2 - 0.28, 0.02]}
         fontSize={0.18}
         color={color}
+        outlineWidth="5%"
+        outlineColor="#020617"
+        outlineOpacity={0.9}
         anchorX="center"
         anchorY="middle"
         font={PIXEL_FONT_URL}
@@ -144,7 +147,10 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
         ref={textRef}
         position={[0, -0.05, 0.02]}
         fontSize={0.26}
-        color="#e0e8ff"
+        color="#ffffff"
+        outlineWidth="6%"
+        outlineColor="#020617"
+        outlineOpacity={0.95}
         anchorX="center"
         anchorY="middle"
         font={PIXEL_FONT_URL}
@@ -154,13 +160,13 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       </Text>
 
       {/* Accent line under label */}
-      <mesh position={[0, height / 2 - 0.45, 0.01]}>
+      <mesh position={[0, height / 2 - 0.45, 0.01]} renderOrder={21}>
         <planeGeometry args={[width - 0.3, 0.025]} />
-        <meshBasicMaterial color={color} transparent opacity={0.6} />
+        <meshBasicMaterial color={color} transparent opacity={0.85} toneMapped={false} />
       </mesh>
 
       {/* Holographic scan line overlay */}
-      <mesh position={[0, 0, 0.03]}>
+      <mesh position={[0, 0, 0.03]} renderOrder={22}>
         <planeGeometry args={[width, height]} />
         <shaderMaterial
           ref={scanRef}
@@ -177,14 +183,15 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       </mesh>
 
       {/* Glow halo behind billboard */}
-      <mesh ref={glowRef} position={[0, 0, -0.05]}>
+      <mesh ref={glowRef} position={[0, 0, -0.05]} renderOrder={18}>
         <planeGeometry args={[width + 1.5, height + 1.0]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={0.18}
+          opacity={0.32}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
+          toneMapped={false}
         />
       </mesh>
 

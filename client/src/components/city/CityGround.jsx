@@ -2,7 +2,7 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid } from '@react-three/drei';
 import * as THREE from 'three';
-import { CITY_COLORS, getTimeOfDayPreset, cityDayMix, mixHex } from './cityConstants';
+import { CITY_COLORS, getTimeOfDayPreset, cityDayMix, mixHex, seededRand } from './cityConstants';
 
 // Reflective puddle/wet-ground patches
 function WetPatch({ position, size, color, dayMix = 0 }) {
@@ -83,8 +83,7 @@ export default function CityGround({ settings }) {
 
   const puddles = useMemo(() => {
     const result = [];
-    let s = 137;
-    const rand = () => { s = (s * 16807 + 0) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
+    const rand = seededRand(137);
     const colors = CITY_COLORS.neonAccents;
     const count = reflectionsEnabled ? 40 : 20;
 
@@ -107,7 +106,7 @@ export default function CityGround({ settings }) {
           <planeGeometry args={[120, 120]} />
           <meshStandardMaterial
             ref={groundMatRef}
-            color="#0a0a20"
+            color={preset.groundColor ?? '#0a0a20'}
             metalness={0.4}
             roughness={0.7}
             side={THREE.DoubleSide}

@@ -1,4 +1,4 @@
-import { BUILDING_PARAMS, DISTRICT_PARAMS } from './cityConstants';
+import { BUILDING_PARAMS, DISTRICT_PARAMS, getBuildingHeight } from './cityConstants';
 import { autoColumns, gridIndexToPosition } from '../../utils/cityDistrictLayout';
 
 const STATUS_ORDER = { online: 0, stopped: 1, not_started: 2, not_found: 3 };
@@ -27,7 +27,7 @@ export const computeCityLayout = (apps) => {
 
   active.forEach((app, i) => {
     const [x, , z] = gridIndexToPosition(i, { columns: activeCols, spacing, rowCount: activeRows });
-    positions.set(app.id, { x, z, district: 'downtown' });
+    positions.set(app.id, { x, z, district: 'downtown', height: getBuildingHeight(app) });
   });
 
   // Warehouse district (archived apps): X-centered grid offset along +Z from downtown.
@@ -41,7 +41,7 @@ export const computeCityLayout = (apps) => {
         spacing,
         base: [0, 0, warehouseZ],
       });
-      positions.set(app.id, { x, z, district: 'warehouse' });
+      positions.set(app.id, { x, z, district: 'warehouse', height: getBuildingHeight(app) });
     });
   }
 

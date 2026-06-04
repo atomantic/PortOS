@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -37,10 +37,14 @@ import CityEffects from './CityEffects';
 import CityClouds from './CityClouds';
 import CitySignalBeacons from './CitySignalBeacons';
 import CitySky from './CitySky';
+import CityGalaxySky from './CityGalaxySky';
+import CityLandscape from './CityLandscape';
 import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 import CityPhotoCamera from './CityPhotoCamera';
+import { cityDayMix } from './cityConstants';
+import ErrorBoundary from '../ErrorBoundary';
 
 export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background }) {
   const [positions, setPositions] = useState(null);
@@ -86,6 +90,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
   const totalCount = apps.filter(a => !a.archived).length;
 
   const dpr = settings?.dpr || [1, 1.5];
+  const showGradientBackground = cityDayMix(settings) > 0.5;
 
   return (
     <Canvas
@@ -97,16 +102,30 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       // WebGL context-creation attribute, so it can't be toggled at runtime without recreating
       // the renderer (which would flash the scene) — we accept it always-on. The cost on modern
       // GPUs is a small per-frame copy; negligible against this scene's particle/bloom load.
-      gl={{ antialias: true, preserveDrawingBuffer: true }}
+      gl={{ antialias: true, preserveDrawingBuffer: true, alpha: false }}
     >
+      {showGradientBackground && <color attach="background" args={[background || '#030308']} />}
+      {/* Mount the galaxy dome only at night — keeps its 2.8MB texture from being
+          fetched/decoded in full daylight, where it's fully faded out anyway.
+          Suspense keeps the useLoader fetch from suspending the whole canvas while
+          it streams in; the error boundary degrades to the plain dark sky if the
+          texture is missing/corrupt (e.g. a partial checkout) instead of crashing. */}
+      {!showGradientBackground && (
+        <ErrorBoundary fallback={null}>
+          <Suspense fallback={null}>
+            <CityGalaxySky settings={settings} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
       <CitySky settings={settings} />
       <CityClouds settings={settings} />
       <CityLights settings={settings} />
+      <CityLandscape settings={settings} />
       <CityEnergyOverlay chronotype={chronotype} settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />
       {!explorationMode && <CityCelestial settings={settings} />}
-      <CitySkyline />
+      <CitySkyline settings={settings} />
       <CityFederationHorizon instances={instances} settings={settings} />
       <CityBackupVault backupStatus={backupStatus} settings={settings} />
       <CityTaskQueue cosTasks={cosTasks} settings={settings} />

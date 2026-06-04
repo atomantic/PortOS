@@ -28,6 +28,7 @@ npm-debug.log*
 # Screenshots
 *.png
 !client/public/portos-logo.png
+!client/public/sky/*.png
 !docs/media/portos-logo.png
 !data.reference/templates/*.png
 

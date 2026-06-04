@@ -1,6 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 
-const STORAGE_KEY = 'portos-city-settings';
+// Exported so useTheme can reset the city's time-of-day override without
+// re-declaring these magic strings (a typo there would silently break the reset).
+export const STORAGE_KEY = 'portos-city-settings';
+export const TIME_OF_DAY_AUTO_EVENT = 'portos-city-timeofday-auto';
 
 const QUALITY_PRESETS = {
   low: {
@@ -67,6 +70,19 @@ export { QUALITY_PRESETS };
 
 export default function useCitySettings() {
   const [settings, setSettings] = useState(loadSettings);
+
+  useEffect(() => {
+    const handleTimeOfDayAuto = () => {
+      setSettings(prev => {
+        if (prev.timeOfDay === 'auto') return prev;
+        const next = { ...prev, timeOfDay: 'auto' };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
+    };
+    window.addEventListener(TIME_OF_DAY_AUTO_EVENT, handleTimeOfDayAuto);
+    return () => window.removeEventListener(TIME_OF_DAY_AUTO_EVENT, handleTimeOfDayAuto);
+  }, []);
 
   const updateSetting = useCallback((key, value) => {
     setSettings(prev => {
