@@ -13,41 +13,47 @@
 
 // Find the prose offset where a scene begins, trying the LLM heading (with the
 // markdown prefixes the editor uses) first, then a summary/action snippet.
-// Returns -1 when the scene can't be located in the body.
-export function sceneAnchorIndex(body, scene) {
+// Searches from `fromIndex` so callers resolving scenes IN ORDER can advance
+// past each match — otherwise scenes that share a heading/snippet (a recurring
+// "INT. KITCHEN" slugline, repeated action text) would all collapse onto the
+// first occurrence and a cursor in a later scene could resolve to an earlier
+// one. Returns -1 when the scene can't be located at or after `fromIndex`.
+export function sceneAnchorIndex(body, scene, fromIndex = 0) {
   if (!body || !scene) return -1;
   const heading = scene.heading || '';
   for (const prefix of ['## ', '### ', '# ', '']) {
     if (!heading) break;
-    const idx = body.indexOf(prefix + heading);
+    const idx = body.indexOf(prefix + heading, fromIndex);
     if (idx >= 0) return idx;
   }
   for (const candidate of [scene.summary, scene.action]) {
     if (!candidate) continue;
     const snippet = String(candidate).trim().slice(0, 40);
     if (!snippet) continue;
-    const idx = body.indexOf(snippet);
+    const idx = body.indexOf(snippet, fromIndex);
     if (idx >= 0) return idx;
   }
   return -1;
 }
 
 // Return { scene, sceneNumber } for the scene the caret at `cursorOffset` sits
-// in, or null. The match is the locatable scene with the greatest anchor index
-// that is <= cursorOffset; ties (multiple scenes resolving to the same index)
-// keep the later one in list order. sceneNumber is the 1-based index in the
-// original scenes array (so it lines up with the storyboard numbering), not the
-// position among locatable scenes.
+// in, or null. Scenes are resolved IN ORDER with a moving search cursor so each
+// scene maps to a strictly-increasing anchor position (duplicate headings don't
+// collapse onto the same offset). The match is then the locatable scene with
+// the greatest anchor index that is <= cursorOffset. sceneNumber is the 1-based
+// index in the original scenes array (so it lines up with the storyboard
+// numbering), not the position among locatable scenes. A scene that can't be
+// located at/after the previous match is skipped without rewinding the cursor.
 export function sceneAtCursor(scenes, body, cursorOffset) {
   if (!Array.isArray(scenes) || !scenes.length || !body) return null;
   const caret = Number.isFinite(cursorOffset) ? cursorOffset : body.length;
+  let searchFrom = 0;
   let best = null;
   scenes.forEach((scene, i) => {
-    const idx = sceneAnchorIndex(body, scene);
-    if (idx < 0 || idx > caret) return;
-    if (!best || idx >= best.index) {
-      best = { scene, sceneNumber: i + 1, index: idx };
-    }
+    const idx = sceneAnchorIndex(body, scene, searchFrom);
+    if (idx < 0) return; // not locatable from here — skip, keep the cursor put
+    searchFrom = idx + 1; // next scene must start strictly after this one
+    if (idx <= caret) best = { scene, sceneNumber: i + 1, index: idx };
   });
   if (best) return { scene: best.scene, sceneNumber: best.sceneNumber };
   return null;

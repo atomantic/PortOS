@@ -438,5 +438,13 @@ describe('writersRoom routes', () => {
       expect(r.body.renderBudget).toBe(20);
       expect(liveSvc.reserveRenderPreview).toHaveBeenCalledWith('wr-work-1');
     });
+
+    it('POST /works/:id/live-render-preview rejects a non-empty body', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/live-render-preview')
+        .send({ renderUsage: { count: 9999 } });
+      expect(r.status).toBe(400);
+      expect(liveSvc.reserveRenderPreview).not.toHaveBeenCalled();
+    });
   });
 });

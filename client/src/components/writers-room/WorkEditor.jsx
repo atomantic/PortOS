@@ -157,6 +157,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // surfaces, fed into LiveRenderPanel so it can render the scene at the cursor
   // using the existing image-gen route + the shared render queue (queueRegister).
   const [liveRenderContext, setLiveRenderContext] = useState(null);
+  // Imperative bridge: StoryboardPanel registers its sceneImages merge fn here
+  // so a finished live render preview updates the boards reactively (no refetch).
+  const sceneImageMergeRef = useRef(null);
+  const registerSceneImageMerge = useCallback((fn) => { sceneImageMergeRef.current = fn; }, []);
+  const handleSceneImageAttached = useCallback((analysis) => {
+    sceneImageMergeRef.current?.(analysis);
+  }, []);
 
   // View mode (Edit | Read | Review) is URL-driven so it deep-links and
   // survives reloads. ?view=read → ProseReader; ?view=review → SyncedReview
@@ -981,6 +988,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 body={body}
                 renderContext={liveRenderContext}
                 registerQueue={queueRegister}
+                onSceneImageAttached={handleSceneImageAttached}
                 workTitle={work.title}
               />
               <div className="shrink-0 max-h-[40%] min-h-0 border-b border-port-border overflow-hidden flex flex-col">
@@ -1005,6 +1013,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onRunObjects={() => runAnalysis(ANALYSIS_KIND.OBJECTS)}
             onScenesChange={setLatestScenes}
             onLiveRenderContextChange={setLiveRenderContext}
+            registerSceneImageMerge={registerSceneImageMerge}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}

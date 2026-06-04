@@ -124,7 +124,7 @@ const SceneCard = forwardRef(function SceneCard({
           filename: `${completedJobId}.png`,
           jobId: completedJobId,
           prompt: data.prompt || null,
-        }).catch((err) => {
+        }, { silent: true }).catch((err) => {
           console.warn(`scene-image persist failed: ${err.message}`);
         });
       }

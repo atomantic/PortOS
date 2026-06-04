@@ -17,6 +17,7 @@ import {
   writersRoomExerciseFinishSchema,
   writersRoomAnalysisCreateSchema,
   writersRoomLiveSuggestSchema,
+  writersRoomLiveRenderPreviewSchema,
   writersRoomCharacterCreateSchema,
   writersRoomCharacterUpdateSchema,
   writersRoomPlaceCreateSchema,
@@ -207,6 +208,7 @@ router.post('/works/:id/live-suggest', asyncHandler(async (req, res) => {
 // queue AFTER this succeeds — the service enforces opt-in (409 if off) and the
 // daily render budget (429 if spent), distinct from the text-suggest budget.
 router.post('/works/:id/live-render-preview', asyncHandler(async (req, res) => {
+  validateRequest(writersRoomLiveRenderPreviewSchema, req.body || {});
   res.json(await reserveRenderPreview(req.params.id));
 }));
 

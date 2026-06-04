@@ -878,6 +878,11 @@ export const writersRoomLiveSuggestSchema = z.object({
   selection: z.string().max(8_000).optional().default(''),
 }).strict();
 
+// Live render-preview reservation takes no body — the work id is in the path
+// and the budget is server-owned. A strict empty object rejects any crafted
+// payload (e.g. an attempt to smuggle a usage counter) instead of ignoring it.
+export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
+
 export const writersRoomDraftSaveSchema = z.object({
   body: z.string().max(5_000_000), // 5 MB ceiling — well over a long novel in plain text
   // Catalog ingredient ids this draft version references. Optional: when

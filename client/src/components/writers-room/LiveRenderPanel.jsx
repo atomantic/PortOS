@@ -35,6 +35,7 @@ export default function LiveRenderPanel({
   body,
   renderContext,
   registerQueue,
+  onSceneImageAttached,
   workTitle,
 }) {
   const [reserving, setReserving] = useState(false);
@@ -54,12 +55,42 @@ export default function LiveRenderPanel({
   const sceneIdRef = useRef(null);
   const [genStatus, setGenStatus] = useState('idle');
 
+  // Read the attach callback through a ref so the socket effect (and the
+  // shared persist helper) stay identity-stable as the parent re-renders.
+  const onAttachedRef = useRef(onSceneImageAttached);
+  useEffect(() => { onAttachedRef.current = onSceneImageAttached; }, [onSceneImageAttached]);
+
   // Stabilize the derived context so it doesn't re-create the render callback's
   // deps on every parent render (renderContext is a fresh object each time).
   const ctx = useMemo(() => renderContext || {}, [renderContext]);
   const analysisId = ctx.analysisId || null;
   const scenes = useMemo(() => (Array.isArray(ctx.scenes) ? ctx.scenes : []), [ctx.scenes]);
   const imageCfg = ctx.imageCfg || WR_IMAGE_DEFAULTS;
+  // The async render can finish (socket completion / fast sync result) after the
+  // user has moved the cursor and the context has changed, so read the analysis
+  // id the job was reserved against through a ref rather than the live value.
+  const analysisIdRef = useRef(analysisId);
+  useEffect(() => { analysisIdRef.current = analysisId; }, [analysisId]);
+
+  // Persist a finished render onto the script analysis (best-effort, mirroring
+  // SceneCard) AND fold the returned sceneImages map up so the storyboard
+  // updates reactively without a refetch. Shared by the socket-completion path
+  // and the fast synchronous-completion path. { silent: true } because we own
+  // the error UI here (a console.warn) — without it the helper would also toast.
+  const persistAttach = useCallback((sceneId, jobId, prompt) => {
+    const aid = analysisIdRef.current;
+    if (!workId || !aid || !jobId || !sceneId) return;
+    attachWritersRoomSceneImage(workId, aid, {
+      sceneId,
+      filename: `${jobId}.png`,
+      jobId,
+      prompt: prompt || null,
+    }, { silent: true }).then((res) => {
+      if (mountedRef.current && res?.analysis) onAttachedRef.current?.(res.analysis);
+    }).catch((err) => {
+      console.warn(`live render persist failed: ${err.message}`);
+    });
+  }, [workId, mountedRef]);
 
   // Resolve the scene under the caret so the button can name its target (and
   // disable when there's nothing to render). Recomputed cheaply on each render;
@@ -76,19 +107,7 @@ export default function LiveRenderPanel({
       jobIdRef.current = null;
       sceneIdRef.current = null;
       if (mountedRef.current) setGenStatus('idle');
-      // Persist onto the analysis snapshot + the work's auto media-collection,
-      // exactly like SceneCard. Best-effort — a failed persist still leaves the
-      // render in the queue/dock and the collection.
-      if (workId && analysisId && completedJobId && sceneId) {
-        attachWritersRoomSceneImage(workId, analysisId, {
-          sceneId,
-          filename: `${completedJobId}.png`,
-          jobId: completedJobId,
-          prompt: data.prompt || null,
-        }).catch((err) => {
-          console.warn(`live render persist failed: ${err.message}`);
-        });
-      }
+      persistAttach(sceneId, completedJobId, data.prompt);
     };
     const onFailed = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
@@ -102,9 +121,9 @@ export default function LiveRenderPanel({
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
     };
-    // sceneId comes from sceneIdRef (set when we kicked the job off), so this
-    // effect only needs the persist target inputs.
-  }, [workId, analysisId, mountedRef]);
+    // sceneId comes from sceneIdRef (set when we kicked the job off); the
+    // persist target inputs are read through refs inside persistAttach.
+  }, [persistAttach, mountedRef]);
 
   const renderCursorScene = useCallback(async () => {
     if (reserving || genStatus === 'running') return;
@@ -162,20 +181,32 @@ export default function LiveRenderPanel({
     if (!mountedRef.current) return;
     if (!res) return;
     const jobId = res.jobId || res.generationId || null;
-    jobIdRef.current = jobId;
-    sceneIdRef.current = jobId ? scene.id : null;
-    if (jobId) {
-      // Register into the shared render dock so the job shows alongside
-      // storyboard renders.
-      const num = hit.sceneNumber;
-      const numLabel = Number.isFinite(num) ? `S${String(num).padStart(2, '0')}` : '';
-      const sceneLabel = `${numLabel} ${scene.heading || ''}`.trim() || scene.heading || 'Scene';
-      registerQueue?.({ jobId, sceneId: scene.id, sceneLabel: `Preview · ${sceneLabel}` });
-      toast('Live preview rendering — see the render dock', { icon: '🎬' });
-    } else {
+    if (!jobId) {
       setGenStatus('idle');
+      return;
     }
-  }, [reserving, genStatus, getCursorOffset, scenes, body, analysisId, workId, workTitle, imageCfg, ctx, registerQueue, mountedRef]);
+    // A fast/synchronous backend (some external SD-API / Codex paths) can return
+    // a finished result whose image-gen:completed socket event already fired
+    // before we could set jobIdRef — so the socket handler ignored it and would
+    // leave the button stuck on "Rendering…" with no attach. Detect the
+    // already-done case from the HTTP result and finalize inline. Only register
+    // into the render dock + wait on the socket for jobs that are still running.
+    const alreadyDone = res.status && res.status !== 'queued' && res.status !== 'running';
+    if (alreadyDone) {
+      setGenStatus('idle');
+      persistAttach(scene.id, jobId, prompt);
+      return;
+    }
+    jobIdRef.current = jobId;
+    sceneIdRef.current = scene.id;
+    // Register into the shared render dock so the job shows alongside storyboard
+    // renders.
+    const num = hit.sceneNumber;
+    const numLabel = Number.isFinite(num) ? `S${String(num).padStart(2, '0')}` : '';
+    const sceneLabel = `${numLabel} ${scene.heading || ''}`.trim() || scene.heading || 'Scene';
+    registerQueue?.({ jobId, sceneId: scene.id, sceneLabel: `Preview · ${sceneLabel}` });
+    toast('Live preview rendering — see the render dock', { icon: '🎬' });
+  }, [reserving, genStatus, getCursorOffset, scenes, body, analysisId, workId, workTitle, imageCfg, ctx, registerQueue, persistAttach, mountedRef]);
 
   if (!liveMode?.enabled) return null;
 

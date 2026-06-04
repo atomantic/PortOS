@@ -33,6 +33,16 @@ describe('sceneAnchorIndex', () => {
     expect(sceneAnchorIndex('', SCENES[0])).toBe(-1);
     expect(sceneAnchorIndex(BODY, null)).toBe(-1);
   });
+
+  it('honors fromIndex so repeated headings resolve to distinct occurrences', () => {
+    const dup = '## INT. KITCHEN\nFirst time.\n## INT. KITCHEN\nSecond time.';
+    const scene = { heading: 'INT. KITCHEN' };
+    const first = sceneAnchorIndex(dup, scene);
+    expect(first).toBe(0);
+    const second = sceneAnchorIndex(dup, scene, first + 1);
+    expect(second).toBe(dup.indexOf('## INT. KITCHEN', first + 1));
+    expect(second).toBeGreaterThan(first);
+  });
 });
 
 describe('sceneAtCursor', () => {
@@ -65,5 +75,22 @@ describe('sceneAtCursor', () => {
   it('defaults a non-finite offset to end-of-body (last scene wins)', () => {
     const hit = sceneAtCursor(SCENES, BODY, undefined);
     expect(hit?.scene.id).toBe('s2');
+  });
+
+  it('does not collapse two scenes that share a heading onto the first', () => {
+    const dupBody = '## INT. KITCHEN\nFirst beat here.\n## INT. KITCHEN\nSecond beat here.';
+    const dupScenes = [
+      { id: 'a', heading: 'INT. KITCHEN' },
+      { id: 'b', heading: 'INT. KITCHEN' },
+    ];
+    // Caret inside the SECOND kitchen scene must resolve to scene b, not a.
+    const caret = dupBody.indexOf('Second beat') + 3;
+    const hit = sceneAtCursor(dupScenes, dupBody, caret);
+    expect(hit?.scene.id).toBe('b');
+    expect(hit?.sceneNumber).toBe(2);
+
+    // Caret inside the FIRST kitchen scene resolves to scene a.
+    const firstCaret = dupBody.indexOf('First beat') + 3;
+    expect(sceneAtCursor(dupScenes, dupBody, firstCaret)?.scene.id).toBe('a');
   });
 });
