@@ -138,10 +138,21 @@ How much audio structure does an episode get?
 
 **Per-arc cues, with a single-track floor and a per-scene path left open.**
 
-The episode already has a narrative arc structure: `arcPlanner`
-(`server/services/pipeline/arcPlanner.js`) produces the act/sequence breakdown,
-and storyboards carry per-scene timing the muxer already uses for VO placement
-(`offsetSec`). **Per-arc cues** are the design target because:
+The episode already encodes its narrative beats in its **own** text stages — the
+issue's `stages.idea` content is exactly what `arcPlanner` reads as "Episode
+beats" when it composes a series-level overview
+(`server/services/pipeline/arcPlanner.js`; note `arcPlanner` operates at the
+*series/season* level — it does **not** emit a per-episode act/sequence
+structure, so the cue boundaries are derived from the episode's own beat prose,
+not from arcPlanner output). The storyboard `scenes[]` give the scene ordering,
+but carry **no sanitized per-scene duration** today (the scenes array is
+pass-through in `sanitizeVisualStage`), and the VO `offsetSec` field is a
+*manually placed* audio-line offset — not a scene-timing source. A cue's
+`startSec`/`endSec` therefore must be derived from **rendered clip durations at
+stitch time** (e.g. an ffprobe pass over the stitched clips, the same point
+`maybeMuxPipelineAudio` already runs), mapping arc beats → the scenes/clips they
+cover → cumulative timeline offsets. **Per-arc cues** are the design target
+because:
 
 - They follow the *emotional* shape of the episode (tension rise, climax,
   resolution) rather than the *mechanical* shape (every scene cut), which is
@@ -163,9 +174,10 @@ To keep the first implementation tractable and degrade gracefully, the design is
    the episode length (long-form engine). This is a small delta over today's
    single-`music`-pointer path.
 2. **Target (per-arc cues):** an ordered `cues[]` array, one cue per arc beat,
-   each with its own prompt + a `startSec`/`endSec` time range derived from the
-   arc → scene-timing mapping. The muxer concatenates/crossfades cues along the
-   timeline.
+   each with its own prompt + a `startSec`/`endSec` time range derived from
+   stitch-time clip durations (arc beat → its scenes/clips → cumulative timeline
+   offsets, per the timing discussion above). The muxer places each cue on the
+   absolute timeline and blends boundaries with fades.
 3. **Future (per-scene beds):** the *same* `cues[]` shape with cue boundaries set
    at scene granularity instead of arc granularity — no schema change, just a
    different boundary-derivation strategy. This is why the data shape below is
@@ -184,7 +196,9 @@ the `uploaded-track` and legacy paths; `cues[]` is the new arc/scene-driven path
 ```jsonc
 // stages.audio (sanitized shape; additions marked +)
 {
-  "status": "empty|in_progress|complete",
+  // unchanged — the shared STAGE_STATUSES enum
+  //   (empty|generating|ready|edited|needs-review|error)
+  "status": "empty",
   "lines": [ /* unchanged VO lines */ ],
 
   // + which strategy drives the episode's non-dialogue audio.
@@ -233,19 +247,24 @@ the `uploaded-track` and legacy paths; `cues[]` is the new arc/scene-driven path
 | `per-clip` | **No episode-level bed** — preserve each stitched clip's own soundtrack (today's `clipAudio` path). | Ducked over clip audio if placed | Preserved (LTX-2 audio-to-video) |
 | `silent` | Strip / no bed | Ducked over silence | **Stripped** |
 | `generated` | Concatenate/crossfade `cues[]` along the timeline, each cue at its `startSec..endSec`; gaps fall back to silence (or a designated bed cue) | Ducked over the cue bed | Preserved + ducked |
-| `uploaded-track` | Loop the single `music.trackFilename` under the whole episode (today's `muxMusicBed`/`muxVoLines` path) | Ducked over the looped bed | Preserved + ducked |
+| `uploaded-track` | Loop the single `music.trackFilename` under the whole episode (today's `muxMusicBed`/`muxVoLines` path) | Ducked over the looped bed | **No-VO:** replaced (today's `muxMusicBed` maps only `0:v` + the bed). **With VO:** preserved + ducked (`muxVoLines`). |
 
 - `per-clip` formalizes today's "no music pointer → keep clip audio" behavior as
   an explicit, user-selectable mode (it is the default so nothing changes for
   existing issues).
 - `uploaded-track` is exactly today's single-`music` path — zero muxer change.
 - `generated` is the new path. It needs a **multi-cue muxer**: a `buildCueMuxArgs`
-  sibling to `buildVoMuxArgs` that lays each cue's file at its `startSec` (via
-  `adelay`, the same primitive `buildVoMuxArgs` already uses), crossfades
-  adjacent cues at their boundaries (`acrossfade`), then ducks the combined bed
-  under VO via the existing `sidechaincompress` key. The VO mixing,
-  clip-audio-preservation, and `-shortest` machinery in `audioMux.js` is reused
-  verbatim — the only addition is the cue-bed assembly upstream of the duck.
+  sibling to `buildVoMuxArgs` that assembles the cues onto an **absolute
+  timeline**. Each cue is laid at its `startSec` with `adelay` (the same
+  primitive `buildVoMuxArgs` uses for placed VO), and adjacent cues are blended
+  by overlapping their fade tails via per-cue `afade` (in/out) before mixing —
+  **not** `acrossfade`, which is sequential concatenation (it splices two streams
+  back-to-back and ignores their absolute offsets), so it can't place cues at
+  arbitrary timeline positions. The delayed, faded cues are combined with
+  `amix=normalize=0` into one bed, which is then ducked under VO via the existing
+  `sidechaincompress` key. The VO mixing, clip-audio-preservation, and
+  `-shortest` machinery in `audioMux.js` is reused verbatim — the only addition
+  is the cue-bed assembly (delay + fade + amix) upstream of the duck.
 
 ### Route / contract changes
 
@@ -255,15 +274,20 @@ in this spike.
 1. **`audioMode` PATCH.** Extend `audioStageInputSchema`
    (`server/routes/pipeline.js`) to accept `audioMode` (enum) and `cues` (array;
    light validation, sanitizer enforces per-cue shape — mirroring how `music`
-   and `lines` are handled today). The base PATCH
-   `PATCH /issues/:id/stages/audio` then persists the mode.
+   and `lines` are handled today). Persistence rides the **existing**
+   `PATCH /issues/:id` route (whose `stages` record is already validated by the
+   union that includes `audioStageInputSchema`) — there is no
+   `PATCH /issues/:id/stages/audio` route today, and one isn't needed; the mode
+   is just another field on the audio-stage sub-object.
 
 2. **Cue generation.** `POST /issues/:id/stages/audio/cues/generate` — derive the
-   per-arc cue list from the issue's arc (`arcPlanner` output) + storyboard scene
-   timing: one cue per arc beat, each with an arc-summary-derived prompt and a
-   `startSec`/`endSec` time range. Returns the populated (but un-rendered)
-   `cues[]`. This is the "drive audio from the episode-level prose/script arc"
-   core — the prompt for each cue is synthesized from that beat's prose summary.
+   per-arc cue list from the issue's **own** beat prose (its `stages.idea` /
+   text-stage content — the same beats `arcPlanner` reads, not a series-level
+   arcPlanner output) + its storyboard scenes: one cue per arc beat, each with a
+   prompt synthesized from that beat's prose summary and a `startSec`/`endSec`
+   range (placed at render/stitch time from the covered clips' durations).
+   Returns the populated (but un-rendered) `cues[]`. This is the "drive audio
+   from the episode-level prose/script arc" core.
 
 3. **Cue render.** `POST /issues/:id/stages/audio/cues/:cueIdx/render` — calls
    `generateMusic({ prompt, durationSec: endSec-startSec, engine, … })` for one
@@ -296,11 +320,17 @@ change needs the full compat treatment:
   `'per-clip'` so an un-migrated record (or one synced from an older peer) reads
   correctly before the migration runs — never let "absent" collapse into a
   wrong mode.
-- **Cross-machine sync.** The `cues[]` addition is a new field on an existing
-  synced record. Per `server/lib/schemaVersions.js`, the audio-stage payload's
-  schema version must bump so a newer peer's `cues[]` doesn't corrupt an older
-  peer that doesn't know the field; the older peer keeps `music`-only behavior
-  and ignores `cues[]` it can't render. Mirror any client-side `pick` helper for
+- **Cross-machine sync.** `cues[]` (and `audioMode`) are new fields on the
+  already-synced issue record, so this follows the **`pipelineIssues`
+  schema-version bump** in `server/lib/schemaVersions.js` — the same pattern as
+  the `pipelineSeries 1→2` (`series.arc.readerMap`) precedent for an additive
+  field. The hazard the bump guards against is *not* a newer peer corrupting an
+  older one on receipt (the version gate rejects an ahead-version `pipelineIssues`
+  transfer outright); it is the inverse — an older, `cues`-unaware peer that
+  receives, re-sanitizes, and syncs the record *back* would silently strip
+  `cues[]`/`audioMode` and last-writer-wins the loss onto the newer peer.
+  Bumping `pipelineIssues` makes the older peer reject the ahead-version record
+  rather than strip-and-LWW-back it. Mirror any client-side `pick` helper for
   the audio stage so the round-trip stays symmetric.
 
 ## What this spike does NOT do
