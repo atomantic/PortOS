@@ -55,6 +55,7 @@ const syncCategoriesSchema = z.object({
   // universe + pipeline omission tracked in .changelog/NEXT.md.
   mediaCollections: z.boolean().optional(),
   videoHistory: z.boolean().optional(),
+  storyBuilder: z.boolean().optional(),
   catalog: z.boolean().optional()
 }).optional();
 

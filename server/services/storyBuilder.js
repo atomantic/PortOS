@@ -306,6 +306,116 @@ export async function deleteStorySession(id) {
   });
 }
 
+// ── Cross-machine sync (#730) ─────────────────────────────────────────────
+//
+// Sessions are LOCAL-ONLY by default and excluded from peer sync entirely.
+// Only a session with `sync: true` participates — it rides the dedicated
+// `storyBuilder` snapshot category (dataSync.js), union-merged by id with LWW
+// on `updatedAt`. Sessions carry no assets and no child records, so they don't
+// need the per-record push pipeline / asset-manifest / reverse-subscribe
+// machinery the universe/series kinds use; the 60s snapshot loop's LWW merge
+// is the whole transport.
+//
+// The carried `syncedHashes` baseline is exactly what makes this safe: a peer's
+// universe/series edit moves the live records but NOT `syncedHashes`, so a
+// session that traveled across machines doesn't false-positive-stale (the whole
+// point of the #861 staleness model). The FKs (`universeId`, `seriesId`)
+// reference records that sync through their own categories; if the peer hasn't
+// received them yet, the session view degrades gracefully (computeCurrentHashes
+// reads them best-effort and a missing record just yields empty hashes).
+
+/**
+ * Wire-safe projection of a single session for the peer snapshot. Re-runs the
+ * sanitizer (canonical key order + field whitelist) and strips the local-only
+ * `ephemeral` marker so a synced session can't smuggle a peer-local flag and so
+ * the byte-stable checksum matches across machines. Returns null for a session
+ * that isn't sync-enabled — local-only sessions must NEVER cross the wire.
+ *
+ * Tombstones (deleted=true) still cross: a session that was synced, then
+ * deleted, needs its tombstone to converge on peers that hold the live copy.
+ */
+export function sanitizeSessionForWire(raw) {
+  const s = sanitizeSession(raw);
+  if (!s) return null;
+  if (s.sync !== true) return null;
+  // `ephemeral` is a peer-local "don't sync" marker analogous to the
+  // universe/series flag (and #727's `importDraft`). A live ephemeral session
+  // is local-only and never crosses the wire; a tombstone still does so the
+  // delete converges on peers that hold the live copy.
+  if (s.ephemeral === true && s.deleted !== true) return null;
+  // Strip the local-only marker so the wire form is byte-stable against peers
+  // that predate the flag (sanitizeSession only adds it when raw.ephemeral).
+  const { ephemeral: _ephemeral, ...rest } = s; // eslint-disable-line no-unused-vars
+  return rest;
+}
+
+/**
+ * Every sync-enabled session in wire form, sorted by id for a deterministic
+ * (checksum-stable) snapshot. Includes tombstones so deletes propagate.
+ */
+export async function listSyncableSessionsForWire() {
+  const sessions = await store().loadAll();
+  return sessions
+    .map(sanitizeSessionForWire)
+    .filter(Boolean)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Merge a peer's sync-enabled sessions into local state. Union by id, LWW on
+ * `updatedAt`. Mirrors the bundled-record merge contract:
+ *   - sanitize-first: every remote row goes through `sanitizeSession` before it
+ *     can touch disk (drops bogus baselines, malformed steps, missing title).
+ *   - first-wins dedup: a duplicate id within the same batch keeps the first.
+ *   - throw-on-unreadable: a per-record load failure aborts (the store's
+ *     queueRecordWrite rejects), surfacing rather than silently dropping.
+ *   - local-only guard: a remote session that isn't sync-enabled is refused
+ *     (the sender only ships sync:true, but a malformed/hostile payload can't
+ *     plant a local-only session as synced).
+ *   - sync-flag preservation: a remote payload can't flip a LOCAL session's
+ *     `sync` off (or on) — sync mode is a per-machine gesture. We only ever
+ *     create/update sessions the remote marked sync:true; a local-only session
+ *     of the same id is left untouched (its `sync:false` keeps it out of the
+ *     wire on its own machine).
+ */
+export async function mergeStorySessionsFromSync(remoteSessions) {
+  if (!Array.isArray(remoteSessions)) return { applied: false, count: 0 };
+  // First-wins dedup within the batch (mirrors the monolithic-reader contract).
+  const byId = new Map();
+  for (const raw of remoteSessions) {
+    const s = sanitizeSessionForWire(raw);
+    if (!s || byId.has(s.id)) continue;
+    byId.set(s.id, s);
+  }
+  let changed = 0;
+  for (const remote of byId.values()) {
+    const applied = await store().queueRecordWrite(remote.id, async () => {
+      const local = await store().loadOne(remote.id);
+      if (!local) {
+        // No local counterpart — adopt the remote session verbatim. It's
+        // already sync:true (sanitizeSessionForWire enforced it), so it stays
+        // syncable on this machine too.
+        await store().saveOneNow(remote.id, remote);
+        return true;
+      }
+      // Don't resurrect / re-sync a session the LOCAL user opted out of. If the
+      // local copy is local-only (sync:false), the user explicitly turned sync
+      // off here — honor that and leave it alone rather than letting a stale
+      // peer push flip it back on.
+      if (local.sync !== true) return false;
+      const localTs = local.updatedAt || '';
+      const remoteTs = remote.updatedAt || '';
+      if (remoteTs <= localTs) return false; // local wins (or tie — no churn)
+      await store().saveOneNow(remote.id, remote);
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  if (changed === 0) return { applied: false, count: 0 };
+  console.log(`🔄 StoryBuilder sync: merged ${changed} session(s)`);
+  return { applied: true, count: changed };
+}
+
 // ── Integrity (staleness) ─────────────────────────────────────────────────
 
 // Project the whitelisted SEMANTIC upstream fields per step. Never include

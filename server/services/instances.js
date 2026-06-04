@@ -168,6 +168,7 @@ const DEFAULT_SYNC_CATEGORIES = {
   pipeline: false,
   mediaCollections: false,
   videoHistory: false,
+  storyBuilder: false,
   catalog: false
 };
 

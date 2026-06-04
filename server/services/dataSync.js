@@ -23,6 +23,7 @@ import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listIssues } from './pipeline/issues.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
+import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
@@ -55,6 +56,11 @@ const MEDIA_COLLECTIONS_DIR = join(PATHS.data, 'media-collections');
 // CHECKSUM_PATHS below.
 const PEER_SUBSCRIPTIONS_FILE = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 const VIDEO_HISTORY_FILE = join(PATHS.data, 'video-history.json');
+// Story Builder sessions live in per-record `data/story-builder/<id>/index.json`
+// (collectionStore layout) with a type-level `data/story-builder/index.json`.
+// Only `sync: true` sessions ride this category (#730); the fingerprint walker
+// descends into the dir so a session edit invalidates the snapshot checksum.
+const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -680,6 +686,33 @@ async function applyVideoHistoryRemote(remoteData) {
   return { applied: true, count: changedCount };
 }
 
+// --- Category: Story Builder sessions ---
+
+// Optional cross-machine resumable Story Builder sessions (#730). Sessions are
+// LOCAL-ONLY by default and excluded from sync; only a session with
+// `sync: true` participates. `listSyncableSessionsForWire` enforces that
+// (returning ONLY sync-enabled sessions, wire-sanitized + sorted by id), so a
+// local-only session can NEVER appear in the snapshot or its checksum — two
+// peers that disagree only on local-only sessions still compute the same
+// checksum and never churn. The merge is union-by-id, LWW on `updatedAt`, and
+// refuses to flip a local session's sync mode (see mergeStorySessionsFromSync).
+//
+// No exclude-set / `{forPeerId}` scoping: sessions have no per-record push
+// subscription (they ride the snapshot only), so there's nothing to exclude.
+
+async function getStoryBuilderSnapshot() {
+  const sessions = await listSyncableSessionsForWire();
+  const data = { sessions };
+  return { data, checksum: computeChecksum(data) };
+}
+
+async function applyStoryBuilderRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+  const incoming = Array.isArray(remoteData.sessions) ? remoteData.sessions : [];
+  if (incoming.length === 0) return { applied: false, count: 0 };
+  return mergeStorySessionsFromSync(incoming);
+}
+
 // --- Public API ---
 
 // Files each category reads, used to keep the in-process checksum cache
@@ -711,6 +744,12 @@ const CHECKSUM_PATHS = {
   // videoHistory is a flat history file with no parent-record dependency —
   // its checksum invalidates only when video-history.json itself moves.
   videoHistory: [VIDEO_HISTORY_FILE],
+  // storyBuilder invalidates on its own per-record dir. The snapshot includes
+  // ONLY sync-enabled sessions, but the fingerprint walker is content-agnostic
+  // (any session file edit re-checksums) — over-invalidation is harmless: the
+  // snapshot getter filters back to sync:true and the checksum is unchanged
+  // when no synced session moved, so the orchestrator still skips the transfer.
+  storyBuilder: [STORY_BUILDER_DIR],
 };
 
 const CATEGORIES = {
@@ -721,7 +760,8 @@ const CATEGORIES = {
   universe: { getSnapshot: getUniverseSnapshot, applyRemote: applyUniverseRemote },
   pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote },
   mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote },
-  videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote }
+  videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote },
+  storyBuilder: { getSnapshot: getStoryBuilderSnapshot, applyRemote: applyStoryBuilderRemote }
 };
 
 // Map a snapshot CATEGORY to the `PORTOS_SCHEMA_VERSIONS` keys whose storage
@@ -751,6 +791,7 @@ const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
   digitalTwin: [],
   meatspace: [],
   videoHistory: [],
+  storyBuilder: RECORD_KIND_SCHEMA_CATEGORIES.storyBuilder,
 };
 
 // Exported for the boot-adjacent guard test (see dataSync.pipelineUniverse.test.js):

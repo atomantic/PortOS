@@ -818,3 +818,107 @@ describe('generateIssuesFromArc (issues step)', () => {
       .rejects.toMatchObject({ code: sb.ERR_VALIDATION });
   });
 });
+
+describe('storyBuilder — cross-machine sync wire (#730)', () => {
+  it('listSyncableSessionsForWire excludes local-only sessions and includes only sync:true', async () => {
+    const local = await sb.createStorySession({ title: 'Local only' });
+    const synced = await sb.createStorySession({ title: 'Synced' });
+    await sb.setStorySessionSync(synced.id, true);
+
+    const wire = await sb.listSyncableSessionsForWire();
+    const ids = wire.map((s) => s.id);
+    expect(ids).toContain(synced.id);
+    expect(ids).not.toContain(local.id);
+    // The wire form must never carry a peer-local marker.
+    expect(wire.every((s) => !('ephemeral' in s))).toBe(true);
+    // Deterministic ordering by id for a stable checksum.
+    expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('sanitizeSessionForWire returns null for a non-sync session and for a non-tombstone ephemeral session', () => {
+    expect(sb.sanitizeSessionForWire({ id: 'stb-x', title: 'T', sync: false })).toBeNull();
+    expect(sb.sanitizeSessionForWire({ id: 'stb-y', title: 'T', sync: true, ephemeral: true })).toBeNull();
+    const ok = sb.sanitizeSessionForWire({ id: 'stb-z', title: 'T', sync: true });
+    expect(ok).toMatchObject({ id: 'stb-z', sync: true });
+  });
+
+  it('merge adopts a new remote sync session verbatim', async () => {
+    const remote = {
+      id: 'stb-remote-1', title: 'From peer', intakeMode: 'seed',
+      sync: true, syncedHashes: {}, currentStep: 'idea',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const res = await sb.mergeStorySessionsFromSync([remote]);
+    expect(res).toEqual({ applied: true, count: 1 });
+    const got = await sb.getStorySession('stb-remote-1');
+    expect(got.title).toBe('From peer');
+    expect(got.sync).toBe(true);
+  });
+
+  it('merge is LWW on updatedAt — newer remote wins, older remote is a no-op', async () => {
+    const base = {
+      id: 'stb-lww', title: 'v1', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await sb.mergeStorySessionsFromSync([base]);
+    // Older remote → ignored.
+    const older = await sb.mergeStorySessionsFromSync([{ ...base, title: 'stale', updatedAt: '2025-12-31T00:00:00.000Z' }]);
+    expect(older.applied).toBe(false);
+    expect((await sb.getStorySession('stb-lww')).title).toBe('v1');
+    // Newer remote → wins.
+    const newer = await sb.mergeStorySessionsFromSync([{ ...base, title: 'v2', updatedAt: '2026-02-01T00:00:00.000Z' }]);
+    expect(newer.applied).toBe(true);
+    expect((await sb.getStorySession('stb-lww')).title).toBe('v2');
+  });
+
+  it('merge refuses to re-sync a session the local user turned local-only', async () => {
+    const synced = await sb.createStorySession({ title: 'Was synced' });
+    await sb.setStorySessionSync(synced.id, true);
+    // User disables sync locally (now sync:false, local-only).
+    await sb.setStorySessionSync(synced.id, false);
+    // A stale peer push for the same id must NOT flip it back on or overwrite it.
+    const res = await sb.mergeStorySessionsFromSync([{
+      id: synced.id, title: 'peer wins?', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: synced.createdAt, updatedAt: '2030-01-01T00:00:00.000Z',
+    }]);
+    expect(res.applied).toBe(false);
+    const got = await sb.getStorySession(synced.id);
+    expect(got.sync).toBe(false);
+    expect(got.title).toBe('Was synced');
+  });
+
+  it('merge refuses a remote session that is not sync-enabled', async () => {
+    const res = await sb.mergeStorySessionsFromSync([{
+      id: 'stb-not-synced', title: 'sneaky', sync: false,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    }]);
+    expect(res.applied).toBe(false);
+    await expect(sb.getStorySession('stb-not-synced')).rejects.toMatchObject({ code: sb.ERR_NOT_FOUND });
+  });
+
+  it('merge is first-wins within a batch for a duplicate id', async () => {
+    const dupA = {
+      id: 'stb-dup', title: 'first', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-03-01T00:00:00.000Z',
+    };
+    const dupB = { ...dupA, title: 'second', updatedAt: '2026-04-01T00:00:00.000Z' };
+    await sb.mergeStorySessionsFromSync([dupA, dupB]);
+    // first-wins dedup keeps dupA despite dupB's newer timestamp.
+    expect((await sb.getStorySession('stb-dup')).title).toBe('first');
+  });
+
+  it('merge converges a tombstone for a synced session', async () => {
+    const base = {
+      id: 'stb-tomb', title: 'doomed', intakeMode: 'seed', sync: true, syncedHashes: {},
+      currentStep: 'idea', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await sb.mergeStorySessionsFromSync([base]);
+    const res = await sb.mergeStorySessionsFromSync([{
+      ...base, deleted: true, deletedAt: '2026-05-01T00:00:00.000Z', updatedAt: '2026-05-01T00:00:00.000Z',
+    }]);
+    expect(res.applied).toBe(true);
+    await expect(sb.getStorySession('stb-tomb')).rejects.toMatchObject({ code: sb.ERR_NOT_FOUND });
+    const withDeleted = await sb.getStorySession('stb-tomb', { includeDeleted: true });
+    expect(withDeleted.deleted).toBe(true);
+  });
+});

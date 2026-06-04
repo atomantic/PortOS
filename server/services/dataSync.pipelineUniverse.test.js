@@ -886,6 +886,111 @@ describe('dataSync — videoHistory category', () => {
   });
 });
 
+describe('dataSync — storyBuilder category (#730)', () => {
+  const STORY_BUILDER_DIR = join(tempRoot, 'story-builder');
+  const session = (id, overrides = {}) => ({
+    id,
+    title: `Session ${id}`,
+    intakeMode: 'seed',
+    seedIdea: '',
+    universeId: null,
+    seriesId: null,
+    currentStep: 'idea',
+    steps: {},
+    llm: { provider: null, model: null },
+    sync: true,
+    syncedHashes: {},
+    origin: null,
+    createdAt: '2026-05-22T00:00:00Z',
+    updatedAt: '2026-05-22T00:00:00Z',
+    ...overrides,
+  });
+  const writeSessions = (sessions) => writeCollectionState(STORY_BUILDER_DIR, 'storyBuilder', sessions);
+  const readSessions = () => readCollectionState(STORY_BUILDER_DIR);
+
+  it('is registered alongside the other categories', () => {
+    expect(dataSync.getSupportedCategories()).toContain('storyBuilder');
+  });
+
+  it('snapshot includes ONLY sync:true sessions — local-only sessions never cross the wire', async () => {
+    writeSessions([session('stb-synced'), session('stb-local', { sync: false })]);
+    const snap = await dataSync.getSnapshot('storyBuilder');
+    expect(snap.data.sessions.map((s) => s.id)).toEqual(['stb-synced']);
+    expect(snap.checksum).toBeTruthy();
+  });
+
+  it('snapshot checksum is identical whether or not a local-only session exists (convergence)', async () => {
+    writeSessions([session('stb-synced')]);
+    const a = await dataSync.getSnapshot('storyBuilder');
+    await new Promise((r) => setTimeout(r, 5));
+    writeSessions([session('stb-synced'), session('stb-local', { sync: false })]);
+    const b = await dataSync.getSnapshot('storyBuilder');
+    expect(b.checksum).toBe(a.checksum);
+  });
+
+  it('applyRemote inserts a new synced session (union by id)', async () => {
+    writeSessions([session('stb-a')]);
+    const result = await dataSync.applyRemote('storyBuilder', {
+      sessions: [session('stb-b')],
+    });
+    expect(result.applied).toBe(true);
+    expect(readSessions().map((s) => s.id).sort()).toEqual(['stb-a', 'stb-b']);
+  });
+
+  it('applyRemote LWW: newer remote wins for the same id', async () => {
+    writeSessions([session('stb-a', { title: 'old', updatedAt: '2026-05-22T00:00:00Z' })]);
+    await dataSync.applyRemote('storyBuilder', {
+      sessions: [session('stb-a', { title: 'new', updatedAt: '2026-05-22T05:00:00Z' })],
+    });
+    expect(readSessions().find((s) => s.id === 'stb-a').title).toBe('new');
+  });
+
+  it('applyRemote refuses to overwrite a LOCAL session the user turned local-only', async () => {
+    writeSessions([session('stb-a', { sync: false, title: 'local wins' })]);
+    const result = await dataSync.applyRemote('storyBuilder', {
+      sessions: [session('stb-a', { title: 'peer wins?', updatedAt: '2030-01-01T00:00:00Z' })],
+    });
+    expect(result.applied).toBe(false);
+    const got = readSessions().find((s) => s.id === 'stb-a');
+    expect(got.sync).toBe(false);
+    expect(got.title).toBe('local wins');
+  });
+
+  it('round-trips: a fresh receiver applying the wire snapshot recomputes the same checksum', async () => {
+    writeSessions([session('stb-a'), session('stb-b'), session('stb-local', { sync: false })]);
+    const snap = await dataSync.getSnapshot('storyBuilder');
+    // Fresh receiver: empty store, apply, recompute.
+    rmSync(STORY_BUILDER_DIR, { recursive: true, force: true });
+    writeSessions([]);
+    const applied = await dataSync.applyRemote('storyBuilder', snap.data);
+    expect(applied.applied).toBe(true);
+    const receiverSnap = await dataSync.getSnapshot('storyBuilder');
+    expect(receiverSnap.checksum).toBe(snap.checksum);
+  });
+
+  it('does NOT block a storyBuilder snapshot when the sender is ahead on universes (per-category gate)', async () => {
+    writeSessions([]);
+    const result = await dataSync.applyRemote('storyBuilder', {
+      sessions: [session('stb-a')],
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6, storyBuilder: 1 } } });
+    expect(result.blockedBySchema).toBeUndefined();
+    expect(result.applied).toBe(true);
+  });
+
+  it('STILL blocks a storyBuilder snapshot when the sender is ahead on storyBuilder', async () => {
+    writeSessions([]);
+    const result = await dataSync.applyRemote('storyBuilder', {
+      sessions: [session('stb-a')],
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { storyBuilder: 2 } } });
+    expect(result.applied).toBe(false);
+    expect(result.blockedBySchema).toBeDefined();
+    expect(result.blockedBySchema.ahead).toEqual([
+      { category: 'storyBuilder', senderV: 2, receiverV: 1 },
+    ]);
+    expect(readSessions()).toEqual([]);
+  });
+});
+
 describe('dataSync — per-category schema gate (cross-key isolation)', () => {
   // A sender always stamps its FULL schemaVersions map (buildPortosMeta spreads
   // PORTOS_SCHEMA_VERSIONS). The old whole-payload gate rejected EVERY category
