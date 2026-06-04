@@ -72,13 +72,13 @@ describe('useNavWorkingSet', () => {
   });
 
   it('does not throw when localStorage.getItem throws (private mode)', () => {
-    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('SecurityError'); });
+    const spy = vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => { throw new Error('SecurityError'); });
     expect(() => renderHook(() => useNavWorkingSet(resolveNavEntry), { wrapper })).not.toThrow();
     spy.mockRestore();
   });
 
   it('does not throw when localStorage.setItem throws (quota)', () => {
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('QuotaExceededError'); });
+    const spy = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { throw new Error('QuotaExceededError'); });
     const { result } = renderHook(() => useNavWorkingSet(resolveNavEntry), { wrapper });
     expect(() => act(() => result.current.pin('/brain/inbox'))).not.toThrow();
     // in-memory state still updates despite the write failing
