@@ -20,7 +20,13 @@ import { timeAgo } from '../utils/formatters';
 const LAST_SEEN_KEY = 'portos.whileAway.lastSeen';
 
 const readLastSeen = () => {
-  const raw = localStorage.getItem(LAST_SEEN_KEY);
+  // localStorage access can throw in private-mode / storage-disabled /
+  // security-error contexts — never let that crash the dashboard render.
+  // (Same guard idiom as utils/timeWindow.js.)
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  let raw = null;
+  try { raw = window.localStorage.getItem(LAST_SEEN_KEY); }
+  catch { return null; }
   // A finite, non-future ISO string is the only valid marker; anything else
   // (absent, garbage, clock-skewed) means "no marker" → server applies its
   // own 24h fallback so the card still renders.
@@ -31,7 +37,11 @@ const readLastSeen = () => {
 };
 
 const writeLastSeen = (iso) => {
-  localStorage.setItem(LAST_SEEN_KEY, iso);
+  // A write failure (quota / disabled) must not break "Mark as seen" — the
+  // subsequent refetch still runs; the window just isn't persisted this time.
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try { window.localStorage.setItem(LAST_SEEN_KEY, iso); }
+  catch { /* private mode / quota — graceful no-op */ }
 };
 
 function ActivityRow({ item, kind }) {
