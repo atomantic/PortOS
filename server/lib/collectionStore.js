@@ -5,7 +5,7 @@
  * Layout on disk:
  *
  *     {dir}/
- *     ├── index.json          // { schemaVersion, type, updatedAt, config: {} }
+ *     ├── index.json          // { schemaVersion, type, updatedAt, config: {…} }
  *     ├── <id-1>/
  *     │   └── index.json      // the record itself
  *     └── <id-2>/
@@ -15,6 +15,48 @@
  * rewrites the whole file and every load parses every record) once a
  * collection has outgrown it. See `data/runs/` for the proven prior-art shape
  * this generalizes.
+ *
+ * The `config` slot — type-level shared state (convention):
+ *   The type index's `config` object holds cross-record state that belongs to
+ *   the collection as a whole rather than to any single record — the things
+ *   that would otherwise need their own sidecar file. The convention is
+ *   grounded in the first real consumer (universeBuilder, see migration 034),
+ *   which keeps a capped `config.runs[]` history log alongside its per-universe
+ *   records. The agreed shape (see the `TypeIndexConfig` typedef below):
+ *
+ *     config: {
+ *       runs?:         [],   // append-mostly cross-record history/audit log,
+ *                            //   capped by the consumer (universeBuilder caps
+ *                            //   at the last 200) — the established slot
+ *       featureFlags?: {},   // reserved: per-collection toggles
+ *       lockPolicies?: {},   // reserved: per-collection lock rules
+ *       …                    // consumers MAY add their own keys; document the
+ *                            //   shape next to the consumer that owns it
+ *     }
+ *
+ *   `runs` is the only slot with a shipped consumer; `featureFlags` /
+ *   `lockPolicies` are reserved names so the next consumer reuses them instead
+ *   of inventing a synonym. Treat the slot as open-but-conventional: prefer a
+ *   reserved name when one fits, and keep each key's value an object or array
+ *   so the shallow-merge semantics below stay predictable.
+ *
+ *   Merge semantics: `saveTypeIndex({ config })` shallow-merges at the TOP
+ *   level of `config` — `{ ...current.config, ...patch.config }`. A patch that
+ *   sets `runs` REPLACES the whole `runs` array; it does NOT deep-merge into
+ *   it. So a read-modify-write of an array (or nested-object) slot must load
+ *   the current value, mutate a copy, and write the full replacement (see
+ *   `recordRun` in universeBuilder). The merge is one level deep only.
+ *
+ *   Write-fence: `config`-slot writes all share ONE file (`index.json`) across
+ *   every record in the type, so a read→modify→write cycle on a slot must run
+ *   inside `queueTypeIndexWrite(fn)` to avoid clobbering a concurrent edit.
+ *   `recordRun` is the canonical example: it loads the index, appends to
+ *   `runs`, caps, and writes — all inside the type-index queue. Use
+ *   `saveTypeIndex` for a simple patch (it queues internally); reach for
+ *   `queueTypeIndexWrite` directly only when the read and the write must be
+ *   fenced together. `defaultTypeIndexConfig` seeds the slot on a fresh type
+ *   index (and on any read where `config` is missing or not a plain object);
+ *   it is NOT re-applied on later writes.
  *
  * Two versioning concerns coexist:
  *   - The TYPE-LEVEL `schemaVersion` (this file): describes the on-disk
@@ -50,6 +92,25 @@ import { atomicWrite, readJSONFile, ensureDir } from './fileUtils.js';
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
+ * The type-index `config` slot — cross-record state owned by the collection as
+ * a whole. See the header doc block for the convention. All keys are optional;
+ * a consumer that needs a slot not listed here MAY add its own (document it
+ * next to the consumer), but should prefer a reserved name when one fits. Each
+ * value should be an array or plain object so the top-level shallow-merge in
+ * `saveTypeIndex` stays predictable.
+ *
+ * @typedef {object} TypeIndexConfig
+ * @property {Array<object>} [runs]
+ *   Append-mostly cross-record history/audit log. The consumer is responsible
+ *   for capping growth (universeBuilder keeps the last 200) and for sanitizing
+ *   each entry on read/write. The only slot with a shipped consumer today.
+ * @property {Object<string, boolean>} [featureFlags]
+ *   Reserved: per-collection on/off toggles.
+ * @property {Object<string, object>} [lockPolicies]
+ *   Reserved: per-collection lock rules.
+ */
+
+/**
  * Create a per-type collection store.
  *
  * @param {object} opts
@@ -64,9 +125,12 @@ const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArr
  * @param {(record: any) => any} [opts.sanitizeRecord]
  *   Optional record-level normalizer. Called on every `loadOne` result. Return
  *   `null` to treat the on-disk record as invalid (loadOne returns `null`).
- * @param {object} [opts.defaultTypeIndexConfig]
- *   Initial value for the `config` slot of a freshly-minted type index.
- *   Defaults to `{}`.
+ * @param {TypeIndexConfig} [opts.defaultTypeIndexConfig]
+ *   Initial value for the `config` slot of a freshly-minted type index (and the
+ *   fallback when an on-disk index is missing/has a non-object `config`).
+ *   Defaults to `{}`. Seeds the slot on first read only — it is NOT re-applied
+ *   on later `saveTypeIndex` writes, which shallow-merge over the current value.
+ *   See the `TypeIndexConfig` typedef and the header `config`-slot convention.
  * @param {RegExp} [opts.idPattern]
  *   Allowlist for record-directory names. Defaults to a permissive pattern
  *   (`/^[A-Za-z0-9_-]{1,128}$/`) — services with stricter id rules should pass
@@ -160,10 +224,18 @@ export function createCollectionStore({
   }
 
   /**
-   * Persist a patch into the type-level index. Top-level fields (schemaVersion,
-   * type, config) are shallow-merged; `updatedAt` is restamped automatically.
-   * Serialized through `queueTypeIndexWrite` so concurrent callers can't
-   * stomp each other's config-slot edits.
+   * Persist a patch into the type-level index. `schemaVersion` / `type` are
+   * replaced only when the patch supplies a valid value (else preserved);
+   * `config` is SHALLOW-merged one level deep (`{ ...current, ...patch.config }`,
+   * so a patched slot like `runs` replaces the whole array — see the header
+   * `config`-slot convention); `updatedAt` is restamped automatically.
+   * Serialized through `queueTypeIndexWrite` so concurrent callers can't stomp
+   * each other's config-slot edits. For a read-modify-write that must read the
+   * current slot value before writing (e.g. appending to `runs`), do the load
+   * and the write together inside one `queueTypeIndexWrite(fn)` rather than
+   * leaning on this patch form.
+   *
+   * @param {{ schemaVersion?: number, type?: string, config?: TypeIndexConfig }} [patch]
    */
   function saveTypeIndex(patch = {}) {
     return queueTypeIndexWrite(async () => {
