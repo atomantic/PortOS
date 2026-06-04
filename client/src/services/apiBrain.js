@@ -18,7 +18,10 @@ export const getBrainInbox = (options = {}) => {
   if (options.status) params.set('status', options.status);
   if (options.limit) params.set('limit', options.limit);
   if (options.offset) params.set('offset', options.offset);
-  return request(`/brain/inbox?${params}`);
+  // Forward request-level options (e.g. { silent: true }) so background pollers can opt out
+  // of the default error toast. `silent` is the only request-level flag the helper reads;
+  // the rest of `options` is query params handled above.
+  return request(`/brain/inbox?${params}`, { silent: options.silent });
 };
 export const getBrainInboxEntry = (id) => request(`/brain/inbox/${id}`);
 export const resolveBrainReview = (inboxLogId, destination, editedExtracted) => request('/brain/review/resolve', {

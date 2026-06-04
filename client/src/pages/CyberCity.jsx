@@ -91,6 +91,21 @@ function CyberCityInner() {
     600_000,
   );
 
+  // Long-term memory graph drives the knowledge district (crystal clusters + light bridges).
+  // The graph changes slowly (new memories trickle in), so a 2-minute poll is plenty. Same
+  // last-good-snapshot semantics as the fetches above.
+  const { data: memoryGraph } = useAutoRefetch(
+    () => api.getMemoryGraph({ silent: true }),
+    120_000,
+  );
+
+  // Brain-inbox backlog feeds the memory district's glowing well — `needs_review` is the count
+  // of captures waiting for the user to sort. Lightweight; the well pulses harder as it grows.
+  const { data: inboxData } = useAutoRefetch(
+    () => api.getBrainInbox({ status: 'needs_review', limit: 1, silent: true }),
+    60_000,
+  );
+
   const handleBuildingClick = useCallback((app) => {
     if (app?.id) {
       navigate(`/apps/${app.id}`);
@@ -139,6 +154,8 @@ function CyberCityInner() {
         goals={goalsData}
         character={character}
         chronotype={chronotypeData}
+        memoryGraph={memoryGraph}
+        inboxDepth={inboxData?.counts?.needs_review ?? 0}
         settings={settings}
         playSfx={playSfx}
         keysRef={keysRef}

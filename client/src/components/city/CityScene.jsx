@@ -26,6 +26,7 @@ import CityArtifacts from './CityArtifacts';
 import CitySeasonalDecor from './CitySeasonalDecor';
 import CityEasterEggs from './CityEasterEggs';
 import CityVoiceMarker from './CityVoiceMarker';
+import CityMemoryDistrict from './CityMemoryDistrict';
 import CityAiCore from './CityAiCore';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
@@ -38,7 +39,7 @@ import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -99,6 +100,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CitySeasonalDecor settings={settings} />
       <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={settings} />
       <CityVoiceMarker voiceState={voiceState} settings={settings} />
+      <CityMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={settings} />
       <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={settings} />
       <CityGround settings={settings} />
 
