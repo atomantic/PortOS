@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -105,8 +105,14 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
     >
       {showGradientBackground && <color attach="background" args={[background || '#030308']} />}
       {/* Mount the galaxy dome only at night — keeps its 2.8MB texture from being
-          fetched/decoded in full daylight, where it's fully faded out anyway. */}
-      {!showGradientBackground && <CityGalaxySky settings={settings} />}
+          fetched/decoded in full daylight, where it's fully faded out anyway.
+          Wrapped in Suspense so the useLoader texture fetch can't suspend the
+          whole canvas tree while it streams in. */}
+      {!showGradientBackground && (
+        <Suspense fallback={null}>
+          <CityGalaxySky settings={settings} />
+        </Suspense>
+      )}
       <CitySky settings={settings} />
       <CityClouds settings={settings} />
       <CityLights settings={settings} />
