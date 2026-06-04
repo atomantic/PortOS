@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text, Line } from '@react-three/drei';
+import { Text } from '@react-three/drei';
+import CityTubeLine from './CityTubeLine';
 import { PIXEL_FONT_URL } from './cityConstants';
 import { computeGoalMonuments, computeGoalForest, MONUMENTS, FOREST } from '../../utils/cityGoalMonuments';
 
@@ -129,12 +130,11 @@ function GoalForest({ forest, shimmerRef, shimmerId }) {
             </group>
           ))}
           {cluster.links.map((link) => (
-            <Line
+            <CityTubeLine
               key={link.childId}
               points={[link.from, link.to]}
               color={cluster.spire.color}
-              lineWidth={1.5}
-              transparent
+              radius={0.06}
               opacity={0.4}
             />
           ))}

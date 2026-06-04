@@ -1,7 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text, Line } from '@react-three/drei';
+import { Text } from '@react-three/drei';
 import { PIXEL_FONT_URL } from './cityConstants';
+import CityTubeLine from './CityTubeLine';
 import { computeMemoryDistrict, MEMORY_DISTRICT } from '../../utils/cityMemoryDistrict';
 
 // CyberCity's memory / knowledge district (roadmap 3.2): the user's long-term memory graph
@@ -124,12 +125,11 @@ export default function CityMemoryDistrict({ memoryGraph, inboxDepth = 0, settin
         // Arc the midpoint up so bridges read as light arcs, not flat lines.
         const mid = [(from[0] + to[0]) / 2, MEMORY_DISTRICT.bridgeY + 2 + Math.min(bridge.weight, 6) * 0.3, (from[2] + to[2]) / 2];
         return (
-          <Line
+          <CityTubeLine
             key={i}
             points={[from, mid, to]}
             color="#67e8f9"
-            lineWidth={Math.min(1 + bridge.weight * 0.5, 4)}
-            transparent
+            radius={Math.min(0.05 + bridge.weight * 0.03, 0.22)}
             opacity={Math.min(0.25 + bridge.weight * 0.12, 0.8)}
           />
         );
