@@ -38,8 +38,9 @@ import CitySky from './CitySky';
 import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
+import CityPhotoCamera from './CityPhotoCamera';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -78,7 +79,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       dpr={dpr}
       shadows={false}
       style={{ background: '#030308', cursor: explorationMode ? 'crosshair' : 'auto' }}
-      gl={{ antialias: true }}
+      // preserveDrawingBuffer lets photo mode read the frame back via toDataURL. It's a
+      // WebGL context-creation attribute, so it can't be toggled at runtime without recreating
+      // the renderer (which would flash the scene) — we accept it always-on. The cost on modern
+      // GPUs is a small per-frame copy; negligible against this scene's particle/bloom load.
+      gl={{ antialias: true, preserveDrawingBuffer: true }}
     >
       <CitySky settings={settings} />
       <CityClouds settings={settings} />
@@ -142,7 +147,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
           active={explorationMode}
         />
       )}
-      {!explorationMode && !transitioning && (
+      {!explorationMode && !transitioning && !photoMode && (
         <OrbitControls
           maxPolarAngle={Math.PI / 2.2}
           minDistance={5}
@@ -155,6 +160,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         active={explorationMode}
         onTransitionComplete={handleTransitionComplete}
       />
+      <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} />
     </Canvas>
   );
 }

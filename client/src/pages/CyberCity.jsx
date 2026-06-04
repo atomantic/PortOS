@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useMemo } from 'react';
+import { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
 import useCityAudio from '../hooks/useCityAudio';
@@ -8,9 +8,11 @@ import * as api from '../services/api';
 import CityScene from '../components/city/CityScene';
 import CityHud from '../components/city/CityHud';
 import CityScanlines from '../components/city/CityScanlines';
+import CityPhotoOverlay from '../components/city/CityPhotoOverlay';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
 import CitySettingsPanel from '../components/city/CitySettingsPanel';
 import { computeFilterResult } from '../utils/cityFilter';
+import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 
 function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, backupStatus, cosTasks, healthMetrics, voiceState, character, aiActivity, loading, connected } = useCityData();
@@ -60,6 +62,37 @@ function CyberCityInner() {
   }, [updateSetting, settings?.explorationMode]);
 
   const keysRef = useKeyboardControls(handleToggleExploration);
+
+  // Photo mode (roadmap 3.3): a cinematic capture mode with framing presets and a postcard
+  // screenshot. The in-canvas CityPhotoCamera registers its capture function here via a ref so
+  // the overlay (outside the Canvas) can trigger a grab. Exiting photo mode clears the fn.
+  const [photoMode, setPhotoMode] = useState(false);
+  const [photoPresetId, setPhotoPresetId] = useState(DEFAULT_PRESET_ID);
+  const captureFnRef = useRef(null);
+  const handlePhotoCaptureReady = useCallback((fn) => { captureFnRef.current = fn; }, []);
+
+  // Entering photo mode leaves exploration; they're mutually exclusive camera modes.
+  const enterPhotoMode = useCallback(() => {
+    updateSetting('explorationMode', false);
+    setPhotoPresetId(DEFAULT_PRESET_ID);
+    setPhotoMode(true);
+  }, [updateSetting]);
+  const exitPhotoMode = useCallback(() => setPhotoMode(false), []);
+
+  // Esc exits photo mode; ←/→ cycle the framing preset. Bound only while photo mode is on so it
+  // doesn't shadow other shortcuts. Ignores key events while typing in an input.
+  useEffect(() => {
+    if (!photoMode) return;
+    const onKey = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'Escape') setPhotoMode(false);
+      else if (e.key === 'ArrowLeft') setPhotoPresetId(id => cyclePreset(id, -1));
+      else if (e.key === 'ArrowRight') setPhotoPresetId(id => cyclePreset(id, 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [photoMode]);
 
   // Productivity data for HUD vitals and billboards. Let errors throw —
   // `useAutoRefetch` preserves the last-good snapshot on transient failures.
@@ -119,6 +152,20 @@ function CyberCityInner() {
     if (first?.id) navigate(`/apps/${first.id}`);
   }, [filterResult.matches, navigate]);
 
+  // Headline numbers baked onto a captured city postcard. Derived from data the page already
+  // has — no extra fetch. buildPostcardStats (in the overlay) omits absent/zero fields.
+  const photoStats = useMemo(() => {
+    const active = (apps || []).filter(a => !a.archived);
+    return {
+      online: active.filter(a => a.overallStatus === 'online').length,
+      total: active.length,
+      agents: (cosAgents || []).filter(a => a.status === 'running' || a.state === 'coding' || a.state === 'thinking').length,
+      peers: (instances?.peers || []).filter(p => p.status === 'online').length,
+      level: character?.level,
+      streak: productivityData?.currentStreak ?? productivityData?.streak,
+    };
+  }, [apps, cosAgents, instances, character, productivityData]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4" style={{ background: '#030308' }}>
@@ -156,31 +203,46 @@ function CyberCityInner() {
         chronotype={chronotypeData}
         memoryGraph={memoryGraph}
         inboxDepth={inboxData?.counts?.needs_review ?? 0}
+        photoMode={photoMode}
+        photoPresetId={photoPresetId}
+        onPhotoCaptureReady={handlePhotoCaptureReady}
         settings={settings}
         playSfx={playSfx}
         keysRef={keysRef}
         dimmedAppIds={filterResult.dimmed}
       />
-      <CityHud
-        cosStatus={cosStatus}
-        cosAgents={cosAgents}
-        agentMap={agentMap}
-        eventLogs={eventLogs}
-        connected={connected}
-        apps={apps}
-        reviewCounts={reviewCounts}
-        instances={instances}
-        productivityData={productivityData}
-        systemHealth={systemHealth}
-        notificationCounts={notificationCounts}
-        character={character}
-        filter={filter}
-        onFilterChange={setFilter}
-        onJumpToFirst={handleJumpToFirst}
-        matchCount={filterResult.matches.length}
-        onToggleExploration={handleToggleExploration}
-        explorationMode={settings?.explorationMode}
-        onSelectApp={handleBuildingClick}
+      {/* The full HUD hides in photo mode so captures are clean; the photo overlay replaces it. */}
+      {!photoMode && (
+        <CityHud
+          cosStatus={cosStatus}
+          cosAgents={cosAgents}
+          agentMap={agentMap}
+          eventLogs={eventLogs}
+          connected={connected}
+          apps={apps}
+          reviewCounts={reviewCounts}
+          instances={instances}
+          productivityData={productivityData}
+          systemHealth={systemHealth}
+          notificationCounts={notificationCounts}
+          character={character}
+          filter={filter}
+          onFilterChange={setFilter}
+          onJumpToFirst={handleJumpToFirst}
+          matchCount={filterResult.matches.length}
+          onToggleExploration={handleToggleExploration}
+          explorationMode={settings?.explorationMode}
+          onSelectApp={handleBuildingClick}
+          onEnterPhotoMode={enterPhotoMode}
+        />
+      )}
+      <CityPhotoOverlay
+        active={photoMode}
+        presetId={photoPresetId}
+        onPresetChange={setPhotoPresetId}
+        onExit={exitPhotoMode}
+        captureFnRef={captureFnRef}
+        statsSnapshot={photoStats}
       />
       <CityScanlines settings={settings} />
       {showSettings && <CitySettingsPanel />}
