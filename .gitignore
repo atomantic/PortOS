@@ -75,3 +75,5 @@ __pycache__/
 
 # Runtime cache (e.g. projects.json) — regenerated, never committed
 cache/
+
+.antigravitycli
