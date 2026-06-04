@@ -87,12 +87,10 @@ import {
 } from '../services/pipeline/musicLibrary.js';
 import {
   generateMusic,
-  MUSICGEN_MODELS,
-  DEFAULT_MUSICGEN_MODEL_ID,
-  DEFAULT_DURATION_SEC,
-  MIN_DURATION_SEC,
-  MAX_DURATION_SEC,
-  isMusicGenReady,
+  ENGINES,
+  DEFAULT_ENGINE_ID,
+  getEngine,
+  isEngineReady,
 } from '../services/pipeline/musicGen.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
@@ -900,26 +898,51 @@ router.get('/audio/music-library', asyncHandler(async (_req, res) => {
 }));
 
 // Local-OSS music generators available to the audio stage (Phase 4c.2).
-// `ready` reflects whether the opt-in MusicGen venv is provisioned, so the UI
-// can show an install hint instead of letting the user type a prompt that 503s.
+// Returns every selectable backend under `engines` (each carrying its models,
+// duration window and a `ready` flag for the opt-in venv) plus a `defaultEngine`
+// id. The top-level `models`/`ready`/duration fields mirror the default engine
+// for backward compatibility with pre-multi-engine clients.
 router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
+  const engines = Object.values(ENGINES).map((engine) => ({
+    id: engine.id,
+    name: engine.name,
+    models: engine.models.map(({ id, name }) => ({ id, name })),
+    defaultModelId: engine.defaultModelId,
+    defaultDurationSec: engine.defaultDurationSec,
+    minDurationSec: engine.minDurationSec,
+    maxDurationSec: engine.maxDurationSec,
+    ready: isEngineReady(engine.id),
+  }));
+  const fallback = engines.find((e) => e.id === DEFAULT_ENGINE_ID) ?? engines[0];
   res.json({
-    models: MUSICGEN_MODELS.map(({ id, name }) => ({ id, name })),
-    defaultModelId: DEFAULT_MUSICGEN_MODEL_ID,
-    defaultDurationSec: DEFAULT_DURATION_SEC,
-    minDurationSec: MIN_DURATION_SEC,
-    maxDurationSec: MAX_DURATION_SEC,
-    ready: isMusicGenReady(),
+    engines,
+    defaultEngine: DEFAULT_ENGINE_ID,
+    // Back-compat: flatten the default engine's fields to the top level.
+    models: fallback.models,
+    defaultModelId: fallback.defaultModelId,
+    defaultDurationSec: fallback.defaultDurationSec,
+    minDurationSec: fallback.minDurationSec,
+    maxDurationSec: fallback.maxDurationSec,
+    ready: fallback.ready,
   });
 }));
 
-// Generate a background-music track with MusicGen (MLX) and attach it to the
-// issue as a `source: 'gen'` track. The generated WAV lands in the shared
+// Every model id across all engines — the schema validates `modelId` against
+// this union and `generateMusic` resolves it within the chosen engine (falling
+// back to that engine's default for a mismatched id).
+const ALL_MODEL_IDS = Object.values(ENGINES).flatMap((e) => e.models.map((m) => m.id));
+// The widest duration window across engines; per-engine clamping happens in the
+// service, so the schema just rejects absurd values.
+const MAX_ENGINE_DURATION = Math.max(...Object.values(ENGINES).map((e) => e.maxDurationSec));
+
+// Generate a background-music track with the selected backend and attach it to
+// the issue as a `source: 'gen'` track. The generated WAV lands in the shared
 // music library, so it's reusable across issues exactly like an upload.
 const musicGenerateSchema = z.object({
   prompt: z.string().trim().min(1).max(800),
-  durationSec: z.number().min(MIN_DURATION_SEC).max(MAX_DURATION_SEC).optional(),
-  modelId: z.enum(MUSICGEN_MODELS.map((m) => m.id)).optional(),
+  engine: z.enum(Object.keys(ENGINES)).optional(),
+  durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
+  modelId: z.enum(ALL_MODEL_IDS).optional(),
 });
 router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicGenerateSchema, req.body ?? {});
@@ -930,8 +953,9 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
   issuesSvc.assertStageUnlocked(issue, 'audio');
   const gen = await generateMusic({
     prompt: body.prompt,
-    durationSec: body.durationSec ?? DEFAULT_DURATION_SEC,
-    modelId: body.modelId ?? DEFAULT_MUSICGEN_MODEL_ID,
+    engine: body.engine ?? DEFAULT_ENGINE_ID,
+    durationSec: body.durationSec,
+    modelId: body.modelId,
   }).catch((err) => { throw mapServiceError(err); });
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,
@@ -942,7 +966,7 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
       errorMessage: '',
     }),
   ).catch((err) => { throw mapServiceError(err); });
-  res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId });
+  res.json({ issue: updatedIssue, stage, music: stage.music, durationSec: gen.durationSec, modelId: gen.modelId, engine: gen.engine });
 }));
 
 router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(async (req, res) => {

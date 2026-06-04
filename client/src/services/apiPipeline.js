@@ -616,19 +616,21 @@ export const deletePipelineMusicTrack = (filename) =>
 
 // ---- Local-OSS music generation (Phase 4c.2) ----
 
-// Available MusicGen generators + whether the opt-in MLX runtime is installed.
-// Returns { models, defaultModelId, defaultDurationSec, minDurationSec,
-// maxDurationSec, ready }. `ready=false` → show the install hint instead of
-// the prompt box.
+// Available local music backends + whether each opt-in runtime is installed.
+// Returns { engines: [{ id, name, models, defaultModelId, defaultDurationSec,
+// minDurationSec, maxDurationSec, ready }], defaultEngine, ... } — the default
+// engine's fields are also flattened to the top level for back-compat. A
+// per-engine `ready=false` → show that engine's install hint, not the prompt.
 export const listPipelineMusicGenerators = (options = {}) =>
   request('/pipeline/audio/music/generators', options);
 
-// Generate a background-music track with MusicGen (MLX) and attach it to the
-// issue (source: 'gen'). Long-running (~tens of seconds); callers own a busy
-// state. Returns { issue, stage, music, durationSec, modelId }.
-export const generatePipelineMusic = (issueId, { prompt, durationSec, modelId } = {}, options = {}) =>
+// Generate a background-music track with a local backend (`engine`: 'musicgen'
+// | 'audioldm2') and attach it to the issue (source: 'gen'). Long-running
+// (~tens of seconds); callers own a busy state. Returns
+// { issue, stage, music, durationSec, modelId, engine }.
+export const generatePipelineMusic = (issueId, { prompt, engine, durationSec, modelId } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/generate`, {
     method: 'POST',
-    body: JSON.stringify({ prompt, durationSec, modelId }),
+    body: JSON.stringify({ prompt, engine, durationSec, modelId }),
     ...options,
   });

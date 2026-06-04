@@ -13,6 +13,7 @@
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
+#   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 
 set -euo pipefail
 
@@ -366,6 +367,51 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
   fi
 fi
 
+INSTALL_AUDIOLDM2="${INSTALL_AUDIOLDM2:-0}"
+if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
+  # Local long-form background-music generation for the pipeline audio stage
+  # (Phase 4c.2, second backend alongside MusicGen). AudioLDM2 is a latent
+  # diffusion text-to-audio model shipped in HuggingFace `diffusers` (a pip
+  # package — no clone needed), so this is just a sibling torch venv. The sidecar
+  # `scripts/generate_audioldm2.py` imports `AudioLDM2Pipeline` from diffusers;
+  # server/lib/pythonSetup.js (resolveAudioldm2Python) looks for python3 here.
+  # Runs on Apple-Silicon MPS, CUDA, or CPU — not gated to macOS like MusicGen.
+  # This is a bash installer, so the venv layout is the POSIX bin/python3 (same
+  # as the MusicGen block); the Windows Scripts/python.exe path is resolved on
+  # the JS side by pythonSetup's AUDIOLDM2_VENV_CANDIDATES.
+  AUDIOLDM2_VENV="${HOME}/.portos/venv-audioldm2"
+  AUDIOLDM2_PY="$AUDIOLDM2_VENV/bin/python3"
+  mkdir -p "${HOME}/.portos"
+
+  if [[ ! -x "$AUDIOLDM2_PY" ]]; then
+    echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
+    "$PYTHON_BIN" -m venv "$AUDIOLDM2_VENV"
+  fi
+  echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
+  "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+  # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
+  # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
+  # accelerate speeds device placement; numpy/scipy back the audio math. We write
+  # WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
+  "$AUDIOLDM2_PY" -m pip install --upgrade \
+    torch \
+    diffusers \
+    "transformers<5" \
+    sentencepiece \
+    accelerate \
+    numpy \
+    scipy \
+    "huggingface_hub[hf_xet]"
+  # Verify the pipeline class imports — a clean import means generation only
+  # needs the one-time weight download, not a broken venv.
+  if ! "$AUDIOLDM2_PY" -c "import torch; from diffusers import AudioLDM2Pipeline" 2>/dev/null; then
+    echo "❌ AudioLDM2 venv built but 'import torch; from diffusers import AudioLDM2Pipeline' failed." >&2
+    echo "   Check that torch + diffusers installed cleanly in ${AUDIOLDM2_VENV}." >&2
+    exit 1
+  fi
+  echo "✅ AudioLDM2 venv ready: $AUDIOLDM2_PY"
+fi
+
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
@@ -438,6 +484,9 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
 fi
 if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
   echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
+fi
+if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
+  echo "   AudioLDM2: ${HOME}/.portos/venv-audioldm2/bin/python3 (separate venv, diffusers — long-form audio)"
 fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"

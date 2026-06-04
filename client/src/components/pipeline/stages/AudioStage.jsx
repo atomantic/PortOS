@@ -83,6 +83,24 @@ export default function AudioStage({ issue, onStageUpdate }) {
   const [genPrompt, setGenPrompt] = useState('');
   const [genDuration, setGenDuration] = useState(12);
   const [genModelId, setGenModelId] = useState('');
+  const [genEngineId, setGenEngineId] = useState('');
+
+  // The selected backend's descriptor (models + duration window + readiness).
+  // Falls back to the legacy single-engine shape when the server predates the
+  // `engines` array, so an older API still drives the picker.
+  const genEngines = generators?.engines ?? (generators
+    ? [{
+        id: generators.defaultEngine || 'musicgen',
+        name: 'MusicGen',
+        models: generators.models || [],
+        defaultModelId: generators.defaultModelId,
+        defaultDurationSec: generators.defaultDurationSec,
+        minDurationSec: generators.minDurationSec,
+        maxDurationSec: generators.maxDurationSec,
+        ready: generators.ready,
+      }]
+    : []);
+  const activeEngine = genEngines.find((e) => e.id === genEngineId) || genEngines[0] || null;
 
   // Per-line VO start-offset drafts (seconds into the stitched episode). Kept
   // separate from text drafts; committed on blur via the same patch queue.
@@ -98,9 +116,26 @@ export default function AudioStage({ issue, onStageUpdate }) {
       });
       if (result) {
         setGenerators(result);
-        setGenModelId((prev) => prev || result.defaultModelId || result.models?.[0]?.id || '');
-        if (Number.isFinite(result.defaultDurationSec)) setGenDuration(result.defaultDurationSec);
+        // Default to the server's default engine, then that engine's default
+        // model + duration. Falls back to the flattened legacy fields.
+        const engines = result.engines ?? [];
+        const defEngine = engines.find((e) => e.id === result.defaultEngine) || engines[0] || null;
+        setGenEngineId((prev) => prev || defEngine?.id || result.defaultEngine || 'musicgen');
+        setGenModelId((prev) => prev || defEngine?.defaultModelId || result.defaultModelId || result.models?.[0]?.id || '');
+        const defDuration = defEngine?.defaultDurationSec ?? result.defaultDurationSec;
+        if (Number.isFinite(defDuration)) setGenDuration(defDuration);
       }
+    }
+  };
+
+  // Switching engine re-anchors the model + duration to the new backend's
+  // defaults so a stale model id (valid only on the prior engine) can't be sent.
+  const handleEngineChange = (engineId) => {
+    setGenEngineId(engineId);
+    const engine = genEngines.find((e) => e.id === engineId);
+    if (engine) {
+      setGenModelId(engine.defaultModelId || engine.models?.[0]?.id || '');
+      if (Number.isFinite(engine.defaultDurationSec)) setGenDuration(engine.defaultDurationSec);
     }
   };
 
@@ -111,7 +146,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
     // Owns its own error toast → silent so the helper doesn't double-toast.
     const result = await generatePipelineMusic(
       issue.id,
-      { prompt, durationSec: genDuration, modelId: genModelId || undefined },
+      { prompt, engine: genEngineId || undefined, durationSec: genDuration, modelId: genModelId || undefined },
       { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Music generation failed');
@@ -499,7 +534,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50"
             >
               <Wand2 size={14} />
-              {genPanelOpen ? 'Close generator' : 'Generate (MusicGen)'}
+              {genPanelOpen ? 'Close generator' : 'Generate music'}
             </button>
           </div>
         </div>
@@ -508,75 +543,97 @@ export default function AudioStage({ issue, onStageUpdate }) {
           <div className="mb-3 p-3 bg-port-bg border border-port-border rounded-lg">
             {generators === null ? (
               <p className="text-xs text-gray-500">Loading generators…</p>
-            ) : !generators.ready ? (
-              <p className="text-xs text-gray-400">
-                Local music generation isn't installed yet. Run{' '}
-                <code className="text-gray-300">INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh</code>{' '}
-                to bootstrap the MusicGen (MLX) runtime, then reopen this panel.
-              </p>
             ) : (
               <div className="space-y-3">
-                <div>
-                  <label htmlFor="musicgen-prompt" className="block text-xs text-gray-400 mb-1">Describe the music</label>
-                  <textarea
-                    id="musicgen-prompt"
-                    value={genPrompt}
-                    onChange={(e) => setGenPrompt(e.target.value)}
-                    rows={2}
-                    maxLength={800}
-                    placeholder="e.g. tense cinematic synth pad, slow build, minor key"
-                    className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
-                  />
-                </div>
-                <div className="flex items-end gap-3 flex-wrap">
+                {genEngines.length > 1 ? (
                   <div>
-                    <label htmlFor="musicgen-model" className="block text-xs text-gray-400 mb-1">Model</label>
+                    <label htmlFor="music-engine" className="block text-xs text-gray-400 mb-1">Engine</label>
                     <select
-                      id="musicgen-model"
-                      value={genModelId}
-                      onChange={(e) => setGenModelId(e.target.value)}
+                      id="music-engine"
+                      value={activeEngine?.id || ''}
+                      onChange={(e) => handleEngineChange(e.target.value)}
                       className="px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                     >
-                      {(generators.models || []).map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
+                      {genEngines.map((eng) => (
+                        <option key={eng.id} value={eng.id}>
+                          {eng.name}{eng.ready ? '' : ' (not installed)'}
+                        </option>
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label htmlFor="musicgen-duration" className="block text-xs text-gray-400 mb-1">
-                      Length (s)
-                    </label>
-                    <input
-                      id="musicgen-duration"
-                      type="number"
-                      min={generators.minDurationSec ?? 1}
-                      max={generators.maxDurationSec ?? 30}
-                      step="1"
-                      value={genDuration}
-                      onChange={(e) => {
-                        // Clamp to the server's accepted range so a blank/typed
-                        // out-of-range value can't 400 on Generate. NaN → default.
-                        const min = generators.minDurationSec ?? 1;
-                        const max = generators.maxDurationSec ?? 30;
-                        const n = Number(e.target.value);
-                        setGenDuration(Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : (generators.defaultDurationSec ?? 12));
-                      }}
-                      className="w-24 px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGenerateMusic}
-                    disabled={generating || !genPrompt.trim()}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
-                  >
-                    {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                    {generating ? 'Generating…' : 'Generate'}
-                  </button>
-                </div>
-                <p className="text-[11px] text-gray-600">
-                  Runs on-device via MLX — a {generators.maxDurationSec ?? 30}s clip takes ~tens of seconds. The track lands in your music library and is attached to this issue.
-                </p>
+                ) : null}
+
+                {!activeEngine?.ready ? (
+                  <p className="text-xs text-gray-400">
+                    {activeEngine?.name || 'This engine'} isn't installed yet. Run{' '}
+                    <code className="text-gray-300">INSTALL_{(activeEngine?.id || 'musicgen').toUpperCase()}=1 bash scripts/setup-image-video.sh</code>{' '}
+                    to bootstrap its runtime, then reopen this panel.
+                  </p>
+                ) : (
+                  <>
+                    <div>
+                      <label htmlFor="musicgen-prompt" className="block text-xs text-gray-400 mb-1">Describe the music</label>
+                      <textarea
+                        id="musicgen-prompt"
+                        value={genPrompt}
+                        onChange={(e) => setGenPrompt(e.target.value)}
+                        rows={2}
+                        maxLength={800}
+                        placeholder="e.g. tense cinematic synth pad, slow build, minor key"
+                        className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
+                      />
+                    </div>
+                    <div className="flex items-end gap-3 flex-wrap">
+                      <div>
+                        <label htmlFor="musicgen-model" className="block text-xs text-gray-400 mb-1">Model</label>
+                        <select
+                          id="musicgen-model"
+                          value={genModelId}
+                          onChange={(e) => setGenModelId(e.target.value)}
+                          className="px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
+                        >
+                          {(activeEngine.models || []).map((m) => (
+                            <option key={m.id} value={m.id}>{m.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="musicgen-duration" className="block text-xs text-gray-400 mb-1">
+                          Length (s)
+                        </label>
+                        <input
+                          id="musicgen-duration"
+                          type="number"
+                          min={activeEngine.minDurationSec ?? 1}
+                          max={activeEngine.maxDurationSec ?? 30}
+                          step="1"
+                          value={genDuration}
+                          onChange={(e) => {
+                            // Clamp to the engine's accepted range so a blank/typed
+                            // out-of-range value can't 400 on Generate. NaN → default.
+                            const min = activeEngine.minDurationSec ?? 1;
+                            const max = activeEngine.maxDurationSec ?? 30;
+                            const n = Number(e.target.value);
+                            setGenDuration(Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : (activeEngine.defaultDurationSec ?? 12));
+                          }}
+                          className="w-24 px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleGenerateMusic}
+                        disabled={generating || !genPrompt.trim()}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
+                      >
+                        {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        {generating ? 'Generating…' : 'Generate'}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-gray-600">
+                      Runs on-device — up to {activeEngine.maxDurationSec ?? 30}s. The track lands in your music library and is attached to this issue.
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>
