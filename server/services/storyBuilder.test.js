@@ -398,6 +398,36 @@ describe('storyBuilder — sync-safe staleness (#730)', () => {
     expect(view.staleSteps).toContain('plotArc');
   });
 
+  it('locking a step does NOT re-baseline OTHER already-locked steps', async () => {
+    // Regression: locking step C must re-baseline only C, not move every locked
+    // step's baseline to the current (possibly peer-edited) records — otherwise
+    // a peer edit suppressed for an earlier-locked step would resurface as stale
+    // the moment any unrelated step is locked, the exact #730 false-positive.
+    const s = await sb.createStorySession({ title: 'X' });
+    await sb.setStorySessionSync(s.id, true);
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'spine', summary: 'sum' } });
+    await universeSvc.updateUniverse(s.universeId, {
+      logline: 'a world of salt', premise: 'the foundry goes silent',
+    });
+    await sb.lockStep(s.id, 'plotArc'); // baseline[plotArc] = live now
+    // Peer edits the arc out-of-band — suppressed for the synced session.
+    await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'PEER spine', summary: 'sum' }, locked: {} });
+    let view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    // Lock an UNRELATED step. The buggy whole-map merge would move
+    // baseline[plotArc] to the peer-edited arc → plotArc would flag stale.
+    await sb.lockStep(s.id, 'universeAesthetic');
+    view = await sb.getStorySessionView(s.id);
+    expect(view.staleSteps).not.toContain('plotArc');
+    expect(view.staleSteps).not.toContain('universeAesthetic');
+  });
+
+  it('reconcile rejects a local-only session (it is a re-baseline, not an enable)', async () => {
+    const s = await sb.createStorySession({ title: 'X' });
+    expect(s.sync).toBe(false);
+    await expect(sb.reconcileStorySession(s.id)).rejects.toMatchObject({ code: sb.ERR_VALIDATION });
+  });
+
   it('sanitizer drops bogus / unknown-step entries from a hand-edited syncedHashes', async () => {
     const cleaned = sb.sanitizeSession({
       id: 'stb-x', title: 'X', sync: true,

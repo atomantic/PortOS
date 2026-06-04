@@ -454,14 +454,19 @@ async function writeSyncState(id, enabled, hashes) {
 }
 
 /**
- * Re-snapshot a session's `syncedHashes` baseline to the CURRENT live records,
- * and turn sync on if it wasn't already. This is the explicit "adopt this
- * machine's universe/series state as the new staleness baseline" gesture — the
- * only thing that moves the carried baseline on a synced session. Returns the
- * saved session.
+ * Re-snapshot a sync-enabled session's `syncedHashes` baseline to the CURRENT
+ * live records. This is the explicit "adopt this machine's universe/series
+ * state as the new staleness baseline" gesture — the only thing that moves the
+ * carried baseline across steps on a synced session. Rejects a local-only
+ * session: reconcile is a re-baseline gesture, NOT a sync-enable one (use
+ * `setStorySessionSync` to turn sync on), so calling it on a session with
+ * sync off is a no-op-with-surprising-side-effect we'd rather surface loudly.
  */
 export async function reconcileStorySession(id) {
   const session = await getStorySession(id);
+  if (session.sync !== true) {
+    throw makeErr('Cross-machine resume is off for this session — enable it before reconciling', ERR_VALIDATION);
+  }
   const { hashes } = await computeCurrentHashes(session);
   return writeSyncState(id, true, hashes);
 }
@@ -530,13 +535,19 @@ export async function lockStep(id, stepId) {
       upstreamHash: hashes[stepId],
     };
     // A sync-enabled session keys staleness off its carried baseline, not live
-    // records — so locking must also move the baseline to live (#730). Otherwise
-    // the just-locked step would compare its fresh `upstreamHash` against a
-    // stale `syncedHashes` entry and report itself stale on the next read.
+    // records — so locking must also move the baseline to live for THIS step
+    // (#730). Otherwise the just-locked step would compare its fresh
+    // `upstreamHash` against a stale `syncedHashes` entry and report itself
+    // stale on the next read. Re-baseline ONLY `stepId`: merging the whole live
+    // `hashes` map would move every OTHER locked step's baseline to the current
+    // (possibly peer-edited) records, re-introducing the exact false-positive
+    // #730 exists to prevent. Cross-step re-baselining is the reconcile gesture.
     const next = sanitizeSession({
       ...cur,
       steps,
-      ...(cur.sync === true ? { syncedHashes: { ...(cur.syncedHashes || {}), ...hashes } } : {}),
+      ...(cur.sync === true
+        ? { syncedHashes: { ...(cur.syncedHashes || {}), [stepId]: hashes[stepId] } }
+        : {}),
       updatedAt: nowIso(),
     });
     await store().saveOneNow(next.id, next);
