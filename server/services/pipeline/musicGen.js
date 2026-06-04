@@ -47,7 +47,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // paths are correct regardless of the server process's cwd.
 const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
 const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py');
-// Back-compat alias: the original single-backend constant name.
+// Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
 const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
 
 // MusicGen's practical clip-length window. It was trained on 30s windows and
