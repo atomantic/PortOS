@@ -270,6 +270,29 @@ vi.mock('../services/pipeline/musicLibrary.js', () => ({
   }),
 }));
 
+// Music generation (musicGen.js) — keep the real ENGINES registry + helpers
+// (the route builds Zod enums from them at module load) but stub generateMusic
+// so cue-render tests never spawn the Python sidecar.
+const generateMusicMock = vi.fn(async ({ engine }) => ({
+  filename: `music-gen-mock-${++uuidCounter}.wav`,
+  durationSec: 18,
+  modelId: 'musicgen-medium',
+  model: 'MusicGen Medium',
+  engine: engine || 'musicgen',
+}));
+vi.mock('../services/pipeline/musicGen.js', async () => {
+  const actual = await vi.importActual('../services/pipeline/musicGen.js');
+  return { ...actual, generateMusic: (...a) => generateMusicMock(...a) };
+});
+
+// Audio cue derivation (audioCues.js) — stub the LLM-backed derivation but keep
+// the real preserveRenderedCues helper so the carry-forward path is exercised.
+let deriveAudioCuesSpy;
+vi.mock('../services/pipeline/audioCues.js', async () => {
+  const actual = await vi.importActual('../services/pipeline/audioCues.js');
+  return { ...actual, deriveAudioCues: (...a) => deriveAudioCuesSpy(...a) };
+});
+
 vi.mock('../lib/multipart.js', () => ({
   uploadSingle: () => (req, _res, next) => {
     req.file = req.body?._mockFile || null;
@@ -2326,6 +2349,149 @@ describe('pipeline routes', () => {
     });
   });
 
+  // ---- whole-episode audio cues (issue #863, steps 3+4) ----
+  describe('audio cue routes', () => {
+    beforeEach(() => {
+      // Default derivation stub: two arc cues with prompts, no timing/render yet.
+      deriveAudioCuesSpy = vi.fn(async () => ({
+        cues: [
+          { id: 'cue-001', label: 'Act I — setup', prompt: 'warm ambient pads', engine: 'musicgen', startSec: null, endSec: null, trackFilename: null, durationSec: null, gain: null },
+          { id: 'cue-002', label: 'Climax', prompt: 'driving percussion, tense', engine: 'musicgen', startSec: null, endSec: null, trackFilename: null, durationSec: null, gain: null },
+        ],
+        runId: 'cue-run-1', providerId: 'p', model: 'm',
+      }));
+      generateMusicMock.mockClear();
+    });
+
+    async function seedIssueWithBeats(app) {
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { idea: { status: 'ready', output: 'Act 1: setup. Act 2: rising. Act 3: climax then resolution.' } },
+      });
+      return iss.body;
+    }
+
+    it('POST /audio/cues/generate derives cues and flips audioMode to generated', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`)
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body.cueCount).toBe(2);
+      expect(r.body.stage.audioMode).toBe('generated');
+      expect(r.body.stage.cues[0]).toMatchObject({ label: 'Act I — setup', prompt: 'warm ambient pads' });
+      // Persisted on the issue.
+      const after = await request(app).get(`/api/pipeline/issues/${iss.id}`);
+      expect(after.body.stages.audio.cues).toHaveLength(2);
+      expect(after.body.stages.audio.audioMode).toBe('generated');
+    });
+
+    it('POST /audio/cues/generate 409s when cues already exist without force', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`)
+        .send({});
+      expect(r.status).toBe(409);
+    });
+
+    it('POST /audio/cues/generate with force:true replaces existing cues', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`)
+        .send({ force: true });
+      expect(r.status).toBe(200);
+      expect(r.body.cueCount).toBe(2);
+    });
+
+    it('POST /audio/cues/generate carries forward a previously-rendered cue by label', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      // First derive + render cue 0 so it has a trackFilename.
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`).send({});
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/0/render`).send({});
+      // Re-derive (force) — the same label should keep the rendered track.
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`)
+        .send({ force: true });
+      expect(r.status).toBe(200);
+      const carried = r.body.stage.cues.find((c) => c.label === 'Act I — setup');
+      expect(carried.trackFilename).toMatch(/^music-gen-mock-/);
+    });
+
+    it('POST /audio/cues/generate 400s when the issue has no idea beats', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      // Real derivation throws PIPELINE_AUDIO_CUES_NO_SOURCE for an empty idea —
+      // route the spy through the real implementation for this case.
+      const real = await vi.importActual('../services/pipeline/audioCues.js');
+      deriveAudioCuesSpy = (...a) => real.deriveAudioCues(...a);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.body.id}/stages/audio/cues/generate`)
+        .send({});
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('PIPELINE_AUDIO_CUES_NO_SOURCE');
+    });
+
+    it('POST /audio/cues/:idx/render renders one cue and stamps trackFilename + durationSec', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/1/render`)
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body.cueIdx).toBe(1);
+      expect(r.body.trackFilename).toMatch(/^music-gen-mock-/);
+      expect(r.body.durationSec).toBe(18);
+      // Engine resolves from the cue's own hint when no body override.
+      expect(generateMusicMock).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'driving percussion, tense', engine: 'musicgen' }));
+      const after = await request(app).get(`/api/pipeline/issues/${iss.id}`);
+      expect(after.body.stages.audio.cues[1].trackFilename).toMatch(/^music-gen-mock-/);
+      expect(after.body.stages.audio.cues[1].durationSec).toBe(18);
+    });
+
+    it('POST /audio/cues/:idx/render passes the placed span as durationSec', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`).send({});
+      // Place cue 0 with a 12s span via the issue PATCH (audio arm).
+      await request(app).patch(`/api/pipeline/issues/${iss.id}`).send({
+        stages: { audio: { audioMode: 'generated', cues: [
+          { id: 'cue-001', label: 'Act I — setup', prompt: 'warm ambient pads', engine: 'musicgen', startSec: 4, endSec: 16 },
+          { id: 'cue-002', label: 'Climax', prompt: 'driving percussion, tense', engine: 'musicgen' },
+        ] } },
+      });
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/0/render`).send({});
+      expect(generateMusicMock).toHaveBeenCalledWith(expect.objectContaining({ durationSec: 12 }));
+    });
+
+    it('POST /audio/cues/:idx/render 404s for an out-of-range index', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/generate`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/9/render`)
+        .send({});
+      expect(r.status).toBe(404);
+    });
+
+    it('POST /audio/cues/:idx/render 400s for a non-integer index', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithBeats(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/nope/render`)
+        .send({});
+      expect(r.status).toBe(400);
+    });
+  });
+
   describe('music library routes', () => {
     beforeEach(() => {
       musicLibraryStore.clear();
@@ -2359,9 +2525,12 @@ describe('pipeline routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.music.source).toBe('upload');
       expect(r.body.music.trackFilename).toMatch(/^music-uuid-/);
+      // Uploading a single track flips the episode to 'uploaded-track'.
+      expect(r.body.stage.audioMode).toBe('uploaded-track');
       // Persisted on the issue
       const after = await request(app).get(`/api/pipeline/issues/${iss.id}`);
       expect(after.body.stages.audio.music.trackFilename).toBe(r.body.music.trackFilename);
+      expect(after.body.stages.audio.audioMode).toBe('uploaded-track');
       expect(lastImportedName).toBe('My Theme.mp3');
     });
 
@@ -2385,6 +2554,10 @@ describe('pipeline routes', () => {
       expect(r.body.music.source).toBe('library');
       expect(r.body.music.trackFilename).toBe('shared.mp3');
       expect(r.body.music.label).toBe('Library pick');
+      // Attaching a single track flips the episode to 'uploaded-track' so the
+      // stitcher actually muxes it (a new issue defaults to 'per-clip', which
+      // ignores the music pointer — issue #863).
+      expect(r.body.stage.audioMode).toBe('uploaded-track');
     });
 
     it('POST /audio/music/attach 404s when the track is not in the library', async () => {
@@ -2430,8 +2603,26 @@ describe('pipeline routes', () => {
         .send();
       expect(r.status).toBe(200);
       expect(r.body.stage.music).toBeNull();
+      // Clearing the only track reverts an 'uploaded-track' issue to 'per-clip'.
+      expect(r.body.stage.audioMode).toBe('per-clip');
       // Library entry survives the issue detach
       expect(musicLibraryStore.has('shared.mp3')).toBe(true);
+    });
+
+    it('DELETE /audio/music leaves a generated-mode issue in generated mode', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      // Put the issue in generated mode with a (stale) music pointer, then clear
+      // the pointer — the explicit generated strategy must survive.
+      await request(app).patch(`/api/pipeline/issues/${iss.id}`).send({
+        stages: { audio: { audioMode: 'generated', music: { source: 'gen', trackFilename: 'old.wav', label: 'x' } } },
+      });
+      const r = await request(app)
+        .delete(`/api/pipeline/issues/${iss.id}/stages/audio/music`)
+        .send();
+      expect(r.status).toBe(200);
+      expect(r.body.stage.music).toBeNull();
+      expect(r.body.stage.audioMode).toBe('generated');
     });
 
     it('DELETE /audio/music 404s with PIPELINE_ISSUE_NOT_FOUND when the issue does not exist', async () => {

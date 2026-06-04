@@ -65,7 +65,8 @@ vi.mock('child_process', async () => {
   };
 });
 
-const { muxMusicBed, muxVoLines, buildVoMuxArgs, selectPlacedVoLines, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
+const { muxMusicBed, muxVoLines, buildVoMuxArgs, buildCueMuxArgs, muxCueBed, muxStripAudio, selectPlacedVoLines, selectPlacedCues, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
+const { placeCuesOnTimeline } = await import('./audioCuePlacement.js');
 
 beforeEach(async () => {
   spawnCalls.length = 0;
@@ -248,11 +249,11 @@ describe('buildVoMuxArgs', () => {
     // One bed (music) → VO padded then split into the mixed-back copy + one
     // sidechain key. The apad-before-split keeps the bed alive past the last
     // VO line (sidechaincompress ends with its shortest input).
-    expect(filter).toContain('apad,asplit=2[vomain][vsck0]');
+    expect(filter).toContain('apad,asplit=2[vomain][vosck0]');
     expect(filter).toContain('[2:a]volume=0.400');
     expect(filter).toContain('sidechaincompress=threshold=');
-    expect(filter).toContain('[bed][vsck0]sidechaincompress');
-    expect(filter).toContain('[ducked0][vomain]amix=inputs=2:normalize=0[aout]');
+    expect(filter).toContain('[bed][vosck0]sidechaincompress');
+    expect(filter).toContain('[voducked0][vomain]amix=inputs=2:normalize=0[aout]');
   });
 
   it('mixes the clip soundtrack in as a second ducked bed alongside music', () => {
@@ -269,10 +270,10 @@ describe('buildVoMuxArgs', () => {
     expect(filter).toContain('[0:a]aresample=48000');
     expect(filter).toMatch(/\[clip\]/);
     // Two beds (music + clip) → VO split into mixed-back + two sidechain keys.
-    expect(filter).toContain('apad,asplit=3[vomain][vsck0][vsck1]');
-    expect(filter).toContain('[bed][vsck0]sidechaincompress');
-    expect(filter).toContain('[clip][vsck1]sidechaincompress');
-    expect(filter).toContain('[ducked0][ducked1][vomain]amix=inputs=3:normalize=0[aout]');
+    expect(filter).toContain('apad,asplit=3[vomain][vosck0][vosck1]');
+    expect(filter).toContain('[bed][vosck0]sidechaincompress');
+    expect(filter).toContain('[clip][vosck1]sidechaincompress');
+    expect(filter).toContain('[voducked0][voducked1][vomain]amix=inputs=3:normalize=0[aout]');
   });
 
   it('ducks the clip soundtrack under VO even with no music bed', () => {
@@ -286,9 +287,9 @@ describe('buildVoMuxArgs', () => {
     expect(args).not.toContain('-stream_loop');
     const filter = args[args.indexOf('-filter_complex') + 1];
     expect(filter).toContain('[0:a]aresample=48000');
-    expect(filter).toContain('apad,asplit=2[vomain][vsck0]');
-    expect(filter).toContain('[clip][vsck0]sidechaincompress');
-    expect(filter).toContain('[ducked0][vomain]amix=inputs=2:normalize=0[aout]');
+    expect(filter).toContain('apad,asplit=2[vomain][vosck0]');
+    expect(filter).toContain('[clip][vosck0]sidechaincompress');
+    expect(filter).toContain('[voducked0][vomain]amix=inputs=2:normalize=0[aout]');
   });
 
   it('uses a single VO label without amix for one line', () => {
@@ -391,7 +392,7 @@ describe('muxVoLines', () => {
     expect(result.ducked).toBe(false);
     const filter = spawnCalls[0].args[spawnCalls[0].args.indexOf('-filter_complex') + 1];
     expect(filter).toContain('[0:a]aresample=48000');
-    expect(filter).toContain('[clip][vsck0]sidechaincompress');
+    expect(filter).toContain('[clip][vosck0]sidechaincompress');
   });
 
   it('skips the clip soundtrack when the input video is silent', async () => {
@@ -409,5 +410,243 @@ describe('muxVoLines', () => {
     // A silent video must never have [0:a] referenced — that would abort ffmpeg.
     expect(filter).not.toContain('[0:a]');
     expect(filter).not.toContain('[clip]');
+  });
+});
+
+describe('selectPlacedCues', () => {
+  it('keeps only rendered (trackFilename) AND placed (finite startSec >= 0) cues', () => {
+    const out = selectPlacedCues([
+      { trackFilename: 'a.wav', startSec: 0, endSec: 30, gain: 0.7 },  // kept
+      { trackFilename: 'b.wav', startSec: null },                      // dropped — not placed
+      { trackFilename: null, startSec: 10 },                           // dropped — not rendered
+      { trackFilename: 'c.wav', startSec: 30, endSec: 60 },            // kept
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out[0].path).toMatch(/a\.wav$/);
+    expect(out[0].startSec).toBe(0);
+    expect(out[0].gain).toBe(0.7);
+    expect(out[1].path).toMatch(/c\.wav$/);
+  });
+
+  it('nulls a non-positive-span endSec and a negative/invalid gain', () => {
+    const out = selectPlacedCues([
+      { trackFilename: 'a.wav', startSec: 10, endSec: 5, gain: -1 }, // endSec <= startSec
+    ]);
+    expect(out[0].endSec).toBeNull();
+    expect(out[0].gain).toBeNull();
+  });
+
+  it('returns [] for non-array input', () => {
+    expect(selectPlacedCues(null)).toEqual([]);
+    expect(selectPlacedCues(undefined)).toEqual([]);
+  });
+
+  it('keeps a partially-rendered cue in its OWN arc slot (place full list, then filter)', () => {
+    // The stitcher places the FULL ordered cue list, THEN drops un-rendered
+    // cues. A lone rendered "climax" (cue 2 of 3) must stay in its middle slot,
+    // not stretch across the whole episode (the bug from placing only rendered).
+    const cues = [
+      { id: 'a', label: 'Setup' },                          // un-rendered
+      { id: 'b', label: 'Climax', trackFilename: 'b.wav' },  // rendered
+      { id: 'c', label: 'Resolution' },                     // un-rendered
+    ];
+    const placed = selectPlacedCues(placeCuesOnTimeline(cues, 90));
+    expect(placed).toHaveLength(1);
+    // 90s / 3 cues → the climax owns its 30..60 middle slot, not 0..90.
+    expect(placed[0].startSec).toBeCloseTo(30, 5);
+    expect(placed[0].endSec).toBeCloseTo(60, 5);
+    expect(placed[0].path).toMatch(/b\.wav$/);
+  });
+});
+
+describe('buildCueMuxArgs', () => {
+  it('lays each cue at its absolute startSec with delay + fade, then amixes (no VO)', () => {
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [
+        { path: '/c0.wav', startSec: 0, endSec: 30, gain: 0.5 },
+        { path: '/c1.wav', startSec: 30, endSec: 60, gain: 0.5 },
+      ],
+      outPath: '/out.mp4',
+    });
+    // video=input0, cue0=input1, cue1=input2. Each cue is looped (-stream_loop
+    // -1) so a short render fills its slot, so the args carry a loop flag before
+    // each cue -i.
+    expect(args.slice(0, 10)).toEqual([
+      '-i', '/v.mp4',
+      '-stream_loop', '-1', '-i', '/c0.wav',
+      '-stream_loop', '-1', '-i', '/c1.wav',
+    ]);
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    // Each looped cue is trimmed to its placed span, then absolute-placed via
+    // adelay (NOT acrossfade) + per-cue fade in/out.
+    expect(filter).toContain('[1:a]atrim=0:30.000,adelay=0:all=1');
+    expect(filter).toContain('[2:a]atrim=0:30.000,adelay=30000:all=1');
+    expect(filter).toContain('afade=t=in:st=0.000');
+    expect(filter).toContain('afade=t=in:st=30.000');
+    expect(filter).toContain('afade=t=out');
+    expect(filter).not.toContain('acrossfade'); // design correction: never acrossfade
+    // Two cues amix into one bed, then padded so -shortest pins to video length.
+    expect(filter).toContain('amix=inputs=2:normalize=0[cuebed]');
+    expect(filter).toContain('[cuebed]apad[aout]');
+    expect(filter).not.toContain('sidechaincompress'); // no VO → no duck
+    expect(args).toContain('-shortest');
+    expect(args[args.indexOf('-map') + 1]).toBe('0:v');
+  });
+
+  it('uses a single cue label without amix for one cue', () => {
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [{ path: '/c0.wav', startSec: 5, endSec: 35, gain: 0.5 }],
+      outPath: '/out.mp4',
+    });
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('[cue0]apad[aout]');
+    expect(filter).not.toContain('[cuebed]');
+  });
+
+  it('ducks the cue bed under VO when VO lines are present', () => {
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [{ path: '/c0.wav', startSec: 0, endSec: 30, gain: 0.5 }],
+      voLines: [{ path: '/a.wav', offsetSec: 2 }],
+      outPath: '/out.mp4',
+    });
+    // video=input0, cue=input1 (looped), VO=input2.
+    expect(args.slice(0, 8)).toEqual([
+      '-i', '/v.mp4',
+      '-stream_loop', '-1', '-i', '/c0.wav',
+      '-i', '/a.wav',
+    ]);
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('[2:a]adelay=2000:all=1');
+    // Cue bed ducked under VO via sidechaincompress (one bed, one VO key copy).
+    expect(filter).toContain('apad,asplit=2[vomain][cuesck0]');
+    expect(filter).toContain('sidechaincompress=threshold=');
+    expect(filter).toContain('[cueducked0][vomain]amix=inputs=2:normalize=0[aout]');
+  });
+
+  it('adds the clip soundtrack as a second ducked bed under VO when clipAudio is set', () => {
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [{ path: '/c0.wav', startSec: 0, endSec: 30, gain: 0.5 }],
+      voLines: [{ path: '/a.wav', offsetSec: 0 }],
+      clipAudio: true,
+      outPath: '/out.mp4',
+    });
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('[0:a]aresample=48000');
+    expect(filter).toContain('apad,asplit=3[vomain][cuesck0][cuesck1]');
+    expect(filter).toContain('[cueducked0][cueducked1][vomain]amix=inputs=3:normalize=0[aout]');
+  });
+
+  it('preserves the clip soundtrack by mixing it under the cue bed when no VO', () => {
+    // Design: 'generated' mode keeps the clip's own audio. With no VO there's
+    // nothing to duck under, so the clip is mixed in alongside the cue bed.
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [{ path: '/c0.wav', startSec: 0, endSec: 30, gain: 0.5 }],
+      clipAudio: true,
+      outPath: '/out.mp4',
+    });
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('[0:a]aresample=48000');
+    expect(filter).toContain('[cue0][clip]amix=inputs=2:normalize=0,apad[aout]');
+    expect(filter).not.toContain('sidechaincompress'); // no VO → mix, not duck
+  });
+
+  it('loops+trims a cue to its placed span so a short render fills the slot', () => {
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [{ path: '/c0.wav', startSec: 10, endSec: 70, gain: 0.5 }], // 60s span
+      outPath: '/out.mp4',
+    });
+    // -stream_loop -1 lets the source repeat; atrim cuts it to the 60s span.
+    expect(args).toContain('-stream_loop');
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('[1:a]atrim=0:60.000,adelay=10000:all=1');
+  });
+});
+
+describe('muxCueBed', () => {
+  beforeEach(() => {
+    findFfmpegMock.mockReset();
+    hasAudioStreamMock.mockReset();
+    spawnCalls.length = 0;
+  });
+
+  it('returns ok:false when no cue is placed+rendered (caller keeps clip audio)', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'cv.mp4');
+    await writeFile(video, Buffer.from('vid'));
+    const result = await muxCueBed(video, { cues: [{ path: '/missing.wav', startSec: 0 }] });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/no placed/i);
+  });
+
+  it('mixes placed+rendered cues onto the video and reports the cue count', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    hasAudioStreamMock.mockResolvedValue(false);
+    const video = join(TEST_HOME, 'cv2.mp4');
+    const cue = join(TEST_HOME, 'cue.wav');
+    await writeFile(video, Buffer.from('vid'));
+    await writeFile(cue, Buffer.from('wav'));
+    const result = await muxCueBed(video, { cues: [{ path: cue, startSec: 0, endSec: 30, gain: 0.5 }] });
+    expect(result.ok).toBe(true);
+    expect(result.cueCount).toBe(1);
+    expect(result.ducked).toBe(false); // no VO
+  });
+
+  it('preserves clip audio (mixed under the cue bed) when the clip has a soundtrack and no VO', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    hasAudioStreamMock.mockResolvedValue(true);
+    const video = join(TEST_HOME, 'cv3.mp4');
+    const cue = join(TEST_HOME, 'cue3.wav');
+    await writeFile(video, Buffer.from('vid'));
+    await writeFile(cue, Buffer.from('wav'));
+    const result = await muxCueBed(video, { cues: [{ path: cue, startSec: 0, endSec: 30, gain: 0.5 }] });
+    expect(result.ok).toBe(true);
+    expect(result.clipAudio).toBe(true);
+    const filter = spawnCalls[0].args[spawnCalls[0].args.indexOf('-filter_complex') + 1];
+    // Clip audio preserved per the design (mixed in, not ducked — no VO).
+    expect(filter).toContain('[0:a]aresample=48000');
+    expect(filter).not.toContain('sidechaincompress');
+  });
+
+  it('never references clip audio when the clip is silent', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    hasAudioStreamMock.mockResolvedValue(false);
+    const video = join(TEST_HOME, 'cv4.mp4');
+    const cue = join(TEST_HOME, 'cue4.wav');
+    await writeFile(video, Buffer.from('vid'));
+    await writeFile(cue, Buffer.from('wav'));
+    await muxCueBed(video, { cues: [{ path: cue, startSec: 0, endSec: 30, gain: 0.5 }] });
+    const filter = spawnCalls[0].args[spawnCalls[0].args.indexOf('-filter_complex') + 1];
+    // [0:a] against a silent clip would abort ffmpeg — must not be referenced.
+    expect(filter).not.toContain('[0:a]');
+  });
+});
+
+describe('muxStripAudio', () => {
+  beforeEach(() => { findFfmpegMock.mockReset(); spawnCalls.length = 0; });
+
+  it('returns ok:false when the input video is missing', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const result = await muxStripAudio(join(TEST_HOME, 'nope.mp4'));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('input video missing');
+  });
+
+  it('strips the audio stream with -an and stream-copies the video', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'sv.mp4');
+    await writeFile(video, Buffer.from('vid'));
+    const result = await muxStripAudio(video);
+    expect(result).toEqual({ ok: true });
+    const { args } = spawnCalls[0];
+    expect(args).toContain('-an');
+    expect(args[args.indexOf('-map') + 1]).toBe('0:v');
+    expect(args[args.indexOf('-c:v') + 1]).toBe('copy');
+    expect(args).not.toContain('-filter_complex');
   });
 });

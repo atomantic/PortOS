@@ -187,6 +187,11 @@ export const hasAudioStream = async (videoPath) => {
 // Returns the basename on success, null when ffmpeg is missing or fails —
 // callers should treat null as "no thumbnail" rather than aborting the
 // parent operation.
+// Probe a video's duration in seconds via ffprobe. Returns null when ffprobe is
+// unavailable or the file has no parseable duration — callers must treat null as
+// "unknown" rather than 0. Exported as `probeVideoDuration` for the cue-placement
+// path (issue #863), which needs the episode length to lay arc cues onto the
+// timeline.
 const probeDurationSeconds = async (videoPath) => {
   const stdout = await runFfprobe([
     '-v', 'error',
@@ -197,6 +202,7 @@ const probeDurationSeconds = async (videoPath) => {
   const n = parseFloat(stdout);
   return Number.isFinite(n) && n > 0 ? n : null;
 };
+export const probeVideoDuration = probeDurationSeconds;
 
 export const generateThumbnail = async (videoPath, jobId) => {
   await ensureDir(PATHS.videoThumbnails);

@@ -91,6 +91,7 @@ import {
   DEFAULT_ENGINE_ID,
   isEngineReady,
 } from '../services/pipeline/musicGen.js';
+import { deriveAudioCues, preserveRenderedCues } from '../services/pipeline/audioCues.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
 import {
@@ -926,6 +927,20 @@ const musicUpload = uploadSingle('track', {
 const audioStatusAfterMusicChange = (stage) =>
   (stage.lines?.length ? 'edited' : 'empty');
 
+// Attaching/generating/uploading a single track means "use this one track as
+// the episode bed" — flip audioMode to 'uploaded-track' so the stitcher
+// actually muxes it. Without this a new issue stays at the default 'per-clip'
+// mode, which (correctly) ignores the music pointer, so the track would land on
+// the issue but never play (issue #863). Only override the generated/silent
+// modes when the user explicitly attaches a single track — those are deliberate
+// strategy choices we shouldn't silently undo for an unrelated music write... but
+// since all three routes ARE the "set the single track" action, the override is
+// the user's intent. The delete route mirrors this: clearing the only track
+// reverts an 'uploaded-track' issue to 'per-clip', leaving generated/silent be.
+const audioModeAfterTrackSet = () => 'uploaded-track';
+const audioModeAfterTrackClear = (stage) =>
+  (stage.audioMode === 'uploaded-track' ? 'per-clip' : stage.audioMode);
+
 router.get('/audio/music-library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
 }));
@@ -998,6 +1013,7 @@ router.post('/issues/:id/stages/audio/music/generate', asyncHandler(async (req, 
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackSet(),
       music: { source: MUSIC_SOURCE.GEN, trackFilename: gen.filename, label: gen.model },
       errorMessage: '',
     }),
@@ -1023,6 +1039,7 @@ router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(a
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackSet(),
       music: { source: MUSIC_SOURCE.UPLOAD, trackFilename: filename, label },
       errorMessage: '',
     }),
@@ -1048,6 +1065,7 @@ router.post('/issues/:id/stages/audio/music/attach', asyncHandler(async (req, re
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackSet(),
       music: {
         source: MUSIC_SOURCE.LIBRARY,
         trackFilename: body.trackFilename,
@@ -1065,11 +1083,149 @@ router.delete('/issues/:id/stages/audio/music', asyncHandler(async (req, res) =>
     'audio',
     (current) => ({
       status: audioStatusAfterMusicChange(current),
+      audioMode: audioModeAfterTrackClear(current),
       music: null,
       errorMessage: '',
     }),
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage });
+}));
+
+// Whole-episode audio cues (issue #863, step 3). The 'generated' audioMode lays
+// an ordered cues[] array — one cue per narrative arc beat — onto the episode
+// timeline at stitch time. These two routes derive the cue list from the
+// episode's own beats and render each cue's audio.
+
+// Derive the per-arc cue list from the episode's OWN beat prose (stages.idea) +
+// storyboard scene order. Replaces the existing cues[] unless force is false and
+// cues already exist (mirrors the extract-lines / extract-scenes overwrite
+// guard). Already-rendered cue audio is carried forward by label so re-deriving
+// doesn't silently invalidate every rendered WAV.
+const cuesGenerateSchema = z.object({
+  engine: z.enum(Object.keys(ENGINES)).optional(),
+  providerOverride: z.string().trim().max(80).optional(),
+  modelOverride: z.string().trim().max(128).optional(),
+  force: z.boolean().optional(),
+});
+router.post('/issues/:id/stages/audio/cues/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(cuesGenerateSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, 'audio');
+  const existing = Array.isArray(issue.stages?.audio?.cues) ? issue.stages.audio.cues : [];
+  if (existing.length > 0 && !body.force) {
+    throw new ServerError(
+      `Audio stage already has ${existing.length} cue${existing.length === 1 ? '' : 's'} — pass { force: true } to replace`,
+      { status: 409, code: 'PIPELINE_AUDIO_CUES_EXIST' },
+    );
+  }
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+  // Inherit the series LLM unless the client overrides — same provider/model
+  // resolution as the other Pipeline LLM actions (extract-scenes / extract-canon).
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: body.providerOverride,
+    overrideModel: body.modelOverride,
+  });
+  const result = await deriveAudioCues(issue, {
+    defaultEngine: body.engine ?? DEFAULT_ENGINE_ID,
+    providerOverride: provider,
+    modelOverride: model,
+    series: { name: series.name, styleNotes: series.styleNotes },
+  }).catch((err) => { throw mapServiceError(err); });
+  // Carry forward already-rendered cue audio (matched by label) so a re-derive
+  // doesn't drop WAVs the user already generated.
+  const cues = preserveRenderedCues(result.cues, existing);
+  // Deriving cues implies the user wants the episode-level generated soundtrack —
+  // flip audioMode to 'generated' so the muxer picks up the cues at stitch time.
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    () => ({ audioMode: 'generated', cues, lastRunId: result.runId, errorMessage: '' }),
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    issue: updatedIssue, stage,
+    cues: stage.cues,
+    cueCount: stage.cues.length,
+    runId: result.runId,
+    providerId: result.providerId,
+    model: result.model,
+  });
+}));
+
+// Render one cue's audio via the generator-agnostic generateMusic contract,
+// stamping trackFilename + durationSec back into that cue. Mirrors the per-line
+// render route. The duration is the cue's placed timeline span (endSec-startSec)
+// when placed, else the requested durationSec, else the engine default —
+// per-engine clampDuration in generateMusic guards the final value.
+const cueRenderSchema = z.object({
+  engine: z.enum(Object.keys(ENGINES)).optional(),
+  durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
+  modelId: z.enum(ALL_MODEL_IDS).optional(),
+});
+router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler(async (req, res) => {
+  const cueIdx = Number(req.params.cueIdx);
+  if (!Number.isInteger(cueIdx) || cueIdx < 0) {
+    throw new ServerError('cueIdx must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_AUDIO_BAD_INDEX',
+    });
+  }
+  const body = validateRequest(cueRenderSchema, req.body ?? {});
+  // Guard the expensive generation behind a 404 + range check first so we don't
+  // burn GPU time only to discover the issue/cue is gone (orphaning the WAV).
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, 'audio');
+  const cues = Array.isArray(issue.stages?.audio?.cues) ? issue.stages.audio.cues : [];
+  const cue = cues[cueIdx];
+  if (!cue) {
+    throw new ServerError(`cueIdx ${cueIdx} out of range (have ${cues.length})`, {
+      status: 404, code: 'PIPELINE_AUDIO_CUE_NOT_FOUND',
+    });
+  }
+  if (!cue.prompt) {
+    throw new ServerError('Cue has no prompt to render — derive cues first', {
+      status: 400, code: 'PIPELINE_AUDIO_CUE_NO_PROMPT',
+    });
+  }
+  // Duration priority: an explicit body override → the placed timeline span
+  // (endSec-startSec when both are placed) → the engine default (generateMusic
+  // resolves undefined to the engine's defaultDurationSec). Engine resolution
+  // priority: body → the cue's own engine hint → the global default.
+  const span = (typeof cue.startSec === 'number' && typeof cue.endSec === 'number' && cue.endSec > cue.startSec)
+    ? cue.endSec - cue.startSec
+    : undefined;
+  const engine = body.engine ?? cue.engine ?? DEFAULT_ENGINE_ID;
+  const gen = await generateMusic({
+    prompt: cue.prompt,
+    engine,
+    durationSec: body.durationSec ?? span,
+    modelId: body.modelId,
+  }).catch((err) => { throw mapServiceError(err); });
+  // Merge against the freshest persisted cue inside the write queue so a
+  // concurrent re-derive can't clobber the render (the cue list is re-read here).
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => {
+      const curCues = Array.isArray(current?.cues) ? current.cues : [];
+      const target = curCues[cueIdx];
+      if (!target) return {};
+      const nextCues = [...curCues];
+      nextCues[cueIdx] = {
+        ...target,
+        engine: gen.engine,
+        trackFilename: gen.filename,
+        durationSec: gen.durationSec,
+      };
+      return { cues: nextCues, errorMessage: '' };
+    },
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    issue: updatedIssue, stage, cueIdx,
+    cue: stage.cues[cueIdx],
+    trackFilename: gen.filename,
+    durationSec: gen.durationSec,
+    engine: gen.engine,
+    modelId: gen.modelId,
+  });
 }));
 
 // Deleting from the library leaves stale `music.trackFilename` pointers on

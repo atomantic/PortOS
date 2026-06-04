@@ -263,6 +263,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-audio-cues": {
+      "name": "Pipeline — Audio Cue Planner",
+      "description": "Break an episode's narrative beats into a small ordered list of per-arc-beat musical cues (one cue per emotional movement, not per scene), each with a self-contained text-to-music prompt + human label. Drives the whole-episode 'generated' audio mode; timing is placed at stitch time from rendered clip durations.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "story-builder-idea-expand": {
       "name": "Story Builder — Idea Expand",
       "description": "Expand a one-line seed idea into a working title, logline, and a world-and-arc-ready premise for the Unified Story Builder's first step (seed intake mode). Seeds the universe starter prompt and the series premise.",
