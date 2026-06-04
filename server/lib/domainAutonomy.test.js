@@ -5,10 +5,7 @@ import {
   AUTONOMY_DOMAINS,
   DOMAIN_IDS,
   normalizeDomainAutonomy,
-  getDomainMode,
-  isDomainOff,
-  isDomainDryRun,
-  isDomainExecute
+  getDomainMode
 } from './domainAutonomy.js';
 
 describe('domainAutonomy constants', () => {
@@ -70,22 +67,5 @@ describe('getDomainMode', () => {
 
   it('falls back to execute for an invalid stored value', () => {
     expect(getDomainMode({ domainAutonomy: { brain: 'haywire' } }, 'brain')).toBe('execute');
-  });
-});
-
-describe('mode predicates', () => {
-  const config = { domainAutonomy: { brain: 'off', memory: 'dry-run', cos: 'execute' } };
-  it('isDomainOff', () => {
-    expect(isDomainOff(config, 'brain')).toBe(true);
-    expect(isDomainOff(config, 'memory')).toBe(false);
-  });
-  it('isDomainDryRun', () => {
-    expect(isDomainDryRun(config, 'memory')).toBe(true);
-    expect(isDomainDryRun(config, 'cos')).toBe(false);
-  });
-  it('isDomainExecute (incl. default for unset/absent)', () => {
-    expect(isDomainExecute(config, 'cos')).toBe(true);
-    expect(isDomainExecute(config, 'messages')).toBe(true); // unset → execute
-    expect(isDomainExecute(config, 'brain')).toBe(false);
   });
 });

@@ -196,7 +196,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `authGate.js` | Express + Socket.IO middleware that gates `/api/*` and `/data/*` behind the password set in `settings.secrets.auth`. No-op when auth is off; emits 401 `AUTH_REQUIRED` (or plain text for `/data/*`) when on and the request has no valid session token. |
-| `domainAutonomy.js` | Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES` (`off`/`dry-run`/`execute`), `getDomainMode(config, id)` + `isDomainOff/DryRun/Execute`, and `normalizeDomainAutonomy(raw)` to coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so no migration needed). |
+| `domainAutonomy.js` | Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES` (`off`/`dry-run`/`execute`), `getDomainMode(config, id)`, and `normalizeDomainAutonomy(raw)` to coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so no migration needed). |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
 | `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |

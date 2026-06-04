@@ -84,7 +84,3 @@ export function getDomainMode(config, domainId) {
   const candidate = config?.domainAutonomy?.[domainId];
   return isValidMode(candidate) ? candidate : DEFAULT_DOMAIN_MODE;
 }
-
-export const isDomainOff = (config, domainId) => getDomainMode(config, domainId) === 'off';
-export const isDomainDryRun = (config, domainId) => getDomainMode(config, domainId) === 'dry-run';
-export const isDomainExecute = (config, domainId) => getDomainMode(config, domainId) === 'execute';
