@@ -97,6 +97,11 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // behind an install hint so a 503 never surprises them mid-prompt.
   const [genPanelOpen, setGenPanelOpen] = useState(false);
   const [generators, setGenerators] = useState(null);
+  // Sentinel discipline (CLAUDE.md "distinguish not-fetched from failed"):
+  // generators === null is "not fetched yet"; generatorsError !== null means a
+  // fetch failed, so the cue panel can offer a Retry instead of showing a
+  // perpetual "Checking engine…" that never resolves.
+  const [generatorsError, setGeneratorsError] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [genPrompt, setGenPrompt] = useState('');
   const [genDuration, setGenDuration] = useState(12);
@@ -170,11 +175,15 @@ export default function AudioStage({ issue, onStageUpdate }) {
 
   // Fetch the generators list (once) without opening the music Generate panel —
   // the cue affordances and the panel both need it to gate on engine readiness.
-  const loadGenerators = async () => {
+  // `force` re-tries after a prior failure (the Retry affordance).
+  const loadGenerators = async (force = false) => {
     if (generators !== null) return;
+    if (generatorsError !== null && !force) return; // failed earlier; wait for explicit retry
+    setGeneratorsError(null);
     // Owns its own error toast → silent so the helper doesn't double-toast.
     const result = await listPipelineMusicGenerators({ silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to load generators');
+      setGeneratorsError(err.message || 'Failed to load generators');
       return null;
     });
     if (result) {
@@ -718,11 +727,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
                   type="button"
                   onClick={handleRenderAllCues}
                   disabled={renderingAllCues || derivingCues || audioModeSaving || !hasRenderableCue}
-                  title={!enginesLoaded
-                    ? 'Checking generator engine…'
-                    : (hasRenderableCue
-                      ? 'Render every cue that has a prompt on an installed engine'
-                      : "No cue has a prompt on an installed engine yet")}
+                  title={generatorsError
+                    ? "Couldn't check the music engine — Retry above"
+                    : !enginesLoaded
+                      ? 'Checking generator engine…'
+                      : (hasRenderableCue
+                        ? 'Render every cue that has a prompt on an installed engine'
+                        : "No cue has a prompt on an installed engine yet")}
                   className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
                 >
                   {renderingAllCues ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -732,7 +743,18 @@ export default function AudioStage({ issue, onStageUpdate }) {
             </div>
           </div>
 
-          {enginesLoaded && !cueEngineReady ? (
+          {generatorsError ? (
+            <p className="text-xs text-port-error flex items-center gap-2">
+              Couldn't check the music engine — render is unavailable until it loads.
+              <button
+                type="button"
+                onClick={() => void loadGenerators(true)}
+                className="px-2 py-0.5 rounded border border-port-border text-gray-300 hover:border-port-accent/50"
+              >
+                Retry
+              </button>
+            </p>
+          ) : enginesLoaded && !cueEngineReady ? (
             <p className="text-xs text-port-warning">
               {cueEngine?.name || 'The music engine'} isn't installed yet — you can derive and edit cue
               prompts, but rendering is disabled until its runtime is bootstrapped.
@@ -799,12 +821,14 @@ export default function AudioStage({ issue, onStageUpdate }) {
                         <button
                           type="button"
                           onClick={() => handleRenderCue(i)}
-                          disabled={isRendering || renderingAllCues || cuePromptSaving || !thisCueEngineReady || !promptValue.trim()}
-                          title={!enginesLoaded
-                            ? 'Checking generator engine…'
-                            : (!thisCueEngineReady
-                              ? `${thisCueEngine?.name || 'The music engine'} isn't installed — render is unavailable`
-                              : (promptValue.trim() ? 'Render this cue as music' : 'Add a prompt first'))}
+                          disabled={isRendering || renderingAllCues || derivingCues || cuePromptSaving || !thisCueEngineReady || !promptValue.trim()}
+                          title={generatorsError
+                            ? "Couldn't check the music engine — Retry above"
+                            : !enginesLoaded
+                              ? 'Checking generator engine…'
+                              : (!thisCueEngineReady
+                                ? `${thisCueEngine?.name || 'The music engine'} isn't installed — render is unavailable`
+                                : (promptValue.trim() ? 'Render this cue as music' : 'Add a prompt first'))}
                           className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
                         >
                           {isRendering ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}

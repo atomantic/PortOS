@@ -243,6 +243,21 @@ describe('AudioStage — whole-episode audio (#863)', () => {
     expect(savedCues[0].trackFilename).toBe('cue.wav');
   });
 
+  it('surfaces a Retry when the generators fetch fails, instead of a perpetual "Checking" state', async () => {
+    listPipelineMusicGenerators.mockRejectedValueOnce(new Error('offline'));
+    const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'p' }];
+    const issue = makeIssue({ audioMode: 'generated', cues });
+    render(<AudioStage issue={issue} onStageUpdate={() => {}} />);
+
+    const retry = await screen.findByRole('button', { name: /Retry/i });
+    expect(screen.getByText(/Couldn't check the music engine/i)).toBeInTheDocument();
+
+    // Retry re-fetches; this time it succeeds and the error clears.
+    listPipelineMusicGenerators.mockResolvedValueOnce(READY_ENGINE);
+    await userEvent.click(retry);
+    await waitFor(() => expect(screen.queryByText(/Couldn't check the music engine/i)).not.toBeInTheDocument());
+  });
+
   it('disables cue render when the engine is not installed', async () => {
     listPipelineMusicGenerators.mockResolvedValue(NOT_READY_ENGINE);
     const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'warm pads', startSec: 0, endSec: 10 }];
