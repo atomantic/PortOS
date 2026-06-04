@@ -28,6 +28,11 @@ const IDENTITY_DOC = {
   category: 'core'
 };
 
+// The vision helper defaults to a short-answer budget (500); the structured
+// JSON response here (four prose fields, descriptors, summary, and a woven
+// markdown document) needs considerably more headroom.
+const VISION_MAX_TOKENS = 1500;
+
 /**
  * Analyze a photo of the user and extract visible appearance / presentation
  * descriptors.
@@ -59,18 +64,22 @@ export async function analyzeIdentityImage({ imageDataUrl, providerId, model }) 
   }
 
   // describeImageDataUrl throws on provider/transport errors; translate to the
-  // { error } shape the rest of the digital-twin services use.
-  const text = await describeImageDataUrl({ dataUrl: imageDataUrl, prompt, providerId, model })
-    .catch((err) => ({ __error: err?.message || 'Vision request failed' }));
+  // { error } shape the rest of the digital-twin services use. The structured
+  // JSON (profiles + woven documentMarkdown) needs more than the vision
+  // helper's short-answer default budget, so raise maxTokens or the reply
+  // truncates mid-JSON and fails to parse.
+  const vision = await describeImageDataUrl({ dataUrl: imageDataUrl, prompt, providerId, model, maxTokens: VISION_MAX_TOKENS })
+    .then((text) => ({ text }))
+    .catch((err) => ({ error: err?.message || 'Vision request failed' }));
 
-  if (text && typeof text === 'object' && text.__error) {
-    return { error: text.__error };
+  if (vision.error) {
+    return { error: vision.error };
   }
-  if (!text) {
+  if (!vision.text) {
     return { error: 'Vision model returned an empty response' };
   }
 
-  return parseIdentityImage(text);
+  return parseIdentityImage(vision.text);
 }
 
 /**

@@ -17,6 +17,12 @@ import ProviderModelSelector from '../../ProviderModelSelector';
 // JSON body limit and vision providers don't choke on huge payloads.
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 
+// Mirror the server's identityImageInputSchema regex so an unsupported format
+// (e.g. an iPhone HEIC) is rejected here with a clear message naming the real
+// cause, instead of passing the loose image/* gate and failing a generic 400.
+const ACCEPTED_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const ACCEPT_ATTR = ACCEPTED_MIME.join(',');
+
 const DETAIL_FIELDS = [
   { key: 'appearance', label: 'Appearance' },
   { key: 'presentation', label: 'Presentation' },
@@ -40,8 +46,8 @@ export default function AppearanceTab({ onRefresh }) {
 
   const handleFile = (file) => {
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      toast.error('Please choose an image file');
+    if (!ACCEPTED_MIME.includes(file.type)) {
+      toast.error('Unsupported format — use a PNG, JPEG, GIF, or WebP image');
       return;
     }
     if (file.size > MAX_IMAGE_BYTES) {
@@ -157,7 +163,7 @@ export default function AppearanceTab({ onRefresh }) {
               id="appearance-image"
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept={ACCEPT_ATTR}
               onChange={(e) => handleFile(e.target.files?.[0])}
               disabled={analyzing}
               className="hidden"

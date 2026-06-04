@@ -127,9 +127,12 @@ describe('analyzeIdentityImage', () => {
     const r = await analyzeIdentityImage({ imageDataUrl: DATA_URL, providerId: 'p1', model: 'm' });
     expect(r.error).toBeUndefined();
     expect(r.suggestedDocument.filename).toBe('APPEARANCE.md');
+    // Must raise the vision token budget above the short-answer default, or the
+    // structured JSON reply truncates mid-output and fails to parse.
     expect(describeImageDataUrl).toHaveBeenCalledWith(
       expect.objectContaining({ dataUrl: DATA_URL, prompt: 'PROMPT', providerId: 'p1', model: 'm' })
     );
+    expect(describeImageDataUrl.mock.calls[0][0].maxTokens).toBeGreaterThan(500);
   });
 });
 
