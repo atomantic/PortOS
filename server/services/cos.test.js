@@ -680,6 +680,15 @@ describe('cos.js source — priority + capacity invariants', () => {
     const execFn = extractFnBody(SCHED_SRC, SCHED_SRC.indexOf('export async function executeScheduledJob'));
     expect(execFn, 'executeScheduledJob must read the cos autonomy mode').toMatch(/getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)/);
     expect(execFn, 'executeScheduledJob must fence on execute').toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
+    // The autonomy-skip branch must record a gate-skip (advances lastRun) BEFORE
+    // re-registering — otherwise a past-due job re-registers with stale lastRun
+    // and refires every 1s while off/dry-run. Pin that the skip branch calls
+    // recordJobGateSkip ahead of registerSingleJobSchedule.
+    const skipBranch = execFn.slice(execFn.indexOf("cosAutonomyMode !== 'execute'"));
+    const recordIdx = skipBranch.indexOf('recordJobGateSkip');
+    const reregIdx = skipBranch.indexOf('registerSingleJobSchedule');
+    expect(recordIdx, 'autonomy-skip must call recordJobGateSkip').toBeGreaterThan(-1);
+    expect(recordIdx, 'recordJobGateSkip must precede re-registration (no 1s refire loop)').toBeLessThan(reregIdx);
     // The improvement-check timer must gate its queueEligibleImprovementTasks call.
     expect(SCHED_SRC, 'improvement-check timer must gate queueing on cos === execute')
       .toMatch(/idleReviewEnabled\s*&&\s*getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)\s*===\s*['"]execute['"]/);

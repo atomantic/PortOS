@@ -176,13 +176,19 @@ export async function executeScheduledJob(jobId) {
   // Per-domain CoS auto-run gate: a SCHEDULED job firing automatically is an
   // autonomous action, so off/dry-run withhold it (dry-run logs what it would
   // have run). Manual /jobs/:id triggers run through runJobNow, not this path,
-  // so explicit user intent is unaffected. Re-register so it fires once the
-  // domain is dialed back to execute.
+  // so explicit user intent is unaffected. Record a skip first (advances
+  // lastRun without incrementing runCount, exactly like the gate-skip path) so
+  // re-registration computes a FUTURE fire time — re-registering a past-due job
+  // with stale lastRun would refire every second (the same 1s-loop the spawn
+  // branch's comment warns about).
   const cosAutonomyMode = getDomainMode(state.config, 'cos');
   if (cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode === 'dry-run') {
       emitLog('info', `[dry-run] CoS auto-run would fire scheduled job: ${job.name}`, { jobId, domainAutonomy: 'cos' });
     }
+    await recordJobGateSkip(jobId).catch(err =>
+      console.error(`❌ Failed to record autonomy-skip for ${jobId}: ${err.message}`)
+    );
     await registerSingleJobSchedule(jobId);
     return;
   }
