@@ -16,18 +16,18 @@
     "@dnd-kit/core": "6.3.1",
     "@dnd-kit/sortable": "10.0.0",
     "@dnd-kit/utilities": "3.2.2",
-    "@react-three/drei": "9.122.0",
-    "@react-three/fiber": "8.18.0",
+    "@react-three/drei": "10.7.7",
+    "@react-three/fiber": "9.6.1",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
     "lucide-react": "0.562.0",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
     "react-router-dom": "7.5.2",
     "recharts": "3.7.0",
     "socket.io-client": "4.8.3",
-    "three": "0.182.0"
+    "three": "0.184.0"
   },
   "devDependencies": {
     "@eslint/js": "9.23.0",
@@ -50,6 +50,7 @@
     "socket.io-parser": "4.2.6",
     "minimatch@3": {
       "brace-expansion": "1.1.12"
-    }
+    },
+    "three": "0.184.0"
   }
 }

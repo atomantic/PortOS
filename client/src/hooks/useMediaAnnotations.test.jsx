@@ -26,6 +26,16 @@ import { useMediaAnnotations } from './useMediaAnnotations.js';
 
 const emit = (payload) => act(() => { handlers.get('media:annotation:updated')(payload); });
 
+// Mount the hook, wait until it has subscribed to the socket, then flush the
+// mount fetch's setAnnotations commit so the initial enrichAll({}) can't land
+// mid-test and swap the annotations object reference under React 19.
+async function mountHook() {
+  const { result } = renderHook(() => useMediaAnnotations());
+  await waitFor(() => expect(handlers.has('media:annotation:updated')).toBe(true));
+  await act(async () => {});
+  return result;
+}
+
 describe('useMediaAnnotations — socket bail-out guard', () => {
   beforeEach(() => {
     handlers.clear();
@@ -38,8 +48,7 @@ describe('useMediaAnnotations — socket bail-out guard', () => {
   });
 
   it('applies a new entry from the socket broadcast', async () => {
-    const { result } = renderHook(() => useMediaAnnotations());
-    await waitFor(() => expect(handlers.has('media:annotation:updated')).toBe(true));
+    const result = await mountHook();
 
     emit({ key: 'a.png', entry: { own: { starred: true, note: '', updatedAt: '2026-01-01T00:00:00Z' } } });
 
@@ -47,8 +56,7 @@ describe('useMediaAnnotations — socket bail-out guard', () => {
   });
 
   it('returns the same annotations reference when an identical entry is rebroadcast', async () => {
-    const { result } = renderHook(() => useMediaAnnotations());
-    await waitFor(() => expect(handlers.has('media:annotation:updated')).toBe(true));
+    const result = await mountHook();
 
     const entry = { own: { starred: true, note: 'hi', updatedAt: '2026-01-01T00:00:00Z' } };
     emit({ key: 'a.png', entry });
@@ -61,8 +69,7 @@ describe('useMediaAnnotations — socket bail-out guard', () => {
   });
 
   it('still re-renders when a field changes (e.g. a newer updatedAt)', async () => {
-    const { result } = renderHook(() => useMediaAnnotations());
-    await waitFor(() => expect(handlers.has('media:annotation:updated')).toBe(true));
+    const result = await mountHook();
 
     emit({ key: 'a.png', entry: { own: { starred: false, note: 'first', updatedAt: '2026-01-01T00:00:00Z' } } });
     const first = result.current.annotations;
@@ -74,8 +81,7 @@ describe('useMediaAnnotations — socket bail-out guard', () => {
   });
 
   it('returns the same reference when deleting a key that was never present', async () => {
-    const { result } = renderHook(() => useMediaAnnotations());
-    await waitFor(() => expect(handlers.has('media:annotation:updated')).toBe(true));
+    const result = await mountHook();
 
     const before = result.current.annotations;
     emit({ key: 'missing.png', entry: null });
@@ -84,8 +90,7 @@ describe('useMediaAnnotations — socket bail-out guard', () => {
   });
 
   it('removes an existing key when the broadcast clears it', async () => {
-    const { result } = renderHook(() => useMediaAnnotations());
-    await waitFor(() => expect(handlers.has('media:annotation:updated')).toBe(true));
+    const result = await mountHook();
 
     emit({ key: 'a.png', entry: { own: { starred: true, note: '', updatedAt: '2026-01-01T00:00:00Z' } } });
     expect(result.current.annotations['a.png']).toBeTruthy();

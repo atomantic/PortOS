@@ -453,6 +453,10 @@ describe('StoryBuilder — detail stepper', () => {
     });
     renderAt('/story-builder/stb-1/idea');
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Idea' })).toBeTruthy());
+    // The provider options load async (getProviders) — wait for the "Claude"
+    // option to render before selecting it, or the <select> has no matching
+    // option and resets the value to "".
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Claude' })).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText('AI'), { target: { value: 'p1' } });
     await waitFor(() => expect(api.updateStorySession).toHaveBeenCalledWith(
       'stb-1', { llm: { provider: 'p1', model: null } }, expect.anything(),

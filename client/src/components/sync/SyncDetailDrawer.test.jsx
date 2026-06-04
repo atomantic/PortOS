@@ -228,7 +228,9 @@ describe('SyncDetailDrawer', () => {
   it('shows collection thumbnails when collection is fetched', async () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText('My Collection')).toBeInTheDocument());
+    // The collection name renders both in the drawer header (<p>) and the
+    // preview card (<h3>), so scope the assertion to the preview heading.
+    await screen.findByRole('heading', { name: 'My Collection' });
     expect(screen.getByText('2 items')).toBeInTheDocument();
     const thumbs = screen.getAllByTestId('media-image');
     expect(thumbs.length).toBeGreaterThan(0);
@@ -281,7 +283,7 @@ describe('SyncDetailDrawer', () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
     // Wait for collection to load
-    await waitFor(() => screen.getByText('My Collection'));
+    await screen.findByRole('heading', { name: 'My Collection' });
     fireEvent.click(screen.getByRole('button', { name: /pull missing metadata/i }));
     await waitFor(() => expect(mockPullMissingMetadata).toHaveBeenCalledWith(
       ['img1.png', 'img2.png'], { silent: true },
@@ -293,7 +295,7 @@ describe('SyncDetailDrawer', () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     mockPullMissingMetadata.mockResolvedValue({ recovered: 1, attempted: 2 });
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
-    await waitFor(() => screen.getByText('My Collection'));
+    await screen.findByRole('heading', { name: 'My Collection' });
     fireEvent.click(screen.getByRole('button', { name: /pull missing metadata/i }));
     await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(expect.stringMatching(/pulled 1\/2/i)));
   });
@@ -302,7 +304,7 @@ describe('SyncDetailDrawer', () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     mockPullMissingMetadata.mockResolvedValue({ recovered: 0, attempted: 2 });
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
-    await waitFor(() => screen.getByText('My Collection'));
+    await screen.findByRole('heading', { name: 'My Collection' });
     fireEvent.click(screen.getByRole('button', { name: /pull missing metadata/i }));
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(expect.stringMatching(/no missing metadata found \(2 checked\)/i)));
     expect(mockToast.success).not.toHaveBeenCalled();
@@ -365,7 +367,7 @@ describe('SyncDetailDrawer', () => {
   it('fetches the collection only once (preview + pull share the same state)', async () => {
     mockGetMediaCollection.mockResolvedValue(COLLECTION_DATA);
     render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
-    await waitFor(() => screen.getByText('My Collection'));
+    await screen.findByRole('heading', { name: 'My Collection' });
     expect(mockGetMediaCollection).toHaveBeenCalledTimes(1);
     // Clicking pull reads from the already-loaded state — must NOT re-fetch
     // the collection before calling pullMissingMetadata.
