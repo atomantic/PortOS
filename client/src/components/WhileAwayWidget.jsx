@@ -22,8 +22,8 @@ const LAST_SEEN_KEY = 'portos.whileAway.lastSeen';
 const readLastSeen = () => {
   // localStorage access can throw in private-mode / storage-disabled /
   // security-error contexts — never let that crash the dashboard render.
-  // (Same guard idiom as utils/timeWindow.js.)
-  if (typeof window === 'undefined' || !window.localStorage) return null;
+  // Even *reading* the `window.localStorage` property can throw in some
+  // sandboxed iframes, so it's acquired inside the try (not before it).
   let raw = null;
   try { raw = window.localStorage.getItem(LAST_SEEN_KEY); }
   catch { return null; }
@@ -37,9 +37,9 @@ const readLastSeen = () => {
 };
 
 const writeLastSeen = (iso) => {
-  // A write failure (quota / disabled) must not break "Mark as seen" — the
-  // subsequent refetch still runs; the window just isn't persisted this time.
-  if (typeof window === 'undefined' || !window.localStorage) return;
+  // A write failure (quota / disabled / property-access throw) must not break
+  // "Mark as seen" — the subsequent refetch still runs; the window just isn't
+  // persisted this time.
   try { window.localStorage.setItem(LAST_SEEN_KEY, iso); }
   catch { /* private mode / quota — graceful no-op */ }
 };
@@ -71,14 +71,17 @@ export default function WhileAwayWidget() {
   // The marker captured at fetch time, so "Mark as seen" and the header label
   // reflect the window we actually queried (not a value that drifted since).
   const sinceRef = useRef(null);
+  // A socket-driven refresh can land after the widget unmounts — guard the
+  // async setState so it doesn't fire into the void (CLAUDE.md unmount rule).
+  const mountedRef = useRef(true);
 
   const load = useCallback(() => {
     const since = readLastSeen();
     sinceRef.current = since;
     return api.getCosWhileAwayActivity(since, { silent: true })
-      .then((res) => setData(res))
+      .then((res) => { if (mountedRef.current) setData(res); })
       .catch(() => null)
-      .finally(() => setLoading(false));
+      .finally(() => { if (mountedRef.current) setLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -87,7 +90,10 @@ export default function WhileAwayWidget() {
     // refresh on completion so the card stays live (mirrors ReviewHubCard).
     const refresh = () => load();
     socket.on('cos:agent:completed', refresh);
-    return () => socket.off('cos:agent:completed', refresh);
+    return () => {
+      mountedRef.current = false;
+      socket.off('cos:agent:completed', refresh);
+    };
   }, [load]);
 
   const markSeen = () => {
@@ -135,6 +141,7 @@ export default function WhileAwayWidget() {
             onClick={markSeen}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-bg border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors shrink-0 min-h-[36px]"
             title="Reset the window to now"
+            aria-label="Mark as seen — reset the window to now"
           >
             <Eye size={13} />
             <span className="hidden sm:inline">Mark as seen</span>

@@ -36,7 +36,7 @@ const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActi
 //
 // `module` is optional micrographic chrome — when set, the dashboard
 // renders a SchematicLabel ("MODULE.04 // ALERTS ●") as a tab on the
-// widget's top border. Six widgets carry this by default; the rest are
+// widget's top border. Several widgets carry this by default; the rest are
 // label-free so the dashboard doesn't turn into a wall of HUD chrome.
 export const WIDGETS = [
   { id: 'quick-brain',       label: 'Quick Brain Capture',   Component: QuickBrainCapture,      width: 'half',    defaultH: 3 },

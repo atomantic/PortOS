@@ -55,7 +55,7 @@ describe('migration 070 — seed while-away widget into default + agent-watch la
 
     const def = after.layouts.find((l) => l.id === 'default');
     expect(def.widgets).toContain('while-away');
-    expect(def.grid.find((g) => g.id === 'while-away')).toEqual({ id: 'while-away', x: 9, y: 14, w: 3, h: 5 });
+    expect(def.grid.find((g) => g.id === 'while-away')).toEqual({ id: 'while-away', x: 9, y: 15, w: 3, h: 3 });
 
     const watch = after.layouts.find((l) => l.id === 'agent-watch');
     expect(watch.widgets).toContain('while-away');
@@ -141,5 +141,29 @@ describe('migration 070 — seed while-away widget into default + agent-watch la
     expect(newEntry).toBeDefined();
     expect(newEntry.x).toBe(0);
     expect(newEntry.y).toBeGreaterThanOrEqual(19);
+  });
+
+  it('keeps the agent-watch preferred width (6) when the slot is occupied', async () => {
+    writeJson(layoutsPath, {
+      activeLayoutId: 'agent-watch',
+      layouts: [
+        {
+          id: 'agent-watch',
+          name: 'Agent Watch',
+          builtIn: true,
+          widgets: ['system-health'],
+          // Occupies the preferred slot (x:6,y:3) so the fallback path runs.
+          grid: [{ id: 'system-health', x: 6, y: 3, w: 6, h: 5 }],
+        },
+      ],
+    });
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(1);
+    const after = readJson(layoutsPath);
+    const newEntry = after.layouts[0].grid.find((g) => g.id === 'while-away');
+    expect(newEntry).toBeDefined();
+    // Fallback must carry the layout's preferred width, not the bare default.
+    expect(newEntry.w).toBe(6);
+    expect(newEntry.h).toBe(5);
   });
 });

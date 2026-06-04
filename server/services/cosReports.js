@@ -12,6 +12,17 @@ import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './co
 import { getAgentsByDate } from './cosAgents.js';
 import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
 
+// A completed agent's work duration in ms: prefer the recorded `result.duration`,
+// else derive from completedAt − startedAt. Clamped to >=0 so a clock-skewed
+// record (completedAt < startedAt) can't surface a negative duration.
+function agentDurationMs(a) {
+  const d = a.result?.duration
+    || (a.completedAt && a.startedAt
+      ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime()
+      : 0);
+  return d > 0 ? d : 0;
+}
+
 export async function generateReport(date = null) {
   const reportDate = date || new Date().toISOString().split('T')[0];
   const state = await loadState();
@@ -117,12 +128,8 @@ export async function getTodayActivity() {
   const succeeded = todayAgents.filter(a => a.result?.success);
   const failed = todayAgents.filter(a => !a.result?.success);
 
-  // Calculate total time worked (sum of agent durations, fallback to completedAt - startedAt)
-  const totalDurationMs = todayAgents.reduce((sum, a) => {
-    const duration = a.result?.duration
-      || (a.completedAt && a.startedAt ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime() : 0);
-    return sum + (duration > 0 ? duration : 0);
-  }, 0);
+  // Calculate total time worked (sum of agent durations)
+  const totalDurationMs = todayAgents.reduce((sum, a) => sum + agentDurationMs(a), 0);
 
   // Get currently running agents
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
@@ -138,8 +145,7 @@ export async function getTodayActivity() {
       taskId: a.taskId,
       description: a.metadata?.taskDescription?.substring(0, 100) || a.taskId,
       taskType: a.metadata?.analysisType || a.metadata?.taskType || 'task',
-      duration: a.result?.duration
-        || (a.completedAt && a.startedAt ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime() : 0),
+      duration: agentDurationMs(a),
       completedAt: a.completedAt
     }))
     .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
@@ -180,18 +186,8 @@ function summarizeAwayActivity(agents, sinceIso) {
   const succeeded = agents.filter(a => a.result?.success);
   const failed = agents.filter(a => !a.result?.success);
 
-  // Clamp to >=0 so a clock-skewed completedAt < startedAt can't produce a
-  // negative duration in either the per-card field or the rollup.
-  const durationOf = (a) => {
-    const d = a.result?.duration
-      || (a.completedAt && a.startedAt
-        ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime()
-        : 0);
-    return d > 0 ? d : 0;
-  };
-
   const toCard = (a) => {
-    const durationMs = durationOf(a);
+    const durationMs = agentDurationMs(a);
     return {
       id: a.id,
       taskId: a.taskId,
@@ -208,7 +204,7 @@ function summarizeAwayActivity(agents, sinceIso) {
 
   // Most-recent first so the freshest work tops each list.
   const byRecency = (a, b) => new Date(b.completedAt) - new Date(a.completedAt);
-  const totalDurationMs = agents.reduce((sum, a) => sum + durationOf(a), 0);
+  const totalDurationMs = agents.reduce((sum, a) => sum + agentDurationMs(a), 0);
 
   return {
     sinceIso,

@@ -108,10 +108,12 @@ const DEFAULT_LAYOUTS = [
       { id: 'quick-stats',      x: 3,  y: 10, w: 3, h: 3 },
       { id: 'goal-progress',    x: 6,  y: 10, w: 3, h: 4 },
       { id: 'network-exposure', x: 9,  y: 10, w: 3, h: 5 },
-      // Row 14–17: lower-priority + cos
+      // Row 14–17: lower-priority + cos. while-away fills the x9–11 column
+      // in rows 15–17 — below network-exposure (ends at row 14) and above
+      // hourly-activity (starts at row 18), so it overlaps neither.
       { id: 'decision-log',     x: 0,  y: 14, w: 4, h: 2 },
       { id: 'cos',              x: 4,  y: 14, w: 5, h: 4 },
-      { id: 'while-away',       x: 9,  y: 14, w: 3, h: 5 },
+      { id: 'while-away',       x: 9,  y: 15, w: 3, h: 3 },
       // Row 18+: full-width visualizations + apps
       { id: 'hourly-activity',  x: 0,  y: 18, w: 12, h: 3 },
       { id: 'apps',             x: 0,  y: 21, w: 12, h: 8 },

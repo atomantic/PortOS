@@ -22,7 +22,7 @@ const WIDGET_H = 5;
 // DEFAULT_LAYOUTS — edits here must match that file or fresh installs +
 // migrated installs diverge. `agent-watch` gives the card a wider slot.
 const PREFERRED_SLOTS = {
-  default: { x: 9, y: 14, w: WIDGET_W, h: WIDGET_H },
+  default: { x: 9, y: 15, w: WIDGET_W, h: 3 },
   'agent-watch': { x: 6, y: 3, w: 6, h: WIDGET_H },
 };
 const TARGET_LAYOUT_IDS = Object.keys(PREFERRED_SLOTS);
@@ -45,9 +45,17 @@ function pickGridEntry(grid, layoutId) {
     if (!collidesWith(grid, candidate)) return candidate;
   }
   // Fall back to a clean row below everything else if the preferred slot is
-  // occupied (a user rearranged the layout but kept the built-in id).
+  // occupied (a user rearranged the layout but kept the built-in id). Carry
+  // the layout's preferred width/height so a collided agent-watch heal still
+  // gets the intended 6-wide card, not the bare WIDGET_W default.
   const bottom = grid.reduce((max, it) => Math.max(max, (it.y ?? 0) + (it.h ?? 0)), 0);
-  return { id: WIDGET_ID, x: 0, y: bottom, w: WIDGET_W, h: WIDGET_H };
+  return {
+    id: WIDGET_ID,
+    x: 0,
+    y: bottom,
+    w: preferred?.w ?? WIDGET_W,
+    h: preferred?.h ?? WIDGET_H
+  };
 }
 
 function applyToLayout(layout) {

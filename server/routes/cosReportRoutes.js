@@ -14,11 +14,15 @@ import { validateRequest } from '../lib/validation.js';
 const router = Router();
 
 // `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:
-// an absent/garbage value is clamped server-side to a 24h fallback, so we only
-// reject a malformed datetime to keep the contract honest — we don't 400 on
-// omission.
+// `getWhileAwayActivity` already clamps an absent/garbage/future marker to a
+// 24h fallback, so a malformed value preprocesses to `undefined` (let the
+// service apply its fallback) rather than 400-ing the dashboard card into a
+// blank state. A valid datetime string passes through unchanged.
 const whileAwayQuerySchema = z.object({
-  since: z.string().datetime({ offset: true }).optional()
+  since: z.preprocess(
+    (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : undefined),
+    z.string().optional()
+  )
 });
 
 // GET /api/cos/reports - List all reports
