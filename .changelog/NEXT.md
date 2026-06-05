@@ -1,0 +1,5 @@
+# Unreleased
+
+## Added
+
+- **Verified, restorable database backups** — PostgreSQL now gets the same backup safety as your files. Every backup snapshot already dumped the database alongside the file copy, but a failed or skipped dump was silent — a green "backup complete" could hide that your database (where Memory and the creative catalog live) was never actually captured. Now the dump outcome is explicit and verified: a successful dump reports its size and table count, a dump that's not applicable (you're running without Postgres) reads as a neutral "not configured," and a dump that *should* have worked but failed marks the whole backup "degraded" and raises a warning toast — even on unattended scheduled runs — so you find out the day it breaks, not when you need to restore. The dump is hashed into the snapshot manifest so a truncated file is detectable, and the Backup settings tab now shows the last run's database status and lists your snapshots with a one-click **Restore DB** action (it previews what would be restored, then asks you to confirm before replaying the dump into the live database).
