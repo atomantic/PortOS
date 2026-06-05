@@ -45,7 +45,7 @@ import CityDepthOfField from './CityDepthOfField';
 import { cityDayMix } from './cityConstants';
 import ErrorBoundary from '../ErrorBoundary';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -224,6 +224,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         settings={settings}
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
+        playback={playback}
       />
       <CityDataStreams positions={positions} apps={apps} agentMap={agentMap} />
       <CityTraffic positions={positions} />

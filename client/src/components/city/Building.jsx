@@ -341,11 +341,24 @@ function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMu
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0 }) {
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
+  const groupRef = useRef();
   const [hovered, setHovered] = useState(false);
+
+  // Construction/teardown animation state (playback/scrubber only — issue #967).
+  // In live mode buildings appear/disappear instantly as today; during playback a
+  // newly-present building scales in from 0 (construction) and a departing one
+  // scales out to 0 (teardown) before the cluster unmounts it.
+  const exiting = transitionState === 'exiting';
+  // Start small only when entering under playback; otherwise full size.
+  const initialScale = playback && !exiting ? 0.001 : 1;
+  const exitedFiredRef = useRef(false);
+  // Smoothly-lerped status color so a status change recolors over a beat rather
+  // than snapping. Seeded to the current color; the target is recomputed below.
+  const displayedColorRef = useRef(null);
 
   const height = getBuildingHeight(app);
   const edgeColor = getBuildingColor(app.overallStatus, app.archived);
@@ -394,9 +407,35 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
     return (app.name || '').replace(/[-_.]/g, ' ').toUpperCase();
   }, [app.name]);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, delta) => {
+    // Construction/teardown scale animation (playback only). damp() eases the
+    // group scale toward 1 (entering) or 0 (exiting); reaching ~0 on exit fires
+    // onExited so the cluster can drop the building from the tree.
+    if (groupRef.current && playback) {
+      const target = exiting ? 0 : 1;
+      const cur = groupRef.current.scale.x;
+      const next = THREE.MathUtils.damp(cur, target, 6, delta || 0.016);
+      groupRef.current.scale.setScalar(next);
+      if (exiting && next < 0.02 && !exitedFiredRef.current) {
+        exitedFiredRef.current = true;
+        onExited?.(app.id);
+      }
+    } else if (groupRef.current && groupRef.current.scale.x !== 1) {
+      // Live mode (or after entering completes): ensure full size.
+      groupRef.current.scale.setScalar(1);
+    }
+
     if (!meshRef.current) return;
     const t = clock.getElapsedTime();
+
+    // Status recolor: ease the body emissive toward the current status color so a
+    // scrub that flips online→stopped fades cyan→red rather than snapping.
+    const mat = meshRef.current.material;
+    if (mat?.emissive) {
+      if (!displayedColorRef.current) displayedColorRef.current = new THREE.Color(edgeColor);
+      displayedColorRef.current.lerp(new THREE.Color(edgeColor), Math.min(1, (delta || 0.016) * 6));
+      mat.emissive.copy(displayedColorRef.current);
+    }
 
     const nb = neonBrightness;
     const baseIntensity = (isOnline ? 0.5 : isStopped ? 0.35 : 0.2) * nb;
@@ -423,7 +462,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   });
 
   return (
-    <group position={[position.x, 0, position.z]}>
+    <group ref={groupRef} position={[position.x, 0, position.z]} scale={initialScale}>
       {/* Building body with window texture + pixel art icon */}
       <mesh
         ref={meshRef}

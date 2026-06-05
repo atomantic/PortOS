@@ -110,6 +110,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCanonPatch` | Optimistic canon-entry patch: rebuild the kind list with one entry mutated, apply locally, PATCH the universe, re-apply the server copy. Targets + staleness-guards on the loaded record's `universe.id` so a mid-flight universe swap can't cross-PATCH or resurrect stale state. `apply` is `setUniverse` or `onUniverseChange`. | Inline canon-field edits on a universe (UniverseCanonSection, NounsStage). Don't re-roll the optimistic-then-confirm dance. |
 | `useCityAudio` | CyberCity ambient audio. | CyberCity only. |
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
+| `useCityPlayback` | Timeline-scrubber transport: loads the snapshot series, steps a frame index, play/pause/speed. | CyberCity playback (history) mode only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useCodeReviewDefaults` | Global Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model) via a small Provider/hook pair. | TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown. |
 | `useCatalogTypes` | Catalog ingredient type registry (system + user-defined) merged with the static fallback via a Provider/hook pair; synchronous fallback to the built-in six so first render never blanks. | Catalog list/picker/editor; anywhere the catalog type list/lookup is needed. |

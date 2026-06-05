@@ -95,6 +95,7 @@ export * from './useAppDeploy.js';
 export * from './useAppOperation.js';
 export * from './useCanonPatch.js';
 export * from './useCityData.js';
+export * from './useCityPlayback.js';
 export * from './useDeathClock.js';
 export * from './useGoalDetail.js';
 export * from './usePostSession.js';

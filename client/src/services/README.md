@@ -101,6 +101,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiOpenClaw.js` | File browser / picker backend. |
 | `apiPalette.js` | Command-palette manifest + action dispatch. |
 | `apiVoice.js` | Voice synthesis / processing. |
+| `apiCity.js` | CyberCity snapshots — historical city-state series for the timeline scrubber (GET /snapshots, GET /config, POST /capture). |
 
 ## Browser-facing (DOM, voice, build) — not pure API wrappers
 

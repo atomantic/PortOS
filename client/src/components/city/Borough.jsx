@@ -5,7 +5,7 @@ import Building from './Building';
 import AgentEntity from './AgentEntity';
 import ProcessBuilding from './ProcessBuilding';
 
-export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false, settings }) {
+export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false, settings, playback = false, transitionState = null, onExited }) {
   const agentData = agentMap.get(app.id);
   const agents = agentData?.agents || [];
   const height = getBuildingHeight(app);
@@ -50,6 +50,9 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
         isProximity={isProximity}
         dimmed={dimmed}
         dayMix={dayMix}
+        playback={playback}
+        transitionState={transitionState}
+        onExited={onExited}
       />
 
       {/* Process buildings in ring around main building */}

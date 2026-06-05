@@ -82,6 +82,7 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | Module | Purpose |
 |---|---|
+| `cityPlaybackFrame.js` | Map a recorded CyberCity snapshot frame onto the prop shape CityScene/CityHud consume for the timeline scrubber (`mergeFrameIntoCityProps`, `buildPlaybackApps`, `buildPlaybackAgentMap`, `isPlayableFrame`). Honors `schemaVersion` and the capture-side null sentinels; returns only snapshot-backed props so unfed landmarks stay live. |
 | `universeBuilderExpand.js` | `mergeExpandIntoDraft(draft, result)` — pure merge of a Universe Builder draft with the LLM expand-API response (lock honoring, category/sheet merge with `kind` precedence, canon dedupe by name/slugline/alias). Also exports `mergeVariations`, `mergeCanonByName`, and `extractPreservedFromDraft` for callers that need the building blocks (per-category Generate, save-time refetch+merge). |
 | `wrSceneCursor.js` | Resolve which script scene the editor caret sits in (`sceneAtCursor`, `sceneAnchorIndex`) — inverse of WorkEditor's jump-to-scene text search; drives the live render preview's "scene at cursor" target. |
 | `writingGuide.js` | Canonical Writers Room reference data + craft principles rendered by the Guide page (`/writers-room/guide`): `WRITING_LENGTH_TARGETS` (microfiction→novel word/char bands), `BOOK_LENGTH_ESTIMATES` (page-based), `WRITING_PRINCIPLES`, `PLANNED_ANALYSES` (e.g. the emotional-roadmap evaluator), and `classifyByWordCount(n)` for labelling a draft's length. Future word-count gauges / length checks read from here so targets don't drift from the docs. |
