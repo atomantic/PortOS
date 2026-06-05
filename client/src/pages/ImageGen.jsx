@@ -813,7 +813,7 @@ export default function ImageGen() {
   // completed images so the queued ones become visible as they land.
   // Async-mode only; external is synchronous so submitting N would block N×.
   const queueAdditional = async (count = 1) => {
-    if (!prompt.trim() || count < 1) return;
+    if (count < 1) return;
     const submissions = Array.from({ length: count }, () =>
       submitGenerationPayload().then(({ data }) => data).catch((err) => err),
     );
@@ -827,10 +827,10 @@ export default function ImageGen() {
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
-    if (!prompt.trim()) return;
-    // The disabled submit button blocks clicks, but an Enter keypress in a
-    // number input still fires onSubmit — gate here too so an edit-only model
-    // without a source image hits the inline hint, not a server 400 toast.
+    // Empty prompt is allowed (e.g. i2i / unconditional generation). The disabled
+    // submit button blocks clicks, but an Enter keypress in a number input still
+    // fires onSubmit — gate here too so an edit-only model without a source image
+    // hits the inline hint, not a server 400 toast.
     if (editImageMissing) return;
     const batchN = isAsyncMode ? Math.max(1, batchCount) : 1;
     if (generating) return queueAdditional(batchN);
@@ -1197,7 +1197,7 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
-              disabled={!prompt.trim() || notConnected || editImageMissing}
+              disabled={notConnected || editImageMissing}
               title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : undefined}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
