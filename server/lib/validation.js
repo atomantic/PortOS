@@ -795,6 +795,11 @@ export const restoreRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+export const restoreDbRequestSchema = z.object({
+  snapshotId: z.string().min(1),
+  dryRun: z.boolean().optional().default(true)
+});
+
 // CyberCity snapshot pipeline (issue #877): how often to capture a city-state
 // frame and how many to retain. Validated as a settings slice on PUT /api/settings;
 // service-side defaults (DEFAULT_SNAPSHOT_CONFIG) fill any absent field so an

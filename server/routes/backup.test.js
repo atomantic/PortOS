@@ -9,6 +9,7 @@ vi.mock('../services/backup.js', () => ({
   runBackup: vi.fn(),
   listSnapshots: vi.fn(),
   restoreSnapshot: vi.fn(),
+  restorePostgres: vi.fn(),
   DEFAULT_EXCLUDES: [
     { path: '/browser-profile/', reason: 'test', overridable: false },
     { path: '/loras/*.safetensors', reason: 'test', overridable: true }
@@ -163,6 +164,54 @@ describe('backup routes', () => {
         'snap-2',
         expect.objectContaining({ dryRun: true })
       );
+    });
+  });
+
+  describe('POST /api/backup/restore-db', () => {
+    it('calls restorePostgres with the validated body (dryRun default true)', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restorePostgres.mockResolvedValue({ status: 'ok', dryRun: true, sizeBytes: 10, tableCount: 1 });
+      const res = await request(buildApp())
+        .post('/api/backup/restore-db')
+        .send({ snapshotId: '2026-06-05T00-00-00' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: 'ok', dryRun: true, sizeBytes: 10, tableCount: 1 });
+      expect(backup.restorePostgres).toHaveBeenCalledWith(
+        '/dest',
+        '2026-06-05T00-00-00',
+        { dryRun: true }
+      );
+    });
+
+    it('forwards dryRun=false when explicitly requested', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restorePostgres.mockResolvedValue({ status: 'ok', dryRun: false });
+      await request(buildApp())
+        .post('/api/backup/restore-db')
+        .send({ snapshotId: 'snap-9', dryRun: false });
+      expect(backup.restorePostgres).toHaveBeenCalledWith(
+        '/dest',
+        'snap-9',
+        { dryRun: false }
+      );
+    });
+
+    it('returns 400 when snapshotId is missing', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      const res = await request(buildApp()).post('/api/backup/restore-db').send({});
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(backup.restorePostgres).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when no destination is configured', async () => {
+      getSettings.mockResolvedValue({ backup: {} });
+      const res = await request(buildApp())
+        .post('/api/backup/restore-db')
+        .send({ snapshotId: 'snap-1' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('BACKUP_NOT_CONFIGURED');
+      expect(backup.restorePostgres).not.toHaveBeenCalled();
     });
   });
 });

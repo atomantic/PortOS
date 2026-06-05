@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, restoreRequestSchema } from '../lib/validation.js';
+import { validateRequest, restoreRequestSchema, restoreDbRequestSchema } from '../lib/validation.js';
 import * as backup from '../services/backup.js';
 import { getSettings } from '../services/settings.js';
 
@@ -45,6 +45,18 @@ router.post('/restore', asyncHandler(async (req, res) => {
   const { snapshotId, subdirFilter, dryRun } = validateRequest(restoreRequestSchema, req.body);
   const settings = await getSettings();
   const result = await backup.restoreSnapshot(settings.backup?.destPath, snapshotId, { dryRun, subdirFilter });
+  res.json(result);
+}));
+
+// POST /api/backup/restore-db
+router.post('/restore-db', asyncHandler(async (req, res) => {
+  const { snapshotId, dryRun } = validateRequest(restoreDbRequestSchema, req.body);
+  const settings = await getSettings();
+  const destPath = settings.backup?.destPath;
+  if (!destPath) {
+    throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
+  }
+  const result = await backup.restorePostgres(destPath, snapshotId, { dryRun });
   res.json(result);
 }));
 
