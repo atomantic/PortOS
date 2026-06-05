@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { getCitySnapshots } from '../services/apiCity.js';
-import { isPlayableFrame } from '../lib/cityPlaybackFrame.js';
+import { isPlayableFrame, buildPlaybackStats } from '../lib/cityPlaybackFrame.js';
 
 // Transport state for the CyberCity timeline scrubber (issue #967). Owns the
 // snapshot series, the current frame index, and play/pause/speed so CyberCity.jsx
@@ -17,6 +17,10 @@ export function useCityPlayback() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(PLAYBACK_SPEEDS[0]);
   const [loading, setLoading] = useState(false);
+  // null = no error; true = the series fetch failed. Distinct from an empty
+  // series (a real, fetched-empty history) so the overlay can say "couldn't
+  // load" vs "nothing recorded yet" — the absent-vs-empty rule.
+  const [error, setError] = useState(false);
 
   // Guards a deferred/interval callback against firing after unmount (CLAUDE.md
   // deferred-work rule). Never reset to true — handles dev double-mount cleanly.
@@ -27,11 +31,20 @@ export function useCityPlayback() {
     setActive(true);
     setLoading(true);
     setPlaying(false);
+    setError(false);
+    // Sentinel: catch → null marks a failed fetch, distinct from a fetched-empty
+    // history. Validate the payload is actually an array before trusting it.
     const res = await getCitySnapshots({ silent: true }).catch(() => null);
     if (!mountedRef.current) return;
+    if (!res || !Array.isArray(res.snapshots)) {
+      setError(true);
+      setSnapshots([]);
+      setLoading(false);
+      return;
+    }
     // Only keep frames this scrubber can render (schemaVersion gate); a future
     // bump leaves older/newer frames out rather than mis-rendering them.
-    const frames = (res?.snapshots || []).filter(isPlayableFrame);
+    const frames = res.snapshots.filter(isPlayableFrame);
     setSnapshots(frames);
     setFrameIndex(frames.length > 0 ? frames.length - 1 : 0); // start at "now"
     setLoading(false);
@@ -67,31 +80,37 @@ export function useCityPlayback() {
     setFrameIndex(() => Math.max(0, Math.min(snapshots.length - 1, index)));
   }, [snapshots.length]);
 
-  // Auto-advance timer. Stops at the last frame. Guarded by mountedRef and torn
-  // down on pause/exit/speed-change/unmount so it never fires into the void.
+  // Auto-advance timer. Guarded by mountedRef and torn down on
+  // pause/exit/speed-change/unmount so it never fires into the void. The updater
+  // stays PURE — it only clamps the index forward; the "stop at the end" pause
+  // is a separate effect below (calling a setter inside a state updater would
+  // double-fire under StrictMode).
   useEffect(() => {
     if (!active || !playing || snapshots.length === 0) return undefined;
     const id = setInterval(() => {
       if (!mountedRef.current) return;
-      setFrameIndex((i) => {
-        if (i >= snapshots.length - 1) {
-          setPlaying(false);
-          return i;
-        }
-        return i + 1;
-      });
+      setFrameIndex((i) => Math.min(i + 1, snapshots.length - 1));
     }, BASE_INTERVAL_MS / speed);
     return () => clearInterval(id);
   }, [active, playing, speed, snapshots.length]);
 
+  // Pause when playback reaches the last frame (kept out of the interval's
+  // updater so that updater stays a pure function of the previous index).
+  useEffect(() => {
+    if (playing && snapshots.length > 0 && frameIndex >= snapshots.length - 1) {
+      setPlaying(false);
+    }
+  }, [playing, frameIndex, snapshots.length]);
+
   const currentFrame = snapshots[frameIndex] || null;
+  const stats = useMemo(() => buildPlaybackStats(currentFrame), [currentFrame]);
 
   return {
     active, enter, exit,
-    snapshots, frameIndex, currentFrame, seek, step,
+    snapshots, frameIndex, currentFrame, stats, seek, step,
     playing, togglePlay,
     speed, cycleSpeed,
-    loading,
+    loading, error,
     frameCount: snapshots.length,
   };
 }

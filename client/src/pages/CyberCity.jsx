@@ -297,8 +297,8 @@ function CyberCityInner() {
   // at live" behavior. Returns null for an unplayable frame → keep live.
   const playbackProps = useMemo(() => {
     if (!playback.active || !playback.currentFrame) return null;
-    return mergeFrameIntoCityProps(playback.currentFrame, { apps });
-  }, [playback.active, playback.currentFrame, apps]);
+    return mergeFrameIntoCityProps(playback.currentFrame, { apps, agentMap });
+  }, [playback.active, playback.currentFrame, apps, agentMap]);
 
   const v = useCallback((key, live) => (playbackProps && key in playbackProps ? playbackProps[key] : live), [playbackProps]);
 
@@ -392,9 +392,11 @@ function CyberCityInner() {
       <CityPlaybackOverlay
         active={playback.active}
         loading={playback.loading}
+        error={playback.error}
         snapshots={playback.snapshots}
         frameIndex={playback.frameIndex}
         currentFrame={playback.currentFrame}
+        stats={playback.stats}
         playing={playback.playing}
         speed={playback.speed}
         onSeek={playback.seek}

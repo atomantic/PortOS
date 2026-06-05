@@ -4,6 +4,7 @@ import {
   buildPlaybackApps,
   buildPlaybackAgentMap,
   mergeFrameIntoCityProps,
+  buildPlaybackStats,
   SUPPORTED_SNAPSHOT_SCHEMA_VERSION,
 } from './cityPlaybackFrame.js';
 
@@ -80,10 +81,32 @@ describe('buildPlaybackAgentMap', () => {
     expect(map.has('a2')).toBe(false);
   });
 
-  it('returns an empty map when assignments are null', () => {
+  it('returns an EMPTY map for a real empty assignments array (no agents running)', () => {
     const apps = buildPlaybackApps(frame(), liveApps);
-    const map = buildPlaybackAgentMap(frame({ assignments: null }), apps);
+    const map = buildPlaybackAgentMap(frame({ assignments: [] }), apps, new Map([['x', {}]]));
     expect(map.size).toBe(0);
+  });
+
+  it('falls back to the LIVE agentMap when assignments are null (failed capture)', () => {
+    const apps = buildPlaybackApps(frame(), liveApps);
+    const live = new Map([['a1', { app: liveApps[0], agents: [{ agentId: 'live-1' }] }]]);
+    const map = buildPlaybackAgentMap(frame({ assignments: null }), apps, live);
+    expect(map).toBe(live);
+  });
+});
+
+describe('buildPlaybackStats', () => {
+  it('surfaces captured numbers, preserving null vs real values', () => {
+    const s = buildPlaybackStats(frame());
+    expect(s).toMatchObject({ cpuPercent: 12, memPercent: 40, diskPercent: 55, agentsActive: 1, tasksPending: 2, tasksInProgress: 1, peersOnline: 1, peersTotal: 2, reviewTotal: 4 });
+  });
+  it('returns null fields when the capture recorded null', () => {
+    const s = buildPlaybackStats(frame({ health: { cpuPercent: null, memPercent: null, diskPercent: null }, counts: { reviewTotal: null } }));
+    expect(s.cpuPercent).toBeNull();
+    expect(s.reviewTotal).toBeNull();
+  });
+  it('returns null for an unplayable frame', () => {
+    expect(buildPlaybackStats(frame({ schemaVersion: 99 }))).toBeNull();
   });
 });
 
@@ -92,34 +115,30 @@ describe('mergeFrameIntoCityProps', () => {
     expect(mergeFrameIntoCityProps(frame({ schemaVersion: 99 }), { apps: liveApps })).toBeNull();
   });
 
-  it('maps counts/health/cos/backup/character into scene props', () => {
+  it('maps the faithfully-driveable scene props (apps/agentMap/cos/backup/character)', () => {
     const props = mergeFrameIntoCityProps(frame(), { apps: liveApps });
+    expect(props.apps).toHaveLength(2);
+    expect(props.agentMap.get('a1').agents).toEqual([{ agentId: 'agent-1', status: 'running' }]);
     expect(props.cosStatus).toMatchObject({ running: true, activeAgents: 1, stats: { tasksCompleted: 7 } });
     expect(props.backupStatus).toEqual({ status: 'success', lastRun: '2026-06-05T00:00:00.000Z' });
-    expect(props.systemHealth.system.cpu.usagePercent).toBe(12);
-    expect(props.systemHealth.system.disk.usagePercent).toBe(55);
     expect(props.character).toEqual({ level: 4 });
-    expect(props.reviewCounts).toEqual({ total: 4 });
-    expect(props.notificationCounts).toEqual({ unread: 3 });
-    expect(props.instances.self).toEqual({ instanceId: 'inst-1', name: 'void' });
   });
 
-  it('passes null (not a fabricated 0) when a frame field was unavailable at capture', () => {
+  it('passes null (not a fabricated 0/empty) when cos/backup/character were unavailable at capture', () => {
     const props = mergeFrameIntoCityProps(
-      frame({ cos: null, backup: null, character: null, health: { cpuPercent: null, memPercent: null, diskPercent: null }, counts: { reviewTotal: null, notificationsUnread: null } }),
+      frame({ cos: null, backup: null, character: null }),
       { apps: liveApps },
     );
     expect(props.cosStatus).toBeNull();
     expect(props.backupStatus).toBeNull();
     expect(props.character).toBeNull();
-    expect(props.systemHealth).toBeNull();
-    expect(props.reviewCounts).toBeNull();
-    expect(props.notificationCounts).toBeNull();
   });
 
-  it('does NOT return unfed landmark props, so the page leaves them at live values', () => {
+  it('does NOT return count-only / unfed landmark props, so the page leaves them at live values', () => {
     const props = mergeFrameIntoCityProps(frame(), { apps: liveApps });
-    for (const key of ['memoryGraph', 'goals', 'jiraTickets', 'activityCalendar', 'productivityData', 'chronotype']) {
+    // count-driven landmarks (freeze at live; their numbers go to the overlay instead)
+    // + rich-array landmarks the frame never captured.
+    for (const key of ['instances', 'systemHealth', 'reviewCounts', 'notificationCounts', 'cosTasks', 'memoryGraph', 'goals', 'jiraTickets', 'activityCalendar', 'productivityData', 'chronotype']) {
       expect(props).not.toHaveProperty(key);
     }
   });

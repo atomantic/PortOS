@@ -7,12 +7,25 @@ import { formatDateTime, timeAgo } from '../../utils/formatters';
 // Mirrors CityPhotoOverlay's bottom-bar styling. All transport logic lives in the
 // useCityPlayback hook; this is presentation only.
 
+// One historical stat chip; renders a null value as "—" so an unavailable
+// capture reads distinctly from a real zero.
+function Stat({ label, value, suffix = '' }) {
+  return (
+    <span className="text-cyan-300/80">
+      <span className="text-cyan-500/60">{label}</span>{' '}
+      {value == null ? '—' : `${value}${suffix}`}
+    </span>
+  );
+}
+
 export default function CityPlaybackOverlay({
   active,
   loading,
+  error,
   snapshots = [],
   frameIndex,
   currentFrame,
+  stats,
   playing,
   speed,
   onSeek,
@@ -50,13 +63,19 @@ export default function CityPlaybackOverlay({
           <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider text-center pb-2">LOADING HISTORY…</div>
         )}
 
-        {!loading && !hasFrames && (
+        {!loading && error && (
+          <div className="font-pixel text-[10px] text-amber-400/80 tracking-wider text-center pb-2">
+            COULDN'T LOAD HISTORY — the snapshot service didn't respond. Try again later.
+          </div>
+        )}
+
+        {!loading && !error && !hasFrames && (
           <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider text-center pb-2">
             NO SNAPSHOTS YET — the city records its state every few minutes. Check back later.
           </div>
         )}
 
-        {!loading && hasFrames && (
+        {!loading && !error && hasFrames && (
           <div className="flex flex-col gap-2">
             {/* Timestamp + live-data note */}
             <div className="flex items-center justify-between font-pixel text-[10px] text-cyan-300/90 tracking-wider">
@@ -66,6 +85,20 @@ export default function CityPlaybackOverlay({
               </span>
               <span className="text-cyan-500/60">{ts ? timeAgo(ts) : ''}</span>
             </div>
+
+            {/* Captured-at-this-moment stats whose 3D landmarks stay live (so the
+                historical numbers are still visible while scrubbing). */}
+            {stats && (
+              <div className="flex items-center justify-center flex-wrap gap-x-4 gap-y-1 font-pixel text-[9px] tracking-wider">
+                <Stat label="CPU" value={stats.cpuPercent} suffix="%" />
+                <Stat label="MEM" value={stats.memPercent} suffix="%" />
+                <Stat label="DISK" value={stats.diskPercent} suffix="%" />
+                <Stat label="AGENTS" value={stats.agentsActive} />
+                <Stat label="TASKS" value={stats.tasksPending == null && stats.tasksInProgress == null ? null : (stats.tasksPending ?? 0) + (stats.tasksInProgress ?? 0)} />
+                <Stat label="PEERS" value={stats.peersOnline == null ? null : `${stats.peersOnline}/${stats.peersTotal ?? '?'}`} />
+                <Stat label="REVIEW" value={stats.reviewTotal} />
+              </div>
+            )}
 
             {/* Timeline slider */}
             <input

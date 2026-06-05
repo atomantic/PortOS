@@ -46,12 +46,15 @@ export function buildPlaybackApps(frame, liveApps = []) {
 }
 
 // Rebuild the agentMap (Map<appId, { app, agents }>) from the frame's compact
-// assignment list. Only running assignments are captured. A null assignments
-// array (failed capture) yields an empty map — playback shows no agent entities
-// rather than fabricating them.
-export function buildPlaybackAgentMap(frame, playbackApps = []) {
+// assignment list. Only running assignments are captured.
+//
+// Sentinel discipline: a `null` assignments array means "agent source failed at
+// capture time" — return the live agentMap (passed in) rather than an empty map,
+// so a transient capture failure doesn't read as "no agents were running." A
+// real empty array yields a real empty map (no agent entities).
+export function buildPlaybackAgentMap(frame, playbackApps = [], liveAgentMap = new Map()) {
+  if (!Array.isArray(frame?.assignments)) return liveAgentMap;
   const map = new Map();
-  if (!Array.isArray(frame?.assignments)) return map;
   const appById = new Map((playbackApps || []).map((a) => [a.id, a]));
   for (const asn of frame.assignments) {
     if (!asn?.appId) continue;
@@ -64,58 +67,65 @@ export function buildPlaybackAgentMap(frame, playbackApps = []) {
   return map;
 }
 
-// Derive the count-driven scene props from a frame. Each value is null when the
-// frame recorded null (source unavailable) so the consuming component shows its
-// empty state rather than a fabricated zero.
-function deriveCountProps(frame) {
-  const c = frame?.counts || {};
-  return {
-    cosStatus: frame?.cos == null ? null : {
-      running: frame.cos.running ?? false,
-      paused: frame.cos.paused ?? false,
-      activeAgents: c.agentsActive ?? null,
-      pausedAgents: c.agentsPaused ?? null,
-      stats: { tasksCompleted: c.tasksCompleted ?? null },
-    },
-    backupStatus: frame?.backup == null ? null : {
-      status: frame.backup.status ?? null,
-      lastRun: frame.backup.lastRun ?? null,
-    },
-    // systemHealth shape mirrors what useCityData exposes (percent fields).
-    systemHealth: (frame?.health && (frame.health.cpuPercent != null || frame.health.memPercent != null || frame.health.diskPercent != null))
-      ? {
-          system: {
-            cpu: { usagePercent: frame.health.cpuPercent },
-            memory: { usagePercent: frame.health.memPercent },
-            disk: { usagePercent: frame.health.diskPercent },
-          },
-        }
-      : null,
-    character: frame?.character == null ? null : { level: frame.character.level ?? null },
-    instances: frame?.instance == null ? null : {
-      self: { instanceId: frame.instance.id, name: frame.instance.name },
-      peers: [],
-      syncStatus: null,
-    },
-    reviewCounts: c.reviewTotal == null ? null : { total: c.reviewTotal },
-    notificationCounts: c.notificationsUnread == null ? null : { unread: c.notificationsUnread },
-  };
-}
-
-// The full set of CityScene/CityHud props a snapshot frame can drive. The page
-// spreads these OVER the live props, so any prop NOT returned here (memoryGraph,
-// goals, jiraTickets, activityCalendar, productivityData, chronotype, etc.) keeps
-// its live value — the deliberate "freeze unfed landmarks at live" behavior.
+// The CityScene props a snapshot frame can FAITHFULLY drive — i.e. scene elements
+// whose data the frame actually carries at the right granularity:
+//   apps        → buildings (per-app status)
+//   agentMap    → agent entities (assignments)
+//   cosStatus   → skyline automation state (running/paused/active)
+//   backupStatus→ backup vault (status/lastRun)
+//   character   → artifact placement (level)
+//
+// Deliberately NOT returned (so the page leaves them at LIVE — "freeze unfed
+// landmarks at live"): the count-only landmarks (task queue, federation horizon,
+// health tower, memory, goals, jira, activity) render from rich per-item arrays
+// the snapshot doesn't carry, only aggregate counts. Faking array items from a
+// count would misrepresent history; instead the captured counts are surfaced as
+// numbers in the playback overlay via buildPlaybackStats(). Each value is null
+// when the frame recorded null (source unavailable at capture).
 //
 // Returns null when the frame isn't playable (wrong/absent schemaVersion) so the
 // caller can keep showing live data and flag the frame.
 export function mergeFrameIntoCityProps(frame, live = {}) {
   if (!isPlayableFrame(frame)) return null;
   const apps = buildPlaybackApps(frame, live.apps);
-  const agentMap = buildPlaybackAgentMap(frame, apps);
+  const agentMap = buildPlaybackAgentMap(frame, apps, live.agentMap);
   return {
     apps,
     agentMap,
-    ...deriveCountProps(frame),
+    cosStatus: frame?.cos == null ? null : {
+      running: frame.cos.running ?? false,
+      paused: frame.cos.paused ?? false,
+      activeAgents: frame.counts?.agentsActive ?? null,
+      pausedAgents: frame.counts?.agentsPaused ?? null,
+      stats: { tasksCompleted: frame.counts?.tasksCompleted ?? null },
+    },
+    backupStatus: frame?.backup == null ? null : {
+      status: frame.backup.status ?? null,
+      lastRun: frame.backup.lastRun ?? null,
+    },
+    character: frame?.character == null ? null : { level: frame.character.level ?? null },
+  };
+}
+
+// Historical numbers the snapshot captured that don't drive a 3D landmark (their
+// landmarks render from rich arrays and stay live). Surfaced as a readout in the
+// playback overlay so the captured counts/health are still visible while
+// scrubbing. Preserves null (unavailable at capture) vs a real number — the
+// overlay renders null as "—". Returns null for an unplayable frame.
+export function buildPlaybackStats(frame) {
+  if (!isPlayableFrame(frame)) return null;
+  const c = frame.counts || {};
+  const h = frame.health || {};
+  return {
+    cpuPercent: h.cpuPercent ?? null,
+    memPercent: h.memPercent ?? null,
+    diskPercent: h.diskPercent ?? null,
+    agentsActive: c.agentsActive ?? null,
+    tasksPending: c.tasksPending ?? null,
+    tasksInProgress: c.tasksInProgress ?? null,
+    peersOnline: c.peersOnline ?? null,
+    peersTotal: c.peersTotal ?? null,
+    reviewTotal: c.reviewTotal ?? null,
+    notificationsUnread: c.notificationsUnread ?? null,
   };
 }

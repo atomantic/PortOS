@@ -30,6 +30,22 @@ describe('useCityPlayback', () => {
     expect(result.current.currentFrame.ts).toBe('2026-06-05T02:00:00.000Z');
   });
 
+  it('flags an error (distinct from empty) when the fetch fails', async () => {
+    getCitySnapshots.mockRejectedValue(new Error('network down'));
+    const { result } = renderHook(() => useCityPlayback());
+    await act(async () => { await result.current.enter(); });
+    expect(result.current.error).toBe(true);
+    expect(result.current.frameCount).toBe(0);
+  });
+
+  it('a real empty history is not an error', async () => {
+    getCitySnapshots.mockResolvedValue({ total: 0, snapshots: [] });
+    const { result } = renderHook(() => useCityPlayback());
+    await act(async () => { await result.current.enter(); });
+    expect(result.current.error).toBe(false);
+    expect(result.current.frameCount).toBe(0);
+  });
+
   it('filters out frames with an unsupported schemaVersion', async () => {
     getCitySnapshots.mockResolvedValue({
       snapshots: [...mkFrames(2), { ts: 'x', schemaVersion: 99, apps: [] }],
