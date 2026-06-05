@@ -507,7 +507,11 @@ export default function ImageGen() {
   // — gallery PNGs are already baked correct.
   const handlePickGalleryInitImage = (item) => {
     if (!item?.filename) return;
-    if (item.raw) handleRemix(item.raw, { applyModel: false });
+    if (item.raw) {
+      handleRemix(item.raw, { applyModel: false });
+      // Source-authoritative prompt: clear the form when the source has none.
+      setPrompt(item.raw.prompt || '');
+    }
     revokeIfBlob(initImage.previewUrl);
     setInitImage({ source: 'gallery', file: null, name: item.filename, previewUrl: item.previewUrl || `/data/images/${item.filename}` });
   };
@@ -1018,6 +1022,9 @@ export default function ImageGen() {
   const handleSendToImage = (img) => {
     if (!img?.filename) return;
     handleRemix(img, { applyModel: false });
+    // i2i is source-authoritative: an empty source prompt must clear the form, not
+    // leave stale text conditioning the render (handleRemix only sets when truthy).
+    setPrompt(img.prompt || '');
     ensureI2iCapableMode();
     revokeIfBlob(initImage.previewUrl);
     setInitImage({ source: 'gallery', file: null, name: img.filename, previewUrl: `/data/images/${img.filename}` });

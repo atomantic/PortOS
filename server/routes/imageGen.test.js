@@ -174,6 +174,15 @@ describe('Image Gen Routes', () => {
       expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: '' }));
     });
 
+    it('rejects a Codex text-to-image request with no prompt and no init image (synchronous 400)', async () => {
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ mode: 'codex' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+    });
+
     it('should validate width and height bounds', async () => {
       const response = await request(app)
         .post('/api/image-gen/generate')

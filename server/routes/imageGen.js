@@ -316,6 +316,13 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     data.referenceImagePaths = referenceImagePaths;
     data.referenceImageStrengths = referenceImageStrengths;
   }
+  // Empty prompt is allowed for i2i / local / external, but Codex text-to-image
+  // (no init image) still needs one — reject synchronously here so direct API
+  // callers get a 400 instead of a 200-then-async-job-failure. Mirrors the guard
+  // in codex.js and the client's codexNeedsPrompt gate.
+  if (mode === IMAGE_GEN_MODE.CODEX && !initImagePath && !data.prompt?.trim()) {
+    throw new ServerError('Prompt is required for Codex text-to-image', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   if (data.guidance == null && data.cfgScale != null) {
     data.guidance = data.cfgScale;
   }
