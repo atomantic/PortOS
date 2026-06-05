@@ -541,9 +541,9 @@ Exit criteria:
 Goal: evolve from manual passes to controlled live assistance.
 
 - Optional live story continuation suggestions while writing. **[shipped]**
-- Optional render previews on selected scenes. *(planned)*
+- Optional render previews on selected scenes. **[shipped]**
 - Creative Director can propose next beats, alternate scenes, and visual
-  treatments from the active cursor context. *(planned)*
+  treatments from the active cursor context. **[shipped]**
 - Add throttling, debouncing, budget controls, and explicit opt-in per work. **[shipped]**
 
 This phase should wait until manual analysis quality, mapping, and render costs
@@ -566,10 +566,18 @@ Backed by the `writers-room-continue` prompt stage (quick tier) and
 `server/services/writersRoom/liveDirector.js`; per-work live config persists on
 the work manifest.
 
-**Still planned for this phase:** live render previews on selected scenes from
-the cursor context, and a Creative Director bridge that proposes next
-beats/alternate scenes/visual treatments (injecting into a CD treatment) rather
-than only prose continuations.
+**Shipped (Creative Director bridge slice):** alongside the inline prose
+continuations, the live-mode sidebar can turn the prose around the cursor into a
+short Creative Director **treatment** — a logline, synopsis, an overall visual
+treatment (palette/lighting/cinematography), and 2–6 filmable scenes (each a
+beat + a visual prompt + a duration). The writer reviews the proposal in the
+"CD Bridge" panel and, with one click, sends it into a **new Creative Director
+project** seeded with that treatment and visual style — then jumps straight to
+it via an "Open in Creative Director" link on the work menu. The bridge is
+non-destructive (it always creates a fresh project, never overwrites an existing
+one) and draws on the same per-work opt-in and daily suggestion budget as the
+continuation panel. Backed by the `writers-room-cd-bridge` prompt stage and the
+existing Creative Director treatment store.
 
 ## Test Plan
 

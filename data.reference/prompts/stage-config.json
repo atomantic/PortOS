@@ -49,6 +49,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-cd-bridge": {
+      "name": "Writers Room — Creative Director Bridge",
+      "description": "From the prose around the cursor, propose a short Creative Director treatment — a logline, synopsis, overall visual treatment (styleSpec), and 2–6 filmable scenes (intent + visual prompt + duration). The writer reviews it and sends it into a new Creative Director project. Drives the opt-in live-mode side panel in the editor.",
+      "model": "quick",
+      "returnsJson": true,
+      "variables": []
+    },
     "catalog-ideas-scenes-concepts": {
       "name": "Catalog Ingest — Ideas / Scenes / Concepts",
       "description": "Extract reusable narrative fragments — ideas (premises), scenes (dramatic beats), and concepts (lore, magic systems, factions) — from a raw user-pasted scrap into the Creative Ingredients Catalog. Runs alongside the character/place/object writers-room passes during catalog ingest.",

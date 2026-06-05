@@ -18,14 +18,14 @@
  */
 
 import { existsSync } from 'fs';
-import { link, mkdir, readFile, rename, rm, stat, unlink, writeFile } from 'fs/promises';
+import { link, readFile, rename, rm, stat, unlink, writeFile } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { randomBytes } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { assertSafeFilename, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   applyDownloadToken,
@@ -331,7 +331,7 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
     );
   }
 
-  await mkdir(PATHS.loras, { recursive: true });
+  await ensureDir(PATHS.loras);
 
   console.log(`📥 Installing Civitai LoRA: ${model.name} v${version.id} → ${filename} (${file.sizeKB ? Math.round(file.sizeKB / 1024) + ' MB' : 'size unknown'})`);
   // Authenticate downloads via `?token=` only — the Authorization header

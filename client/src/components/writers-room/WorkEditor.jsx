@@ -46,6 +46,7 @@ import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import LiveContinuationPanel from './LiveContinuationPanel';
 import LiveRenderPanel from './LiveRenderPanel';
+import CdBridgePanel from './CdBridgePanel';
 import AnalysisHistory from './AnalysisHistory';
 import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
@@ -437,6 +438,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const handleOpenInPipeline = () => {
     if (!work.pipelineIssueId) return;
     navigate(`/pipeline/issues/${encodeURIComponent(work.pipelineIssueId)}/prose`);
+  };
+
+  const handleOpenInCreativeDirector = () => {
+    if (!work.cdProjectId) return;
+    navigate(`/media/creative-director/${encodeURIComponent(work.cdProjectId)}/overview`);
   };
 
   const commitTitle = async () => {
@@ -862,6 +868,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 ) : (
                   <MenuItem icon={Film} label={promoting ? 'Promoting…' : 'Promote to pipeline'} running={promoting} onClick={closeOverflowAnd(handlePromoteToPipeline)} />
                 )}
+                {work.cdProjectId && (
+                  <MenuItem icon={ExternalLink} label="Open in Creative Director" onClick={closeOverflowAnd(handleOpenInCreativeDirector)} />
+                )}
               </MenuSection>
               <MenuSection label="View">
                 <MenuItem
@@ -1000,6 +1009,12 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                   registerTrigger={registerLiveTrigger}
                 />
               </div>
+              <CdBridgePanel
+                workId={work.id}
+                liveMode={liveMode}
+                getCursorContext={getCursorContext}
+                onLinked={(cdProjectId) => onChange?.({ ...work, cdProjectId })}
+              />
             </>
           )}
           <StoryboardPanel

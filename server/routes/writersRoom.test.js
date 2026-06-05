@@ -71,6 +71,20 @@ vi.mock('../services/writersRoom/liveDirector.js', () => ({
     renderUsage: { date: '2026-06-03', count: 1 },
     renderBudget: 20,
   })),
+  suggestCdBridge: vi.fn(async () => ({
+    proposal: {
+      logline: 'A courier outruns the storm.',
+      synopsis: 'Cross the flooded city.',
+      styleSpec: 'Rain-slick neon.',
+      scenes: [
+        { intent: 'Deluge', prompt: 'Wide shot', durationSeconds: 6 },
+        { intent: 'Run', prompt: 'Tracking shot', durationSeconds: 4 },
+      ],
+    },
+    usage: { date: '2026-06-03', count: 1 },
+    budget: 100,
+  })),
+  sendToCreativeDirector: vi.fn(async () => ({ project: { id: 'cd-1' } })),
 }));
 
 import * as svc from '../services/writersRoom/local.js';
@@ -445,6 +459,51 @@ describe('writersRoom routes', () => {
         .send({ renderUsage: { count: 9999 } });
       expect(r.status).toBe(400);
       expect(liveSvc.reserveRenderPreview).not.toHaveBeenCalled();
+    });
+
+    it('POST /works/:id/cd-bridge/suggest forwards the cursor context and returns a proposal', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/cd-bridge/suggest')
+        .send({ before: 'The levee groaned.', after: '', selection: '' });
+      expect(r.status).toBe(200);
+      expect(r.body.proposal.scenes).toHaveLength(2);
+      expect(liveSvc.suggestCdBridge).toHaveBeenCalledWith('wr-work-1', {
+        before: 'The levee groaned.', after: '', selection: '',
+      });
+    });
+
+    it('POST /works/:id/cd-bridge/suggest rejects an over-long before window', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/cd-bridge/suggest')
+        .send({ before: 'x'.repeat(12_001) });
+      expect(r.status).toBe(400);
+      expect(liveSvc.suggestCdBridge).not.toHaveBeenCalled();
+    });
+
+    it('POST /works/:id/cd-bridge/send creates a CD project from the proposal', async () => {
+      const proposal = {
+        logline: 'A courier outruns the storm.',
+        synopsis: 'Cross the flooded city.',
+        styleSpec: 'Rain-slick neon.',
+        scenes: [
+          { intent: 'Deluge', prompt: 'Wide shot', durationSeconds: 6 },
+          { intent: 'Run', prompt: 'Tracking shot', durationSeconds: 4 },
+        ],
+      };
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/cd-bridge/send')
+        .send({ proposal });
+      expect(r.status).toBe(201);
+      expect(r.body.project.id).toBe('cd-1');
+      expect(liveSvc.sendToCreativeDirector).toHaveBeenCalledWith('wr-work-1', { proposal });
+    });
+
+    it('POST /works/:id/cd-bridge/send rejects a proposal with an empty logline', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/cd-bridge/send')
+        .send({ proposal: { logline: '', synopsis: 's', scenes: [{ intent: 'i', prompt: 'p', durationSeconds: 5 }] } });
+      expect(r.status).toBe(400);
+      expect(liveSvc.sendToCreativeDirector).not.toHaveBeenCalled();
     });
   });
 });
