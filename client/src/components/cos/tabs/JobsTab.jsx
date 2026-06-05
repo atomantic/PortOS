@@ -86,6 +86,12 @@ function normalizeJobPayload(formData) {
   if (payload.type !== 'shell' && payload.type !== 'script') {
     payload.command = null;
     payload.triggerAction = null;
+  } else {
+    // App scope only applies to AI-agent jobs (the scope drives the agent's
+    // workspace). Shell/script jobs always run in the PortOS root, so clear any
+    // appId left over from when the job was an agent type — otherwise the saved
+    // job shows a misleading app badge while executing in root.
+    payload.appId = null;
   }
   // Empty app picker selection ('') → null so a PUT actively un-scopes the job
   // back to global (undefined would be dropped from JSON and updateJob would
