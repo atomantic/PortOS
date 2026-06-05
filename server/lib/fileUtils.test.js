@@ -4,8 +4,18 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
+import * as fsPromises from 'fs/promises';
+// Mock fs/promises so the `ensureDir` regression test can force `mkdir` to
+// throw a spurious Windows error. `mkdir` defaults to delegating to the real
+// implementation (so every other test in this file is unaffected); individual
+// tests override it with `mockRejectedValueOnce`.
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, mkdir: vi.fn((...args) => actual.mkdir(...args)) };
+});
 import {
   assertSafeFilename,
+  ensureDir,
   expandHome,
   isValidJSON,
   listDirectoryByExtension,
@@ -731,6 +741,48 @@ describe('fileUtils', () => {
     it('only expands a leading `~` — embedded `~` chars are preserved (iCloud~md~obsidian)', () => {
       expect(expandHome('iCloud~md~obsidian')).toBe('iCloud~md~obsidian');
       expect(expandHome('foo/~bar')).toBe('foo/~bar');
+    });
+  });
+
+  describe('ensureDir', () => {
+    let tmpRoot;
+
+    beforeEach(() => {
+      tmpRoot = mkdtempSync(join(tmpdir(), 'fileutils-ensuredir-'));
+    });
+
+    afterEach(() => {
+      fsPromises.mkdir.mockClear();
+      rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('creates a missing nested directory', async () => {
+      const target = join(tmpRoot, 'a', 'b', 'c');
+      await ensureDir(target);
+      expect(existsSync(target)).toBe(true);
+    });
+
+    it('is idempotent — succeeds when the directory already exists', async () => {
+      const target = join(tmpRoot, 'exists');
+      await ensureDir(target);
+      await expect(ensureDir(target)).resolves.toBeUndefined();
+    });
+
+    it('swallows a spurious Windows mkdir error when the dir already exists (regression)', async () => {
+      const target = join(tmpRoot, 'preexisting');
+      mkdirSync(target);
+      // Simulate the Windows UNKNOWN/EPERM that fs.mkdir can throw even on an
+      // existing directory (antivirus locks, OneDrive sync, mapped drives).
+      const spurious = Object.assign(new Error('UNKNOWN: unknown error, mkdir'), { code: 'UNKNOWN' });
+      fsPromises.mkdir.mockRejectedValueOnce(spurious);
+      await expect(ensureDir(target)).resolves.toBeUndefined();
+    });
+
+    it('still rejects when mkdir fails and the path is not a directory afterward', async () => {
+      const target = join(tmpRoot, 'never-created');
+      const realFailure = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      fsPromises.mkdir.mockRejectedValueOnce(realFailure);
+      await expect(ensureDir(target)).rejects.toThrow(/EACCES/);
     });
   });
 });
