@@ -290,11 +290,13 @@ function CyberCityInner() {
   }, [apps, cosAgents, instances, character, productivityData]);
 
   // In playback mode, overlay the current snapshot frame's data onto the props
-  // the scene + HUD consume. mergeFrameIntoCityProps returns ONLY the
-  // snapshot-backed props (apps, agentMap, counts, health, cos, backup,
-  // character, instances), so anything it omits (memoryGraph, goals, jira,
-  // activity, productivity) keeps its live value — the "freeze unfed landmarks
-  // at live" behavior. Returns null for an unplayable frame → keep live.
+  // the scene consumes. mergeFrameIntoCityProps returns ONLY the props the frame
+  // can faithfully drive (apps, agentMap, cosStatus, backupStatus, character),
+  // so anything it omits (the count-only and rich-array landmarks: task queue,
+  // federation, health tower, memory, goals, jira, activity, productivity) keeps
+  // its live value — the "freeze unfed landmarks at live" behavior; their
+  // captured numbers show in the playback overlay instead. Returns null for an
+  // unplayable frame → keep live.
   const playbackProps = useMemo(() => {
     if (!playback.active || !playback.currentFrame) return null;
     return mergeFrameIntoCityProps(playback.currentFrame, { apps, agentMap });
@@ -327,8 +329,8 @@ function CyberCityInner() {
         agentMap={v('agentMap', agentMap)}
         onBuildingClick={handleBuildingClick}
         cosStatus={v('cosStatus', cosStatus)}
-        reviewCounts={v('reviewCounts', reviewCounts)}
-        instances={v('instances', instances)}
+        reviewCounts={reviewCounts}
+        instances={instances}
         backupStatus={v('backupStatus', backupStatus)}
         cosTasks={cosTasks}
         healthMetrics={healthMetrics}
