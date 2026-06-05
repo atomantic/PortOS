@@ -94,6 +94,7 @@ export const getBackupStatus = (options) => request('/backup/status', options);
 export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
 export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
 export const restoreBackup = (data) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data) });
+export const restoreDatabase = (data, options) => request('/backup/restore-db', { method: 'POST', body: JSON.stringify(data), ...options });
 
 // Data Manager
 export const getDataOverview = () => request('/data');
