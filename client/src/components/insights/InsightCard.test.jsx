@@ -15,8 +15,11 @@ describe('InsightCard', () => {
   });
 
   it('renders no provenance chip when provenance is absent', () => {
+    // The badge here is a non-interactive span, so the only button that could
+    // appear is the provenance chip — asserting zero buttons genuinely fails if
+    // a chip ever leaks in without a provenance prop.
     render(<InsightCard title="No prov" badge={<span>Strong</span>} />);
-    expect(screen.queryByRole('button', { name: /tap for how this is derived/i })).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('renders a provenance chip from the provenance prop and reveals override copy on click', () => {
