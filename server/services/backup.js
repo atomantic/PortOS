@@ -182,7 +182,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
   const fail = async (err) => {
     isRunning = false;
-    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message });
+    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null });
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
   };
@@ -317,6 +317,9 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
   if (pgDumpPath) {
     const dumpInfo = await stat(pgDumpPath).catch(() => null);
     if (dumpInfo?.isFile()) {
+      // Parent-relative key: the dump lives one level ABOVE snapshotDataDir
+      // (alongside it, not inside it). A future manifest-verify must not assume
+      // every key resolves under snapshotDataDir.
       files['../portos-db.sql'] = await sha256File(pgDumpPath);
     }
   }
