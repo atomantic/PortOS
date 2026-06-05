@@ -116,7 +116,8 @@ def build_pipeline(flux_key, hf_cache, dtype):
     # the desktop/browser baseline (~5GB) plus activations are accounted for, so
     # the driver spills to shared system RAM and each diffusion step takes
     # minutes — long enough to trip the media-job idle watchdog (300s). Layerwise
-    # casting keeps the weights stored as fp8 (~12GB) and upcasts each layer to
+    # casting keeps the weights stored as fp8 (~15GB resident — fp8 weight bytes
+    # plus the norm/embedding modules that stay bf16) and upcasts each layer to
     # bf16 only during its forward pass, so the model fits in VRAM while compute
     # stays bf16. (Ampere/3090 has no fp8 tensor cores, so we must NOT compute in
     # fp8 — storage-only casting is the correct strategy here.) Set
