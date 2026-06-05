@@ -95,6 +95,17 @@ export function redactPeerForWire(peer) {
   return rest;
 }
 
+// Redact the stored credential before a peer record is returned to the local
+// client (API responses + socket broadcasts). Keeps the non-secret username
+// and a `hasPassword` marker so the UI can show "credential set" and prefill
+// the username, but never ships the password to the browser — mirrors the
+// `hasApiKey` pattern in server/routes/providers.js. The password stays only
+// on the server-side record, where peerAuthHeaders reads it.
+export function sanitizePeerForClient(peer) {
+  if (!peer || typeof peer !== 'object' || !peer.auth || typeof peer.auth !== 'object') return peer;
+  return { ...peer, auth: { username: peer.auth.username ?? '', hasPassword: Boolean(peer.auth.password) } };
+}
+
 // Default data shape
 const DEFAULT_DATA = {
   self: null,
@@ -340,6 +351,15 @@ export async function updatePeer(id, updates) {
   // reconnect using the new URL on the next probe cycle. Invalid/no-op host
   // writes no longer disrupt an already-healthy connection.
   if (updates.enabled === false || hostChanged || authChanged) disconnectFromPeer(id);
+  // A credential edit is almost always the fix for a 401, but the peer may be
+  // deep in exponential probe backoff (up to 24h) from those failures — so the
+  // regular poll loop would skip it for hours. Retry immediately: probePeer
+  // bypasses the nextProbeAt gate and, on success, resets backoff + reconnects
+  // the relay with the new credential. Fire-and-forget; failure just re-arms
+  // backoff as before.
+  if (authChanged && result && result.enabled !== false) {
+    probePeer(result).catch((err) => console.log(`⚠️ Probe after credential change failed: ${err.message}`));
+  }
   // Backfill-subscribe every local record of any kind whose category just
   // flipped on. Fire-and-forget — `autoSubscribePeerToAllRecords` is
   // idempotent + per-record-error tolerant, and we don't want to block the

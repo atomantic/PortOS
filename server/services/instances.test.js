@@ -60,6 +60,7 @@ import {
   queryPeer,
   handleAnnounce,
   redactPeerForWire,
+  sanitizePeerForClient,
   startPolling,
   stopPolling
 } from './instances.js';
@@ -323,6 +324,24 @@ describe('instances.js', () => {
     });
   });
 
+  describe('sanitizePeerForClient', () => {
+    it('redacts the password to a hasPassword marker but keeps the username', () => {
+      const peer = { id: 'peer-1', name: 'host', auth: { username: 'alice', password: 'secret' }, status: 'online' };
+      const sanitized = sanitizePeerForClient(peer);
+
+      expect(sanitized.auth).toEqual({ username: 'alice', hasPassword: true });
+      expect(sanitized.auth.password).toBeUndefined();
+      expect(sanitized).toMatchObject({ id: 'peer-1', status: 'online' });
+      // Original (server-side record) keeps the real password
+      expect(peer.auth.password).toBe('secret');
+    });
+
+    it('leaves a credential-less peer untouched', () => {
+      const peer = { id: 'peer-1', name: 'host', auth: null };
+      expect(sanitizePeerForClient(peer)).toBe(peer);
+    });
+  });
+
   describe('updatePeer', () => {
     it('should update peer name', async () => {
       const peers = [{ id: 'peer-1', name: 'old-name', enabled: true }];
@@ -387,24 +406,31 @@ describe('instances.js', () => {
       expect(result.auth).toEqual({ username: 'bob', password: 'pw' });
     });
 
-    it('should reconnect the socket relay when the credential changes', async () => {
-      const peers = [{ id: 'peer-1', name: 'host', enabled: true, auth: { username: 'bob', password: 'old' } }];
+    it('should reconnect the relay and re-probe immediately when the credential changes', async () => {
+      // Peer is deep in backoff from prior 401s — the new credential must
+      // trigger an immediate probe, not wait out nextProbeAt.
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, status: 'offline', consecutiveFailures: 5, nextProbeAt: '2999-01-01T00:00:00Z', auth: { username: 'bob', password: 'old' } }];
       readJSONFile.mockResolvedValue({ self: null, peers });
+      fetch.mockRejectedValue(new Error('offline'));
 
       await updatePeer('peer-1', { auth: { username: 'bob', password: 'new' } });
 
       // Relay pins the Basic header at connect time, so a credential change
       // must tear it down to reconnect with the new extraHeaders.
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
+      // Immediate re-probe fired (bypasses the nextProbeAt backoff gate).
+      expect(fetch).toHaveBeenCalled();
     });
 
-    it('should NOT reconnect the socket relay on a no-op credential write', async () => {
+    it('should NOT reconnect or re-probe on a no-op credential write', async () => {
       const peers = [{ id: 'peer-1', name: 'host', enabled: true, auth: { username: 'bob', password: 'pw' } }];
       readJSONFile.mockResolvedValue({ self: null, peers });
+      fetch.mockRejectedValue(new Error('offline'));
 
       await updatePeer('peer-1', { auth: { username: 'bob', password: 'pw' } });
 
       expect(disconnectFromPeer).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
     });
 
     it('should not disconnect when enabling a peer', async () => {

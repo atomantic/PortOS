@@ -833,10 +833,11 @@ function PeerAuthEditor({ peer, onRefresh }) {
   const hasAuth = !!peer.auth;
 
   const startEdit = () => {
-    // Prefill from the stored credential so editing the username alone doesn't
-    // wipe the password (the server replaces the whole credential on save).
+    // Prefill the (non-secret) username; the password is never sent to the
+    // browser (server redacts it to a hasPassword marker), so it must be
+    // re-entered to save — saving replaces the whole credential server-side.
     setUsername(peer.auth?.username || '');
-    setPassword(peer.auth?.password || '');
+    setPassword('');
     setEditing(true);
   };
 
@@ -875,7 +876,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
           value={password}
           onChange={e => setPassword(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && save()}
-          placeholder="password"
+          placeholder={hasAuth ? 're-enter password to update' : 'password'}
           type="password"
           autoComplete="new-password"
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"

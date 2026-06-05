@@ -16,6 +16,7 @@ import { brainEvents } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
+import { sanitizePeerForClient } from './instances.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
@@ -835,7 +836,13 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
-  instanceEvents.on('peers:updated', (data) => broadcastToInstances('instances:peers:updated', data));
+  // Redact each peer's stored proxy password before it reaches the browser
+  // (keep username + hasPassword) — same secret-stripping the GET /instances
+  // route applies. `data` is the full peers array.
+  instanceEvents.on('peers:updated', (data) => {
+    const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
+    broadcastToInstances('instances:peers:updated', sanitized);
+  });
 }
 
 // Set up peer agent event forwarding (remote agent streaming)

@@ -100,7 +100,9 @@ router.get('/', asyncHandler(async (req, res) => {
     instances.getPeers(),
     getSyncStatus({ includeChecksums: true })
   ]);
-  res.json({ self, peers, syncStatus });
+  // Redact each peer's stored proxy password (keep username + hasPassword) —
+  // the browser never needs the secret. Mirrors providers' hasApiKey pattern.
+  res.json({ self, peers: peers.map(instances.sanitizePeerForClient), syncStatus });
 }));
 
 // GET /api/instances/sync-status — local sync sequences + checksums (used by peers during probe)
@@ -204,7 +206,7 @@ router.post('/peers', asyncHandler(async (req, res) => {
     }
   }
   const peer = await instances.addPeer(data);
-  res.status(201).json(peer);
+  res.status(201).json(instances.sanitizePeerForClient(peer));
 }));
 
 // PUT /api/instances/peers/:id — update peer
@@ -218,7 +220,7 @@ router.put('/peers/:id', asyncHandler(async (req, res) => {
   }
   const peer = await instances.updatePeer(req.params.id, data);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
-  res.json(peer);
+  res.json(instances.sanitizePeerForClient(peer));
 }));
 
 // DELETE /api/instances/peers/:id — remove peer
@@ -232,7 +234,7 @@ router.delete('/peers/:id', asyncHandler(async (req, res) => {
 router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
   const result = await instances.connectPeer(req.params.id);
   if (!result) throw new ServerError('Peer not found', { status: 404 });
-  res.json(result);
+  res.json(instances.sanitizePeerForClient(result));
 }));
 
 // POST /api/instances/peers/:id/probe — force immediate probe
@@ -241,7 +243,7 @@ router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   const peer = peers.find(p => p.id === req.params.id);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
   const result = await instances.probePeer(peer);
-  res.json(result);
+  res.json(instances.sanitizePeerForClient(result));
 }));
 
 // GET /api/instances/peers/:id/query — proxy GET to peer
