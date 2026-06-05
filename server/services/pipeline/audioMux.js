@@ -43,6 +43,16 @@ import { statMusicTrack } from './musicLibrary.js';
 // (4d.2), but not so quiet the user wonders if it's there.
 const DEFAULT_MUSIC_GAIN = 0.5;
 
+// Coerce a gain to a finite number, falling back to DEFAULT_MUSIC_GAIN for any
+// non-numeric / NaN / Infinity input. Every `volume=` filter string runs through
+// this so a stray non-numeric gain can never inject `"NaN"` into the ffmpeg
+// graph (which aborts the whole render). Callers today pass clamped/frozen
+// gains, so this is parity hardening on these exported "pure" builders.
+const finiteGain = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : DEFAULT_MUSIC_GAIN;
+};
+
 // Sidechain-ducking defaults — the music bed (sidechain input) is compressed
 // whenever the VO track (sidechain key) exceeds the threshold. ratio=8 +
 // a low threshold pulls the bed well down under speech; release=300ms lets the
@@ -117,7 +127,7 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
     '-i', inputVideoPath,
     '-stream_loop', '-1',
     '-i', musicPath,
-    '-filter_complex', `[1:a]volume=${Number(musicGain).toFixed(3)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[bed]`,
+    '-filter_complex', `[1:a]volume=${finiteGain(musicGain).toFixed(3)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[bed]`,
     '-map', '0:v',
     '-map', '[bed]',
     '-c:v', 'copy',
@@ -215,7 +225,7 @@ export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain =
   const beds = [];
   if (musicPath) {
     const musicIdx = voLines.length + 1;
-    const gain = Number(musicGain).toFixed(3);
+    const gain = finiteGain(musicGain).toFixed(3);
     chains.push(`[${musicIdx}:a]volume=${gain},${AFMT}[bed]`);
     beds.push('[bed]');
   }
@@ -370,7 +380,7 @@ export function buildCueMuxArgs({ inputVideoPath, cues, voLines = [], musicGain 
   cues.forEach((cue, i) => {
     const inputIdx = i + 1; // 0 is the video
     const delayMs = Math.round(Number(cue.startSec) * 1000);
-    const gain = Number(cue.gain ?? musicGain).toFixed(3);
+    const gain = finiteGain(cue.gain ?? musicGain).toFixed(3);
     const span = (typeof cue.endSec === 'number' && cue.endSec > cue.startSec)
       ? cue.endSec - cue.startSec
       : null;

@@ -187,7 +187,7 @@ export async function resetTaskTypeLearning(taskType) {
   data.totals.failed -= metrics.failed;
   data.totals.totalDurationMs -= metrics.totalDurationMs;
   if (data.totals.successDurationMs) {
-    data.totals.successDurationMs -= (metrics.successDurationMs || 0);
+    data.totals.successDurationMs = Math.max(0, data.totals.successDurationMs - (metrics.successDurationMs || 0));
   }
   // Recalculate max from remaining task types (we can't subtract a max)
   const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
