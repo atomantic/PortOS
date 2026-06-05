@@ -20,18 +20,18 @@ const KIND_TONE = {
 export default function LiveContinuationPanel({
   workId,
   liveMode,
+  usage,
+  onUsageChange,
   getCursorContext,
   onInsert,
   registerTrigger,
 }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
-  // Local usage so a fresh suggest updates the "N left today" readout
-  // immediately (the response carries the new count, which we don't push up to
-  // the parent's work manifest). Re-synced from the prop below so a
-  // parent-driven liveMode change (budget edit, work swap) isn't shadowed.
-  const [usage, setUsage] = useState(liveMode?.usage || null);
-  useEffect(() => { setUsage(liveMode?.usage || null); }, [liveMode?.usage]);
+  // `usage` is the SHARED live text-suggest counter, owned by WorkEditor and
+  // passed in so the CD bridge panel's readout stays in sync after this panel
+  // spends budget. A fresh suggest response carries the new count, which we
+  // push up via onUsageChange rather than mirroring locally.
   const [notice, setNotice] = useState(null);
   const mountedRef = useMounted();
   // Overlapping-call control. A fast typist can re-trigger the debounce before
@@ -51,8 +51,10 @@ export default function LiveContinuationPanel({
   // to. Refs keep `requestSuggest` identity-stable AND current.
   const ctxGetterRef = useRef(getCursorContext);
   const workIdRef = useRef(workId);
+  const onUsageChangeRef = useRef(onUsageChange);
   useEffect(() => { ctxGetterRef.current = getCursorContext; }, [getCursorContext]);
   useEffect(() => { workIdRef.current = workId; }, [workId]);
+  useEffect(() => { onUsageChangeRef.current = onUsageChange; }, [onUsageChange]);
 
   const requestSuggest = useCallback(async () => {
     if (inFlightRef.current) { rerunPendingRef.current = true; return; }
@@ -93,7 +95,7 @@ export default function LiveContinuationPanel({
     setLoading(false);
     if (!res) return;
     setOptions(res.options || []);
-    if (res.usage) setUsage(res.usage);
+    if (res.usage) onUsageChangeRef.current?.(res.usage);
     if ((res.options || []).length === 0) setNotice('No suggestions this time — keep writing and pause again.');
   }, [mountedRef]);
 
