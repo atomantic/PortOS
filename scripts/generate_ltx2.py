@@ -29,8 +29,8 @@ Pin compatibility — class renames + frame_rate:
   switched the output-rate keyword from `fps` to `frame_rate`. PortOS pins a
   specific commit (see scripts/setup-image-video.sh LTX2_PIN), but installs
   upgrade on their own schedule, so this bridge resolves both the pipeline
-  class (_resolve_pipeline / _resolve_pipeline_with_method) and the rate
-  keyword (_rate_kwargs) from the live API — old and new pins both work.
+  class (_resolve_pipeline) and the rate keyword (_rate_kwargs) from the live
+  API — old and new pins both work.
 
 Output: writes the rendered .mp4 to --output. Emits a final JSON line on
 stdout ({"video_path": "<output>"}) so the Node parent can read the result
@@ -158,6 +158,20 @@ def _rate_kwargs(func, fps: float) -> dict:
     """
     name = _rate_kwarg_name(func)
     return {name: fps} if name else {}
+
+
+def _import_image_conditioning_input():
+    """v0.14.x ImageConditioningInput (per-image strength field), or None on old pins.
+
+    Pre-rename pins have no ltx_pipelines_mlx.utils.args module; image strength
+    there is injected via the legacy VideoConditionByLatentIndex monkey-patch
+    instead (see _image_conditioning_kwargs / _apply_legacy_image_strength).
+    """
+    try:
+        from ltx_pipelines_mlx.utils.args import ImageConditioningInput
+    except ImportError:
+        return None
+    return ImageConditioningInput
 
 
 _EXTEND_TC_CONFIG: dict | None = None
@@ -364,28 +378,19 @@ def bind_output_fps(pipe, fps: float) -> None:
     pipe._decode_and_save_video = decode_with_fps
 
 
-def configure_image_strength(image_strength: float | None) -> None:
-    """Thread PortOS' I2V strength into ltx-2-mlx conditioning constructors.
+def _apply_legacy_image_strength(image_strength: float) -> bool:
+    """Inject I2V strength on pre-rename pins; return True if the hook applied.
 
     Pre-rename pins drive first-frame conditioning through a module-level
-    `VideoConditionByLatentIndex` symbol on ti2vid_one_stage that we subclass to
-    inject the requested strength. v0.14.x reworked image conditioning and no
-    longer exposes that hook, so on those pins we surface a clear notice and
-    leave strength at the pipeline default rather than silently pretending the
-    value applied (distinguish "applied" from "couldn't apply").
+    `VideoConditionByLatentIndex` symbol on ti2vid_one_stage (and ti2vid_two_stages)
+    that we subclass to bake in the strength — replaced wholesale, not appended.
+    v0.14.x reworked image conditioning and no longer exposes that hook (strength
+    is carried by ImageConditioningInput instead — see _image_conditioning_kwargs),
+    so this returns False there and the caller surfaces a clear notice.
     """
-    if image_strength is None:
-        return
-    if image_strength < 0.0 or image_strength > 1.0:
-        raise SystemExit("--image-strength must be between 0.0 and 1.0")
-
     from ltx_pipelines_mlx import ti2vid_one_stage
     if not hasattr(ti2vid_one_stage, "VideoConditionByLatentIndex"):
-        emit_status(
-            "--image-strength not supported at this ltx-2-mlx pin "
-            "(reworked image conditioning) — using pipeline default"
-        )
-        return
+        return False
 
     from ltx_core_mlx.conditioning.types.latent_cond import VideoConditionByLatentIndex as BaseCondition
 
@@ -400,7 +405,52 @@ def configure_image_strength(image_strength: float | None) -> None:
             ti2vid_two_stages.VideoConditionByLatentIndex = PortOSVideoCondition
     except ImportError:
         pass
-    emit_status(f"Using image strength {image_strength:g}")
+    return True
+
+
+def _image_conditioning_kwargs(generate_and_save, image: str | None,
+                               image_strength: float | None) -> dict:
+    """I2V image kwarg(s) for generate_and_save, honoring --image-strength on both pins.
+
+    Returns {} when there's no source image. With no strength override we pass a
+    bare `image=` on every pin — unchanged behavior. With a strength override:
+
+      - v0.14.x carries per-image strength as a first-class field on
+        ImageConditioningInput passed through `images=[...]` (passing
+        `images=[ImageConditioningInput(path, 0, 1.0)]` is exactly what the
+        pipeline builds from a bare `image=` internally, so this only changes
+        the strength); and
+      - pre-rename pins take a bare `image=` and get strength from the legacy
+        VideoConditionByLatentIndex monkey-patch, applied here just before
+        generate reads it. If even that hook is absent we surface a notice and
+        fall back to the pipeline default rather than silently dropping it.
+
+    Pin selection is by the live API: the new path needs both an `images`
+    parameter on generate_and_save AND an importable ImageConditioningInput.
+    """
+    if not image:
+        return {}
+    if image_strength is None:
+        return {"image": image}
+    if image_strength < 0.0 or image_strength > 1.0:
+        raise SystemExit("--image-strength must be between 0.0 and 1.0")
+
+    ImageConditioningInput = _import_image_conditioning_input()
+    if ImageConditioningInput is not None and \
+            "images" in inspect.signature(generate_and_save).parameters:
+        emit_status(f"Using image strength {image_strength:g}")
+        return {"images": [ImageConditioningInput(
+            path=image, frame_idx=0, strength=image_strength,
+        )]}
+
+    if _apply_legacy_image_strength(image_strength):
+        emit_status(f"Using image strength {image_strength:g}")
+    else:
+        emit_status(
+            "--image-strength not supported at this ltx-2-mlx pin "
+            "(reworked image conditioning) — using pipeline default"
+        )
+    return {"image": image}
 
 
 def _one_stage_kwargs(args: argparse.Namespace, **extra) -> dict:
@@ -442,7 +492,6 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     return pipe.generate_and_save(
         prompt=args.prompt,
         output_path=args.output,
-        image=image,
         height=args.height,
         width=args.width,
         num_frames=args.num_frames,
@@ -450,6 +499,7 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
         stage1_steps=args.steps if args.steps is not None else 30,
         stage2_steps=args.stage2_steps,
         cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
+        **_image_conditioning_kwargs(pipe.generate_and_save, image, args.image_strength),
         **_rate_kwargs(pipe.generate_and_save, args.fps),
     )
 
@@ -471,13 +521,13 @@ def run_text(args: argparse.Namespace) -> str:
 
 
 def run_image(args: argparse.Namespace) -> str:
-    configure_image_strength(args.image_strength)
-    if args.cfg_scale is not None:
-        if not args.image:
-            raise SystemExit("--image is required for image mode")
-        return run_two_stage(args, image=args.image)
     if not args.image:
         raise SystemExit("--image is required for image mode")
+    # --image-strength is threaded into generate_and_save via
+    # _image_conditioning_kwargs (per-pipe, since the new/old pins carry it
+    # differently); both the two-stage and one-stage paths below pick it up.
+    if args.cfg_scale is not None:
+        return run_two_stage(args, image=args.image)
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "ImageToVideoPipeline")
     emit_status(f"Loading I2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
@@ -485,8 +535,11 @@ def run_image(args: argparse.Namespace) -> str:
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     emit_status("Generating I2V…")
+    image_kwargs = _image_conditioning_kwargs(
+        pipe.generate_and_save, args.image, args.image_strength
+    )
     return pipe.generate_and_save(
-        **_one_stage_kwargs(args, image=args.image),
+        **_one_stage_kwargs(args, **image_kwargs),
         **_rate_kwargs(pipe.generate_and_save, args.fps),
     )
 
@@ -592,10 +645,11 @@ def run_extend(args: argparse.Namespace) -> str:
     """
     global _EXTEND_TC_CONFIG
     from ltx_core_mlx.utils.memory import aggressive_cleanup
-    # Pre-rename pins: ExtendPipeline.extend_from_video; v0.14.x folds extend
-    # into RetakePipeline.extend_from_video (and deletes the extend module).
+    # v0.14.x: RetakePipeline.extend_from_video; pre-rename pins: ExtendPipeline.
+    # New name first (the resolver contract) — and on the old pin RetakePipeline
+    # lacks extend_from_video, so method-presence still selects ExtendPipeline.
     ExtendPipeline = _resolve_pipeline(
-        "ExtendPipeline", "RetakePipeline", method="extend_from_video"
+        "RetakePipeline", "ExtendPipeline", method="extend_from_video"
     )
     if not args.extend_from_video:
         raise SystemExit("--extend-from-video is required for extend mode")
