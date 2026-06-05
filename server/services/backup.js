@@ -7,7 +7,7 @@
  */
 
 import { spawn } from 'child_process';
-import { access, readdir, stat, writeFile } from 'fs/promises';
+import { access, readdir, readFile, stat, writeFile } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
@@ -200,14 +200,17 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
 /**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
- * Silently skips if PostgreSQL is not available.
+ * Returns an explicit status so the caller can distinguish "no PG configured"
+ * (benign, file mode) from "PG configured but dump failed" (data at risk):
+ *   { status: 'ok', sizeBytes, tableCount, path }
+ *   { status: 'skipped', reason: 'not_configured' }
+ *   { status: 'failed', reason: 'pg_dump_missing'|'dump_error'|'empty_dump', error }
  * @param {string} outputPath - Path to write the SQL dump file
- * @returns {Promise<{success: boolean, size?: number, error?: string}>}
  */
 export async function dumpPostgres(outputPath) {
   const health = await checkHealth();
   if (!health.connected || !health.hasSchema) {
-    return { success: false, error: 'PostgreSQL not available' };
+    return { status: 'skipped', reason: 'not_configured' };
   }
 
   const pgHost = process.env.PGHOST || 'localhost';
@@ -237,20 +240,29 @@ export async function dumpPostgres(outputPath) {
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
     proc.on('close', async (code) => {
-      if (code === 0) {
-        const info = await stat(outputPath).catch(() => null);
-        console.log(`💾 pg_dump complete: ${info ? Math.round(info.size / 1024) + 'KB' : 'unknown size'}`);
-        resolve({ success: true, size: info?.size ?? 0 });
-      } else {
+      if (code !== 0) {
         console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
-        resolve({ success: false, error: stderr.trim() });
+        resolve({ status: 'failed', reason: 'dump_error', error: stderr.trim() });
+        return;
       }
+      // Verify: a dump that exits 0 but is empty/truncated is still a failure.
+      const info = await stat(outputPath).catch(() => null);
+      if (!info || info.size === 0) {
+        console.warn('⚠️ pg_dump produced an empty dump file');
+        resolve({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
+        return;
+      }
+      const sql = await readFile(outputPath, 'utf-8').catch(() => '');
+      const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
+      console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
+      resolve({ status: 'ok', sizeBytes: info.size, tableCount, path: outputPath });
     });
 
     proc.on('error', (err) => {
-      // pg_dump not installed — skip silently
+      // pg_dump not installed — a configured-but-unbacked-up DB is at risk,
+      // so this is a failure, not a silent skip.
       console.warn(`⚠️ pg_dump not available: ${err.message}`);
-      resolve({ success: false, error: err.message });
+      resolve({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
     });
   });
 }

@@ -1,13 +1,56 @@
 /**
- * Unit tests for computeEffectiveExcludes — the pure function that decides
- * which paths rsync sees as `--exclude`. Tests the defensive Array.isArray
- * guards (settings.json is hand-editable, so a non-array value must not
- * throw) and the overridable allow-list (non-overridable defaults can never
- * be disabled by user input).
+ * Unit tests for the backup service.
+ *
+ * - computeEffectiveExcludes — the pure function that decides which paths
+ *   rsync sees as `--exclude`. Tests the defensive Array.isArray guards
+ *   (settings.json is hand-editable, so a non-array value must not throw)
+ *   and the overridable allow-list (non-overridable defaults can never be
+ *   disabled by user input).
+ * - dumpPostgres — status classification (ok / skipped / failed) so the
+ *   caller can distinguish "no PG configured" from "configured but the dump
+ *   failed", including the empty-dump verification path.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the DB health check and child_process.spawn before importing backup.js
+vi.mock('../lib/db.js', () => ({
+  checkHealth: vi.fn(),
+}));
+
+import { EventEmitter } from 'events';
+import { spawn } from 'child_process';
+// Partial mock: only override spawn. Preserve execFile et al. because
+// backup.js transitively imports fileUtils.js, which promisifies execFile.
+vi.mock('child_process', async (importOriginal) => ({
+  ...(await importOriginal()),
+  spawn: vi.fn(),
+}));
+
+// Mock fs/promises so stat/readFile are spyable in ESM (the real namespace
+// is non-configurable). Spread the original first so every other fs helper
+// used by backup.js + fileUtils.js keeps its real implementation.
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, stat: vi.fn(actual.stat), readFile: vi.fn(actual.readFile) };
+});
+
+import { checkHealth } from '../lib/db.js';
+import * as fs from 'fs/promises';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes } from './backup.js';
+
+// Helper: build a fake child process whose close/error we can drive.
+function fakeProc() {
+  const proc = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  return proc;
+}
+
+// dumpPostgres awaits checkHealth() before calling spawn() and attaching its
+// close/error listeners. Flush the microtask queue so the listeners exist
+// before the test drives the fake process — otherwise an 'error' emit throws
+// (no listener) and 'close' emits fall into the void (test hangs).
+const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const overridable = DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path);
 const nonOverridable = DEFAULT_EXCLUDES.filter(e => !e.overridable).map(e => e.path);
@@ -101,5 +144,83 @@ describe('computeEffectiveExcludes', () => {
     expect(() => computeEffectiveExcludes()).not.toThrow();
     const result = computeEffectiveExcludes();
     expect(result).toEqual(DEFAULT_EXCLUDES.map(e => e.path));
+  });
+});
+
+describe('dumpPostgres status classification', () => {
+  let dumpPostgres;
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ({ dumpPostgres } = await import('./backup.js'));
+  });
+
+  it('returns skipped/not_configured when PG is not connected', async () => {
+    checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('returns skipped/not_configured when connected but no schema', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: false });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result.status).toBe('skipped');
+  });
+
+  it('returns failed/pg_dump_missing when spawn errors', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.emit('error', new Error('spawn pg_dump ENOENT'));
+    const result = await p;
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('pg_dump_missing');
+  });
+
+  it('returns failed/dump_error on non-zero exit', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.stderr.emit('data', Buffer.from('FATAL: auth failed'));
+    proc.emit('close', 1);
+    const result = await p;
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('dump_error');
+    expect(result.error).toContain('auth failed');
+  });
+
+  it('returns failed/empty_dump when exit 0 but file is 0 bytes', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0 });
+    vi.spyOn(fs, 'readFile').mockResolvedValue('');
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.emit('close', 0);
+    const result = await p;
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('empty_dump');
+  });
+
+  it('returns ok with sizeBytes and tableCount on a good dump', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
+    vi.spyOn(fs, 'readFile').mockResolvedValue(
+      'CREATE TABLE memories (...);\nCREATE TABLE memory_links (...);\n'
+    );
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.emit('close', 0);
+    const result = await p;
+    expect(result.status).toBe('ok');
+    expect(result.sizeBytes).toBe(2048);
+    expect(result.tableCount).toBe(2);
   });
 });
