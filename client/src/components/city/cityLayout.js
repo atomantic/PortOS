@@ -80,11 +80,18 @@ export const computeCityLayout = (apps) => {
   });
 
   // Warehouse district (archived apps): X-centered grid offset along +Z from downtown.
-  // Placement is unchanged by the plaza clearance (downtown-only); see PLAN.md for the
-  // separate all-archived warehouse-near-core follow-up.
+  // The +Z offset follows downtown's depth, but is floored so the near row (and the
+  // ARCHIVE DISTRICT label two units in front of it) always clears the central AI Core
+  // plaza. Without the floor, few-/no-active-app installs collapse the warehouse onto
+  // the core (all-archived → warehouseZ 4, label at z=2, on top of the monument). The
+  // floor is a no-op for normal installs: any layout with 3+ active apps already has
+  // activeRows ≥ 2, so warehouseZ is already ≥ CORE_CLEARANCE_RADIUS + gap.
   if (archived.length > 0) {
     const archiveCols = autoColumns(archived.length);
-    const warehouseZ = activeRows * spacing / 2 + DISTRICT_PARAMS.gap;
+    const warehouseZ = Math.max(
+      activeRows * spacing / 2 + DISTRICT_PARAMS.gap,
+      CORE_CLEARANCE_RADIUS + DISTRICT_PARAMS.gap,
+    );
 
     archived.forEach((app, i) => {
       const [x, , z] = gridIndexToPosition(i, {

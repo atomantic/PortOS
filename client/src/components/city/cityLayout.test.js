@@ -31,17 +31,40 @@ describe('computeCityLayout', () => {
     expect(typeof pos.get('solo').height).toBe('number');
   });
 
-  it('offsets archived apps into a warehouse grid along +Z (plaza clearance is downtown-only)', () => {
+  it('offsets archived apps into a warehouse grid clear of the core plaza on sparse installs', () => {
     const pos = computeCityLayout([
       online('a'),
       { id: 'x', overallStatus: 'online', archived: true },
       { id: 'y', overallStatus: 'online', archived: true },
     ]);
-    // 1 active → activeRows 1 → warehouseZ = 1*12/2 + 4 = 10; 2 archived → 2 cols, X offset 6.
-    // The active app clears to the plaza front edge; warehouse positions are untouched.
+    // 1 active → raw warehouseZ = 1*12/2 + 4 = 10, which sits inside the 12-unit core
+    // plaza — so the floor lifts it to CORE_CLEARANCE_RADIUS + gap = 16. 2 archived → 2
+    // cols, X offset 6. The active app clears to the plaza front edge.
     expect(pos.get('a')).toMatchObject({ x: 0, z: -12, district: 'downtown' });
-    expect(pos.get('x')).toMatchObject({ x: -6, z: 10, district: 'warehouse' });
-    expect(pos.get('y')).toMatchObject({ x: 6, z: 10, district: 'warehouse' });
+    expect(pos.get('x')).toMatchObject({ x: -6, z: 16, district: 'warehouse' });
+    expect(pos.get('y')).toMatchObject({ x: 6, z: 16, district: 'warehouse' });
+  });
+
+  it('keeps the warehouse off the core on an all-archived install (no active apps)', () => {
+    const pos = computeCityLayout([
+      { id: 'x', overallStatus: 'online', archived: true },
+      { id: 'y', overallStatus: 'online', archived: true },
+    ]);
+    // No active apps → raw warehouseZ = 0*12/2 + 4 = 4, which would drop the near row
+    // (and the ARCHIVE DISTRICT label at z-2) on top of the AI Core. The floor lifts the
+    // near row to 16 so the label lands at z=14, clear of the 12-unit core plaza.
+    expect(pos.get('x')).toMatchObject({ x: -6, z: 16, district: 'warehouse' });
+    expect(pos.get('y')).toMatchObject({ x: 6, z: 16, district: 'warehouse' });
+  });
+
+  it('leaves the warehouse offset untouched for normal installs (3+ active apps)', () => {
+    const pos = computeCityLayout([
+      online('a'), online('b'), online('c'),
+      { id: 'x', overallStatus: 'online', archived: true },
+    ]);
+    // 3 active → activeRows 2 → raw warehouseZ = 2*12/2 + 4 = 16, already at the floor,
+    // so max(16, 16) is a no-op: established layouts for normal installs don't shift.
+    expect(pos.get('x')).toMatchObject({ x: 0, z: 16, district: 'warehouse' });
   });
 
   it('never stacks two downtown buildings when clearing the core plaza', () => {

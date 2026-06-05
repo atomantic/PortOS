@@ -313,10 +313,22 @@ export async function updatePeer(id, updates) {
     // is ignored so a stray payload can't wipe a working credential.
     if (updates.auth !== undefined) {
       const normalizedAuth = sanitizePeerAuth(updates.auth);
-      if (normalizedAuth !== undefined && !sameAuth(peer.auth, normalizedAuth)) {
-        peer.auth = normalizedAuth; // null clears, object sets
-        authChanged = true;
-        console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peer.name}`);
+      if (normalizedAuth !== undefined) {
+        if (!sameAuth(peer.auth, normalizedAuth)) {
+          peer.auth = normalizedAuth; // null clears, object sets
+          authChanged = true;
+          console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peer.name}`);
+        }
+        // When sameAuth was true (credential unchanged), authChanged is still
+        // false. If the peer is stuck in authRequired+backoff the user is
+        // explicitly asking for a retry — clear backoff so the immediate probe
+        // below fires instead of waiting up to 24h.
+        if (!authChanged && normalizedAuth !== null && peer.authRequired) {
+          peer.consecutiveFailures = 0;
+          peer.nextProbeAt = null;
+          peer.authRequired = false;
+          authChanged = true; // ensure probe fires
+        }
       }
     }
     if (updates.host !== undefined) {

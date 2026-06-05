@@ -310,6 +310,24 @@ const navItems = [
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
 
+// The pin/unpin toggle shared by every pinnable sidebar row (Pinned/Recent rows
+// and the top-level single rows). It must not navigate, so it swallows the click
+// (preventDefault + stopPropagation). A pinned row shows a filled pin in the
+// accent color; an unpinned row reveals the affordance only on hover/focus of
+// the enclosing `group`.
+function PinButton({ label, pinned, onTogglePin }) {
+  return (
+    <button
+      type="button"
+      aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
+      className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+    >
+      {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+    </button>
+  );
+}
+
 // One row in the sidebar's Pinned/Recent sections: a nav link plus a pin/unpin
 // toggle that does not navigate (stops propagation). Pinned rows show a filled
 // pin; recent rows reveal the pin affordance on hover/focus.
@@ -328,14 +346,60 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
         {Icon && <Icon size={16} className="shrink-0" />}
         <span className="min-w-0 truncate">{entry.label}</span>
       </NavLink>
-      <button
-        type="button"
-        aria-label={pinned ? `Unpin ${entry.label}` : `Pin ${entry.label}`}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
-        className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+      <PinButton label={entry.label} pinned={pinned} onTogglePin={onTogglePin} />
+    </div>
+  );
+}
+
+// A top-level *single* nav row (Dashboard / Review Hub / City / Goals). Unlike a
+// section, it links straight to one destination — and unlike WorkingSetRow it
+// carries the heavier top-level row weight plus the optional badge (Chief of
+// Staff unread count) and the collapsed-rail layout (icon-only, centered, badge
+// overlaid on the icon). When expanded it also exposes the same hover/focus
+// pin/unpin affordance as WorkingSetRow so these destinations can be pinned too;
+// the pin button is omitted in the collapsed rail, mirroring the Pinned/Recent
+// sections which only render when the sidebar is expanded.
+export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTogglePin, onNavigate }) {
+  const Icon = item.icon;
+  const showBadge = item.showBadge && badgeCount > 0;
+  const badgeText = badgeCount > 9 ? '9+' : badgeCount;
+  return (
+    <div className={`group flex items-stretch min-w-0 mx-2 ${collapsed ? 'lg:justify-center' : ''}`}>
+      <NavLink
+        to={item.to}
+        end={item.to === '/'}
+        onClick={onNavigate}
+        className={`flex-1 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+          collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+        } ${
+          active
+            ? 'bg-port-accent/10 text-port-accent'
+            : 'text-gray-400 hover:text-white hover:bg-port-border/50'
+        }`}
+        title={collapsed ? item.label : undefined}
       >
-        {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-      </button>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="relative">
+            <Icon size={20} className="shrink-0" />
+            {/* Badge for collapsed state */}
+            {showBadge && collapsed && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                {badgeText}
+              </span>
+            )}
+          </div>
+          <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+            {item.label}
+          </span>
+        </div>
+        {/* Badge for expanded state */}
+        {showBadge && !collapsed && (
+          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+            {badgeText}
+          </span>
+        )}
+      </NavLink>
+      {!collapsed && <PinButton label={item.label} pinned={pinned} onTogglePin={onTogglePin} />}
     </div>
   );
 }
@@ -645,7 +709,7 @@ export default function Layout() {
       );
     }
 
-    // "More" section divider (Task 5 will add pin/recent logic here)
+    // "More" section divider — visually groups the long-tail sections below it.
     if (item.moreLabel) {
       return <div key="more-label" className="mx-4 mt-3 mb-1 pt-2 border-t border-port-border text-[10px] font-semibold uppercase tracking-wide text-gray-500">More</div>;
     }
@@ -682,42 +746,18 @@ export default function Layout() {
     }
 
     if (item.single) {
+      const singlePinned = isPinned(item.to);
       return (
-        <NavLink
+        <SingleNavRow
           key={item.to}
-          to={item.to}
-          end={item.to === '/'}
-          onClick={() => setMobileOpen(false)}
-          className={`flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
-            collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
-          } ${
-            isActive(item.to)
-              ? 'bg-port-accent/10 text-port-accent'
-              : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-          }`}
-          title={collapsed ? item.label : undefined}
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="relative">
-              <Icon size={20} className="shrink-0" />
-              {/* Badge for collapsed state */}
-              {item.showBadge && unreadCount > 0 && collapsed && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
-              )}
-            </div>
-            <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
-              {item.label}
-            </span>
-          </div>
-          {/* Badge for expanded state */}
-          {item.showBadge && unreadCount > 0 && !collapsed && (
-            <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
-          )}
-        </NavLink>
+          item={item}
+          collapsed={collapsed}
+          active={isActive(item.to)}
+          badgeCount={unreadCount}
+          pinned={singlePinned}
+          onTogglePin={() => (singlePinned ? unpin(item.to) : pin(item.to))}
+          onNavigate={() => setMobileOpen(false)}
+        />
       );
     }
 
@@ -953,7 +993,7 @@ export default function Layout() {
           {!collapsed && (pinned.length > 0 || recent.length > 0) && (
             <div className="mb-2">
               {pinned.length > 0 && (
-                <div className="mb-2">
+                <div className="mb-2" data-testid="pinned-section">
                   <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Pinned</div>
                   {pinned.map((entry) => (
                     <WorkingSetRow key={`pin-${entry.path}`} entry={entry} pinned onTogglePin={() => unpin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
