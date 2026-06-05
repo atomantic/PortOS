@@ -262,6 +262,46 @@ describe('restorePostgres', () => {
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it('treats a 0-byte dump as no_dump (does not restore a truncated snapshot)', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0, isFile: () => true });
+    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+    expect(result).toEqual({ status: 'skipped', reason: 'no_dump' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('real restore spawns psql with ON_ERROR_STOP and shell:false, returns ok on exit 0', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+    await flush();
+    proc.emit('close', 0);
+    const result = await p;
+    expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
+    const [bin, args, opts] = spawn.mock.calls[0];
+    expect(bin).toBe('psql');
+    expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '-f']));
+    expect(opts.shell).toBe(false);
+  });
+
+  it('real restore returns failed/restore_error on non-zero psql exit', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+    await flush();
+    proc.stderr.emit('data', Buffer.from('ERROR: relation already exists'));
+    proc.emit('close', 1);
+    const result = await p;
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('restore_error');
+    expect(result.error).toContain('already exists');
+  });
 });
 
 describe('runBackup pg status propagation', () => {

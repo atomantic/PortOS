@@ -57,6 +57,7 @@ const DEFAULT_STATE = {
   status: 'never',
   lastSnapshotId: null,
   filesChanged: 0,
+  pgBackup: null,
   error: null
 };
 
@@ -424,7 +425,10 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
   }
 
   const info = await stat(sqlPath).catch(() => null);
-  if (!info || !info.isFile?.()) {
+  // An empty/0-byte dump is as good as absent — restoring it is a silent no-op.
+  // Mirror dumpPostgres's empty-dump guard so a truncated snapshot can't read
+  // as a successful "0 tables" restore.
+  if (!info || !info.isFile?.() || info.size === 0) {
     return { status: 'skipped', reason: 'no_dump' };
   }
   const sql = await readFile(sqlPath, 'utf-8').catch(() => '');
@@ -446,7 +450,11 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
   const pgUser = process.env.PGUSER || 'portos';
 
   return new Promise((resolveP) => {
+    // ON_ERROR_STOP=1 makes psql abort and exit non-zero on the first failed
+    // statement. Without it psql replays best-effort and exits 0 even when
+    // statements fail — a partial restore would falsely report success.
     const proc = spawn('psql', [
+      '-v', 'ON_ERROR_STOP=1',
       '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
     ], { shell: false, env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
