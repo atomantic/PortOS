@@ -251,9 +251,14 @@ export default function CustomTasksSection({ appId, appName }) {
     return true;
   };
 
+  // The api.* job wrappers toast HTTP/network errors themselves (request() is not
+  // silent here), so catches just return null — guarding on the result avoids a
+  // second toast and the success-on-error footgun. Business-logic failures the
+  // server returns as a 200 { success: false } are NOT toasted by the helper, so
+  // those branches toast explicitly.
   const handleCreate = async () => {
     if (!validate(createForm)) return;
-    const created = await api.createCosJob(toPayload(createForm, appId)).catch(err => { toast.error(err.message); return null; });
+    const created = await api.createCosJob(toPayload(createForm, appId)).catch(() => null);
     if (!created) return;
     toast.success('Custom task created');
     setCreateForm(emptyForm());
@@ -268,7 +273,7 @@ export default function CustomTasksSection({ appId, appName }) {
 
   const handleEditSave = async () => {
     if (!validate(editForm)) return;
-    const result = await api.updateCosJob(editingId, toPayload(editForm, appId)).catch(err => { toast.error(err.message); return null; });
+    const result = await api.updateCosJob(editingId, toPayload(editForm, appId)).catch(() => null);
     if (!result) return;
     toast.success('Custom task updated');
     setEditingId(null);
@@ -276,22 +281,23 @@ export default function CustomTasksSection({ appId, appName }) {
   };
 
   const handleToggle = async (job) => {
-    const result = await api.toggleCosJob(job.id).catch(err => { toast.error(err.message); return null; });
+    const result = await api.toggleCosJob(job.id).catch(() => null);
     if (!result) return;
     setTasks(prev => prev.map(t => t.id === job.id ? { ...t, enabled: result.job.enabled } : t));
   };
 
   const handleTrigger = async (job) => {
     setTriggering(job.id);
-    const result = await api.triggerCosJob(job.id).catch(err => { toast.error(err.message); return null; });
+    const result = await api.triggerCosJob(job.id).catch(() => null);
     setTriggering(null);
-    if (result?.success !== false) toast.success(`Triggered "${job.name}" for ${appName}`);
-    else toast.error('Task failed to trigger');
+    if (!result) return; // HTTP/network error already toasted by the api helper
+    if (result.success === false) toast.error('Task failed to trigger');
+    else toast.success(`Triggered "${job.name}" for ${appName}`);
     fetchTasks();
   };
 
   const handleDelete = async (job) => {
-    const result = await api.deleteCosJob(job.id).catch(err => { toast.error(err.message); return null; });
+    const result = await api.deleteCosJob(job.id).catch(() => null);
     if (!result) return;
     toast.success('Custom task deleted');
     setTasks(prev => prev.filter(t => t.id !== job.id));
