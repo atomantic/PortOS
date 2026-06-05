@@ -75,15 +75,29 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         output: {
-          manualChunks: {
+          // Vite 8's rolldown bundler requires manualChunks to be a function;
+          // the object-map form Rollup accepted is no longer supported. Match
+          // each module id against the vendor package's node_modules path to
+          // produce the same vendor chunks as before.
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
             // Core React dependencies
-            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+            if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom)[\\/]/.test(id)) {
+              return 'vendor-react';
+            }
             // Socket dependencies
-            'vendor-realtime': ['socket.io-client'],
+            if (/[\\/]node_modules[\\/]socket\.io-client[\\/]/.test(id)) {
+              return 'vendor-realtime';
+            }
             // Drag and drop library (only used in CoS)
-            'vendor-dnd': ['@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
+            if (/[\\/]node_modules[\\/]@dnd-kit[\\/]/.test(id)) {
+              return 'vendor-dnd';
+            }
             // Icon library (largest dependency)
-            'vendor-icons': ['lucide-react']
+            if (/[\\/]node_modules[\\/]lucide-react[\\/]/.test(id)) {
+              return 'vendor-icons';
+            }
+            return undefined;
           }
         }
       },
