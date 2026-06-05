@@ -13,6 +13,7 @@
  */
 
 import { spawn } from 'child_process';
+import sharp from 'sharp';
 import { writeFile, readFile, readdir, stat, unlink, rm, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
@@ -399,8 +400,12 @@ export function buildSidecarMeta({
   };
 }
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null }) {
-  if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null }) {
+  // A regen pass (issue #912) deliberately runs with an EMPTY prompt for
+  // minimal-mutation, watermark-overwriting img2img — so the usual
+  // prompt-required guard is waived when `regenOf` is set (the init image is
+  // what conditions the render, not text).
+  if (!regenOf && !prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
   // callers that bypass the queue must not run two concurrent renders — the
   // activeProcess handle below would be clobbered and cancel() would orphan
@@ -697,6 +702,29 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       imageGenEvents.emit('failed', { generationId: jobId, error: userMessage || reason });
     } else {
       job.status = 'complete';
+      // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
+      // resolution. Upscale the result back to the requested delivery size so
+      // the watermark-free copy matches the original's resolution. `meta.width/
+      // height` currently hold the render dims; record those as render* and
+      // promote the delivered dims so the gallery shows the real file size.
+      if (upscaleTo && Number(upscaleTo.width) > 0 && Number(upscaleTo.height) > 0
+          && (Math.round(upscaleTo.width) !== meta.width || Math.round(upscaleTo.height) !== meta.height)) {
+        const targetW = Math.round(upscaleTo.width);
+        const targetH = Math.round(upscaleTo.height);
+        const resized = await sharp(outputPath)
+          .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
+          .png({ compressionLevel: 9 })
+          .toBuffer()
+          .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
+        if (resized) {
+          await writeFile(outputPath, resized).catch(() => {});
+          meta.renderWidth = meta.width;
+          meta.renderHeight = meta.height;
+          meta.width = targetW;
+          meta.height = targetH;
+          console.log(`🔍 Upscaled regen [${jobId.slice(0, 8)}] ${meta.renderWidth}x${meta.renderHeight} → ${targetW}x${targetH}`);
+        }
+      }
       // Sidecar: persist a metadata record next to the PNG so the gallery
       // and Remix flow can recover prompt/seed/steps even if mflux's own
       // --metadata sidecar lives at a slightly different filename shape.

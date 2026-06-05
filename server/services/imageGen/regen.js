@@ -34,13 +34,58 @@ import { IMAGE_GEN_MODE } from './modes.js';
 
 const IS_WIN = process.platform === 'win32';
 
-// img2img denoise strength: lower = closer to the source (less watermark
-// overwrite), higher = more of the image resampled. 0.4 is the issue's
-// recommended midpoint — enough fresh sampling to overwrite the per-pixel
-// signal while composition holds.
-export const DEFAULT_REGEN_STRENGTH = 0.4;
-export const REGEN_STRENGTH_MIN = 0.2;
+// img2img denoise strength: lower = closer to the source (less mutation),
+// higher = more of the image resampled. With the empty-prompt minimal-mutation
+// default, the VAE round-trip already overwrites most of the per-pixel SynthID
+// signal, so a low strength is enough — 0.25 is the provisional default and the
+// floor is 0.1 so a user can sweep down (via the API `strength` param) to the
+// minimum their SynthID detector still clears. Tune the default once that floor
+// is known.
+export const DEFAULT_REGEN_STRENGTH = 0.25;
+export const REGEN_STRENGTH_MIN = 0.1;
 export const REGEN_STRENGTH_MAX = 0.6;
+
+// FLUX runs self-attention over latent tokens (~pixels/256) and the cost is
+// O(tokens²), so render resolution can't track the source for large images:
+// a 12.6 MP (4096×3072) codex render is ~60× the attention compute of a 1.5 MP
+// one and will stall or OOM even on a big-memory box, well before producing a
+// usable result. Cap the *render* resolution to a FLUX-sane budget; the output
+// is then upscaled back to the source's exact dimensions (see generateImage's
+// `upscaleTo`). Env-tunable for high-memory machines that want to push it.
+export const DEFAULT_MAX_REGEN_MEGAPIXELS = (() => {
+  const n = Number(process.env.PORTOS_REGEN_MAX_MP);
+  return Number.isFinite(n) && n > 0 ? n : 2.0;
+})();
+
+// FLUX latents are /8 spatial and the transformer patchifies 2×2, so render
+// dimensions must be multiples of 16. Round DOWN to the nearest multiple (so
+// the megapixel budget stays a hard ceiling — rounding up could nudge a
+// budget-fitted image back over and reintroduce the OOM risk), floored at 16 so
+// a tiny input can't collapse to 0.
+const floor16 = (n) => Math.max(16, Math.floor(n / 16) * 16);
+
+/**
+ * Resolve the render dimensions for a regen pass: clamp the source to a
+ * FLUX-sane megapixel budget (aspect-preserved) and round to multiples of 16.
+ * Pure. Returns `{ width, height, scaled }` where `scaled` is true whenever the
+ * render dims differ from the source (either because it was downscaled to fit
+ * the budget OR because the source wasn't already /16) — i.e. whenever the
+ * caller must upscale the result back to the source's exact dimensions.
+ */
+export function clampRegenDimensions(srcWidth, srcHeight, maxMegapixels = DEFAULT_MAX_REGEN_MEGAPIXELS) {
+  const w = Math.round(Number(srcWidth));
+  const h = Math.round(Number(srcHeight));
+  if (!(w > 0) || !(h > 0)) {
+    // Defensive fallback for a missing/garbage sidecar — render at the FLUX
+    // native square and don't claim a scale-back.
+    return { width: 1024, height: 1024, scaled: false };
+  }
+  const budgetPx = Math.max(1, maxMegapixels) * 1_000_000;
+  const scale = w * h > budgetPx ? Math.sqrt(budgetPx / (w * h)) : 1;
+  const rw = floor16(w * scale);
+  const rh = floor16(h * scale);
+  return { width: rw, height: rh, scaled: rw !== w || rh !== h };
+}
 
 // FLUX.2 + the diffusers-family runners (Z-Image / ERNIE / HiDream / Qwen) all
 // share the FLUX.2 venv and implement img2img via `--image-path`.
@@ -135,19 +180,26 @@ export async function readImageDimensions(absPath) {
   return null;
 }
 
-// Pure: assemble the mediaJobQueue params for a regen render. Reuses the source
-// image's own prompt (falling back to a generic quality prompt when the source
-// has no recorded prompt — e.g. an upload or an already-cleaned copy) so the
-// round-trip preserves intent. `regenOf` is what stamps the sidecar lineage in
-// `generateImage`. The validated `strength` is the img2img denoise; `steps`
-// (optional) lets the caller pin a low count, otherwise the model default is
-// used. Actual dimensions match the source.
-export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sourceDims = null, model, pythonPath, strength, steps }) {
-  const dims = sourceDims
-    || (sourceMeta.width && sourceMeta.height ? { width: sourceMeta.width, height: sourceMeta.height } : null);
-  const prompt = typeof sourceMeta.prompt === 'string' && sourceMeta.prompt.trim()
-    ? sourceMeta.prompt
-    : 'high quality, highly detailed';
+// Pure: assemble the mediaJobQueue params for a regen render. `regenOf` is what
+// stamps the sidecar lineage in `generateImage`. The validated `strength` is the
+// img2img denoise; `steps` (optional) pins a low count, else the model default.
+//
+// Minimal-mutation default: NO prompt and NO negative prompt. With img2img a
+// text prompt steers the output toward described content; an empty prompt makes
+// the pass a near-pure VAE round-trip + `strength` worth of resample — which is
+// what overwrites the per-pixel SynthID signal with the LEAST visible change to
+// the image. A caller that wants a creative re-roll instead can pass an explicit
+// `promptOverride` (then the source's negative prompt is carried along too).
+//
+// Render dimensions are clamped to a FLUX-sane megapixel budget (large codex
+// renders — up to 12.6 MP — would otherwise stall/OOM the attention pass). When
+// clamping changes the dims, `upscaleTo` carries the source's exact dimensions
+// so `generateImage` resizes the result back up, delivering a watermark-free
+// copy at the original resolution.
+export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sourceDims = null, model, pythonPath, strength, steps, promptOverride }) {
+  const src = sourceDims
+    || (sourceMeta.width && sourceMeta.height ? { width: Math.round(sourceMeta.width), height: Math.round(sourceMeta.height) } : null);
+  const hasPrompt = typeof promptOverride === 'string' && promptOverride.trim();
   // Anchor the variant-grouping lineage at the ROOT original, not the clicked
   // image. computeImageVariantGroup groups siblings under a single original
   // (an item with no `cleanedFrom`); regenerating a cleaned/regenerated variant
@@ -161,15 +213,19 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
     mode: IMAGE_GEN_MODE.LOCAL,
     pythonPath,
     modelId: model.id,
-    prompt,
-    negativePrompt: typeof sourceMeta.negativePrompt === 'string' ? sourceMeta.negativePrompt : '',
+    prompt: hasPrompt ? promptOverride : '',
+    negativePrompt: hasPrompt && typeof sourceMeta.negativePrompt === 'string' ? sourceMeta.negativePrompt : '',
     initImagePath: sourceAbsPath,
     initImageStrength: strength,
     regenOf: groupRoot,
   };
-  if (dims) {
-    params.width = dims.width;
-    params.height = dims.height;
+  if (src) {
+    const render = clampRegenDimensions(src.width, src.height);
+    params.width = render.width;
+    params.height = render.height;
+    // Clamped or /16-rounded → deliver the cleaned copy at the source's exact
+    // resolution by upscaling the render back up.
+    if (render.scaled) params.upscaleTo = { width: src.width, height: src.height };
   }
   if (steps != null) params.steps = steps;
   return params;

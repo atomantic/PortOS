@@ -25,6 +25,7 @@ import { existsSync } from 'node:fs';
 import {
   orderRegenCandidates, modelSupportsRegen, modelUsesFluxVenv,
   resolveRegenBackend, buildRegenParams, DEFAULT_REGEN_STRENGTH,
+  clampRegenDimensions,
 } from './regen.js';
 
 const FLUX2 = { id: 'flux2-klein-9b', runner: 'flux2', cfgDisabled: true };
@@ -140,7 +141,7 @@ describe('buildRegenParams', () => {
     strength: DEFAULT_REGEN_STRENGTH,
   };
 
-  it('assembles a local img2img job from the source prompt + dims + regenOf', () => {
+  it('assembles a minimal-mutation (empty-prompt) local img2img job by default', () => {
     const params = buildRegenParams({
       ...base,
       sourceMeta: { prompt: 'a neon city', negativePrompt: 'blurry', width: 1024, height: 768, modelId: 'flux2-klein-9b' },
@@ -148,14 +149,27 @@ describe('buildRegenParams', () => {
     expect(params).toMatchObject({
       mode: 'local',
       modelId: 'flux2-klein-9b',
-      prompt: 'a neon city',
-      negativePrompt: 'blurry',
+      // Empty prompt by default — the init image conditions the render, not text.
+      prompt: '',
+      negativePrompt: '',
       initImagePath: '/data/images/source.png',
-      initImageStrength: 0.4,
+      initImageStrength: DEFAULT_REGEN_STRENGTH,
       regenOf: 'source.png',
       width: 1024,
       height: 768,
     });
+    // 1024x768 is ≤2MP and /16, so no scale-back is needed.
+    expect(params.upscaleTo).toBeUndefined();
+  });
+
+  it('honors an explicit promptOverride (creative re-roll) and carries the source negative', () => {
+    const params = buildRegenParams({
+      ...base,
+      promptOverride: 'a neon city',
+      sourceMeta: { prompt: 'ignored', negativePrompt: 'blurry', width: 1024, height: 768 },
+    });
+    expect(params.prompt).toBe('a neon city');
+    expect(params.negativePrompt).toBe('blurry');
   });
 
   it('anchors regenOf at the root original when regenerating a cleaned variant', () => {
@@ -189,20 +203,76 @@ describe('buildRegenParams', () => {
     expect(params.height).toBe(720);
   });
 
-  it('falls back to a generic prompt when the source has none', () => {
-    const params = buildRegenParams({ ...base, sourceMeta: {} });
-    expect(params.prompt).toMatch(/high quality/i);
+  it('keeps the prompt empty even when the source has one (minimal mutation)', () => {
+    const params = buildRegenParams({ ...base, sourceMeta: { prompt: 'a detailed castle' } });
+    expect(params.prompt).toBe('');
     expect(params.negativePrompt).toBe('');
   });
 
   it('omits width/height when neither dims source is available', () => {
-    const params = buildRegenParams({ ...base, sourceMeta: { prompt: 'x' } });
+    const params = buildRegenParams({ ...base, sourceMeta: {} });
     expect(params.width).toBeUndefined();
     expect(params.height).toBeUndefined();
+    expect(params.upscaleTo).toBeUndefined();
   });
 
   it('includes steps only when provided', () => {
     expect(buildRegenParams({ ...base, sourceMeta: { prompt: 'x' } }).steps).toBeUndefined();
     expect(buildRegenParams({ ...base, sourceMeta: { prompt: 'x' }, steps: 6 }).steps).toBe(6);
+  });
+
+  it('clamps a large source to the MP budget and sets upscaleTo to the exact source dims', () => {
+    // 4096x3072 = 12.6MP — far over the ~2MP FLUX budget.
+    const params = buildRegenParams({ ...base, sourceDims: { width: 4096, height: 3072 } });
+    expect(params.width * params.height).toBeLessThanOrEqual(2_000_000);
+    expect(params.width % 16).toBe(0);
+    expect(params.height % 16).toBe(0);
+    // aspect ratio preserved (4:3) within rounding tolerance
+    expect(Math.abs(params.width / params.height - 4096 / 3072)).toBeLessThan(0.05);
+    // delivered back at the original resolution
+    expect(params.upscaleTo).toEqual({ width: 4096, height: 3072 });
+  });
+
+  it('upscales back when an under-budget source is not a multiple of 16', () => {
+    // 1024x1000 = 1.02MP (under budget) but 1000 isn't /16 → render rounds to
+    // /16, so deliver back at the exact 1024x1000.
+    const params = buildRegenParams({ ...base, sourceDims: { width: 1024, height: 1000 } });
+    expect(params.width % 16).toBe(0);
+    expect(params.height % 16).toBe(0);
+    expect(params.upscaleTo).toEqual({ width: 1024, height: 1000 });
+  });
+});
+
+describe('clampRegenDimensions', () => {
+  it('leaves a /16 image under budget untouched (no scale-back)', () => {
+    expect(clampRegenDimensions(1024, 1536)).toEqual({ width: 1024, height: 1536, scaled: false });
+  });
+
+  it('downscales a 12.6MP image under the 2MP budget, /16, aspect-preserved', () => {
+    const r = clampRegenDimensions(4096, 3072, 2.0);
+    expect(r.scaled).toBe(true);
+    expect(r.width * r.height).toBeLessThanOrEqual(2_000_000);
+    expect(r.width % 16).toBe(0);
+    expect(r.height % 16).toBe(0);
+    expect(Math.abs(r.width / r.height - 4096 / 3072)).toBeLessThan(0.05);
+  });
+
+  it('rounds a non-/16 source to /16 and flags scaled', () => {
+    const r = clampRegenDimensions(1000, 1000, 9.0); // under budget but not /16
+    expect(r.width % 16).toBe(0);
+    expect(r.height % 16).toBe(0);
+    expect(r.scaled).toBe(true);
+  });
+
+  it('respects a custom (larger) megapixel budget', () => {
+    // 4MP budget keeps a 4096x... source closer to native.
+    const small = clampRegenDimensions(4096, 3072, 2.0);
+    const big = clampRegenDimensions(4096, 3072, 8.0);
+    expect(big.width).toBeGreaterThan(small.width);
+  });
+
+  it('falls back to 1024x1024 for garbage dims', () => {
+    expect(clampRegenDimensions(0, 500)).toEqual({ width: 1024, height: 1024, scaled: false });
+    expect(clampRegenDimensions(NaN, NaN)).toEqual({ width: 1024, height: 1024, scaled: false });
   });
 });
