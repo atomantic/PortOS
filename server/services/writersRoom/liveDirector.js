@@ -19,7 +19,8 @@ import {
   getWork, resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, utcDayKey,
   linkToCreativeDirector,
 } from './local.js';
-import { createProject, setTreatment, deleteProject } from '../creativeDirector/local.js';
+import { createProject, setTreatment, deleteProject, updateProject } from '../creativeDirector/local.js';
+import { deleteCollection } from '../mediaCollections.js';
 import { defaultVideoModelId } from '../videoGen/local.js';
 import { badRequest } from './_shared.js';
 
@@ -162,9 +163,16 @@ function shapeProposal(parsed) {
     .filter(Boolean)
     .slice(0, MAX_BRIDGE_SCENES);
   if (scenes.length < MIN_BRIDGE_SCENES) return null;
+  const logline = typeof parsed?.logline === 'string' ? parsed.logline.trim().slice(0, 500) : '';
+  const synopsis = typeof parsed?.synopsis === 'string' ? parsed.synopsis.trim().slice(0, 5000) : '';
+  // logline + synopsis are REQUIRED by the send schema (and CD's treatment
+  // schema) with min(1). Returning a proposal missing either would render a
+  // live "Send" button that then 400s — so treat a missing-headline response
+  // as "no usable treatment" (null), the same as too-few scenes.
+  if (!logline || !synopsis) return null;
   return {
-    logline: typeof parsed?.logline === 'string' ? parsed.logline.trim().slice(0, 500) : '',
-    synopsis: typeof parsed?.synopsis === 'string' ? parsed.synopsis.trim().slice(0, 5000) : '',
+    logline,
+    synopsis,
     styleSpec: typeof parsed?.styleSpec === 'string' ? parsed.styleSpec.trim().slice(0, 5000) : '',
     scenes,
   };
@@ -253,17 +261,27 @@ export async function sendToCreativeDirector(workId, { proposal } = {}) {
   // it so the route can return the seeded project without a re-read.
   let withTreatment;
   try {
-    withTreatment = await setTreatment(project.id, {
+    await setTreatment(project.id, {
       logline: proposal.logline,
       synopsis: proposal.synopsis,
       scenes,
     });
+    // setTreatment flips a fresh project to 'rendering', but nothing here
+    // enqueues a render — the orchestrator only runs on an explicit
+    // POST /:id/start. A 'rendering' project also hides the detail page's
+    // "Start" button (it shows only for 'draft'/'failed'), which would strand
+    // the bridged project as "active" with no way to kick it off. Reset to
+    // 'draft' so the user reviews it in Creative Director and starts rendering
+    // deliberately (no surprise GPU/provider spend from the bridge itself).
+    withTreatment = await updateProject(project.id, { status: 'draft' });
     await linkToCreativeDirector(workId, { projectId: project.id });
   } catch (err) {
-    // Roll back the orphaned project so a validation/link failure doesn't leave
-    // a treatment-less project behind with no manifest link. Best-effort —
-    // swallow the cleanup error so the original cause reaches the caller.
+    // Roll back the orphaned project AND its auto-created media collection so a
+    // setTreatment/link failure doesn't leave a treatment-less project or a
+    // dangling empty collection behind with no manifest link. Best-effort —
+    // swallow cleanup errors so the original cause reaches the caller.
     await deleteProject(project.id).catch(() => {});
+    if (project.collectionId) await deleteCollection(project.collectionId).catch(() => {});
     throw err;
   }
 

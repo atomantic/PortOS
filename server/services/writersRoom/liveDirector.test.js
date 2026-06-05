@@ -21,11 +21,15 @@ vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLL
 const createProject = vi.fn();
 const setTreatment = vi.fn();
 const deleteProject = vi.fn();
+const updateProject = vi.fn();
 vi.mock('../creativeDirector/local.js', () => ({
   createProject: (...a) => createProject(...a),
   setTreatment: (...a) => setTreatment(...a),
   deleteProject: (...a) => deleteProject(...a),
+  updateProject: (...a) => updateProject(...a),
 }));
+const deleteCollection = vi.fn();
+vi.mock('../mediaCollections.js', () => ({ deleteCollection: (...a) => deleteCollection(...a) }));
 vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltxv-default' }));
 
 const local = await import('./local.js');
@@ -41,6 +45,8 @@ beforeEach(() => {
   createProject.mockReset();
   setTreatment.mockReset();
   deleteProject.mockReset();
+  updateProject.mockReset();
+  deleteCollection.mockReset();
 });
 
 afterEach(() => {
@@ -243,6 +249,20 @@ describe('suggestCdBridge', () => {
     expect(res.usage.count).toBe(1); // reached the LLM → charged
   });
 
+  it('returns a null proposal when logline/synopsis is missing (would fail the send schema)', async () => {
+    // 2 usable scenes but no headline — the send schema requires logline +
+    // synopsis min(1), so a proposal missing them must not render a live Send.
+    runStagedLLM.mockResolvedValue({ content: { logline: '', synopsis: '', styleSpec: 'z', scenes: [
+      { intent: 'a', prompt: 'shot a' }, { intent: 'b', prompt: 'shot b' },
+    ] } });
+    const work = await createWork({ title: 'Headless' });
+    await updateWork(work.id, { liveMode: { enabled: true } });
+
+    const res = await suggestCdBridge(work.id, { before: 'something' });
+    expect(res.proposal).toBeNull();
+    expect(res.usage.count).toBe(1); // reached the LLM → charged
+  });
+
   it('shares the daily budget with suggestContinuation (one pool, not two)', async () => {
     runStagedLLM.mockResolvedValue(BRIDGE_RESPONSE);
     const work = await createWork({ title: 'Shared' });
@@ -274,9 +294,10 @@ describe('sendToCreativeDirector', () => {
     ],
   };
 
-  it('creates a project, seeds the treatment, and records the manifest link', async () => {
-    createProject.mockResolvedValue({ id: 'cd-1' });
-    setTreatment.mockImplementation(async (id, treatment) => ({ id, treatment }));
+  it('creates a project, seeds the treatment, resets to draft, and records the manifest link', async () => {
+    createProject.mockResolvedValue({ id: 'cd-1', collectionId: 'col-1' });
+    setTreatment.mockImplementation(async (id, treatment) => ({ id, treatment, status: 'rendering' }));
+    updateProject.mockImplementation(async (id, patch) => ({ id, ...patch }));
     const work = await createWork({ title: 'My Draft' });
 
     const res = await sendToCreativeDirector(work.id, { proposal: PROPOSAL });
@@ -289,22 +310,27 @@ describe('sendToCreativeDirector', () => {
     const [, treatment] = setTreatment.mock.calls[0];
     expect(treatment.scenes[0]).toMatchObject({ sceneId: 'sc-1', order: 0, useContinuationFromPrior: false });
     expect(treatment.scenes[1]).toMatchObject({ sceneId: 'sc-2', order: 1, useContinuationFromPrior: true });
-    expect(res.project).toMatchObject({ id: 'cd-1' });
+    // setTreatment forces 'rendering' but the bridge resets to 'draft' so the
+    // user can Start it deliberately — the returned project reflects the reset.
+    expect(updateProject).toHaveBeenCalledWith('cd-1', { status: 'draft' });
+    expect(res.project).toMatchObject({ id: 'cd-1', status: 'draft' });
 
     // The bridge link is persisted on the work manifest.
     const reloaded = await getWork(work.id);
     expect(reloaded.cdProjectId).toBe('cd-1');
   });
 
-  it('rolls back the orphaned project when setTreatment fails, and leaves the work unlinked', async () => {
-    createProject.mockResolvedValue({ id: 'cd-orphan' });
+  it('rolls back the orphaned project AND its media collection when setTreatment fails', async () => {
+    createProject.mockResolvedValue({ id: 'cd-orphan', collectionId: 'col-orphan' });
     setTreatment.mockRejectedValue(new Error('treatment invalid'));
     deleteProject.mockResolvedValue({ ok: true });
+    deleteCollection.mockResolvedValue({ ok: true });
     const work = await createWork({ title: 'Doomed' });
 
     await expect(sendToCreativeDirector(work.id, { proposal: PROPOSAL }))
       .rejects.toThrow(/treatment invalid/);
     expect(deleteProject).toHaveBeenCalledWith('cd-orphan');
+    expect(deleteCollection).toHaveBeenCalledWith('col-orphan');
 
     const reloaded = await getWork(work.id);
     expect(reloaded.cdProjectId ?? null).toBeNull();
