@@ -16,16 +16,15 @@ import useMounted from '../../hooks/useMounted';
 // timer: proposing a treatment is a deliberate, heavier action behind an
 // explicit button. It draws on the SAME daily call budget as the continuation
 // panel (both are text LLM calls), so the readout reflects the shared counter.
-export default function CdBridgePanel({ workId, liveMode, getCursorContext, onLinked }) {
+export default function CdBridgePanel({ workId, liveMode, usage, onUsageChange, getCursorContext, onLinked }) {
   const navigate = useNavigate();
   const [proposal, setProposal] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState(null);
-  // Local usage mirror so a fresh proposal updates the "N left today" readout
-  // immediately; re-synced from the prop on a parent-driven liveMode change.
-  const [usage, setUsage] = useState(liveMode?.usage || null);
-  useEffect(() => { setUsage(liveMode?.usage || null); }, [liveMode?.usage]);
+  // `usage` is the SHARED live text-suggest counter, owned by WorkEditor and
+  // passed in so this readout reflects budget the continuation panel spent too.
+  // A fresh proposal response carries the new count, pushed up via onUsageChange.
   const mountedRef = useMounted();
 
   // Staleness guard for overlapping proposal requests — a second click while
@@ -35,8 +34,10 @@ export default function CdBridgePanel({ workId, liveMode, getCursorContext, onLi
   const genRef = useRef(0);
   const ctxGetterRef = useRef(getCursorContext);
   const workIdRef = useRef(workId);
+  const onUsageChangeRef = useRef(onUsageChange);
   useEffect(() => { ctxGetterRef.current = getCursorContext; }, [getCursorContext]);
   useEffect(() => { workIdRef.current = workId; }, [workId]);
+  useEffect(() => { onUsageChangeRef.current = onUsageChange; }, [onUsageChange]);
 
   const requestProposal = useCallback(async () => {
     const ctx = ctxGetterRef.current?.();
@@ -59,7 +60,7 @@ export default function CdBridgePanel({ workId, liveMode, getCursorContext, onLi
     if (!mountedRef.current || gen !== genRef.current) return;
     setLoading(false);
     if (!res) return;
-    if (res.usage) setUsage(res.usage);
+    if (res.usage) onUsageChangeRef.current?.(res.usage);
     if (!res.proposal) {
       setNotice('No treatment this time — keep writing and try again.');
       return;

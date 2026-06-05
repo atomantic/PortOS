@@ -151,6 +151,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // imperative suggest fn; `liveTimerRef` is the post-typing debounce.
   const [liveMode, setLiveMode] = useState(work.liveMode || null);
   useEffect(() => { setLiveMode(work.liveMode || null); }, [work.liveMode]);
+  // Shared live text-suggest usage counter. The continuation panel and the CD
+  // bridge BOTH draw on the same server-side daily budget, so a single mirror
+  // lives here (not one per panel) — otherwise the panel that didn't make the
+  // most recent call shows a stale "N left today" readout until its own next
+  // call. Seeded from / re-synced to liveMode.usage (parent-driven changes:
+  // work swap, budget edit, toggle); updated by whichever panel suggests. The
+  // render-preview budget is a distinct counter owned by LiveRenderPanel.
+  const [liveUsage, setLiveUsage] = useState(liveMode?.usage || null);
+  useEffect(() => { setLiveUsage(liveMode?.usage || null); }, [liveMode?.usage]);
   const liveTriggerRef = useRef(null);
   const liveTimerRef = useRef(null);
   const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
@@ -1004,6 +1013,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <LiveContinuationPanel
                   workId={work.id}
                   liveMode={liveMode}
+                  usage={liveUsage}
+                  onUsageChange={setLiveUsage}
                   getCursorContext={getCursorContext}
                   onInsert={insertAtCursor}
                   registerTrigger={registerLiveTrigger}
@@ -1012,6 +1023,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
               <CdBridgePanel
                 workId={work.id}
                 liveMode={liveMode}
+                usage={liveUsage}
+                onUsageChange={setLiveUsage}
                 getCursorContext={getCursorContext}
                 onLinked={(cdProjectId) => onChange?.({ ...work, cdProjectId })}
               />
