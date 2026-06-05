@@ -166,4 +166,14 @@ describe('getDofParams', () => {
     expect(params.aperture).toBe(0.09);
     expect(params.maxblur).toBe(DOF_DEFAULTS.maxblur); // unspecified → default
   });
+  it('always returns positive finite aperture/maxblur and a positive focus', () => {
+    for (const p of PHOTO_PRESETS) {
+      const params = getDofParams(p.id);
+      expect(params.focus).toBeGreaterThan(0);
+      expect(params.aperture).toBeGreaterThan(0);
+      expect(params.maxblur).toBeGreaterThan(0);
+      expect(Number.isFinite(params.aperture)).toBe(true);
+      expect(Number.isFinite(params.maxblur)).toBe(true);
+    }
+  });
 });

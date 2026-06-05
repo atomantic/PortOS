@@ -51,6 +51,11 @@ export function presetFocusDistance(preset) {
   return Number.isFinite(dist) && dist > 0 ? dist : 1;
 }
 
+// Accept a per-preset override only when it's a positive finite number; otherwise fall back to the
+// default. A negative/zero/NaN aperture or maxblur is meaningless to the bokeh shader (blur radius
+// is non-negative), so a malformed hand-edited preset can't push a broken value into the pass.
+const positiveOr = (value, fallback) => (Number.isFinite(value) && value > 0 ? value : fallback);
+
 // Resolve the BokehPass parameters for a preset: derived focal distance + (per-preset-overridable)
 // aperture/maxblur. Used by CityDepthOfField to build and re-tune the pass when the preset changes.
 export function getDofParams(presetId) {
@@ -58,8 +63,8 @@ export function getDofParams(presetId) {
   const override = preset?.dof || {};
   return {
     focus: presetFocusDistance(preset),
-    aperture: Number.isFinite(override.aperture) ? override.aperture : DOF_DEFAULTS.aperture,
-    maxblur: Number.isFinite(override.maxblur) ? override.maxblur : DOF_DEFAULTS.maxblur,
+    aperture: positiveOr(override.aperture, DOF_DEFAULTS.aperture),
+    maxblur: positiveOr(override.maxblur, DOF_DEFAULTS.maxblur),
   };
 }
 

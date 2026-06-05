@@ -77,8 +77,15 @@ export default function CityDepthOfField({ presetId, enabled = true, composerRef
     invalidate();
   }, [bokehPass, presetId, enabled, invalidate]);
 
-  // Free GPU resources (render targets, materials, full-screen quads) when photo mode exits.
-  useEffect(() => () => composer.dispose(), [composer]);
+  // Free GPU resources when photo mode exits. EffectComposer.dispose() only frees the composer's
+  // own read/write targets + internal copy pass — NOT the passes you added — so dispose each pass
+  // (BokehPass owns a depth render target + materials + a full-screen quad; OutputPass owns a
+  // material + quad) before disposing the composer. The Canvas key-remount tears the WebGL context
+  // down on exit too, but disposing explicitly keeps this correct if that remount ever changes.
+  useEffect(() => () => {
+    for (const pass of composer.passes) pass.dispose?.();
+    composer.dispose();
+  }, [composer]);
 
   // Positive priority makes R3F hand the render loop to us: drive the scene through the composer
   // instead of the default renderer. In photo mode's frameloop="demand" this runs only when
