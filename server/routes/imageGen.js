@@ -657,7 +657,16 @@ async function runLightRegen({ filename, sourceAbsPath, sourceMeta }) {
   const createdAt = new Date().toISOString();
   // Strip hidden/filename/id so the listGallery `...metadata` spread doesn't
   // overwrite the disk-derived filename or re-hide the deliberate variant.
-  const { hidden: _hidden, filename: _srcFilename, id: _srcId, ...sourceMetaForVariant } = sourceMeta;
+  // Also strip the FLUX-regen-specific fields: when the source is itself a
+  // prior FLUX regen, carrying its regenStrength/Steps/ModelId + stale
+  // delta into a SPATIAL pass would make the lineage row falsely read
+  // "· N% denoise" (a light pass has no denoise) and show a stale fidelity.
+  const {
+    hidden: _hidden, filename: _srcFilename, id: _srcId,
+    regenStrength: _rs, regenSteps: _rst, regenModelId: _rm,
+    regenPixelDeltaPct: _rpd, regenPsnr: _rp,
+    ...sourceMetaForVariant
+  } = sourceMeta;
 
   // Compare the in-memory source/output buffers — no need to re-read outPath
   // off disk just to measure the delta.

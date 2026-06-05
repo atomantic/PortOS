@@ -5,18 +5,20 @@
 // are in-memory PNG buffers (no temp files).
 import { describe, it, expect } from 'vitest';
 import sharp from 'sharp';
-import { computePixelDelta, applyLightRegen, REGEN_SQUEEZE_FACTOR } from './regen.js';
+import { computePixelDelta, applyLightRegen, REGEN_SQUEEZE_FACTOR, PSNR_IDENTICAL } from './regen.js';
 
 // Solid-color PNG of the given size — a deterministic fixture for delta math.
 const solidPng = (w, h, { r, g, b }) =>
   sharp({ create: { width: w, height: h, channels: 3, background: { r, g, b } } }).png().toBuffer();
 
 describe('computePixelDelta', () => {
-  it('reports zero delta / infinite PSNR for an identical image', async () => {
+  it('reports zero delta / finite sentinel PSNR for an identical image', async () => {
     const buf = await solidPng(128, 128, { r: 120, g: 64, b: 200 });
     const delta = await computePixelDelta(buf, buf);
     expect(delta.pixelDeltaPct).toBe(0);
-    expect(delta.psnr).toBe(Infinity);
+    // Finite (not Infinity) so it survives JSON serialization.
+    expect(delta.psnr).toBe(PSNR_IDENTICAL);
+    expect(Number.isFinite(delta.psnr)).toBe(true);
   });
 
   it('reports a large delta for opposite solid colors', async () => {

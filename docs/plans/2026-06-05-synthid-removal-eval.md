@@ -38,8 +38,9 @@ fidelity (PSNR-gating) and verify against a detector; (5) LSB-only is a dead end
    installs with no FLUX runner — which previously had no SynthID defeat path at all. Honestly
    labeled as less reliable (`regenMethod: 'light-spatial'` sidecar stamp, UI copy says so).
 3. **Output fidelity metric** (`computePixelDelta`): source-vs-delivered pixel delta % + PSNR
-   stamped on every regen sidecar (`regenPixelDeltaPct`/`regenPsnr`) and surfaced in the lightbox
-   lineage row — catches the mflux strength-0.0 footgun, silent txt2img fallbacks, over-mutation.
+   stamped on every regen sidecar (`regenPixelDeltaPct`/`regenPsnr`); the lightbox lineage row
+   surfaces the "% changed" figure (PSNR stays in the sidecar for diagnostics) — catches the mflux
+   strength-0.0 footgun, silent txt2img fallbacks, over-mutation.
 4. **Provider-adaptive strength default** (`resolveRegenStrengthDefault`): SynthID-bearing sources
    (codex/gpt-image, gemini/imagen/nano-banana) keep the conservative known-good 0.25; local FLUX
    sources (no Google watermark) default to a lighter 0.15. Explicit `strength` override unchanged.

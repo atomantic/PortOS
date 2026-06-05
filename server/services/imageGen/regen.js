@@ -296,6 +296,11 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
   return params;
 }
 
+// PSNR (dB) reported for a byte-identical pair — a finite sentinel above any
+// realistic regen PSNR (an 8% VAE-floor change lands near 30 dB), used instead
+// of Infinity so the value survives JSON serialization.
+export const PSNR_IDENTICAL = 100;
+
 // Measure how much a regen actually changed the image — source vs. delivered.
 // Every serious watermark tool gates on a fidelity metric (reverse-SynthID
 // PSNR-gates each stage); we only stamped the *requested* strength, never the
@@ -305,9 +310,10 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
 // small common raster (cheap, resolution-independent) and compared per-channel.
 // `a`/`b` are each a file path OR an in-memory Buffer (sharp accepts both) — the
 // caller passes buffers when it already has the bytes to skip a disk re-read.
-// Returns `{ pixelDeltaPct, psnr }` (psnr in dB; Infinity for identical), or
-// null on a decode failure so the caller can skip the stamp without failing the
-// render.
+// Returns `{ pixelDeltaPct, psnr }` (psnr in dB; capped at PSNR_IDENTICAL for a
+// byte-identical pair so the value always survives JSON serialization — a raw
+// Infinity would round-trip to null through res.json/JSON.stringify), or null on
+// a decode failure so the caller can skip the stamp without failing the render.
 export async function computePixelDelta(a, b, sampleSize = 256) {
   const toRaster = (src) => sharp(src)
     .resize(sampleSize, sampleSize, { fit: 'fill', kernel: 'cubic' })
@@ -326,7 +332,9 @@ export async function computePixelDelta(a, b, sampleSize = 256) {
   }
   const pixelDeltaPct = Math.round((sumAbs / ra.length / 255) * 1000) / 10;
   const mse = sumSq / ra.length;
-  const psnr = mse === 0 ? Infinity : Math.round(10 * Math.log10((255 * 255) / mse) * 10) / 10;
+  // Finite cap for the identical case — JSON has no Infinity (it serializes to
+  // null), and a real regen never reaches it anyway (the pass always mutates).
+  const psnr = mse === 0 ? PSNR_IDENTICAL : Math.round(10 * Math.log10((255 * 255) / mse) * 10) / 10;
   return { pixelDeltaPct, psnr };
 }
 
@@ -353,8 +361,11 @@ export async function applyLightRegen(buffer, { sharpImpl = sharp } = {}) {
   if (!(w > 0) || !(h > 0)) return null;
   const sw = floor16(w * REGEN_SQUEEZE_FACTOR);
   const sh = floor16(h * REGEN_SQUEEZE_FACTOR);
+  // No EXIF auto-orient: the gallery is PNG-only and PNGs carry no orientation
+  // tag, so a .rotate() would be a no-op whose dim math silently depends on that
+  // invariant. The squeeze targets (sw/sh) come from the un-rotated metadata, so
+  // skipping rotation keeps the resize aspect and the upscale-back dims exact.
   const data = await sharpImpl(buffer)
-    .rotate() // honor EXIF orientation so output matches what the browser showed
     .resize(sw, sh, { kernel: 'cubic' })
     .resize(w, h, { fit: 'fill', kernel: 'lanczos3' })
     .modulate({ brightness: 1.01, saturation: 0.99, hue: 1 })
