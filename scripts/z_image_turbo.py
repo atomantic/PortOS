@@ -38,6 +38,7 @@ from _runner_common import (  # noqa: E402
     make_generator,
     make_stepwise_callback,
     pick_device,
+    place_pipeline,
     suppress_cosmetic_clip_truncation,
     write_sidecar,
 )
@@ -169,7 +170,7 @@ def load_pipeline(
             )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
     with heartbeat("move-to-device"):
-        pipe.to(device)
+        place_pipeline(pipe, device)
     return pipe
 
 

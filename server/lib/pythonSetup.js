@@ -61,16 +61,23 @@ const PYTHON_CANDIDATES = IS_WIN
       join(PATHS.data, 'python', 'venv', 'Scripts', 'python.exe'),
       join(HOME, '.portos', 'venv', 'Scripts', 'python.exe'),
       join(HOME, '.pixie-forge', 'venv', 'Scripts', 'python.exe'),
-      join(HOME, 'miniconda3', 'python.exe'),
-      join(HOME, 'anaconda3', 'python.exe'),
-      'C:\\miniconda3\\python.exe',
-      'C:\\anaconda3\\python.exe',
+      // Standalone python.org installs are preferred over conda on Windows.
+      // A venv created from a conda/miniconda base inherits conda's MKL +
+      // OpenMP DLLs, which make torch fail to load at runtime with
+      // "WinError 1114: c10.dll initialization routine failed" — so a
+      // conda-based FLUX.2 venv installs cleanly but can't import torch.
+      // Conda stays last as a usable-for-non-torch fallback when it's the
+      // only Python present.
       join(HOME, 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
       join(HOME, 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
       join(HOME, 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'python.exe'),
       'C:\\Python313\\python.exe',
       'C:\\Python312\\python.exe',
       'C:\\Python311\\python.exe',
+      join(HOME, 'miniconda3', 'python.exe'),
+      join(HOME, 'anaconda3', 'python.exe'),
+      'C:\\miniconda3\\python.exe',
+      'C:\\anaconda3\\python.exe',
     ]
   : [
       join(PATHS.data, 'python', 'venv', 'bin', 'python3'),
@@ -126,6 +133,16 @@ export async function detectArm64Python() {
   if (!IS_DARWIN || HOST_ARCH !== 'arm64') return null;
   const present = PYTHON_CANDIDATES.filter((p) => existsSync(p));
   return firstArchMatch(present, (a) => a === 'arm64');
+}
+
+// True when an NVIDIA GPU is present (nvidia-smi lists at least one device).
+// Used to decide whether the Windows FLUX.2 install pulls CUDA torch from the
+// PyTorch index vs. the default CPU wheel. Best-effort: a missing nvidia-smi
+// or any failure reads as "no GPU".
+export async function hasNvidiaGpu() {
+  const { stdout } = await execFileAsync('nvidia-smi', ['-L'], { timeout: 8000 })
+    .catch(() => ({ stdout: '' }));
+  return /GPU \d+:/.test(stdout);
 }
 
 // FLUX.2 runs in its own venv because mflux (MLX) and torch+diffusers-from-git
@@ -389,12 +406,25 @@ export function installPackages(pythonPath, importNames, onLog) {
   };
 }
 
+// torch + torchvision are split out from the rest of the FLUX.2 venv specs
+// because Windows needs the CUDA-enabled wheels from PyTorch's own index: the
+// default PyPI `torch` wheel on Windows is CPU-only (`torch==X+cpu`), which
+// makes local image-gen unusably slow on an NVIDIA box. Linux's default PyPI
+// torch already bundles CUDA and macOS uses the default MPS-capable wheel, so
+// only Windows + NVIDIA needs the index swap (see installFlux2Venv).
+export const FLUX2_TORCH_SPECS = ['torch>=2.5', 'torchvision'];
+
+// PyTorch CUDA wheel index used on Windows + NVIDIA. cu126 (CUDA 12.6) is the
+// broadest-compatible recent index — drivers >= ~525 support it — and serves
+// current torch builds. Override with PORTOS_TORCH_CUDA_INDEX (e.g.
+// https://download.pytorch.org/whl/cu130) if a newer/older CUDA is needed.
+export const WIN_TORCH_CUDA_INDEX = 'https://download.pytorch.org/whl/cu126';
+
 // Pip specs for the FLUX.2 venv. Mirrors scripts/setup-image-video.sh so the
 // shell path and the in-app installer stay in sync. diffusers + sdnq are
 // git-only because Flux2KleinPipeline isn't in any tagged release yet.
 export const FLUX2_PIP_SPECS = [
-  'torch>=2.5',
-  'torchvision',
+  ...FLUX2_TORCH_SPECS,
   'accelerate',
   'transformers>=4.51',
   'sentencepiece',
@@ -449,7 +479,26 @@ export function installFlux2Venv(onLog) {
     if (killed) return { ok: false, stage: 'upgrade-pip', cancelled: true };
 
     stage('install', 'Installing torch + diffusers + sdnq + transformers (~6-10 min — large download)…');
-    if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
+    if (IS_WIN) {
+      // Windows: install torch+torchvision first so the right wheel sticks,
+      // then the rest WITHOUT torch in the list — otherwise the `--upgrade`
+      // below would re-pull the CPU-only PyPI torch over the CUDA build.
+      const useCuda = await hasNvidiaGpu();
+      const cudaIndex = process.env.PORTOS_TORCH_CUDA_INDEX || WIN_TORCH_CUDA_INDEX;
+      log(useCuda
+        ? `NVIDIA GPU detected — installing CUDA torch from ${cudaIndex}`
+        : 'No NVIDIA GPU detected — installing CPU torch (image-gen will be slow)');
+      const torchArgs = ['install', '--upgrade', '--progress-bar', 'on', ...FLUX2_TORCH_SPECS];
+      if (useCuda) torchArgs.push('--index-url', cudaIndex);
+      if (!await runPython([venvPython, '-m', 'pip', ...torchArgs])) {
+        return { ok: false, stage: 'install' };
+      }
+      if (killed) return { ok: false, stage: 'install', cancelled: true };
+      const otherSpecs = FLUX2_PIP_SPECS.filter((s) => !FLUX2_TORCH_SPECS.includes(s));
+      if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...otherSpecs])) {
+        return { ok: false, stage: 'install' };
+      }
+    } else if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
       return { ok: false, stage: 'install' };
     }
     if (killed) return { ok: false, stage: 'install', cancelled: true };
