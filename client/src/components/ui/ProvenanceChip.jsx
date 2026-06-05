@@ -35,7 +35,11 @@ function popoverStyleFor(rect, align, popHeight) {
   if (!h || belowTop + h <= vh - VIEWPORT_MARGIN) top = belowTop;        // fits below
   else if (aboveTop >= VIEWPORT_MARGIN) top = aboveTop;                  // flip above
   else top = Math.max(VIEWPORT_MARGIN, vh - VIEWPORT_MARGIN - h);        // clamp into view
-  return { position: 'fixed', top, left, width, visibility: 'visible' };
+  // `width` drives only the `left` math above — the element's actual width is
+  // pinned by the w-64/max-w className so the hidden measure pass (which sets the
+  // height used for the flip) wraps text at exactly the visible width. Don't set
+  // width inline, or the two passes could measure at different widths.
+  return { position: 'fixed', top, left, visibility: 'visible' };
 }
 
 // Source-style provenance chip for health/longevity insights. Tap (or click) to
@@ -147,7 +151,7 @@ export default function ProvenanceChip({
           // Rendered hidden for one layout-effect pass so its height is measurable
           // before it's placed (the below/above flip needs that height).
           style={popStyle}
-          className="z-30 rounded-lg border border-port-border bg-port-card p-3 text-left shadow-xl"
+          className="z-30 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-port-border bg-port-card p-3 text-left shadow-xl"
         >
           <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-gray-200 normal-case tracking-normal">
             <Icon size={12} aria-hidden="true" className={`shrink-0 ${iconTone}`} />

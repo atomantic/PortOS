@@ -146,4 +146,14 @@ describe('ProvenanceChip', () => {
     const popover = openPopover();
     expect(popover.style.top).toBe('46px');
   });
+
+  it('constrains width via className (not inline) so hidden and visible passes wrap identically', () => {
+    // The height that drives the below/above flip is measured during the hidden
+    // pass; if width were applied only to the visible style, the hidden pass would
+    // wrap at full width and under-measure. Pin width to the className instead.
+    stubChipRect({ left: 500, right: 560, top: 20, bottom: 40 });
+    const popover = openPopover();
+    expect(popover.className).toContain('w-64');
+    expect(popover.style.width).toBe(''); // width is NOT set inline
+  });
 });
