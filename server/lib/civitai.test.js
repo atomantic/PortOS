@@ -7,6 +7,7 @@ import {
   buildSidecar,
   detectEarlyAccess,
   fetchCivitaiModel,
+  flux2VariantFromBaseModel,
   normalizeCivitaiImageUrl,
   parseCivitaiUrl,
   pickPrimaryFile,
@@ -88,6 +89,22 @@ describe('baseModelToRunner', () => {
     expect(baseModelToRunner('Pony')).toBe(null);
     expect(baseModelToRunner('')).toBe(null);
     expect(baseModelToRunner(null)).toBe(null);
+  });
+});
+
+describe('flux2VariantFromBaseModel', () => {
+  it('parses the Klein size from the Civitai baseModel string', () => {
+    expect(flux2VariantFromBaseModel('Flux.2 Klein 4B')).toBe('4b');
+    expect(flux2VariantFromBaseModel('Flux.2 Klein 9B')).toBe('9b');
+  });
+  it('returns null for a flux2 baseModel with no size', () => {
+    expect(flux2VariantFromBaseModel('Flux.2 Klein')).toBe(null);
+  });
+  it('returns null for non-flux2 families (so a "4b" elsewhere never leaks in)', () => {
+    expect(flux2VariantFromBaseModel('Flux.1 D')).toBe(null);
+    expect(flux2VariantFromBaseModel('SDXL 1.0')).toBe(null);
+    expect(flux2VariantFromBaseModel('')).toBe(null);
+    expect(flux2VariantFromBaseModel(null)).toBe(null);
   });
 });
 

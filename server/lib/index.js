@@ -93,6 +93,7 @@ export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';
 export * from './imageClean.js';
 export * from './multipart.js';
+export * from './safetensors.js';
 export * from './assetHash.js';
 export * from './pdfImageEmbed.js';
 export * from './zipStream.js';

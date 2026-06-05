@@ -33,12 +33,15 @@ import {
   buildSidecar,
   detectEarlyAccess,
   fetchCivitaiModel,
+  flux2VariantFromBaseModel,
   normalizeCivitaiImageUrl,
   parseCivitaiUrl,
   pickPrimaryFile,
   pickVersion,
   slugifyForFilename,
 } from '../lib/civitai.js';
+import { RUNNER_FAMILIES, composeCompatKey } from '../lib/runners.js';
+import { detectFlux2Variant } from '../lib/safetensors.js';
 import { getSettings } from './settings.js';
 
 const SIDECAR_SUFFIX = '.metadata.json';
@@ -107,6 +110,27 @@ export const listLoras = async () => {
       const runnerFamily = baseModel
         ? baseModelToRunner(baseModel)
         : (sidecar?.runnerFamily || null);
+      // Fine-grained FLUX.2 size variant ('4b'/'9b'). Resolve in order:
+      // stored sidecar value → Civitai baseModel string → the safetensors
+      // header (ground truth for self-trained / hand-dropped LoRAs with no
+      // Civitai metadata). Persist a header-detected value back so the header
+      // is read at most once per LoRA. Mirrors the "re-derive runnerFamily on
+      // read" healing above.
+      let fluxVariant = null;
+      if (runnerFamily === RUNNER_FAMILIES.FLUX2) {
+        fluxVariant = sidecar?.fluxVariant || flux2VariantFromBaseModel(baseModel);
+        if (!fluxVariant) {
+          fluxVariant = await detectFlux2Variant(_fullPath);
+          if (fluxVariant) {
+            // Best-effort cache — never block or fail the list on a write error.
+            patchLoraSidecar(filename, { fluxVariant }).catch(() => {});
+          }
+        }
+      }
+      // The picker matches this against the selected model's `loraCompatKey`.
+      // FLUX.2 → size-specific (or bare 'flux2' when size is unknown, so it
+      // still shows for both sizes); every other family → its runner id.
+      const loraCompatKey = composeCompatKey(runnerFamily, fluxVariant);
       return {
         filename,
         name: sidecar?.name || fallbackName,
@@ -115,6 +139,8 @@ export const listLoras = async () => {
         // sidecar fields surfaced for the picker / manager UI:
         civitai: sidecar?.civitai || null,
         runnerFamily,
+        fluxVariant,
+        loraCompatKey,
         triggerWords: sidecar?.triggerWords || [],
         // Coerce non-finite values (NaN, Infinity, missing/malformed sidecar
         // fields) to the default — `?? 1.0` alone wouldn't catch NaN.

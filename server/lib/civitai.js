@@ -43,6 +43,17 @@ export const baseModelToRunner = (baseModel) => {
   return null;
 };
 
+// FLUX.2 Klein ships in two sizes (4B/9B) with incompatible transformer dims.
+// Civitai distinguishes them in the baseModel string ("Flux.2 Klein 4B" /
+// "Flux.2 Klein 9B"), so a Civitai-installed LoRA can be tagged without
+// reading its safetensors header. Returns '4b' | '9b' | null.
+export const flux2VariantFromBaseModel = (baseModel) => {
+  if (typeof baseModel !== 'string') return null;
+  if (baseModelToRunner(baseModel) !== RUNNER_FAMILIES.FLUX2) return null;
+  const m = baseModel.match(/\b([49])b\b/i);
+  return m ? `${m[1].toLowerCase()}b` : null;
+};
+
 // Extracts model id and optional modelVersionId from any Civitai URL shape:
 //   https://civitai.com/models/123456
 //   https://civitai.com/models/123456/some-slug
@@ -287,6 +298,9 @@ export const buildSidecar = ({ model, version, file, filename }) => {
       nsfw: !!model?.nsfw,
     },
     runnerFamily: baseModelToRunner(baseModel),  // 'mflux' | 'flux2' | 'z-image' | null
+    // '4b' | '9b' | null — only meaningful for the flux2 family. Lets the LoRA
+    // picker tell a Klein-4B LoRA apart from a Klein-9B one (incompatible dims).
+    fluxVariant: flux2VariantFromBaseModel(baseModel),
     triggerWords: Array.isArray(version?.trainedWords) ? version.trainedWords : [],
     recommendedScale: Number.isFinite(version?.settings?.strength) ? version.settings.strength : 1.0,
     file: {

@@ -18,16 +18,38 @@ import { Link } from 'react-router-dom';
 // that the server would reject with a confusing 400.
 const MAX_SELECTED_LORAS = 8;
 
+// Coarse family for a compat key — collapses `flux2-4b`/`flux2-9b` back to
+// `flux2` so a size-unknown LoRA still matches any flux2 model (and vice
+// versa). Non-flux2 keys are returned unchanged.
+const familyOf = (k) => (typeof k === 'string' && k.startsWith('flux2') ? 'flux2' : k);
+
 export default function LoraPicker({
   availableLoras = [],
   selected = [],
   onChange,
   currentRunnerFamily,
+  // Fine-grained compat key for the selected model (e.g. 'flux2-4b'). When
+  // provided, it filters out off-size FLUX.2 LoRAs that would silently fail to
+  // load. Falls back to `currentRunnerFamily` for older callers.
+  currentCompatKey = null,
   onAppendTrigger = null,
   disabled = false,
 }) {
   if (!availableLoras.length) return null;
-  const compatible = availableLoras.filter((l) => !l.runnerFamily || l.runnerFamily === currentRunnerFamily);
+  const modelKey = currentCompatKey || currentRunnerFamily;
+  // A LoRA is compatible when: it has no compat key (unknown — show it and let
+  // the runner surface any error), it matches the model exactly, or one side's
+  // size is unknown (coarse flux2 match). A `flux2-9b` LoRA is hidden from a
+  // `flux2-4b` model — the actual fix.
+  const isCompatible = (lora) => {
+    const loraKey = lora.loraCompatKey || lora.runnerFamily;
+    if (!loraKey) return true;
+    if (loraKey === modelKey) return true;
+    if (loraKey === familyOf(modelKey)) return true;
+    if (modelKey === familyOf(loraKey)) return true;
+    return false;
+  };
+  const compatible = availableLoras.filter(isCompatible);
   const atCap = selected.length >= MAX_SELECTED_LORAS;
 
   const toggle = (lora, on) => {

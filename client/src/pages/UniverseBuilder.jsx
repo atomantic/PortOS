@@ -32,7 +32,7 @@ import { useUniverseNav } from '../hooks/useUniverseNav';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
-import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
+import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
@@ -3490,10 +3490,12 @@ function RenderTab({
   availableBackends, defaultMode, imageModels, availableLoras = [],
   handleRender, rendering, runs,
 }) {
-  const currentRunnerFamily = useMemo(() => {
-    const currentModel = imageModels.find((m) => m.id === renderOpts.modelId);
-    return currentModel?.runner || RUNNER_FAMILIES.MFLUX;
-  }, [imageModels, renderOpts.modelId]);
+  const currentModel = useMemo(
+    () => imageModels.find((m) => m.id === renderOpts.modelId),
+    [imageModels, renderOpts.modelId],
+  );
+  const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
+  const currentCompatKey = loraCompatKey(currentModel);
   // Memoize the counts that drive button labels + disable states. Drafts can
   // be large (full canon + variations + sheets) and ImageGenSettingsForm
   // re-renders RenderTab on every keystroke into the per-batch fields.
@@ -3543,6 +3545,7 @@ function RenderTab({
           showLoras
           availableLoras={availableLoras}
           currentRunnerFamily={currentRunnerFamily}
+          currentCompatKey={currentCompatKey}
           showStylePreset
         />
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">

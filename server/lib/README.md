@@ -102,6 +102,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
 | `imageClean.js` | `cleanImageBuffer` (sharp-based denoise + C2PA strip) + `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in `routes/imageClean.js` wraps `cleanImageBuffer`. |
 | `multipart.js` | Streaming multipart/form-data parser. |
+| `safetensors.js` | `readSafetensorsHeader(path)` reads only the JSON header of a `.safetensors` file (never the tensor payload). `detectFlux2VariantFromHeader(header)` / `detectFlux2Variant(path)` classify a LoRA as FLUX.2 Klein `'4b'` (hidden dim 3072) vs `'9b'` (4096) by transformer-block tensor shapes, so the LoRA picker can hide off-variant weights that would silently fail to load. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
 | `zipStream.js` | Streaming ZIP parser. |
 | `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. `sidecarGenParamsHash` canonically hashes a sidecar's gen-params (excludes the machine-local `sha256` cache block) for cross-machine sidecar-convergence comparisons. |

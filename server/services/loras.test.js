@@ -63,11 +63,72 @@ describe('listLoras', () => {
     const legacy = list.find((l) => l.filename === 'lora-legacy.safetensors');
     expect(realstagram.name).toBe('RealStagram');
     expect(realstagram.runnerFamily).toBe('mflux');
+    // Non-flux2 LoRAs: compat key is just the runner family.
+    expect(realstagram.loraCompatKey).toBe('mflux');
+    expect(realstagram.fluxVariant).toBe(null);
     expect(realstagram.triggerWords).toEqual(['rstgrm']);
     expect(realstagram.recommendedScale).toBe(0.85);
     expect(legacy.name).toBe('legacy');
     expect(legacy.runnerFamily).toBe(null);
+    expect(legacy.loraCompatKey).toBe(null);
     expect(legacy.recommendedScale).toBe(1.0);
+  });
+
+  it('tags a flux2 LoRA size from the Civitai baseModel without reading the header', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    // Garbage file contents — must NOT be read since baseModel carries the size.
+    await fs.writeFile(join(tmpLoras, 'lora-f2-9b.safetensors'), 'not-a-real-safetensors');
+    await fs.writeFile(join(tmpLoras, 'lora-f2-9b.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-f2-9b.safetensors',
+      name: 'Flux2 9B LoRA',
+      civitai: { baseModel: 'Flux.2 Klein 9B' },
+    }));
+    const list = await lorasService.listLoras();
+    const lora = list.find((l) => l.filename === 'lora-f2-9b.safetensors');
+    expect(lora.runnerFamily).toBe('flux2');
+    expect(lora.fluxVariant).toBe('9b');
+    expect(lora.loraCompatKey).toBe('flux2-9b');
+  });
+
+  it('detects a flux2 LoRA size from the safetensors header when baseModel lacks it', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    // Real header with a 9B-dim transformer tensor (16384 = 4096×4).
+    const header = {
+      'transformer.single_transformer_blocks.0.attn.to_out.lora_A.weight': { dtype: 'F16', shape: [32, 16384], data_offsets: [0, 1] },
+    };
+    const json = Buffer.from(JSON.stringify(header), 'utf-8');
+    const len = Buffer.alloc(8);
+    len.writeBigUInt64LE(BigInt(json.length), 0);
+    await fs.writeFile(join(tmpLoras, 'lora-selftrained.safetensors'), Buffer.concat([len, json, Buffer.from([0])]));
+    // baseModel is the bare family — no size — forcing the header read.
+    await fs.writeFile(join(tmpLoras, 'lora-selftrained.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-selftrained.safetensors',
+      name: 'Self-trained 9B',
+      civitai: { baseModel: 'Flux.2 Klein' },
+    }));
+    const list = await lorasService.listLoras();
+    const lora = list.find((l) => l.filename === 'lora-selftrained.safetensors');
+    expect(lora.runnerFamily).toBe('flux2');
+    expect(lora.fluxVariant).toBe('9b');
+    expect(lora.loraCompatKey).toBe('flux2-9b');
+  });
+
+  it('leaves loraCompatKey at bare flux2 when the size is indeterminate', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    // Unreadable header + no size in baseModel → can't determine the variant.
+    await fs.writeFile(join(tmpLoras, 'lora-f2-unknown.safetensors'), 'garbage');
+    await fs.writeFile(join(tmpLoras, 'lora-f2-unknown.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-f2-unknown.safetensors',
+      civitai: { baseModel: 'Flux.2 Klein' },
+    }));
+    const list = await lorasService.listLoras();
+    const lora = list.find((l) => l.filename === 'lora-f2-unknown.safetensors');
+    expect(lora.runnerFamily).toBe('flux2');
+    expect(lora.fluxVariant).toBe(null);
+    expect(lora.loraCompatKey).toBe('flux2');
   });
 
   it('returns [] when PATHS.loras is a file, not a directory', async () => {
@@ -237,6 +298,8 @@ describe('installFromCivitai', () => {
     expect(sidecar.civitai.modelId).toBe(2600698);
     expect(sidecar.civitai.versionId).toBe(7);
     expect(sidecar.runnerFamily).toBe('mflux');
+    // Flux.1 D is not a flux2 family → no size variant.
+    expect(sidecar.fluxVariant).toBe(null);
     expect(sidecar.triggerWords).toEqual(['rstgrm']);
     expect(sidecar.recommendedScale).toBe(0.85);
     // File on disk

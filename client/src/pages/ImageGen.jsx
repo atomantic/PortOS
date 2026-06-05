@@ -18,7 +18,7 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
-import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
+import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import HfTokenBanner from '../components/imageGen/HfTokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -502,8 +502,11 @@ export default function ImageGen() {
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   // mflux is the default runner for entries with no explicit `runner` field.
-  // LoraPicker filters compatible weights itself; we just pass the family.
+  // LoraPicker filters compatible weights itself; we pass the family (for the
+  // "install one matching X" copy) and the fine-grained compat key (which
+  // distinguishes FLUX.2 4B vs 9B so off-size LoRAs are hidden).
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
+  const currentCompatKey = loraCompatKey(currentModel);
 
   const refreshFlux2Status = useCallback((signal) => {
     const qs = modelId ? `?modelId=${encodeURIComponent(modelId)}` : '';
@@ -1007,6 +1010,7 @@ export default function ImageGen() {
               selected={selectedLoras}
               onChange={setSelectedLoras}
               currentRunnerFamily={currentRunnerFamily}
+              currentCompatKey={currentCompatKey}
               onAppendTrigger={(words) => setPrompt((p) => appendTriggerWords(p, words))}
               disabled={statusLoading}
             />
