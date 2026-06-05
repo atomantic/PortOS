@@ -78,6 +78,13 @@ export function normalizeImage(i) {
     regenStrength: typeof i.regenStrength === 'number' ? i.regenStrength : null,
     regenSteps: typeof i.regenSteps === 'number' ? i.regenSteps : null,
     regenModelId: i.regenModelId || null,
+    // 'flux' (GPU round-trip) | 'light-spatial' (CPU pass). Drives the "(light)"
+    // lineage label — must survive normalization or the label never renders.
+    regenMethod: i.regenMethod || null,
+    // Realized fidelity stamped by the server (% the pixels actually changed +
+    // PSNR); surfaced in the lightbox lineage row, so it must be lifted here too.
+    regenPixelDeltaPct: typeof i.regenPixelDeltaPct === 'number' ? i.regenPixelDeltaPct : null,
+    regenPsnr: typeof i.regenPsnr === 'number' ? i.regenPsnr : null,
     raw: i,
   };
 }
