@@ -72,7 +72,7 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 router.post('/jobs', asyncHandler(async (req, res) => {
   const parsedJob = createCosJobSchema.safeParse(req.body);
   if (!parsedJob.success) failValidation(parsedJob);
-  const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = parsedJob.data;
+  const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, appId, taskMetadata } = parsedJob.data;
 
   if (type === 'shell' && !command?.trim()) {
     throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
@@ -100,7 +100,7 @@ router.post('/jobs', asyncHandler(async (req, res) => {
 
   const job = await autonomousJobs.createJob({
     name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,
-    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, appId, taskMetadata
   });
   res.json({ success: true, job });
 }));
@@ -110,7 +110,7 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
   const parsedJobUpdate = updateCosJobSchema.safeParse(req.body);
   if (!parsedJobUpdate.success) failValidation(parsedJobUpdate);
   const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,
-    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly } = parsedJobUpdate.data;
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly, appId, taskMetadata } = parsedJobUpdate.data;
   if (cronExpression) {
     const parts = cronExpression.trim().split(/\s+/);
     if (parts.length !== 5) {
@@ -128,7 +128,7 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
   }
   const job = await autonomousJobs.updateJob(req.params.id, {
     name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,
-    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly, appId, taskMetadata
   });
   if (!job) {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
@@ -175,11 +175,19 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // Job execution is recorded via the job:spawned event when the agent actually starts
   // Manual triggers always bypass approval — the user explicitly requested execution
   const task = await autonomousJobs.generateTaskFromJob(job);
+  // Forward the app scope + git-workflow options from the generated task's
+  // metadata. addTask maps these top-level keys back onto metadata; without
+  // them an app-scoped job triggered manually would run in the PortOS root
+  // (the scheduled path emits the full task object via task:ready and is unaffected).
   const taskResult = await cos.addTask({
     description: task.description,
     priority: task.priority,
     context: `Manually triggered autonomous job: ${job.name}`,
-    approvalRequired: false
+    approvalRequired: false,
+    app: task.metadata?.app,
+    useWorktree: task.metadata?.useWorktree,
+    openPR: task.metadata?.openPR,
+    simplify: task.metadata?.simplify
   }, 'internal');
 
   if (!taskResult?.id) {

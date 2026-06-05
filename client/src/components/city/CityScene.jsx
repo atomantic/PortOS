@@ -33,8 +33,6 @@ import CityAiCore from './CityAiCore';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
-import CityEffects from './CityEffects';
-import CityClouds from './CityClouds';
 import CitySignalBeacons from './CitySignalBeacons';
 import CitySky from './CitySky';
 import CityGalaxySky from './CityGalaxySky';
@@ -50,10 +48,21 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
+  const [webglLost, setWebglLost] = useState(false);
   const prevExplorationRef = useRef(false);
   const orbitRef = useRef(null);
+  const contextCleanupRef = useRef(null);
+  const contextLostTimerRef = useRef(null);
+  const activeCanvasRef = useRef(null);
 
   const explorationMode = settings?.explorationMode || false;
+
+  const clearContextTimer = useCallback(() => {
+    if (contextLostTimerRef.current) {
+      window.clearTimeout(contextLostTimerRef.current);
+      contextLostTimerRef.current = null;
+    }
+  }, []);
 
   // drei's `keyEvents` only (re)connects pointer events to the DOM element in this
   // three-stdlib version — it does NOT attach the keydown listener OrbitControls
@@ -65,6 +74,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
     controls.listenToKeyEvents(window);
     return () => controls.stopListenToKeyEvents?.();
   }, [explorationMode, transitioning, photoMode]);
+
+  useEffect(() => () => {
+    clearContextTimer();
+    contextCleanupRef.current?.();
+  }, [clearContextTimer]);
 
   // Set transitioning=true when exploration mode toggles
   useEffect(() => {
@@ -89,22 +103,67 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
   const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online').length;
   const totalCount = apps.filter(a => !a.archived).length;
 
-  const dpr = settings?.dpr || [1, 1.5];
+  // Quality presets always express dpr as a [min, max] pair. Cap it to the live
+  // ceiling so a high preset can't push a context-losing pixel ratio; photo mode
+  // gets a touch more for crisp postcards.
+  const rawDpr = settings?.dpr || [1, 1.25];
+  const dprLimit = photoMode ? 1.5 : 1.25;
+  const dpr = rawDpr.map(value => Math.min(value, dprLimit));
   const showGradientBackground = cityDayMix(settings) > 0.5;
+  const sceneClearColor = background || '#030308';
+  const fallbackBackground = showGradientBackground
+    ? 'linear-gradient(180deg, #0f4f9a 0%, #1e78bf 48%, #58a9dc 100%)'
+    : sceneClearColor;
+
+  const handleCanvasCreated = useCallback(({ gl }) => {
+    contextCleanupRef.current?.();
+    const canvas = gl.domElement;
+    activeCanvasRef.current = canvas;
+    clearContextTimer();
+    const handleContextLost = (event) => {
+      event.preventDefault();
+      clearContextTimer();
+      contextLostTimerRef.current = window.setTimeout(() => {
+        contextLostTimerRef.current = null;
+        if (activeCanvasRef.current !== canvas || !canvas.isConnected) return;
+        const context = gl.getContext?.();
+        if (context?.isContextLost?.()) {
+          setWebglLost(true);
+        }
+      }, 750);
+    };
+    const handleContextRestored = () => {
+      clearContextTimer();
+      setWebglLost(false);
+    };
+    canvas.addEventListener('webglcontextlost', handleContextLost, false);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
+    contextCleanupRef.current = () => {
+      clearContextTimer();
+      if (activeCanvasRef.current === canvas) {
+        activeCanvasRef.current = null;
+      }
+      canvas.removeEventListener('webglcontextlost', handleContextLost, false);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored, false);
+    };
+    setWebglLost(false);
+  }, [clearContextTimer]);
 
   return (
-    <Canvas
-      camera={{ position: [0, 25, 45], fov: 50 }}
-      dpr={dpr}
-      shadows={false}
-      style={{ background: background || '#030308', cursor: explorationMode ? 'crosshair' : 'auto' }}
-      // preserveDrawingBuffer lets photo mode read the frame back via toDataURL. It's a
-      // WebGL context-creation attribute, so it can't be toggled at runtime without recreating
-      // the renderer (which would flash the scene) — we accept it always-on. The cost on modern
-      // GPUs is a small per-frame copy; negligible against this scene's particle/bloom load.
-      gl={{ antialias: true, preserveDrawingBuffer: true, alpha: false }}
-    >
-      {showGradientBackground && <color attach="background" args={[background || '#030308']} />}
+    <div className="absolute inset-0" style={{ background: fallbackBackground }}>
+      <Canvas
+        key={photoMode ? 'photo' : 'live'}
+        camera={{ position: [0, 25, 45], fov: 50 }}
+        dpr={dpr}
+        shadows={false}
+        onCreated={handleCanvasCreated}
+        style={{ background: sceneClearColor, cursor: explorationMode ? 'crosshair' : 'auto', opacity: webglLost ? 0 : 1 }}
+        // preserveDrawingBuffer is only needed while taking postcards. Keeping it
+        // always-on makes Chromium's WebGL context much easier to lose in the live
+        // dashboard, which reads as a blank white scene.
+        gl={{ antialias: true, preserveDrawingBuffer: Boolean(photoMode), alpha: false, powerPreference: 'high-performance' }}
+      >
+      <color attach="background" args={[sceneClearColor]} />
       {/* Mount the galaxy dome only at night — keeps its 2.8MB texture from being
           fetched/decoded in full daylight, where it's fully faded out anyway.
           Suspense keeps the useLoader fetch from suspending the whole canvas while
@@ -118,7 +177,6 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         </ErrorBoundary>
       )}
       <CitySky settings={settings} />
-      <CityClouds settings={settings} />
       <CityLights settings={settings} />
       <CityLandscape settings={settings} />
       <CityEnergyOverlay chronotype={chronotype} settings={settings} />
@@ -164,13 +222,12 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         productivityData={productivityData}
       />
       <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} settings={settings} />
-      <CityVolumetricLights positions={positions} />
+      <CityVolumetricLights positions={positions} settings={settings} />
       <CityNeonSigns positions={positions} />
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
       <CityDataRain />
       <CityEmbers />
       <CityParticles settings={settings} />
-      <CityEffects settings={settings} />
       {explorationMode && (
         <PlayerController
           keysRef={keysRef}
@@ -207,6 +264,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         onTransitionComplete={handleTransitionComplete}
       />
       <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} />
-    </Canvas>
+      </Canvas>
+    </div>
   );
 }

@@ -45,10 +45,16 @@ function NeonSign({ position, rotation, text, color, fontSize = 0.4, flickerRate
         <meshBasicMaterial color="#020208" transparent opacity={0.5} />
       </mesh>
 
-      {/* Back blocker to prevent mirrored text */}
+      {/* Styled back blocker to prevent mirrored text — a tinted panel plus a thin
+          accent strip so the sign reads as a finished object from behind, not a
+          flat black cutout. */}
       <mesh position={[0, 0, -0.03]}>
         <planeGeometry args={[textWidth + 0.3, textHeight + 0.15]} />
-        <meshBasicMaterial color="#020208" side={THREE.BackSide} />
+        <meshBasicMaterial color="#07111f" transparent opacity={0.78} side={THREE.BackSide} />
+      </mesh>
+      <mesh position={[0, 0, -0.032]}>
+        <planeGeometry args={[textWidth + 0.42, 0.04]} />
+        <meshBasicMaterial color={color} transparent opacity={0.24} side={THREE.BackSide} />
       </mesh>
 
       {/* Neon text */}

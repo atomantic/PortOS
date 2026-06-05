@@ -53,7 +53,57 @@ function classifyProbeError(err, peer) {
   // (used for HTTPS peer hops via peerFetch) destroys the request with a
   // plain `new Error('Request aborted')` instead — both are timeouts here.
   if (code === 'ETIMEDOUT' || err?.name === 'AbortError' || err?.message === 'Request aborted') return `🌐 ⏱️ Probe timeout (${PROBE_TIMEOUT_MS}ms)`;
+  // The peer is reachable but gated by an auth proxy (Tailscale serve, Caddy,
+  // nginx Basic auth). Point the user at the per-peer credential field rather
+  // than letting it read like a generic failure.
+  if (err?.httpStatus === 401 || err?.httpStatus === 403) {
+    return `🔒 Authentication required (HTTP ${err.httpStatus}) — set a username/password for this peer in the Instances UI`;
+  }
   return err?.message || String(err);
+}
+
+// Normalize a credential object off a peer add/update payload. Returns:
+//   - `undefined` for absent / malformed input (caller leaves the field as-is)
+//   - `null` for an explicit clear (both fields blank)
+//   - `{ username, password }` for a credential to store
+// Username defaults to '' so a password-only credential is valid Basic auth.
+function sanitizePeerAuth(auth) {
+  if (auth === null) return null;
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return undefined;
+  const username = typeof auth.username === 'string' ? auth.username.trim() : '';
+  const password = typeof auth.password === 'string' ? auth.password : '';
+  if (!username && !password) return null;
+  return { username, password };
+}
+
+// True when two credential values (null or { username, password }) are
+// equivalent — used to skip a needless socket-relay reconnect on a no-op
+// credential write.
+function sameAuth(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.username === b.username && a.password === b.password;
+}
+
+// Strip the locally-stored proxy credential before a peer record crosses the
+// wire (e.g. the announce response echoes the matched local peer back to the
+// announcing instance). The password is OUR secret for reaching THEM and must
+// never leak to the peer itself.
+export function redactPeerForWire(peer) {
+  if (!peer || typeof peer !== 'object' || !('auth' in peer)) return peer;
+  const { auth: _auth, ...rest } = peer;
+  return rest;
+}
+
+// Redact the stored credential before a peer record is returned to the local
+// client (API responses + socket broadcasts). Keeps the non-secret username
+// and a `hasPassword` marker so the UI can show "credential set" and prefill
+// the username, but never ships the password to the browser — mirrors the
+// `hasApiKey` pattern in server/routes/providers.js. The password stays only
+// on the server-side record, where peerAuthHeaders reads it.
+export function sanitizePeerForClient(peer) {
+  if (!peer || typeof peer !== 'object' || !peer.auth || typeof peer.auth !== 'object') return peer;
+  return { ...peer, auth: { username: peer.auth.username ?? '', hasPassword: Boolean(peer.auth.password) } };
 }
 
 // Default data shape
@@ -174,13 +224,18 @@ const DEFAULT_SYNC_CATEGORIES = {
 
 export { DEFAULT_SYNC_CATEGORIES };
 
-export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host }) {
+export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {
   const peer = await withData(async (data) => {
     const normalizedHost = validHost(host);
+    const normalizedAuth = sanitizePeerAuth(auth);
     const entry = {
       id: crypto.randomUUID(),
       address,
       host: normalizedHost || null,
+      // Optional HTTP Basic credential for peers gated behind an auth proxy.
+      // null when unset; `peerAuthHeaders` no-ops on it. Stays local — never
+      // synced or announced (see redactPeerForWire).
+      auth: normalizedAuth || null,
       // Set to true once the user explicitly chooses a host (set/clear via UI).
       // Once true, handleAnnounce never auto-overwrites — it's the only way to
       // honor "the user explicitly cleared this; stay on IP" against a peer
@@ -223,6 +278,11 @@ export async function removePeer(id) {
 
 export async function updatePeer(id, updates) {
   let hostChanged = false;
+  // Credential edits must reconnect the live socket relay (it pins the
+  // Basic-auth header into extraHeaders at connect time), not just the next
+  // probe cycle — otherwise an online relayed peer keeps the stale credential
+  // until a natural reconnect. Tracked like hostChanged, consumed below.
+  let authChanged = false;
   // Track false→true transitions for the per-record-subscribable categories
   // so we can backfill-subscribe existing local records after the data write
   // settles. Set inside withData (where we have the merged before/after
@@ -247,6 +307,17 @@ export async function updatePeer(id, updates) {
       }
       peer.syncCategories = { ...prev, ...incoming };
       if (turnedOnKinds.length > 0) backfillPeerInstanceId = peer.instanceId || null;
+    }
+    // Optional proxy credential. `null` (or both fields blank) clears it; a
+    // valid object replaces it; malformed input (sanitizePeerAuth → undefined)
+    // is ignored so a stray payload can't wipe a working credential.
+    if (updates.auth !== undefined) {
+      const normalizedAuth = sanitizePeerAuth(updates.auth);
+      if (normalizedAuth !== undefined && !sameAuth(peer.auth, normalizedAuth)) {
+        peer.auth = normalizedAuth; // null clears, object sets
+        authChanged = true;
+        console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peer.name}`);
+      }
     }
     if (updates.host !== undefined) {
       const normalized = validHost(updates.host);
@@ -279,7 +350,16 @@ export async function updatePeer(id, updates) {
   // Tear down the socket relay only after a real state transition so it can
   // reconnect using the new URL on the next probe cycle. Invalid/no-op host
   // writes no longer disrupt an already-healthy connection.
-  if (updates.enabled === false || hostChanged) disconnectFromPeer(id);
+  if (updates.enabled === false || hostChanged || authChanged) disconnectFromPeer(id);
+  // A credential edit is almost always the fix for a 401, but the peer may be
+  // deep in exponential probe backoff (up to 24h) from those failures — so the
+  // regular poll loop would skip it for hours. Retry immediately: probePeer
+  // bypasses the nextProbeAt gate and, on success, resets backoff + reconnects
+  // the relay with the new credential. Fire-and-forget; failure just re-arms
+  // backoff as before.
+  if (authChanged && result && result.enabled !== false) {
+    probePeer(result).catch((err) => console.log(`⚠️ Probe after credential change failed: ${err.message}`));
+  }
   // Backfill-subscribe every local record of any kind whose category just
   // flipped on. Fire-and-forget — `autoSubscribePeerToAllRecords` is
   // idempotent + per-record-error tolerant, and we don't want to block the
@@ -313,14 +393,22 @@ export async function probePeer(peer) {
 
   const previousStatus = peer.status;
   let status, lastHealth, lastSeen, remoteInstanceId, remoteVersion, remoteApps, remoteSyncSeqs;
+  // Latches when the peer answers 401/403 — a reachable-but-auth-gated peer, as
+  // opposed to an unreachable one. The Instances UI reads this to prompt for a
+  // credential instead of showing a generic offline state.
+  let authRequired = false;
   try {
     // Fetch health details, apps, and sync status in parallel
     const [healthRes, appsRes, syncRes] = await Promise.all([
-      peerFetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }),
-      peerFetch(`${baseUrl}/api/apps`, { signal: controller.signal }).catch(() => null),
-      peerFetch(`${baseUrl}/api/instances/sync-status`, { signal: controller.signal }).catch(() => null)
+      peerFetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }, peer),
+      peerFetch(`${baseUrl}/api/apps`, { signal: controller.signal }, peer).catch(() => null),
+      peerFetch(`${baseUrl}/api/instances/sync-status`, { signal: controller.signal }, peer).catch(() => null)
     ]);
-    if (!healthRes.ok) throw new Error(`HTTP ${healthRes.status}`);
+    if (!healthRes.ok) {
+      const err = new Error(`HTTP ${healthRes.status}`);
+      err.httpStatus = healthRes.status;
+      throw err;
+    }
     const json = await healthRes.json();
     status = 'online';
     lastHealth = json;
@@ -342,6 +430,7 @@ export async function probePeer(peer) {
   } catch (err) {
     console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(err, peer)}`);
     status = 'offline';
+    authRequired = err?.httpStatus === 401 || err?.httpStatus === 403;
     lastHealth = peer.lastHealth; // preserve last known
     lastSeen = peer.lastSeen;
   } finally {
@@ -354,6 +443,9 @@ export async function probePeer(peer) {
     entry.status = status;
     entry.lastSeen = lastSeen;
     entry.lastHealth = lastHealth;
+    // Surface "reachable but needs a credential" distinctly from plain offline.
+    // Cleared on any successful probe (including after the user adds the password).
+    entry.authRequired = authRequired;
     entry.lastApps = remoteApps ?? entry.lastApps ?? null;
     entry.remoteSyncSeqs = remoteSyncSeqs ?? entry.remoteSyncSeqs ?? null;
     if (remoteInstanceId) entry.instanceId = remoteInstanceId;
@@ -430,7 +522,7 @@ export async function queryPeer(id, apiPath) {
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   try {
-    const res = await peerFetch(url, { signal: controller.signal });
+    const res = await peerFetch(url, { signal: controller.signal }, peer);
     const json = await res.json();
     return { success: true, data: json };
   } catch (err) {
@@ -484,6 +576,10 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       id: crypto.randomUUID(),
       address,
       host: normalizedHost || null,
+      // A credential can only be entered locally, never learned from an
+      // announce — start null. If this peer needs auth, our probe to it will
+      // 401 and the user sets the password from the Instances UI.
+      auth: null,
       // The host came from the peer's announce, not from a user — leave
       // hostManual false so subsequent updates from the peer can still refine.
       hostManual: false,
@@ -538,7 +634,7 @@ async function announceSelf(peer) {
         host: selfHost
       }),
       signal: controller.signal
-    });
+    }, peer);
     if (res.ok) {
       console.log(`🌐 Announced self to ${url}`);
       await markDirection(peer.id, 'outbound');

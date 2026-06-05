@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, seededRand, smoothstepRange, cityDayMix } from './cityConstants';
+import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset } from './cityConstants';
 
 const hexLum = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -25,10 +25,10 @@ describe('deriveCityPalette', () => {
     const phosphor = getTheme('black-ice-terminal-day'); // accent #0a7a4a
     const p = deriveCityPalette(phosphor);
     expect(p.nightBackground).toBe('#010c07'); // #0a7a4a * 0.1
-    expect(p.dayBackground).toBe('#ddece6');   // #0a7a4a lightened 0.86 toward white
+    expect(p.dayBackground).toBe('#badacc');   // #0a7a4a lightened 0.72 toward white
     // A day theme's default surround (loading screen) is the bright day sky.
     expect(p.isDay).toBe(true);
-    expect(p.background).toBe('#ddece6');
+    expect(p.background).toBe('#badacc');
   });
 
   it('defaults a night theme surround to the dark void', () => {
@@ -36,7 +36,7 @@ describe('deriveCityPalette', () => {
     const p = deriveCityPalette(midnight);
     expect(p.isDay).toBe(false);
     expect(p.background).toBe('#060d19'); // nightBackground = #3b82f6 * 0.1
-    expect(p.dayBackground).toBe('#e4eefe');
+    expect(p.dayBackground).toBe('#c8dcfc');
   });
 
   it('falls back to defaults for a missing/invalid theme', () => {
@@ -95,6 +95,26 @@ describe('deriveCityPalette', () => {
     // glass — fully clean, no CRT
     expect(deriveCityPalette(getTheme('lumen-glass')).crt)
       .toEqual({ scanlines: false, glow: false, vignette: false });
+  });
+});
+
+describe('city sky visibility', () => {
+  it('keeps daytime horizon bands blue enough to avoid a white sky wash', () => {
+    const noon = getTimeOfDayPreset('noon', 'cyberpunk');
+    const horizonLow = hexChannels(noon.horizonLow);
+    const horizonHigh = hexChannels(noon.horizonHigh);
+
+    // The lower horizon can be bright, but should not be near-white across all
+    // channels; otherwise the sky dome becomes a fog overlay.
+    expect(Math.max(...horizonLow) - Math.min(...horizonLow)).toBeGreaterThan(35);
+    expect(Math.max(...horizonHigh) - Math.min(...horizonHigh)).toBeGreaterThan(45);
+    expect(hexLum(noon.horizonLow)).toBeLessThan(205);
+  });
+
+  it('falls back to the cyber sky for legacy dreamworld settings', () => {
+    const cyber = getTimeOfDayPreset('noon', 'cyberpunk');
+    const noon = getTimeOfDayPreset('noon', 'dreamworld');
+    expect(noon).toBe(cyber);
   });
 });
 

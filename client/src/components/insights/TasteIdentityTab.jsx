@@ -13,6 +13,17 @@ const STRENGTH_TO_LEVEL = {
   tentative: 'weak'
 };
 
+// Themes are modeled by the LLM from the taste profile — never something the user
+// stated outright — so every card declares an `inferred` provenance. Confidence
+// (strong/moderate/tentative) is a separate axis carried by ConfidenceBadge.
+const THEME_PROVENANCE = {
+  level: 'inferred',
+  explainer:
+    'Surfaced by AI from your completed taste profile — a cross-domain pattern it inferred across your aesthetics, media, food, and values, not something you stated directly.',
+  whatWouldChange:
+    'Answering more of your taste profile, or regenerating themes, refines or replaces this pattern.',
+};
+
 function EvidenceList({ evidence }) {
   const [expanded, setExpanded] = useState(false);
   if (!evidence || evidence.length === 0) return null;
@@ -48,6 +59,7 @@ function ThemeCard({ theme }) {
   return (
     <InsightCard
       title={theme.title}
+      provenance={THEME_PROVENANCE}
       badge={
         <ConfidenceBadge
           level={level}

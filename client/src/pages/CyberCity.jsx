@@ -14,7 +14,7 @@ import CitySettingsPanel from '../components/city/CitySettingsPanel';
 import { computeFilterResult } from '../utils/cityFilter';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
-import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay } from '../components/city/cityConstants';
+import { CITY_COLORS, deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay } from '../components/city/cityConstants';
 import { useThemeContext } from '../components/ThemeContext';
 
 function CyberCityInner() {
@@ -51,11 +51,11 @@ function CyberCityInner() {
   // The city renders day or night, following the theme mode by default (see
   // resolveCityTimeOfDay). The resolved preset key is handed to the scene via a
   // settings override (CitySky/CityLights/CityGround read settings.timeOfDay), and
-  // the backdrop swaps between the bright day sky and the dark night void to match.
+  // the backdrop swaps between the blue day sky and the dark night void to match.
   const cityTimeOfDay = resolveCityTimeOfDay(settings?.timeOfDay, cityPalette.isDay);
-  const sceneBackground = cityTimeOfDay.daytime ? cityPalette.dayBackground : cityPalette.nightBackground;
+  const sceneBackground = cityTimeOfDay.daytime ? CITY_COLORS.timeOfDay.noon.midSky : cityPalette.nightBackground;
   const sceneSettings = useMemo(
-    () => ({ ...settings, timeOfDay: cityTimeOfDay.presetKey }),
+    () => ({ ...settings, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey }),
     [settings, cityTimeOfDay.presetKey],
   );
 

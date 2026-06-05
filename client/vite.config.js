@@ -36,6 +36,11 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: 5554,
+      // Fail loudly if 5554 is taken instead of auto-incrementing. Without this,
+      // Vite walks up to the next free port and can land on a reserved PortOS
+      // port (5555 API, 5556 browser CDP) — squatting on the CDP port makes the
+      // browser keep-alive read Vite's HTML index and spam JSON-parse errors.
+      strictPort: true,
       open: false,
       allowedHosts: ['.ts.net', 'localhost'],
       proxy: {

@@ -7,44 +7,32 @@ export const TIME_OF_DAY_AUTO_EVENT = 'portos-city-timeofday-auto';
 
 const QUALITY_PRESETS = {
   low: {
-    bloomEnabled: false, bloomStrength: 0,
-    reflectionsEnabled: false, chromaticAberration: false,
-    filmGrain: false, colorGrading: false,
+    reflectionsEnabled: false,
     particleDensity: 0.5, scanlineOverlay: false,
     ambientBrightness: 1.0,
     neonBrightness: 1.0,
-    sceneExposure: 1.0,
     dpr: [1, 1],
   },
   medium: {
-    bloomEnabled: true, bloomStrength: 0.3,
-    reflectionsEnabled: true, chromaticAberration: false,
-    filmGrain: false, colorGrading: true,
+    reflectionsEnabled: true,
     particleDensity: 0.75, scanlineOverlay: true,
     ambientBrightness: 1.0,
     neonBrightness: 1.0,
-    sceneExposure: 1.0,
     dpr: [1, 1.25],
   },
   high: {
-    bloomEnabled: true, bloomStrength: 0.5,
-    reflectionsEnabled: true, chromaticAberration: true,
-    filmGrain: true, colorGrading: true,
+    reflectionsEnabled: true,
     particleDensity: 1.0, scanlineOverlay: true,
     ambientBrightness: 1.2,
     neonBrightness: 1.2,
-    sceneExposure: 1.0,
-    dpr: [1, 1.5],
+    dpr: [1, 1.25],
   },
   ultra: {
-    bloomEnabled: true, bloomStrength: 0.7,
-    reflectionsEnabled: true, chromaticAberration: true,
-    filmGrain: true, colorGrading: true,
+    reflectionsEnabled: true,
     particleDensity: 1.5, scanlineOverlay: true,
     ambientBrightness: 1.5,
     neonBrightness: 1.5,
-    sceneExposure: 1.2,
-    dpr: [1, 2],
+    dpr: [1, 1.5],
   },
 };
 
@@ -54,7 +42,6 @@ const DEFAULT_SETTINGS = {
   sfxEnabled: true,
   sfxVolume: 0.5,
   qualityPreset: 'high',
-  skyTheme: 'cyberpunk',
   timeOfDay: 'auto', // 'auto' follows the active theme's day/night mode; 'day'/'night' force it
   explorationMode: false,
   ...QUALITY_PRESETS.high,

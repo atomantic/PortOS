@@ -1,7 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { CITY_COLORS, cityDayMix } from './cityConstants';
 
 // Volumetric light cone shader
 const CONE_VERT = `
@@ -86,7 +86,7 @@ function LightBeam({ position, color, height = 15, radius = 2, intensity = 1, ph
 }
 
 // Horizontal scanning laser beam between two points
-function ScanBeam({ start, end, color, speed = 0.2, delay = 0 }) {
+function ScanBeam({ start, end, color, speed = 0.2, delay = 0, intensityScale = 1 }) {
   const meshRef = useRef();
 
   const { length, midX, midZ, angle } = useMemo(() => {
@@ -106,7 +106,7 @@ function ScanBeam({ start, end, color, speed = 0.2, delay = 0 }) {
     // Slowly fade in and out
     const cycle = ((t * speed + delay) % 4.0);
     meshRef.current.material.opacity = cycle < 2 ?
-      Math.sin((cycle / 2) * Math.PI) * 0.06 : 0;
+      Math.sin((cycle / 2) * Math.PI) * 0.06 * intensityScale : 0;
   });
 
   const y = 3 + Math.sin(delay * 7) * 2;
@@ -121,7 +121,7 @@ function ScanBeam({ start, end, color, speed = 0.2, delay = 0 }) {
       <meshBasicMaterial
         color={color}
         transparent
-        opacity={0.05}
+        opacity={0.05 * intensityScale}
         blending={THREE.AdditiveBlending}
         side={THREE.DoubleSide}
       />
@@ -129,7 +129,8 @@ function ScanBeam({ start, end, color, speed = 0.2, delay = 0 }) {
   );
 }
 
-export default function CityVolumetricLights({ positions }) {
+export default function CityVolumetricLights({ positions, settings }) {
+  const nightFade = 1 - cityDayMix(settings);
   const beams = useMemo(() => {
     if (!positions || positions.size < 2) return { lights: [], scans: [] };
 
@@ -169,7 +170,7 @@ export default function CityVolumetricLights({ positions }) {
     return { lights, scans };
   }, [positions]);
 
-  if (beams.lights.length === 0) return null;
+  if (nightFade <= 0.05 || beams.lights.length === 0) return null;
 
   return (
     <group>
@@ -180,7 +181,7 @@ export default function CityVolumetricLights({ positions }) {
           color={beam.color}
           height={beam.height}
           radius={beam.radius}
-          intensity={beam.intensity}
+          intensity={beam.intensity * nightFade}
           phase={beam.phase}
         />
       ))}
@@ -192,6 +193,7 @@ export default function CityVolumetricLights({ positions }) {
           color={scan.color}
           speed={scan.speed}
           delay={scan.delay}
+          intensityScale={nightFade}
         />
       ))}
     </group>

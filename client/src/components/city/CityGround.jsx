@@ -65,6 +65,7 @@ export default function CityGround({ settings }) {
   const groundColorTarget = useRef(new THREE.Color(preset.groundColor ?? '#0a0a20'));
   groundColorTarget.current.set(preset.groundColor ?? '#0a0a20');
   const targetRoughness = preset.groundRoughness ?? 0.7;
+  const targetMetalness = 0.4 * (1 - dayMix) + 0.04 * dayMix;
 
   // The neon grid + additive fog follow the themed accent (CITY_COLORS.ground is
   // recolored per theme by applyCityBrandColors). At night they read as accent neon;
@@ -79,6 +80,7 @@ export default function CityGround({ settings }) {
     const lf = Math.min(1, delta * 3);
     groundMatRef.current.color.lerp(groundColorTarget.current, lf);
     groundMatRef.current.roughness += (targetRoughness - groundMatRef.current.roughness) * lf;
+    groundMatRef.current.metalness += (targetMetalness - groundMatRef.current.metalness) * lf;
   });
 
   const puddles = useMemo(() => {
@@ -107,7 +109,7 @@ export default function CityGround({ settings }) {
           <meshStandardMaterial
             ref={groundMatRef}
             color={preset.groundColor ?? '#0a0a20'}
-            metalness={0.4}
+            metalness={targetMetalness}
             roughness={0.7}
             side={THREE.DoubleSide}
           />

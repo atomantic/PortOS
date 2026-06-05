@@ -78,6 +78,8 @@ export async function getPeerIntegrity({ peerId, kind }) {
 
   const res = await peerFetch(
     `${peerBaseUrl(peer)}/api/peer-sync/manifest?kind=${encodeURIComponent(kind)}`,
+    {},
+    peer,
   ).catch(() => null);
 
   // Distinguish a network failure (peerFetch threw / returned null) from a 404.

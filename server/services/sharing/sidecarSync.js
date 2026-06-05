@@ -87,7 +87,7 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   // Abort a hung connection after the timeout — mirrors the image pull worker.
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SIDECAR_PULL_TIMEOUT_MS);
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes: SIDECAR_MAX_BYTES })
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes: SIDECAR_MAX_BYTES }, peer)
     .finally(() => clearTimeout(timeoutId))
     .catch(() => null);
   if (!res || !res.ok) return false;

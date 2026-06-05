@@ -130,7 +130,9 @@ const getPresetColors = (name, skyTheme) => {
       sunLight: new THREE.Color(p.sunLight),
       hour: p.hour,
       sunIntensity: p.sunIntensity,
-      overlayOpacity: isBrightDay ? 1.0 : 0.26,
+      // Day is the gradient sky. Night is the bundled galaxy map, so the shader
+      // dome gets out of the way and only the moon/light meshes remain.
+      overlayOpacity: isBrightDay ? 1.0 : 0.0,
       sunScale: p.sunScale,
       isMoon: p.isMoon,
     };
@@ -146,30 +148,30 @@ function CelestialBody({ groupRef }) {
   useFrame(({ clock }) => {
     if (!bodyRef.current) return;
     const t = clock.getElapsedTime();
-    const pulse = 1.0 + Math.sin(t * 0.5) * 0.1;
-    bodyRef.current.material.emissiveIntensity = 2.0 * pulse;
+    const pulse = 1.0 + Math.sin(t * 0.5) * 0.08;
+    bodyRef.current.material.emissiveIntensity = 0.45 * pulse;
     if (haloRef.current) {
-      haloRef.current.material.opacity = 0.15 + Math.sin(t * 0.3) * 0.05;
+      haloRef.current.material.opacity = 0.035 + Math.sin(t * 0.3) * 0.012;
     }
   });
 
   return (
     <group ref={groupRef}>
       <mesh ref={bodyRef}>
-        <sphereGeometry args={[4, 24, 24]} />
+        <sphereGeometry args={[2.2, 24, 24]} />
         <meshStandardMaterial
           color="#ffaa44"
           emissive="#ffaa44"
-          emissiveIntensity={2.0}
-          toneMapped={false}
+          emissiveIntensity={0.45}
+          toneMapped
         />
       </mesh>
       <mesh ref={haloRef}>
-        <ringGeometry args={[5, 14, 32]} />
+        <ringGeometry args={[3, 7, 32]} />
         <meshBasicMaterial
           color="#ff6080"
           transparent
-          opacity={0.15}
+          opacity={0.035}
           side={THREE.DoubleSide}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
@@ -229,7 +231,7 @@ export default function CitySky({ settings }) {
         uTime: { value: 0 },
       },
       side: THREE.BackSide,
-      transparent: true,
+      transparent: preset.overlayOpacity < 0.999,
       opacity: preset.overlayOpacity,
       blending: THREE.NormalBlending,
       depthWrite: false,
@@ -276,6 +278,11 @@ export default function CitySky({ settings }) {
     skyMaterial.uniforms.uIsMoon.value += ((preset.isMoon ? 1.0 : 0.0) - skyMaterial.uniforms.uIsMoon.value) * lerpFactor;
     skyMaterial.uniforms.uOpacity.value += (preset.overlayOpacity - skyMaterial.uniforms.uOpacity.value) * lerpFactor;
     skyMaterial.opacity = skyMaterial.uniforms.uOpacity.value;
+    const shouldBeTransparent = skyMaterial.opacity < 0.999;
+    if (skyMaterial.transparent !== shouldBeTransparent) {
+      skyMaterial.transparent = shouldBeTransparent;
+      skyMaterial.needsUpdate = true;
+    }
     skyMaterial.uniforms.uTime.value = clock.getElapsedTime();
 
     // Move celestial body mesh
@@ -311,7 +318,7 @@ export default function CitySky({ settings }) {
       {/* Dome radius must exceed the CityLandscape mountain ring (~1210 max extent)
           so the horizon mountains sit INSIDE the dome and aren't occluded by the
           opaque daytime sky. Kept under the camera far plane (2000). */}
-      <mesh material={skyMaterial}>
+      <mesh material={skyMaterial} renderOrder={-1000}>
         <sphereGeometry args={[1600, 32, 32]} />
       </mesh>
       <CelestialBody groupRef={bodyGroupRef} />

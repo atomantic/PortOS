@@ -37,6 +37,7 @@ export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';
+export * from './consoleFilters.js';
 export * from './genUtils.js';
 export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';

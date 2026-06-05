@@ -13,6 +13,7 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getPeers, DEFAULT_SYNC_CATEGORIES, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
+import { peerAuthHeaders } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import * as memorySync from './memorySync.js';
@@ -63,7 +64,7 @@ async function withCursors(fn) {
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
   try {
-    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
+    const res = await fetchWithTimeout(url, { headers: peerAuthHeaders(peer) }, FETCH_TIMEOUT_MS);
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -88,7 +89,7 @@ async function syncImageFromPeer(peer, avatarPath) {
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
   try {
-    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
+    const res = await fetchWithTimeout(url, { headers: peerAuthHeaders(peer) }, FETCH_TIMEOUT_MS);
     if (!res.ok) return;
     const buffer = Buffer.from(await res.arrayBuffer());
     await ensureDir(PATHS.images);

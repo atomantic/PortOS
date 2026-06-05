@@ -86,7 +86,18 @@ function normalizeJobPayload(formData) {
   if (payload.type !== 'shell' && payload.type !== 'script') {
     payload.command = null;
     payload.triggerAction = null;
+  } else {
+    // App scope only applies to AI-agent jobs (the scope drives the agent's
+    // workspace). Shell/script jobs always run in the PortOS root, so clear any
+    // appId left over from when the job was an agent type — otherwise the saved
+    // job shows a misleading app badge while executing in root.
+    payload.appId = null;
   }
+  // Empty app picker selection ('') → null so a PUT actively un-scopes the job
+  // back to global (undefined would be dropped from JSON and updateJob would
+  // preserve the old scope). The schema maps '' → null too; sending null directly
+  // is unambiguous across create and update.
+  if (!payload.appId) payload.appId = null;
   if (payload.scheduleMode === 'cron') {
     payload.cronExpression = payload.cronExpression?.trim() || null;
     payload.scheduledTime = null;
@@ -194,10 +205,11 @@ function getJobTypeLabel(job) {
   return 'AI';
 }
 
-function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
+function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({});
+  const appName = job.appId ? (apps.find(a => a.id === job.appId)?.name || job.appId) : null;
 
   const isShell = job.type === 'shell';
   const isScript = job.type === 'script';
@@ -213,7 +225,8 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
       cronExpression: job.cronExpression || '',
       priority: job.priority,
       autonomyLevel: job.autonomyLevel,
-      promptTemplate: job.promptTemplate || ''
+      promptTemplate: job.promptTemplate || '',
+      appId: job.appId || ''
     };
     // Always initialize shell fields so switching type to 'shell' during editing works
     base.command = job.command || '';
@@ -277,6 +290,11 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
             <span className="px-1.5 py-0.5 bg-port-bg text-gray-400 text-xs rounded">
               {job.category}
             </span>
+            {appName && (
+              <span className="px-1.5 py-0.5 bg-port-accent/15 text-port-accent text-xs rounded" title={`Scoped to app: ${appName}`}>
+                {appName}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
             <span className="flex items-center gap-1">
@@ -382,6 +400,19 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                 )}
               </div>
               <ScheduleFields data={editData} onChange={(key, val) => setEditData(d => ({ ...d, [key]: val }))} />
+              {editData.type !== 'shell' && editData.type !== 'script' && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400">App scope:</span>
+                  <select
+                    value={editData.appId || ''}
+                    onChange={e => setEditData(d => ({ ...d, appId: e.target.value }))}
+                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  >
+                    <option value="">Global (PortOS)</option>
+                    {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+              )}
               {editData.config && (
                 <BriefingConfig
                   config={editData.config}
@@ -495,6 +526,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
 
 export default function JobsTab() {
   const [jobs, setJobs] = useState([]);
+  const [apps, setApps] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -512,6 +544,7 @@ export default function JobsTab() {
     promptTemplate: '',
     command: '',
     triggerAction: 'log-only',
+    appId: '',
     enabled: false
   });
 
@@ -528,6 +561,10 @@ export default function JobsTab() {
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  useEffect(() => {
+    api.getApps().then(data => setApps(data?.apps || data || [])).catch(() => setApps([]));
+  }, []);
 
   const handleCreate = async () => {
     if (!newJob.name.trim()) {
@@ -567,6 +604,7 @@ export default function JobsTab() {
       promptTemplate: '',
       command: '',
       triggerAction: 'log-only',
+      appId: '',
       enabled: false
     });
     setShowCreate(false);
@@ -718,6 +756,19 @@ export default function JobsTab() {
               )}
             </div>
             <ScheduleFields data={newJob} onChange={(key, val) => setNewJob(j => ({ ...j, [key]: val }))} />
+            {newJob.type !== 'shell' && newJob.type !== 'script' && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">App scope:</span>
+                <select
+                  value={newJob.appId || ''}
+                  onChange={e => setNewJob(j => ({ ...j, appId: e.target.value }))}
+                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                >
+                  <option value="">Global (PortOS)</option>
+                  {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+            )}
             {newJob.type === 'shell' ? (
               <>
                 <textarea
@@ -777,6 +828,7 @@ export default function JobsTab() {
             <JobCard
               key={job.id}
               job={job}
+              apps={apps}
               onToggle={handleToggle}
               onTrigger={handleTrigger}
               onDelete={handleDelete}

@@ -725,6 +725,17 @@ export const createCosJobSchema = z.object({
   promptTemplate: z.string().optional(),
   command: z.string().optional(),
   triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Optional managed-app scope. Empty string from the UI picker → null so a PUT
+  // can actively un-scope a job back to global (updateJob only skips `undefined`,
+  // so undefined would silently preserve the old scope). Absent key stays
+  // undefined (preserve existing on PUT, default null on create).
+  appId: z.preprocess(v => v === '' ? null : v, z.string().nullable().optional()),
+  // Optional git-workflow options for app-scoped agent jobs.
+  taskMetadata: z.object({
+    useWorktree: z.boolean().optional(),
+    openPR: z.boolean().optional(),
+    simplify: z.boolean().optional(),
+  }).optional(),
 });
 
 export const updateCosJobSchema = createCosJobSchema.partial().extend({

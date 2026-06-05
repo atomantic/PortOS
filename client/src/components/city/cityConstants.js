@@ -1,7 +1,8 @@
 import { hashString } from '../../utils/hashString';
 
-// Geist Pixel Square font URL for drei <Text> in 3D scene (TTF required, troika doesn't support woff2)
-export const PIXEL_FONT_URL = '/fonts/GeistPixel-Square.ttf';
+// Drei <Text> needs a TTF; this copy keeps the Geist Pixel glyphs but strips
+// layout tables that Troika's font parser logs as unsupported.
+export const PIXEL_FONT_URL = '/fonts/GeistPixel-Square-3d.ttf';
 
 export const CITY_COLORS = {
   ground: '#06b6d4',
@@ -52,30 +53,31 @@ export const CITY_COLORS = {
     },
     noon: {
       hour: 12,
-      // Bright, airy daytime sky — luminous blue overhead fading to a near-white
-      // horizon haze (stylized "clear day" look, BotW-ish).
-      zenith: '#4a93e0',
-      midSky: '#7fb6ec',
-      horizonHigh: '#bfe0f7',
-      horizonLow: '#e6f3fc',
+      // Bright daytime sky, but with enough blue/chroma in the horizon bands that
+      // the dome reads as sky instead of a white fog sheet over the city.
+      zenith: '#0f4f9a',
+      midSky: '#1e78bf',
+      horizonHigh: '#3d95d2',
+      horizonLow: '#58a9dc',
       sunCore: '#fffef2',
       sunGlow: '#fff7d6',
       sunLight: '#fff4e0',
       // Moderate intensities — kept low enough that lit surfaces don't clip to white
       // (the post-process previously bloomed the over-bright scene into a white disc).
-      sunIntensity: 1.9,
+      sunIntensity: 1.25,
       sunScale: 0.7,
       isMoon: false,
       daylightFactor: 1.0,
-      // Mid-tone ground so daylight lands around a clean gray, not blown-out white.
-      groundColor: '#8d9198',
+      // Muted blue-gray pavement; daylight + sky reflections otherwise turn the
+      // central city plane into a white mirror.
+      groundColor: '#3f5268',
       groundRoughness: 0.9,
       // Soft daytime sky fill (blue from above, warm bounce) — gentle, not high-key.
-      hemiSkyColor: '#acc6e8',
-      hemiGroundColor: '#b4b0a0',
-      hemiIntensity: 0.95,
-      ambientColor: '#c0cce0',
-      ambientIntensity: 0.35,
+      hemiSkyColor: '#8bb8e0',
+      hemiGroundColor: '#8f9488',
+      hemiIntensity: 0.65,
+      ambientColor: '#8ea4c6',
+      ambientIntensity: 0.24,
     },
     sunset: {
       // Theme-night preset: moonlit cyber-night, not blackout. The city should
@@ -122,100 +124,9 @@ export const CITY_COLORS = {
       ambientIntensity: 0.1,
     },
   },
-  // Sky themes: visual palette overrides for time-of-day presets
-  // 'cyberpunk' uses default timeOfDay colors above
-  // 'dreamworld' bright purple/blue open-world sky with clouds
-  skyThemes: {
-    cyberpunk: null, // uses default timeOfDay colors
-    dreamworld: {
-      sunrise: {
-        hour: 6,
-        zenith: '#4a2080',
-        midSky: '#6a3aaa',
-        horizonHigh: '#ff9070',
-        horizonLow: '#ffcc88',
-        sunCore: '#ffdd66',
-        sunGlow: '#ffaa55',
-        sunLight: '#ffeecc',
-        sunIntensity: 3.0,
-        sunScale: 1.2,
-        isMoon: false,
-        daylightFactor: 0.5,
-        groundColor: '#4a4a60',
-        groundRoughness: 0.5,
-        hemiSkyColor: '#cc88ff',
-        hemiGroundColor: '#4a3a50',
-        hemiIntensity: 0.8,
-        ambientColor: '#6644aa',
-        ambientIntensity: 0.35,
-      },
-      noon: {
-        hour: 12,
-        zenith: '#4a93e0',
-        midSky: '#7fb6ec',
-        horizonHigh: '#bfe0f7',
-        horizonLow: '#e6f3fc',
-        sunCore: '#fffef2',
-        sunGlow: '#fff7d6',
-        sunLight: '#fff4e0',
-        // Rebalanced to match the default noon (lower intensities / mid ground) so
-        // a dreamworld sky in Day mode doesn't blow the scene out to white.
-        sunIntensity: 1.9,
-        sunScale: 0.8,
-        isMoon: false,
-        daylightFactor: 1.0,
-        groundColor: '#8d9198',
-        groundRoughness: 0.9,
-        hemiSkyColor: '#acc6e8',
-        hemiGroundColor: '#b4b0a0',
-        hemiIntensity: 0.95,
-        ambientColor: '#c0cce0',
-        ambientIntensity: 0.35,
-      },
-      sunset: {
-        hour: 18,
-        zenith: '#2a1860',
-        midSky: '#5530a0',
-        horizonHigh: '#ff6088',
-        horizonLow: '#ffaa60',
-        sunCore: '#ffcc44',
-        sunGlow: '#ff8866',
-        sunLight: '#ffddbb',
-        sunIntensity: 2.5,
-        sunScale: 1.2,
-        isMoon: false,
-        daylightFactor: 0.4,
-        groundColor: '#302848',
-        groundRoughness: 0.55,
-        hemiSkyColor: '#bb6688',
-        hemiGroundColor: '#2a2040',
-        hemiIntensity: 0.6,
-        ambientColor: '#4a2266',
-        ambientIntensity: 0.3,
-      },
-      midnight: {
-        hour: 0,
-        zenith: '#0a0830',
-        midSky: '#161248',
-        horizonHigh: '#2a2266',
-        horizonLow: '#3a3080',
-        sunCore: '#ccccff',
-        sunGlow: '#9999dd',
-        sunLight: '#556688',
-        sunIntensity: 0.3,
-        sunScale: 0.7,
-        isMoon: true,
-        daylightFactor: 0.05,
-        groundColor: '#141230',
-        groundRoughness: 0.7,
-        hemiSkyColor: '#221e55',
-        hemiGroundColor: '#0a0818',
-        hemiIntensity: 0.1,
-        ambientColor: '#1a1644',
-        ambientIntensity: 0.15,
-      },
-    },
-  },
+  // The City uses one canonical cyber sky. Legacy stored skyTheme values are
+  // ignored by the scene and fall back to these presets.
+  skyThemes: {},
 };
 
 export const BOROUGH_PARAMS = {
@@ -456,7 +367,7 @@ export const deriveCityPalette = (theme) => {
   // actual daytime). The scene picks one based on the resolved time of day; the HUD
   // panels follow the light/dark theme independently (see .cybercity-themed CSS).
   const nightBackground = darkenHex(accent, 0.1);
-  const dayBackground = lightenHex(accent, 0.86);
+  const dayBackground = lightenHex(accent, 0.72);
   return {
     themeId: theme?.id || 'classic-midnight',
     mode: theme?.mode || 'night',

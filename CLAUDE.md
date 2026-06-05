@@ -191,7 +191,7 @@ If a close match exists, **extend it or use it**. Only add a new module when no 
 
 ### Maintenance rule (WHEN adding a public module)
 
-Any new file added to `server/lib/`, `client/src/lib/`, `client/src/hooks/`, or a new `apiX.js` in `client/src/services/` **MUST**:
+Any new file added to `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, or a new `apiX.js` in `client/src/services/` **MUST**:
 
 1. Be re-exported from the same-directory `index.js` barrel (or, for `services/`, from `api.js`).
 2. Get a one-line row in the same-directory `README.md`.

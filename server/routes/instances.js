@@ -29,6 +29,16 @@ function safeJsonParse(str) {
 
 const router = Router();
 
+// Optional HTTP Basic credential for a peer behind an auth proxy. `null` clears
+// it; an object sets it (username optional — a password-only credential is
+// valid Basic auth). The service's sanitizePeerAuth does the final normalize,
+// and treats a username-only payload (no password) as a clear, not a store —
+// a password is required to store a credential.
+const peerAuthSchema = z.object({
+  username: z.string().max(256).optional(),
+  password: z.string().max(2048).optional()
+}).nullable().optional();
+
 // Validation schemas
 const addPeerSchema = z.object({
   address: z.string()
@@ -36,7 +46,8 @@ const addPeerSchema = z.object({
     .refine(ip => !ip.startsWith('127.') && !ip.startsWith('169.254.'), 'Loopback and link-local addresses are not allowed'),
   port: z.number().int().min(1).max(65535).default(DEFAULT_PEER_PORT),
   name: z.string().optional(),
-  host: z.string().optional()
+  host: z.string().optional(),
+  auth: peerAuthSchema
 });
 
 const syncCategoriesSchema = z.object({
@@ -65,7 +76,8 @@ const updatePeerSchema = z.object({
   syncEnabled: z.boolean().optional(),
   syncCategories: syncCategoriesSchema,
   // Accept empty string to clear; any other string is validated/normalized in the service
-  host: z.string().optional().nullable()
+  host: z.string().optional().nullable(),
+  auth: peerAuthSchema
 });
 
 const announceSchema = z.object({
@@ -88,7 +100,9 @@ router.get('/', asyncHandler(async (req, res) => {
     instances.getPeers(),
     getSyncStatus({ includeChecksums: true })
   ]);
-  res.json({ self, peers, syncStatus });
+  // Redact each peer's stored proxy password (keep username + hasPassword) —
+  // the browser never needs the secret. Mirrors providers' hasApiKey pattern.
+  res.json({ self, peers: peers.map(instances.sanitizePeerForClient), syncStatus });
 }));
 
 // GET /api/instances/sync-status — local sync sequences + checksums (used by peers during probe)
@@ -174,7 +188,10 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
   const self = await instances.getSelf();
   res.status(result.created ? 201 : 200).json({
     self: { instanceId: self?.instanceId, name: self?.name },
-    peer: result.peer
+    // Strip our locally-stored proxy credential before echoing the matched
+    // peer back to the announcing instance — that password is our secret for
+    // reaching them, not theirs to receive.
+    peer: instances.redactPeerForWire(result.peer)
   });
 }));
 
@@ -189,7 +206,7 @@ router.post('/peers', asyncHandler(async (req, res) => {
     }
   }
   const peer = await instances.addPeer(data);
-  res.status(201).json(peer);
+  res.status(201).json(instances.sanitizePeerForClient(peer));
 }));
 
 // PUT /api/instances/peers/:id — update peer
@@ -203,7 +220,7 @@ router.put('/peers/:id', asyncHandler(async (req, res) => {
   }
   const peer = await instances.updatePeer(req.params.id, data);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
-  res.json(peer);
+  res.json(instances.sanitizePeerForClient(peer));
 }));
 
 // DELETE /api/instances/peers/:id — remove peer
@@ -217,7 +234,7 @@ router.delete('/peers/:id', asyncHandler(async (req, res) => {
 router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
   const result = await instances.connectPeer(req.params.id);
   if (!result) throw new ServerError('Peer not found', { status: 404 });
-  res.json(result);
+  res.json(instances.sanitizePeerForClient(result));
 }));
 
 // POST /api/instances/peers/:id/probe — force immediate probe
@@ -226,7 +243,7 @@ router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   const peer = peers.find(p => p.id === req.params.id);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
   const result = await instances.probePeer(peer);
-  res.json(result);
+  res.json(instances.sanitizePeerForClient(result));
 }));
 
 // GET /api/instances/peers/:id/query — proxy GET to peer

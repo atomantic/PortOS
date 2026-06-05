@@ -870,6 +870,7 @@ describe('peerSync', () => {
       expect(vi.mocked(peerFetch)).toHaveBeenCalledWith(
         expect.stringContaining('/api/peer-sync/push'),
         expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({ instanceId: 'peer-a' }),
       );
     });
 
