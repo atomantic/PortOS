@@ -18,6 +18,8 @@ import {
   writersRoomAnalysisCreateSchema,
   writersRoomLiveSuggestSchema,
   writersRoomLiveRenderPreviewSchema,
+  writersRoomCdBridgeSuggestSchema,
+  writersRoomCdBridgeSendSchema,
   writersRoomCharacterCreateSchema,
   writersRoomCharacterUpdateSchema,
   writersRoomPlaceCreateSchema,
@@ -36,7 +38,9 @@ import {
   runAnalysis, listAnalyses, getAnalysis, attachSceneImage,
 } from '../services/writersRoom/evaluator.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
-import { suggestContinuation, reserveRenderPreview } from '../services/writersRoom/liveDirector.js';
+import {
+  suggestContinuation, reserveRenderPreview, suggestCdBridge, sendToCreativeDirector,
+} from '../services/writersRoom/liveDirector.js';
 import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
@@ -210,6 +214,25 @@ router.post('/works/:id/live-suggest', asyncHandler(async (req, res) => {
 router.post('/works/:id/live-render-preview', asyncHandler(async (req, res) => {
   validateRequest(writersRoomLiveRenderPreviewSchema, req.body || {});
   res.json(await reserveRenderPreview(req.params.id));
+}));
+
+// Propose a Creative Director treatment (logline + synopsis + visual treatment
+// + 2–6 filmable scenes) from the cursor context. Draws on the SAME daily
+// call budget + opt-in as live-suggest (409 if off, 429 if spent). Returns
+// { proposal, usage, budget } — proposal is null when the model couldn't
+// produce a usable treatment.
+router.post('/works/:id/cd-bridge/suggest', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomCdBridgeSuggestSchema, req.body || {});
+  res.json(await suggestCdBridge(req.params.id, data));
+}));
+
+// Send a reviewed proposal into a NEW Creative Director project (non-destructive),
+// seeding its treatment + styleSpec and recording the bridge link on the work
+// manifest. No budget — the proposal was already generated + charged by the
+// suggest call. Returns { project }.
+router.post('/works/:id/cd-bridge/send', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomCdBridgeSendSchema, req.body || {});
+  res.status(201).json(await sendToCreativeDirector(req.params.id, data));
 }));
 
 // ---------- synced review (Phase 4: prose ↔ script ↔ media) ----------

@@ -15,15 +15,32 @@ vi.mock('../../lib/fileUtils.js', async () => {
 const runStagedLLM = vi.fn();
 vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLM(...a) }));
 
+// Mock the Creative Director store + video-model helper so the CD-bridge send
+// path is a focused unit test of the orchestration (create → setTreatment →
+// link → rollback) without dragging in media-collection side effects.
+const createProject = vi.fn();
+const setTreatment = vi.fn();
+const deleteProject = vi.fn();
+vi.mock('../creativeDirector/local.js', () => ({
+  createProject: (...a) => createProject(...a),
+  setTreatment: (...a) => setTreatment(...a),
+  deleteProject: (...a) => deleteProject(...a),
+}));
+vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltxv-default' }));
+
 const local = await import('./local.js');
 const { createWork, updateWork, getWork } = local;
 const {
-  suggestContinuation, reserveRenderPreview, ERR_LIVE_MODE_OFF, ERR_BUDGET_EXCEEDED,
+  suggestContinuation, reserveRenderPreview, suggestCdBridge, sendToCreativeDirector,
+  ERR_LIVE_MODE_OFF, ERR_BUDGET_EXCEEDED,
 } = await import('./liveDirector.js');
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-live-test-'));
   runStagedLLM.mockReset();
+  createProject.mockReset();
+  setTreatment.mockReset();
+  deleteProject.mockReset();
 });
 
 afterEach(() => {
@@ -178,5 +195,118 @@ describe('reserveRenderPreview', () => {
     vi.setSystemTime(new Date('2026-06-04T00:01:00Z'));
     const res = await reserveRenderPreview(work.id);
     expect(res.renderUsage).toMatchObject({ date: '2026-06-04', count: 1 });
+  });
+});
+
+const BRIDGE_RESPONSE = {
+  content: {
+    logline: 'A courier outruns the storm.',
+    synopsis: 'She must cross the flooded city before the levee breaks.',
+    styleSpec: 'Rain-slick neon, handheld, teal-and-amber.',
+    scenes: [
+      { intent: 'Establish the deluge', prompt: 'Wide shot of a drowned street, neon reflections', durationSeconds: 6 },
+      { intent: 'The courier runs', prompt: 'Tracking shot, sprinting through ankle-deep water', durationSeconds: 4.4 },
+    ],
+  },
+};
+
+describe('suggestCdBridge', () => {
+  it('throws LIVE_MODE_OFF when the work has not opted in', async () => {
+    const work = await createWork({ title: 'Off' });
+    await expect(suggestCdBridge(work.id, { before: 'words here' }))
+      .rejects.toMatchObject({ code: ERR_LIVE_MODE_OFF, status: 409 });
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('shapes a proposal, clamps duration, and charges the SHARED suggest budget', async () => {
+    runStagedLLM.mockResolvedValue(BRIDGE_RESPONSE);
+    const work = await createWork({ title: 'On' });
+    await updateWork(work.id, { liveMode: { enabled: true } });
+
+    const res = await suggestCdBridge(work.id, { before: 'The door creaked open.' });
+    expect(res.proposal.logline).toBe('A courier outruns the storm.');
+    expect(res.proposal.scenes).toHaveLength(2);
+    expect(res.proposal.scenes[1].durationSeconds).toBe(4); // 4.4 → rounded into 1..10
+    // Draws on the same daily call budget as suggestContinuation (not a render slot).
+    expect(res.usage.count).toBe(1);
+    const reloaded = await getWork(work.id);
+    expect(reloaded.liveMode.renderUsage).toMatchObject({ count: 0 });
+  });
+
+  it('returns a null proposal (but still charges budget) when fewer than 2 usable scenes come back', async () => {
+    runStagedLLM.mockResolvedValue({ content: { logline: 'x', synopsis: 'y', styleSpec: 'z', scenes: [{ intent: 'only one', prompt: 'shot' }] } });
+    const work = await createWork({ title: 'Thin' });
+    await updateWork(work.id, { liveMode: { enabled: true } });
+
+    const res = await suggestCdBridge(work.id, { before: 'something' });
+    expect(res.proposal).toBeNull();
+    expect(res.usage.count).toBe(1); // reached the LLM → charged
+  });
+
+  it('shares the daily budget with suggestContinuation (one pool, not two)', async () => {
+    runStagedLLM.mockResolvedValue(BRIDGE_RESPONSE);
+    const work = await createWork({ title: 'Shared' });
+    await updateWork(work.id, { liveMode: { enabled: true, dailyCallBudget: 1 } });
+
+    await suggestCdBridge(work.id, { before: 'first' }); // count -> 1
+    runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
+    await expect(suggestContinuation(work.id, { before: 'second' }))
+      .rejects.toMatchObject({ code: ERR_BUDGET_EXCEEDED, status: 429 });
+  });
+
+  it('rejects an empty cursor context before spending an LLM call', async () => {
+    const work = await createWork({ title: 'Blank' });
+    await updateWork(work.id, { liveMode: { enabled: true } });
+    await expect(suggestCdBridge(work.id, { before: '  ', after: '', selection: '' }))
+      .rejects.toThrow(/prose around the cursor/);
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendToCreativeDirector', () => {
+  const PROPOSAL = {
+    logline: 'A courier outruns the storm.',
+    synopsis: 'Cross the flooded city before the levee breaks.',
+    styleSpec: 'Rain-slick neon.',
+    scenes: [
+      { intent: 'Establish the deluge', prompt: 'Wide shot', durationSeconds: 6 },
+      { intent: 'The courier runs', prompt: 'Tracking shot', durationSeconds: 4 },
+    ],
+  };
+
+  it('creates a project, seeds the treatment, and records the manifest link', async () => {
+    createProject.mockResolvedValue({ id: 'cd-1' });
+    setTreatment.mockImplementation(async (id, treatment) => ({ id, treatment }));
+    const work = await createWork({ title: 'My Draft' });
+
+    const res = await sendToCreativeDirector(work.id, { proposal: PROPOSAL });
+
+    // Project created with work title + styleSpec + a resolved (non-legacy) model.
+    expect(createProject).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'My Draft', styleSpec: 'Rain-slick neon.', modelId: 'ltxv-default',
+    }));
+    // Treatment scenes carry the runtime fields the schema needs.
+    const [, treatment] = setTreatment.mock.calls[0];
+    expect(treatment.scenes[0]).toMatchObject({ sceneId: 'sc-1', order: 0, useContinuationFromPrior: false });
+    expect(treatment.scenes[1]).toMatchObject({ sceneId: 'sc-2', order: 1, useContinuationFromPrior: true });
+    expect(res.project).toMatchObject({ id: 'cd-1' });
+
+    // The bridge link is persisted on the work manifest.
+    const reloaded = await getWork(work.id);
+    expect(reloaded.cdProjectId).toBe('cd-1');
+  });
+
+  it('rolls back the orphaned project when setTreatment fails, and leaves the work unlinked', async () => {
+    createProject.mockResolvedValue({ id: 'cd-orphan' });
+    setTreatment.mockRejectedValue(new Error('treatment invalid'));
+    deleteProject.mockResolvedValue({ ok: true });
+    const work = await createWork({ title: 'Doomed' });
+
+    await expect(sendToCreativeDirector(work.id, { proposal: PROPOSAL }))
+      .rejects.toThrow(/treatment invalid/);
+    expect(deleteProject).toHaveBeenCalledWith('cd-orphan');
+
+    const reloaded = await getWork(work.id);
+    expect(reloaded.cdProjectId ?? null).toBeNull();
   });
 });
