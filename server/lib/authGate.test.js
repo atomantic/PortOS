@@ -234,6 +234,45 @@ describe('authGate middleware', () => {
   });
 });
 
+describe('authGate HTTP Basic auth (peer federation)', () => {
+  const basicHeader = (password, username = '') =>
+    `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+
+  it('allows /api routes when Authorization: Basic carries the correct password', async () => {
+    const auth = await import('../services/auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, {
+      path: '/api/cos',
+      headers: { authorization: basicHeader('peer-secret') },
+    });
+    expect(result.called).toBe(true);
+  });
+
+  it('also works with a non-empty username (username is ignored)', async () => {
+    const auth = await import('../services/auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, {
+      path: '/api/cos',
+      headers: { authorization: basicHeader('peer-secret', 'user') },
+    });
+    expect(result.called).toBe(true);
+  });
+
+  it('rejects Basic auth with a wrong password', async () => {
+    const auth = await import('../services/auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, {
+      path: '/api/cos',
+      headers: { authorization: basicHeader('wrong') },
+    });
+    expect(result.called).toBe(false);
+    expect(result.res.statusCode).toBe(401);
+  });
+});
+
 describe('socketAuthGate middleware', () => {
   it('is a no-op when auth is disabled', async () => {
     const { socketAuthGate } = await import('./authGate.js');
@@ -260,6 +299,17 @@ describe('socketAuthGate middleware', () => {
     const { socketAuthGate } = await import('./authGate.js');
     const err = await new Promise((resolve) => {
       socketAuthGate({ handshake: { headers: { cookie: `portos_auth=${token}` } } }, (e) => resolve(e));
+    });
+    expect(err).toBeUndefined();
+  });
+
+  it('accepts a peer relay handshake with correct Basic auth', async () => {
+    const auth = await import('../services/auth.js');
+    await auth.setPassword({ newPassword: 'peer-secret' });
+    const { socketAuthGate } = await import('./authGate.js');
+    const header = `Basic ${Buffer.from(':peer-secret').toString('base64')}`;
+    const err = await new Promise((resolve) => {
+      socketAuthGate({ handshake: { headers: { authorization: header } } }, (e) => resolve(e));
     });
     expect(err).toBeUndefined();
   });
