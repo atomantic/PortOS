@@ -193,6 +193,18 @@ describe('dumpPostgres status classification', () => {
     expect(result.error).toContain('auth failed');
   });
 
+  it('unlinks the partial dump file on non-zero exit (no restorable artifact left behind)', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockResolvedValue();
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.emit('close', 1);
+    await p;
+    expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
+  });
+
   it('returns failed/empty_dump when exit 0 but file is 0 bytes', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0 });

@@ -47,6 +47,10 @@ describe('vaultHealth', () => {
   it('reports "running" when a backup is in flight, overriding everything', () => {
     expect(vaultHealth({ status: 'error', lastRun: daysAgo(9), running: true }, NOW)).toBe('running');
   });
+
+  it('reports "degraded" when files saved but the DB dump failed, even on a fresh run', () => {
+    expect(vaultHealth({ status: 'degraded', lastRun: hoursAgo(1) }, NOW)).toBe('degraded');
+  });
 });
 
 describe('vaultColor', () => {
@@ -57,6 +61,7 @@ describe('vaultColor', () => {
     expect(vaultColor('error')).toBe('#ef4444');
     expect(vaultColor('running')).toBe('#3b82f6');
     expect(vaultColor('never')).toBe('#64748b');
+    expect(vaultColor('degraded')).toBe('#f59e0b');
   });
 
   it('falls back to the never color for an unknown health', () => {
@@ -65,9 +70,10 @@ describe('vaultColor', () => {
 });
 
 describe('vaultIsAlerting', () => {
-  it('alerts only on stale or error', () => {
+  it('alerts on stale, error, or degraded', () => {
     expect(vaultIsAlerting('stale')).toBe(true);
     expect(vaultIsAlerting('error')).toBe(true);
+    expect(vaultIsAlerting('degraded')).toBe(true);
     expect(vaultIsAlerting('ok')).toBe(false);
     expect(vaultIsAlerting('aging')).toBe(false);
     expect(vaultIsAlerting('running')).toBe(false);
@@ -82,6 +88,7 @@ describe('vaultStatusLabel', () => {
     expect(vaultStatusLabel('aging')).toBe('AGING');
     expect(vaultStatusLabel('stale')).toBe('STALE');
     expect(vaultStatusLabel('error')).toBe('FAILED');
+    expect(vaultStatusLabel('degraded')).toBe('DB FAILED');
     expect(vaultStatusLabel('never')).toBe('NO BACKUP');
     expect(vaultStatusLabel('bogus')).toBe('NO BACKUP');
   });

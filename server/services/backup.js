@@ -7,7 +7,7 @@
  */
 
 import { spawn } from 'child_process';
-import { access, readdir, readFile, stat, writeFile } from 'fs/promises';
+import { access, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
@@ -252,6 +252,10 @@ export async function dumpPostgres(outputPath) {
   }
 
   return new Promise((resolve) => {
+    // --clean --if-exists: the dump DROPs each object before recreating it, so it
+    // replays cleanly into the live, already-initialized PortOS database (the
+    // common Restore-DB target) instead of erroring "relation already exists" on
+    // the first CREATE. Without it the dump is only restorable into an empty DB.
     const proc = spawn('pg_dump', [
       '-h', pgHost,
       '-p', pgPort,
@@ -259,6 +263,8 @@ export async function dumpPostgres(outputPath) {
       '-d', pgDb,
       '--no-owner',
       '--no-acl',
+      '--clean',
+      '--if-exists',
       '-f', outputPath
     ], {
       shell: false,
@@ -271,6 +277,10 @@ export async function dumpPostgres(outputPath) {
     proc.on('close', async (code) => {
       if (code !== 0) {
         console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
+        // pg_dump can exit non-zero after writing a partial file (e.g. mid-dump
+        // connection loss). Remove it so a later restore can't trust a truncated
+        // dump on size alone — a failed dump must leave no restorable artifact.
+        await unlink(outputPath).catch(() => {});
         resolve({ status: 'failed', reason: 'dump_error', error: stderr.trim() });
         return;
       }
@@ -450,11 +460,15 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
   const pgUser = process.env.PGUSER || 'portos';
 
   return new Promise((resolveP) => {
-    // ON_ERROR_STOP=1 makes psql abort and exit non-zero on the first failed
-    // statement. Without it psql replays best-effort and exits 0 even when
-    // statements fail — a partial restore would falsely report success.
+    // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
+    // wraps the whole replay in one transaction so that abort ROLLs BACK every
+    // prior statement. Together they make the restore atomic: it either fully
+    // applies or leaves the live DB untouched — never a mixed snapshot/current
+    // state. (The dump is written with --clean --if-exists, so the DROPs and
+    // recreates all commit or roll back as one unit.)
     const proc = spawn('psql', [
       '-v', 'ON_ERROR_STOP=1',
+      '--single-transaction',
       '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
     ], { shell: false, env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
