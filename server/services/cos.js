@@ -83,6 +83,7 @@ import {
   generateSelfImprovementTaskForType,
   generateManagedAppImprovementTaskForType,
   blockIfExceedsMaxSpawns,
+  selectDryRunAutoApproved,
   countRunningAgentsByProject,
   isWithinProjectLimit,
   checkStagePrecondition,
@@ -750,30 +751,51 @@ async function dequeueNextTask() {
   const autoApproved = cosTaskData.autoApproved || [];
   const cosAutonomyMode = getDomainMode(state.config, 'cos');
 
-  for (const task of autoApproved) {
-    if (spawned >= availableSlots) break;
-    if (cosAutonomyMode !== 'execute') {
-      if (cosAutonomyMode === 'dry-run') {
+  // Engine-specific gate shared by execute and dry-run: improvement tasks whose
+  // task type was disabled after queuing are skipped.
+  const isDisabledAnalysisType = (task) => {
+    const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
+    return Boolean(analysisType) && !taskSchedule.tasks[analysisType]?.enabled;
+  };
+
+  if (cosAutonomyMode !== 'execute') {
+    // off/dry-run withhold the unattended spawn; dry-run logs only the tasks
+    // execute mode would ACTUALLY spawn — applying the same max-spawns /
+    // disabled-type / cooldown / per-project gates against virtual capacity —
+    // rather than every auto-approved task regardless of eligibility.
+    if (cosAutonomyMode === 'dry-run') {
+      const wouldSpawn = await selectDryRunAutoApproved(autoApproved, {
+        availableSlots,
+        alreadySpawned: spawned,
+        perProjectLimit,
+        spawnProjectCounts,
+        isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+        extraSkip: isDisabledAnalysisType
+      });
+      for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
       }
-      continue;
     }
-    if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
-    // Skip improvement tasks whose type was disabled after queuing
-    const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
-    if (analysisType && !taskSchedule.tasks[analysisType]?.enabled) {
-      emitLog('info', `System task skipped — task type '${analysisType}' is disabled`, { taskId: task.id });
-      continue;
+  } else {
+    for (const task of autoApproved) {
+      if (spawned >= availableSlots) break;
+      if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
+      // Skip improvement tasks whose type was disabled after queuing
+      if (isDisabledAnalysisType(task)) {
+        const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
+        emitLog('info', `System task skipped — task type '${analysisType}' is disabled`, { taskId: task.id });
+        continue;
+      }
+      const appId = task.metadata?.app;
+      if (appId) {
+        const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
+        if (onCooldown) continue;
+      }
+      const sysTask = { ...task, taskType: 'internal' };
+      if (!canSpawn(sysTask)) continue;
+      cosEvents.emit('task:ready', sysTask);
+      trackSpawn(sysTask);
     }
-    const appId = task.metadata?.app;
-    if (appId) {
-      const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
-      if (onCooldown) continue;
-    }
-    const sysTask = { ...task, taskType: 'internal' };
-    if (!canSpawn(sysTask)) continue;
-    cosEvents.emit('task:ready', sysTask);
-    trackSpawn(sysTask);
   }
 
   const hasPendingUserTasks = pendingUserTasks.length > 0;

@@ -39,8 +39,8 @@ import { isRecoveryTask } from './recoveryTasks.js';
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
  */
 export async function blockIfExceedsMaxSpawns(task, taskType) {
+  if (!exceedsMaxSpawns(task)) return false;
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
-  if (totalSpawns < MAX_TOTAL_SPAWNS) return false;
   emitLog('info', `🚫 Blocking task ${task.id} — exceeded max spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, { taskId: task.id });
   await updateTask(task.id, {
     status: 'blocked',
@@ -49,6 +49,73 @@ export async function blockIfExceedsMaxSpawns(task, taskType) {
     emitLog('warn', `Failed to block task ${task.id}: ${err.message}`, { taskId: task.id });
   });
   return true;
+}
+
+/**
+ * Non-mutating sibling of `blockIfExceedsMaxSpawns` — true when a task has hit
+ * the max-total-spawns ceiling, WITHOUT blocking/persisting it. Used by the
+ * dry-run eligibility pass, which must predict execute's skip without mutating.
+ */
+export function exceedsMaxSpawns(task) {
+  return (Number(task.metadata?.totalSpawnCount) || 0) >= MAX_TOTAL_SPAWNS;
+}
+
+/**
+ * Dry-run eligibility pass over auto-approved system tasks. Walks the tasks in
+ * file order applying the SAME gates execute mode uses — global slot cap,
+ * max-total-spawns, app cooldown, per-project cap — while tracking virtual
+ * capacity, and returns the ordered subset execute mode WOULD spawn. It never
+ * blocks, persists, or emits anything, so a dry-run can log exactly the set
+ * execute would spawn instead of over-reporting (logging tasks execute would
+ * skip) or under-reporting (stopping early before applying the gates).
+ *
+ * The two spawn engines (`dequeueNextTask` in cos.js and `evaluateTasks` here)
+ * have small execute-path differences, expressed via the optional per-task
+ * hooks so each engine's dry-run plan matches its own execute path:
+ * `extraSkip` adds an engine-specific gate (dequeue's disabled-analysis-type
+ * check); `cooldownExempt` exempts a task from the cooldown gate (this engine's
+ * pipeline-continuation bypass).
+ *
+ * @param {object[]} autoApproved - auto-approved system tasks, file order
+ * @param {object} ctx
+ * @param {number} ctx.availableSlots - global free slots at the start of this cycle
+ * @param {number} ctx.alreadySpawned - slots already consumed by higher-priority picks (on-demand/user)
+ * @param {number} ctx.perProjectLimit - per-project concurrent cap
+ * @param {Record<string, number>} ctx.spawnProjectCounts - running+spawned counts per project (cloned, not mutated)
+ * @param {(appId: string) => Promise<boolean>} ctx.isOnCooldown - async cooldown probe
+ * @param {(task: object) => boolean} [ctx.cooldownExempt] - true ⇒ skip the cooldown gate for this task
+ * @param {(task: object) => boolean} [ctx.extraSkip] - true ⇒ task ineligible (engine-specific gate)
+ * @returns {Promise<object[]>} the tasks execute mode would spawn, in order
+ */
+export async function selectDryRunAutoApproved(autoApproved, ctx) {
+  const {
+    availableSlots,
+    alreadySpawned = 0,
+    perProjectLimit,
+    spawnProjectCounts = {},
+    isOnCooldown,
+    cooldownExempt = () => false,
+    extraSkip = () => false
+  } = ctx;
+
+  const counts = { ...spawnProjectCounts };
+  let spawned = alreadySpawned;
+  const spawnable = [];
+
+  for (const task of autoApproved) {
+    if (spawned >= availableSlots) break;
+    if (exceedsMaxSpawns(task)) continue;
+    if (extraSkip(task)) continue;
+    const appId = task.metadata?.app;
+    if (appId && !cooldownExempt(task) && (await isOnCooldown(appId))) continue;
+    const project = appId || '_self';
+    if ((counts[project] || 0) >= perProjectLimit) continue;
+    counts[project] = (counts[project] || 0) + 1;
+    spawned++;
+    spawnable.push(task);
+  }
+
+  return spawnable;
 }
 
 // Task types where the scheduler reads PLAN.md to find an in-flight-aware pick.
@@ -357,7 +424,18 @@ export async function evaluateTasks(options) {
   // what would have run so the user can see the plan without it executing.
   if (tasksToSpawn.length < availableSlots && cosTaskData.exists && cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode === 'dry-run') {
-      for (const task of (cosTaskData.autoApproved || [])) {
+      // Log only the tasks execute mode would ACTUALLY spawn — applying the same
+      // max-spawns / cooldown / per-project gates against virtual capacity —
+      // rather than every auto-approved task regardless of eligibility.
+      const wouldSpawn = await selectDryRunAutoApproved(cosTaskData.autoApproved || [], {
+        availableSlots,
+        alreadySpawned: tasksToSpawn.length,
+        perProjectLimit,
+        spawnProjectCounts,
+        isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+        cooldownExempt: (task) => task.metadata?.pipeline?.currentStage > 0
+      });
+      for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
       }
     }
