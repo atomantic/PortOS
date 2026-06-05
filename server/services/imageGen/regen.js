@@ -46,14 +46,23 @@ export const REGEN_STRENGTH_MAX = 0.6;
 // share the FLUX.2 venv and implement img2img via `--image-path`.
 export const modelUsesFluxVenv = (model) => isFlux2(model) || usesDiffusersRunner(model);
 
-// Whether a model can do the img2img round-trip regen needs. FLUX.2/diffusers
-// runners do i2i on every platform. The legacy mflux path does i2i on macOS
-// (`mflux-generate --image-path`), but on Windows `imagine_win.py` silently
-// drops the init-image args — a regen there would degrade to txt2img and
-// produce an unrelated image, so it's excluded.
+// Whether a model RELIABLY does the img2img round-trip regen needs — i.e. it
+// honors the init image rather than silently degrading to txt2img (which would
+// make `regenerated: true` a lie). Capability, not installed-state.
+//
+//   - FLUX.2 (`scripts/flux2_macos.py`) — the intended i2i path; --image-path
+//     is forwarded to the pipeline. Regen-capable on every platform.
+//   - The broader diffusers family (Z-Image / ERNIE / HiDream / Qwen via
+//     `scripts/z_image_turbo.py`) — EXCLUDED: that runner explicitly
+//     "falls back to txt2img and ignores the init image" when a model family
+//     has no i2i sibling, so JS can't know from here whether the round-trip
+//     actually happened. Excluding them keeps the lineage honest.
+//   - Legacy mflux — reliable i2i on macOS (`mflux-generate --image-path`);
+//     Windows `imagine_win.py` drops the init-image args, so excluded there.
 export function modelSupportsRegen(model) {
   if (!model) return false;
-  if (modelUsesFluxVenv(model)) return true;
+  if (isFlux2(model)) return true;
+  if (usesDiffusersRunner(model)) return false;
   return !IS_WIN;
 }
 
@@ -139,6 +148,15 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
   const prompt = typeof sourceMeta.prompt === 'string' && sourceMeta.prompt.trim()
     ? sourceMeta.prompt
     : 'high quality, highly detailed';
+  // Anchor the variant-grouping lineage at the ROOT original, not the clicked
+  // image. computeImageVariantGroup groups siblings under a single original
+  // (an item with no `cleanedFrom`); regenerating a cleaned/regenerated variant
+  // must therefore stamp the root's filename as `cleanedFrom` (= `regenOf`),
+  // or the new render orphans from the family's variant switch. Pixels still
+  // come from the clicked image (`sourceAbsPath`).
+  const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
+    ? sourceMeta.cleanedFrom
+    : filename;
   const params = {
     mode: IMAGE_GEN_MODE.LOCAL,
     pythonPath,
@@ -147,7 +165,7 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
     negativePrompt: typeof sourceMeta.negativePrompt === 'string' ? sourceMeta.negativePrompt : '',
     initImagePath: sourceAbsPath,
     initImageStrength: strength,
-    regenOf: filename,
+    regenOf: groupRoot,
   };
   if (dims) {
     params.width = dims.width;

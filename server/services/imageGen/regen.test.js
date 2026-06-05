@@ -59,11 +59,17 @@ describe('orderRegenCandidates', () => {
 });
 
 describe('modelSupportsRegen / modelUsesFluxVenv', () => {
-  it('flux2 + diffusers models use the flux venv and support regen', () => {
+  it('flux2 + diffusers models both use the flux venv (availability detection)', () => {
     expect(modelUsesFluxVenv(FLUX2)).toBe(true);
     expect(modelUsesFluxVenv(ZIMAGE)).toBe(true);
+  });
+
+  it('only FLUX.2 (not the broader diffusers family) is regen-capable', () => {
+    // FLUX.2 reliably honors --image-path; Z-Image/ERNIE/HiDream/Qwen can
+    // silently fall back to txt2img (z_image_turbo.py), so excluded to keep
+    // the regenerated lineage honest.
     expect(modelSupportsRegen(FLUX2)).toBe(true);
-    expect(modelSupportsRegen(ZIMAGE)).toBe(true);
+    expect(modelSupportsRegen(ZIMAGE)).toBe(false);
   });
 
   it('legacy mflux is not a flux-venv model', () => {
@@ -100,12 +106,28 @@ describe('resolveRegenBackend', () => {
     expect(r.reason).toMatch(/no local flux runner is installed/i);
   });
 
-  it('prefers the source model when it is runnable', async () => {
-    vi.mocked(getImageModels).mockReturnValue([FLUX2, ZIMAGE]);
+  it('prefers the source model when it is regen-capable and runnable', async () => {
+    const FLUX2_DEV = { id: 'flux2-dev', runner: 'flux2', cfgDisabled: false };
+    vi.mocked(getImageModels).mockReturnValue([FLUX2, FLUX2_DEV]);
+    vi.mocked(isFlux2VenvHealthy).mockResolvedValue(true);
+    const r = await resolveRegenBackend({ sourceModelId: 'flux2-dev' });
+    expect(r.available).toBe(true);
+    expect(r.model.id).toBe('flux2-dev');
+  });
+
+  it('skips a regen-incapable source model (diffusers) and falls to FLUX.2', async () => {
+    vi.mocked(getImageModels).mockReturnValue([ZIMAGE, FLUX2]);
     vi.mocked(isFlux2VenvHealthy).mockResolvedValue(true);
     const r = await resolveRegenBackend({ sourceModelId: 'z-image-turbo' });
     expect(r.available).toBe(true);
-    expect(r.model.id).toBe('z-image-turbo');
+    expect(r.model.id).toBe('flux2-klein-9b');
+  });
+
+  it('reports unavailable when only regen-incapable diffusers models exist', async () => {
+    vi.mocked(getImageModels).mockReturnValue([ZIMAGE]);
+    vi.mocked(isFlux2VenvHealthy).mockResolvedValue(true);
+    const r = await resolveRegenBackend();
+    expect(r.available).toBe(false);
   });
 });
 
@@ -134,6 +156,27 @@ describe('buildRegenParams', () => {
       width: 1024,
       height: 768,
     });
+  });
+
+  it('anchors regenOf at the root original when regenerating a cleaned variant', () => {
+    // Regen of `a_clean-aggressive.png` (cleanedFrom: a.png) must group under
+    // a.png, not orphan under the clicked variant. Pixels still come from the
+    // clicked image (initImagePath stays sourceAbsPath).
+    const params = buildRegenParams({
+      filename: 'a_clean-aggressive.png',
+      sourceAbsPath: '/data/images/a_clean-aggressive.png',
+      sourceMeta: { prompt: 'x', cleanedFrom: 'a.png' },
+      model: FLUX2,
+      pythonPath: null,
+      strength: 0.4,
+    });
+    expect(params.regenOf).toBe('a.png');
+    expect(params.initImagePath).toBe('/data/images/a_clean-aggressive.png');
+  });
+
+  it('uses the clicked filename as regenOf when regenerating an original', () => {
+    const params = buildRegenParams({ ...base, sourceMeta: { prompt: 'x' } });
+    expect(params.regenOf).toBe('source.png');
   });
 
   it('prefers measured sourceDims over the sidecar dimensions', () => {
