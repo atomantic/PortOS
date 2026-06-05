@@ -5,6 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import FolderPicker from '../FolderPicker';
 import useAsyncAction from '../../hooks/useAsyncAction';
+import Modal from '../ui/Modal';
 import { getSettings, updateSettings, getBackupStatus, triggerBackup, getBackupSnapshots, restoreDatabase } from '../../services/api';
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
@@ -175,6 +176,7 @@ export function BackupTab() {
   };
 
   const handleRestoreDb = async (snapshotId) => {
+    setRestorePreview(null);
     // Dry-run first to show what would restore, then open the confirm modal.
     const preview = await restoreDatabase({ snapshotId, dryRun: true }, { silent: true })
       .catch(() => null);
@@ -351,22 +353,26 @@ export function BackupTab() {
         </div>
       )}
 
-      {restoreTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
-          <div className="bg-port-card border border-port-border rounded-xl p-5 max-w-md w-full mx-4 space-y-4">
-            <h3 className="text-white text-sm font-medium">Restore database?</h3>
-            <p className="text-sm text-gray-400">
-              This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget}</code>
-              {restorePreview && <> ({Math.round((restorePreview.sizeBytes || 0) / 1024)} KB · {restorePreview.tableCount} tables)</>}
-              {' '}into the live PostgreSQL database. Existing rows may be overwritten.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-              <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
-            </div>
+      <Modal
+        open={!!restoreTarget}
+        onClose={() => { setRestoreTarget(null); setRestorePreview(null); }}
+        size="sm"
+        usePortal
+        ariaLabel="Restore database"
+      >
+        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
+          <h3 className="text-white text-sm font-medium">Restore database?</h3>
+          <p className="text-sm text-gray-400">
+            This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget}</code>
+            {restorePreview && <> ({Math.round((restorePreview.sizeBytes || 0) / 1024)} KB · {restorePreview.tableCount} tables)</>}
+            {' '}into the live PostgreSQL database. Existing rows may be overwritten.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+            <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
           </div>
         </div>
-      )}
+      </Modal>
 
       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-port-border">
         <button
