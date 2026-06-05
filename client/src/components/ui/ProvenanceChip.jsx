@@ -1,7 +1,25 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { BadgeCheck, FlaskConical, HelpCircle, Sigma, Telescope } from 'lucide-react';
 import { getProvenanceLevel } from '../../lib/healthProvenance.js';
 import useClickOutside from '../../hooks/useClickOutside';
+
+const POPOVER_WIDTH = 256; // w-64
+const VIEWPORT_MARGIN = 8;
+const POPOVER_GAP = 6; // ~mt-1.5 below the chip
+
+// Position the fixed popover from the chip's viewport rect, biased to `align`
+// (start = popover's left edge under the chip; end = its right edge under the
+// chip) and then clamped to the viewport so it never runs off-screen. Fixed
+// positioning is what lets the popover escape the `overflow-hidden` dashboard
+// grid cell it can live inside — an absolutely-positioned panel would clip
+// against the cell on narrow widget widths regardless of which edge it anchored.
+function popoverStyleFor(rect, align) {
+  const vw = window.innerWidth;
+  const width = Math.min(POPOVER_WIDTH, vw - VIEWPORT_MARGIN * 2);
+  const rawLeft = align === 'end' ? rect.right - width : rect.left;
+  const left = Math.max(VIEWPORT_MARGIN, Math.min(rawLeft, vw - width - VIEWPORT_MARGIN));
+  return { position: 'fixed', top: rect.bottom + POPOVER_GAP, left, width };
+}
 
 // Source-style provenance chip for health/longevity insights. Tap (or click) to
 // reveal how the insight was derived plus a "what would change this?" explainer.
@@ -41,11 +59,28 @@ export default function ProvenanceChip({
 }) {
   const meta = getProvenanceLevel(level);
   const [open, setOpen] = useState(false);
+  const [popStyle, setPopStyle] = useState(null);
   const wrapRef = useRef(null);
+  const btnRef = useRef(null);
   const popId = useId();
   const close = useCallback(() => setOpen(false), []);
 
   useClickOutside(wrapRef, open, close);
+
+  // Measure the chip and place the fixed popover before paint so it never flashes
+  // at the wrong spot; re-measure on scroll/resize while open since fixed coords
+  // are viewport-relative and the chip can move under them.
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return undefined;
+    const reposition = () => setPopStyle(popoverStyleFor(btnRef.current.getBoundingClientRect(), align));
+    reposition();
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [open, align]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -65,6 +100,7 @@ export default function ProvenanceChip({
   return (
     <div ref={wrapRef} className={`relative inline-flex align-middle ${className}`}>
       <button
+        ref={btnRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -76,14 +112,14 @@ export default function ProvenanceChip({
         <span>{label ?? meta.label}</span>
         <HelpCircle size={10} aria-hidden="true" className="shrink-0 opacity-60" />
       </button>
-      {open && (
+      {open && popStyle && (
         <div
           id={popId}
-          // `align="end"` anchors the popover to the chip's right edge (opens
-          // leftward) so a chip sitting in a right-aligned header — dashboard
-          // widget headers, the goal detail panel — doesn't push its 16rem panel
-          // off the card's right edge (dashboard cells clip with overflow-hidden).
-          className={`absolute ${align === 'end' ? 'right-0' : 'left-0'} top-full z-30 mt-1.5 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-port-border bg-port-card p-3 text-left shadow-xl`}
+          // Fixed + viewport-clamped (see popoverStyleFor) so the panel escapes
+          // any overflow-hidden ancestor — e.g. the dashboard grid cell — and
+          // never renders off-screen, on a narrow widget or near the viewport edge.
+          style={popStyle}
+          className="z-30 rounded-lg border border-port-border bg-port-card p-3 text-left shadow-xl"
         >
           <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-gray-200 normal-case tracking-normal">
             <Icon size={12} aria-hidden="true" className={`shrink-0 ${iconTone}`} />
