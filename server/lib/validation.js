@@ -725,6 +725,14 @@ export const createCosJobSchema = z.object({
   promptTemplate: z.string().optional(),
   command: z.string().optional(),
   triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Optional managed-app scope (empty string from the UI picker → undefined → global job).
+  appId: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Optional git-workflow options for app-scoped agent jobs.
+  taskMetadata: z.object({
+    useWorktree: z.boolean().optional(),
+    openPR: z.boolean().optional(),
+    simplify: z.boolean().optional(),
+  }).optional(),
 });
 
 export const updateCosJobSchema = createCosJobSchema.partial().extend({

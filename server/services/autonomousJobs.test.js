@@ -197,6 +197,27 @@ describe('autonomousJobs', () => {
       expect(task.autoApprove).toBe(true)
       expect(task.metadata.autonomyLevel).toBe('yolo')
     })
+
+    it('omits app + git options when job has no appId/taskMetadata', async () => {
+      const task = await generateTaskFromJob(mockJobsData.jobs[0])
+      expect(task.metadata.app).toBeUndefined()
+      expect(task.metadata.useWorktree).toBeUndefined()
+      expect(task.metadata.openPR).toBeUndefined()
+      expect(task.metadata.simplify).toBeUndefined()
+    })
+
+    it('app-scoped job sets metadata.app and forwards git options', async () => {
+      const appJob = {
+        ...mockJobsData.jobs[0],
+        appId: 'app-xyz',
+        taskMetadata: { useWorktree: true, openPR: true, simplify: false }
+      }
+      const task = await generateTaskFromJob(appJob)
+      expect(task.metadata.app).toBe('app-xyz')
+      expect(task.metadata.useWorktree).toBe(true)
+      expect(task.metadata.openPR).toBe(true)
+      expect(task.metadata.simplify).toBe(false)
+    })
   })
 
   describe('createJob with resolveIntervalMs', () => {
@@ -719,6 +740,23 @@ describe('autonomousJobs', () => {
         name: 'New Job'
       })
     })
+
+    it('defaults appId/taskMetadata to null when omitted', async () => {
+      const job = await createJob({ name: 'Global Job', promptTemplate: 'do it' })
+      expect(job.appId).toBeNull()
+      expect(job.taskMetadata).toBeNull()
+    })
+
+    it('persists appId + taskMetadata when provided', async () => {
+      const job = await createJob({
+        name: 'App Job',
+        promptTemplate: 'do it',
+        appId: 'app-xyz',
+        taskMetadata: { useWorktree: true, openPR: true, simplify: false }
+      })
+      expect(job.appId).toBe('app-xyz')
+      expect(job.taskMetadata).toEqual({ useWorktree: true, openPR: true, simplify: false })
+    })
   })
 
   describe('updateJob', () => {
@@ -742,6 +780,15 @@ describe('autonomousJobs', () => {
       const job = await updateJob('nonexistent', { name: 'Updated' })
 
       expect(job).toBeNull()
+    })
+
+    it('updates appId + taskMetadata, and can clear appId', async () => {
+      const scoped = await updateJob('job-test-1', { appId: 'app-abc', taskMetadata: { openPR: true } })
+      expect(scoped.appId).toBe('app-abc')
+      expect(scoped.taskMetadata).toEqual({ openPR: true })
+
+      const cleared = await updateJob('job-test-1', { appId: null })
+      expect(cleared.appId).toBeNull()
     })
   })
 
