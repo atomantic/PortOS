@@ -26,6 +26,7 @@
 - **[issue-925] Pin the top-level sidebar pages too** — Dashboard, Review Hub, City, and Goals can now be pinned to the top of the sidebar, the same way pages inside the collapsible sections already could. Hover (or keyboard-focus) one of these rows to reveal its pin button; the Chief of Staff unread badge and the collapsed icon-rail look are unchanged.
 - **City keeps downtown clear of the AI Core** — downtown buildings that would otherwise grid onto the central AI Core landmark are now pushed out onto a one-cell plaza ring (dodging occupied slots so two buildings never stack), so no downtown building or label overlaps the core; a lone app sits at the front of the plaza. The warehouse district keeps its existing placement. District neon signs also gain a styled back panel with a thin accent strip so they read as finished objects when seen from behind instead of flat black cutouts.
 - **[issue-919] Internal: shared-helper catalog for the client utility modules** — Added a discovery index and a drift-guard test so the client's pure helper modules stay easy to find and can't silently fall out of the catalog. No user-facing change.
+- **[issue-895] Internal: pinned the goal-organization apex round-trip with a test** — Confirmed "create a new apex from AI suggestions" already works end-to-end and added regression coverage so it can't silently break. No user-facing change.
 
 ## Fixed
 
