@@ -229,6 +229,53 @@ describe('getSuggestions', () => {
     expect(out.items[0].modelId).toBe(7002);
   });
 
+  it('searchLorasInFamily shapes the card from the family-matching version, not modelVersions[0]', async () => {
+    // A multi-base-model model whose NEWEST version is Flux.1 D but which also
+    // carries a Z-Image version (which is why it matched a z-image search).
+    const fetchImpl = async (url) => {
+      if (/api\/v1\/models\/\d+$/.test(url)) return mockJsonResponse(buildModel(1, 'C', 'Flux.1 D'));
+      return mockJsonResponse({
+        items: [{
+          id: 5000,
+          name: 'Multi-base style',
+          type: 'LORA',
+          creator: { username: 'someone' },
+          stats: { downloadCount: 10 },
+          modelVersions: [
+            { id: 900, baseModel: 'Flux.1 D', trainedWords: [], images: [], files: [{ name: 'flux.safetensors', primary: true, sizeKB: 100 }] },
+            { id: 800, baseModel: 'ZImageTurbo', trainedWords: [], images: [], files: [{ name: 'z.safetensors', primary: true, sizeKB: 90 }] },
+          ],
+        }],
+      });
+    };
+    const out = await svc.searchLorasInFamily({ runnerFamily: 'z-image', query: 'style', fetchImpl });
+    expect(out.items.length).toBe(1);
+    // Card must reflect the Z-Image version (800), not the newer Flux.1 D one (900).
+    expect(out.items[0].versionId).toBe(800);
+    expect(out.items[0].runnerFamily).toBe('z-image');
+    expect(out.items[0].installUrl).toMatch(/modelVersionId=800/);
+  });
+
+  it('searchLorasInFamily drops a model with no installable version for the family', async () => {
+    const fetchImpl = async (url) => {
+      if (/api\/v1\/models\/\d+$/.test(url)) return mockJsonResponse(buildModel(1, 'C', 'Flux.1 D'));
+      return mockJsonResponse({
+        items: [{
+          id: 5001,
+          name: 'Wrong family only',
+          type: 'LORA',
+          modelVersions: [
+            { id: 700, baseModel: 'Flux.1 D', files: [{ name: 'a.safetensors', primary: true, sizeKB: 50 }] },
+          ],
+        }],
+      });
+    };
+    // Civitai shouldn't return this for a z-image search, but if it does we must
+    // not surface a Flux card under the Z-Image header.
+    const out = await svc.searchLorasInFamily({ runnerFamily: 'z-image', query: 'x', fetchImpl });
+    expect(out.items.length).toBe(0);
+  });
+
   it('searchLorasInFamily does not touch the cached suggestions (live, uncached)', async () => {
     let searchCalls = 0;
     const fetchImpl = async (url) => {
