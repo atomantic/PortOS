@@ -38,6 +38,7 @@
 - **[issue-907] Internal: upgraded the server validation library to Zod 4** — Migrated the server's request-validation layer to the Zod 4 major release, preserving the exact accept/reject behavior of every existing rule (including a fix so partial-update saves no longer risk silently resetting fields you didn't touch). No user-facing change.
 - **[issue-907] Internal: upgraded the web build tooling to Vite 8** — Moved the client to the Vite 8 major release (and its new Rust-based bundler) for faster builds. The app builds, runs, and tests identically. No user-facing change.
 - **[issue-951] Internal: moved the web build to Vite 8's native chunking API** — Switched the client's vendor-chunk splitting from the older Rollup-compatibility form to Vite 8's canonical equivalent, dropping reliance on a compatibility shim that a future Vite may remove. The same vendor bundles are produced. No user-facing change.
+- **[issue-905] Internal: local-LLM playground stream honors socket backpressure** — The streaming model-test endpoint now pauses upstream reading when a slow client can't keep up, instead of buffering the whole response in memory. No user-facing change.
 
 ## Fixed
 

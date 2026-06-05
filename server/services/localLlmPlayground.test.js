@@ -179,6 +179,43 @@ describe('runLocalLlmTest timeout/abort contract', () => {
     expect(result.text).toBe('Hello');
   });
 
+  it('awaits onToken before reading the next upstream chunk (honours backpressure)', async () => {
+    const reader = makeReader([sse({ content: 'a' }), sse({ content: 'b' })], { abort: false });
+    stubStream(reader);
+
+    // A slow consumer (e.g. the streaming route awaiting a socket `drain`): hold
+    // the first token's promise open and assert the read loop has NOT pulled the
+    // next chunk until we let it settle. This is what makes the route's drain-await
+    // actually pause upstream reading instead of buffering unbounded.
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+    let firstSeen;
+    const firstArrived = new Promise((resolve) => { firstSeen = resolve; });
+    const tokens = [];
+    const onToken = vi.fn((delta) => {
+      tokens.push(delta);
+      if (tokens.length === 1) { firstSeen(); return firstHeld; }
+      return undefined;
+    });
+
+    const promise = runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000, onToken,
+    });
+
+    // Wait until the first token is being handled (it's held open below). At that
+    // point only one read has resolved a line — the second chunk must NOT have been
+    // requested yet, since the loop is parked awaiting our held onToken. This is what
+    // makes the route's drain-await actually pause upstream reading.
+    await firstArrived;
+    expect(tokens).toEqual(['a']);
+    expect(reader.read).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    const result = await promise;
+    expect(tokens).toEqual(['a', 'b']);
+    expect(result.text).toBe('ab');
+  });
+
   it('forwards a client cancel onto the upstream fetch so the reader tears down early', async () => {
     let capturedSignal = null;
     global.fetch = vi.fn().mockImplementation((_url, init) => {

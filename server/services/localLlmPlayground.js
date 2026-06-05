@@ -133,7 +133,7 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
       throw new Error(`Provider returned a non-JSON response (${response.status})`);
     }
     const text = data.choices?.[0]?.message?.content || '';
-    if (text) onChunk(text);
+    if (text) await onChunk(text);
     return text;
   }
 
@@ -143,12 +143,12 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
   let output = '';
   let reasoning = '';
 
-  const consumeLine = (rawLine) => {
+  const consumeLine = async (rawLine) => {
     const delta = extractStreamDelta(rawLine);
     if (!delta) return;
     if (delta.content) {
       output += delta.content;
-      onChunk(delta.content);
+      await onChunk(delta.content);
     }
     if (delta.reasoning) reasoning += delta.reasoning;
   };
@@ -165,9 +165,9 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-      for (const line of lines) consumeLine(line);
+      for (const line of lines) await consumeLine(line);
     }
-    if (buffer.trim()) consumeLine(buffer);
+    if (buffer.trim()) await consumeLine(buffer);
   } catch (err) {
     err.partialOutput = resolvePartialOutput({ output, reasoning });
     throw err;
@@ -176,7 +176,7 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
   }
 
   const resolved = resolvePartialOutput({ output, reasoning });
-  if (resolved && resolved !== output) onChunk(resolved);
+  if (resolved && resolved !== output) await onChunk(resolved);
   return resolved;
 }
 
@@ -232,7 +232,11 @@ export async function runLocalLlmTest({
       signal,
       onChunk: (chunk) => {
         if (!firstChunkAt && chunk) firstChunkAt = Date.now();
-        if (chunk) onToken?.(chunk);
+        // Await the consumer so socket backpressure from the streaming route
+        // propagates back up to the upstream read loop (pauses reading until the
+        // client drains). Non-streaming callers pass no onToken, so this no-ops.
+        if (chunk) return onToken?.(chunk);
+        return undefined;
       },
     }).finally(() => clearTimeout(timeoutHandle));
 
