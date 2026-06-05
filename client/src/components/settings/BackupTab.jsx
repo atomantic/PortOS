@@ -5,7 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import FolderPicker from '../FolderPicker';
 import useAsyncAction from '../../hooks/useAsyncAction';
-import { getSettings, updateSettings, getBackupStatus, triggerBackup } from '../../services/api';
+import { getSettings, updateSettings, getBackupStatus, triggerBackup, getBackupSnapshots, restoreDatabase } from '../../services/api';
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.
@@ -50,10 +50,19 @@ export function BackupTab() {
   const [savedDisabledDefaultExcludes, setSavedDisabledDefaultExcludes] = useState([]);
   const [defaultExcludes, setDefaultExcludes] = useState([]);
   const [newExclude, setNewExclude] = useState('');
+  const [pgBackup, setPgBackup] = useState(null);
+  const [backupStatus, setBackupStatus] = useState('never');
+  const [snapshots, setSnapshots] = useState([]);
+  const [restoreTarget, setRestoreTarget] = useState(null); // snapshotId pending confirm
+  const [restorePreview, setRestorePreview] = useState(null); // dry-run result
 
   useEffect(() => {
-    Promise.all([getSettings(), getBackupStatus({ silent: true }).catch(() => null)])
-      .then(([settings, status]) => {
+    Promise.all([
+      getSettings(),
+      getBackupStatus({ silent: true }).catch(() => null),
+      getBackupSnapshots({ silent: true }).catch(() => []),
+    ])
+      .then(([settings, status, snaps]) => {
         const backup = settings?.backup || {};
         const saved = backup.destPath || '';
         const savedExcludes = asArray(backup.excludePaths);
@@ -67,6 +76,9 @@ export function BackupTab() {
         setDisabledDefaultExcludes(savedDisabled);
         setSavedDisabledDefaultExcludes(savedDisabled);
         setDefaultExcludes(asArray(status?.defaultExcludes));
+        setPgBackup(status?.pgBackup ?? null);
+        setBackupStatus(status?.status ?? 'never');
+        setSnapshots(Array.isArray(snaps) ? snaps : []);
       })
       .catch(() => toast.error('Failed to load settings'))
       .finally(() => setLoading(false));
@@ -107,7 +119,11 @@ export function BackupTab() {
     if (result?.skipped) {
       toast('Backup already running');
     } else {
-      toast.success(`Backup complete — ${result?.filesChanged ?? 0} files changed`, { icon: '💾' });
+      setPgBackup(result?.pgBackup ?? null);
+      setBackupStatus(result?.status ?? 'ok');
+      const dbNote = result?.pgBackup?.status === 'failed' ? ' (DB dump FAILED)' : '';
+      toast.success(`Backup complete — ${result?.filesChanged ?? 0} files changed${dbNote}`, { icon: '💾' });
+      getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch(() => {});
     }
     return result;
   }, { errorMessage: 'Backup failed' });
@@ -147,8 +163,55 @@ export function BackupTab() {
         ? 'Save your changes before running — the backup uses saved settings.'
         : 'Run a backup snapshot now using saved settings';
 
+  const renderPgStatus = () => {
+    if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
+    if (pgBackup.status === 'ok') {
+      return <span className="text-port-success">✅ {Math.round((pgBackup.sizeBytes || 0) / 1024)} KB · {pgBackup.tableCount} tables</span>;
+    }
+    if (pgBackup.status === 'skipped') {
+      return <span className="text-gray-400">⏭️ Not configured (file mode)</span>;
+    }
+    return <span className="text-port-warning">❌ Dump failed: {pgBackup.reason}</span>;
+  };
+
+  const handleRestoreDb = async (snapshotId) => {
+    // Dry-run first to show what would restore, then open the confirm modal.
+    const preview = await restoreDatabase({ snapshotId, dryRun: true }, { silent: true })
+      .catch(() => null);
+    if (!preview || preview.status === 'skipped') {
+      toast.error(preview?.reason === 'no_dump' ? 'No DB dump in this snapshot' : 'DB restore unavailable');
+      return;
+    }
+    setRestorePreview(preview);
+    setRestoreTarget(snapshotId);
+  };
+
+  const confirmRestoreDb = async () => {
+    const snapshotId = restoreTarget;
+    setRestoreTarget(null);
+    const result = await restoreDatabase({ snapshotId, dryRun: false }, { silent: true })
+      .catch(() => ({ status: 'failed', reason: 'request_error' }));
+    if (result.status === 'ok') {
+      toast.success(`Database restored from ${snapshotId}`, { icon: '💾' });
+    } else {
+      toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
+    }
+    setRestorePreview(null);
+  };
+
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
+      {backupStatus === 'degraded' && (
+        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
+          ⚠️ Last backup degraded — files were saved but the database dump failed. Check that <code>pg_dump</code> is installed and PostgreSQL is reachable.
+        </div>
+      )}
+
+      <div className="space-y-1">
+        <label className="block text-sm text-gray-400">Database Backup (last run)</label>
+        <div className="text-sm">{renderPgStatus()}</div>
+      </div>
+
       <div className="space-y-1">
         <label htmlFor={destPathId} className="block text-sm text-gray-400">Destination Path</label>
         <div className="flex gap-2 items-stretch">
@@ -268,6 +331,42 @@ export function BackupTab() {
           </div>
         )}
       </div>
+
+      {snapshots.length > 0 && (
+        <div className="space-y-2">
+          <label className="block text-sm text-gray-400">Snapshots</label>
+          <ul className="space-y-1.5">
+            {snapshots.slice(0, 10).map((snap) => (
+              <li key={snap.id} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
+                <span className="text-gray-300 truncate">{snap.id}</span>
+                <button
+                  onClick={() => handleRestoreDb(snap.id)}
+                  className="shrink-0 px-2 py-1 bg-port-border hover:bg-port-border/70 text-white rounded transition-colors"
+                >
+                  Restore DB
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {restoreTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
+          <div className="bg-port-card border border-port-border rounded-xl p-5 max-w-md w-full mx-4 space-y-4">
+            <h3 className="text-white text-sm font-medium">Restore database?</h3>
+            <p className="text-sm text-gray-400">
+              This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget}</code>
+              {restorePreview && <> ({Math.round((restorePreview.sizeBytes || 0) / 1024)} KB · {restorePreview.tableCount} tables)</>}
+              {' '}into the live PostgreSQL database. Existing rows may be overwritten.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-port-border">
         <button
