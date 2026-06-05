@@ -28,6 +28,7 @@
 - **[issue-919] Internal: shared-helper catalog for the client utility modules** — Added a discovery index and a drift-guard test so the client's pure helper modules stay easy to find and can't silently fall out of the catalog. No user-facing change.
 - **[issue-939] Internal: integration test locking pinned single nav rows** — Added a sidebar-level test that pinning a top-level page (Dashboard, Review Hub, City, Goals) renders it in the Pinned section, so a future refactor of the nav indexing can't silently drop pinned top-level pages. No user-facing change.
 - **[issue-895] Internal: pinned the goal-organization apex round-trip with a test** — Confirmed "create a new apex from AI suggestions" already works end-to-end and added regression coverage so it can't silently break. No user-facing change.
+- **Internal: restored a green lint build** — Added the standard DOM element globals the client lint config was missing, so the build's lint check passes again. No user-facing change.
 
 ## Fixed
 

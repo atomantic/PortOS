@@ -24,6 +24,7 @@ const browserGlobals = {
   HTMLElement: 'readonly', HTMLInputElement: 'readonly', HTMLCanvasElement: 'readonly',
   HTMLVideoElement: 'readonly', HTMLTextAreaElement: 'readonly',
   HTMLMediaElement: 'readonly', HTMLAudioElement: 'readonly',
+  HTMLButtonElement: 'readonly', HTMLDivElement: 'readonly', HTMLSelectElement: 'readonly',
   Element: 'readonly', Node: 'readonly', NodeList: 'readonly', Text: 'readonly',
   MutationObserver: 'readonly', IntersectionObserver: 'readonly',
   ResizeObserver: 'readonly',
