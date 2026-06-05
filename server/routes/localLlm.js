@@ -234,7 +234,8 @@ router.post('/test', asyncHandler(async (req, res) => {
 
 // POST /api/local-llm/test/stream — same as /test, but streams the model's
 // output token-by-token as newline-delimited JSON (NDJSON) so the playground
-// can render live. Frames: `{ type: 'token', delta }` per content chunk, then a
+// can render live. Frames: `{ type: 'token', delta, kind }` per chunk (kind is
+// 'content' or 'reasoning' so the client can render thinking separately), then a
 // terminal `{ type: 'result', result }` carrying the same object /test returns
 // (text, timings, runId, and any error). `runLocalLlmTest` resolves rather than
 // throws — including on timeout/abort — so the result frame always lands while
@@ -273,7 +274,7 @@ router.post('/test/stream', asyncHandler(async (req, res) => {
   const result = await runLocalLlmTest({
     ...body,
     signal: abortSignalFromResponse(res),
-    onToken: (delta) => (delta ? write({ type: 'token', delta }) : undefined),
+    onToken: (delta, kind = 'content') => (delta ? write({ type: 'token', delta, kind }) : undefined),
   }).catch((err) => ({
     backend: body.backend,
     modelId: body.modelId,

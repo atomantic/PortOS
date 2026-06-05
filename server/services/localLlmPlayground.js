@@ -133,7 +133,7 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
       throw new Error(`Provider returned a non-JSON response (${response.status})`);
     }
     const text = data.choices?.[0]?.message?.content || '';
-    if (text) await onChunk(text);
+    if (text) await onChunk(text, 'content');
     return text;
   }
 
@@ -148,9 +148,17 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     if (!delta) return;
     if (delta.content) {
       output += delta.content;
-      await onChunk(delta.content);
+      await onChunk(delta.content, 'content');
     }
-    if (delta.reasoning) reasoning += delta.reasoning;
+    // Stream reasoning live too, on its own channel, so a reasoning-only model
+    // (deepseek-r1, qwq, …) renders its chain-of-thought as it arrives instead
+    // of sitting on "Waiting for the first token…" until the whole run lands.
+    // Kept distinct from content so the live panel can label it and so the
+    // final content-only `text` doesn't inherit reasoning prose.
+    if (delta.reasoning) {
+      reasoning += delta.reasoning;
+      await onChunk(delta.reasoning, 'reasoning');
+    }
   };
 
   // Always release the reader (and tear down the socket) on every exit path —
@@ -175,9 +183,10 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     await reader.cancel().catch(() => {});
   }
 
-  const resolved = resolvePartialOutput({ output, reasoning });
-  if (resolved && resolved !== output) await onChunk(resolved);
-  return resolved;
+  // Both channels already streamed live via onChunk, so there's no end-of-stream
+  // re-emit here — re-pushing `resolved` would double the reasoning-only output
+  // the client just received. We only resolve the final text for the result record.
+  return resolvePartialOutput({ output, reasoning });
 }
 
 export async function runLocalLlmTest({
@@ -189,9 +198,11 @@ export async function runLocalLlmTest({
   maxTokens = 1000,
   timeoutMs = 300000,
   signal: clientSignal,
-  // Optional per-token callback. When provided (streaming route), each content
-  // delta is forwarded as it arrives so the client can render live output. The
-  // returned result is unchanged, so non-streaming callers ignore this entirely.
+  // Optional per-token callback `onToken(delta, kind)` where kind is 'content'
+  // or 'reasoning'. When provided (streaming route), each delta is forwarded as
+  // it arrives so the client can render live output (reasoning on its own
+  // channel). The returned result is unchanged, so non-streaming callers ignore
+  // this entirely.
   onToken,
 }) {
   const provider = await resolveLocalProvider(backend);
@@ -230,12 +241,16 @@ export async function runLocalLlmTest({
       temperature,
       maxTokens,
       signal,
-      onChunk: (chunk) => {
+      onChunk: (chunk, kind = 'content') => {
+        // First token of EITHER channel marks TTFT: for a reasoning model the
+        // first thing it emits is reasoning, so timing it from that chunk is the
+        // honest time-to-first-token (previously reasoning-only runs reported a
+        // null TTFT because reasoning never reached this callback).
         if (!firstChunkAt && chunk) firstChunkAt = Date.now();
         // Await the consumer so socket backpressure from the streaming route
         // propagates back up to the upstream read loop (pauses reading until the
         // client drains). Non-streaming callers pass no onToken, so this no-ops.
-        if (chunk) return onToken?.(chunk);
+        if (chunk) return onToken?.(chunk, kind);
         return undefined;
       },
     }).finally(() => clearTimeout(timeoutHandle));
@@ -257,8 +272,8 @@ export async function runLocalLlmTest({
     // A timeout/abort mid-stream still has tokens worth keeping — surface what the
     // model already streamed (attached to the error by streamChatCompletion) instead
     // of discarding it. Persist it on the failed run record too so /runs replay shows it.
-    // (TTFT is best-effort here: a reasoning-only partial leaves firstChunkAt unset,
-    // since reasoning deltas don't mark first-chunk timing during the stream.)
+    // (TTFT is recorded even for a reasoning-only partial now, since reasoning deltas
+    // mark first-chunk timing too.)
     const partialText = typeof err?.partialOutput === 'string' ? err.partialOutput : '';
     if (runId) {
       await finalizeRunRecord({
