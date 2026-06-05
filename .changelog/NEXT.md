@@ -22,6 +22,7 @@
 - **[issue-875] CyberCity district layout internals consolidated** — the city's districts now share one set of layout primitives for grid placement, category tallies, and log-scaled building heights, so each district no longer carries its own copy of that math. No visible change to the city.
 - **[issue-713] Simpler, collapsed sidebar** — The left navigation is consolidated to a focused set of top-level areas with a "More" group for the long tail. Messaging and your wiki now live under Brain, system and infrastructure tools under Dev Tools, and health tracking is now simply "Health"; Goals is promoted to its own top-level entry. Deep page tabs no longer clutter the sidebar — open a page and its tabs live in the page — and everything stays reachable from ⌘K and voice navigation.
 - **[issue-919] Internal: shared-helper catalog for the client utility modules** — Added a discovery index and a drift-guard test so the client's pure helper modules stay easy to find and can't silently fall out of the catalog. No user-facing change.
+- **City keeps a clear plaza around the AI Core** — downtown buildings that would otherwise grid onto the central AI Core landmark are now pushed out to the edge of a one-cell plaza, so no building or label overlaps the core (a lone app sits at the plaza's front edge facing the camera). The warehouse district is unaffected. District neon signs also gain a styled back panel with a thin accent strip so they read as finished objects when seen from behind instead of flat black cutouts.
 
 ## Fixed
 
