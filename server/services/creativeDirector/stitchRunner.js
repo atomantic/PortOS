@@ -23,7 +23,7 @@ import { loadHistory } from '../videoGen/local.js';
 import { addItem as addCollectionItem } from '../mediaCollections.js';
 import { buildTimelineClips } from './orchestrator.js';
 import { getProject, updateProject } from './local.js';
-import { getIssue } from '../pipeline/issues.js';
+import { getIssue, sanitizeAudioMode } from '../pipeline/issues.js';
 import { muxMusicBed, muxVoLines, muxCueBed, muxStripAudio, resolveMusicTrackPath, selectPlacedVoLines, selectPlacedCues } from '../pipeline/audioMux.js';
 import { placeCuesOnTimeline } from '../pipeline/audioCuePlacement.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -147,7 +147,7 @@ async function maybeMuxPipelineAudio(project, finalEntry) {
   // Whole-episode audio strategy (issue #863). Absent / unknown audioMode reads
   // as 'per-clip' (the sanitizer already defaults it), so existing issues keep
   // today's behavior. Placed VO lines are muxable in every non-silent mode.
-  const audioMode = issue.stages?.audio?.audioMode || 'per-clip';
+  const audioMode = sanitizeAudioMode(issue.stages?.audio?.audioMode);
   const voLines = selectPlacedVoLines(issue.stages?.audio?.lines);
 
   // 'generated' — assemble the arc-driven cues[] onto the timeline. Cue timing
