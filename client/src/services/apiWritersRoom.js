@@ -94,6 +94,28 @@ export const reserveWritersRoomRenderPreview = (workId, options) =>
     ...(options || {}),
   });
 
+// CD bridge (Phase 5): propose a Creative Director treatment from the cursor
+// context. Draws on the SAME daily call budget as live continuation (both text
+// calls); the server gates on the live-mode toggle (409) and that budget (429).
+// Returns { proposal, usage, budget } — proposal is null when no usable
+// treatment came back. Callers own their own error UI, so pass { silent: true }.
+export const suggestWritersRoomCdBridge = (workId, context, options) =>
+  request(`/writers-room/works/${enc(workId)}/cd-bridge/suggest`, {
+    method: 'POST',
+    body: JSON.stringify(context || {}),
+    ...(options || {}),
+  });
+
+// Send a reviewed CD-bridge proposal into a NEW Creative Director project
+// (non-destructive). Returns { project } — the seeded CD project with its
+// treatment applied. Callers own their own error UI, so pass { silent: true }.
+export const sendWritersRoomCdBridge = (workId, proposal, options) =>
+  request(`/writers-room/works/${enc(workId)}/cd-bridge/send`, {
+    method: 'POST',
+    body: JSON.stringify({ proposal }),
+    ...(options || {}),
+  });
+
 // Synced review (Phase 4): a read-model that maps prose segments ↔ script
 // scenes ↔ generated media with provenance + stale detection. Derived on the
 // server from the active draft's segment index and the `script` analysis

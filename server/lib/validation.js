@@ -904,6 +904,33 @@ export const writersRoomLiveSuggestSchema = z.object({
 // payload (e.g. an attempt to smuggle a usage counter) instead of ignoring it.
 export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
 
+// Cursor-context payload for the CD-bridge suggest route — identical shape to
+// the live continuation suggest (the server only needs a window around the
+// cursor, not the whole manuscript).
+export const writersRoomCdBridgeSuggestSchema = z.object({
+  before: z.string().max(12_000).optional().default(''),
+  after: z.string().max(12_000).optional().default(''),
+  selection: z.string().max(8_000).optional().default(''),
+}).strict();
+
+// The reviewed CD-bridge proposal the writer sends into a new Creative Director
+// project. Caps align with creativeDirectorTreatmentSchema / creativeDirectorSceneSchema
+// so a gate-passing proposal always validates again at setTreatment time. The
+// scene shape here is the PROPOSAL subset (intent/prompt/duration); the service
+// assigns sceneId/order/useContinuationFromPrior before calling setTreatment.
+export const writersRoomCdBridgeSendSchema = z.object({
+  proposal: z.object({
+    logline: z.string().trim().min(1).max(500),
+    synopsis: z.string().trim().min(1).max(5000),
+    styleSpec: z.string().max(5000).optional().default(''),
+    scenes: z.array(z.object({
+      intent: z.string().trim().min(1).max(1000),
+      prompt: z.string().trim().min(1).max(8000),
+      durationSeconds: z.number().int().min(1).max(10),
+    }).strict()).min(1).max(120),
+  }).strict(),
+}).strict();
+
 export const writersRoomDraftSaveSchema = z.object({
   body: z.string().max(5_000_000), // 5 MB ceiling — well over a long novel in plain text
   // Catalog ingredient ids this draft version references. Optional: when
