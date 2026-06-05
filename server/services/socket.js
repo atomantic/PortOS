@@ -64,6 +64,15 @@ const loopSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
+/**
+ * Return the module-level Socket.IO instance (null before initSocket runs).
+ * Lets services emit to clients from unattended paths (cron handlers) that
+ * don't receive an `io` argument.
+ */
+export function getIo() {
+  return ioInstance;
+}
+
 const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers];
 
 function broadcastToSet(set, event, data) {
