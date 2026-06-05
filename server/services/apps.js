@@ -183,18 +183,27 @@ export async function getActiveApps() {
  * are reported separately under `unmanaged` so callers can show context
  * without inflating the running denominator.
  */
-export async function getAppStatusSummary() {
+/**
+ * Resolve each active app's overall PM2 status in one pass.
+ *
+ * Returns one entry per active app — PM2-runnable apps carry a derived
+ * `overallStatus` of `online` / `stopped` / `not_started`; native projects
+ * (Xcode, iOS, macOS) report `n/a` since they have no detectable runtime.
+ * Each unique PM2_HOME is queried at most once. This is the shared primitive
+ * behind both `getAppStatusSummary()` (counts) and the CyberCity snapshot
+ * pipeline (per-building status), so the two never drift.
+ *
+ * @returns {Promise<Array<{ id, name, type, repoPath, overallStatus, managed: boolean }>>}
+ */
+export async function getAppStatuses() {
   const apps = await getAllApps({ includeArchived: false });
 
-  const pm2Apps = apps.filter(a => usesPm2(a.type));
-  const unmanaged = apps.length - pm2Apps.length;
-
-  // Group by pm2Home so each unique home is queried at most once
+  // Group PM2 apps by pm2Home so each unique home is queried at most once.
   const homeGroups = new Map();
-  for (const app of pm2Apps) {
+  for (const app of apps) {
+    if (!usesPm2(app.type)) continue;
     const home = app.pm2Home || null;
-    if (!homeGroups.has(home)) homeGroups.set(home, []);
-    homeGroups.get(home).push(app);
+    if (!homeGroups.has(home)) homeGroups.set(home, true);
   }
 
   const procMaps = new Map();
@@ -203,28 +212,38 @@ export async function getAppStatusSummary() {
     procMaps.set(home, new Map(procs.map(p => [p.name, p])));
   }
 
-  let online = 0;
-  let stopped = 0;
-  let notStarted = 0;
-  for (const app of pm2Apps) {
+  return apps.map(app => {
+    const managed = usesPm2(app.type);
+    // repoPath is carried so callers can map an agent's workspacePath back to its
+    // app (the CyberCity snapshot's agent-assignment mapping, mirroring the
+    // client's agentMap) without a second apps read.
+    const base = { id: app.id, name: app.name, type: app.type, repoPath: app.repoPath };
+    if (!managed) {
+      return { ...base, overallStatus: 'n/a', managed: false };
+    }
     const procMap = procMaps.get(app.pm2Home || null) || new Map();
     const names = app.pm2ProcessNames || [];
-    if (names.length === 0) {
-      notStarted++;
-      continue;
+    let overallStatus = 'not_started';
+    if (names.length > 0) {
+      const statuses = names.map(n => procMap.get(n)?.status || 'not_found');
+      if (statuses.some(s => s === 'online')) overallStatus = 'online';
+      else if (statuses.some(s => s === 'stopped')) overallStatus = 'stopped';
+      else overallStatus = 'not_started';
     }
-    const statuses = names.map(n => procMap.get(n)?.status || 'not_found');
-    if (statuses.some(s => s === 'online')) online++;
-    else if (statuses.some(s => s === 'stopped')) stopped++;
-    else notStarted++;
-  }
+    return { ...base, overallStatus, managed: true };
+  });
+}
+
+export async function getAppStatusSummary() {
+  const statuses = await getAppStatuses();
+  const managed = statuses.filter(s => s.managed);
 
   return {
-    total: pm2Apps.length,
-    online,
-    stopped,
-    notStarted,
-    unmanaged
+    total: managed.length,
+    online: managed.filter(s => s.overallStatus === 'online').length,
+    stopped: managed.filter(s => s.overallStatus === 'stopped').length,
+    notStarted: managed.filter(s => s.overallStatus === 'not_started').length,
+    unmanaged: statuses.length - managed.length
   };
 }
 

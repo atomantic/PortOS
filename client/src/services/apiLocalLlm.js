@@ -66,8 +66,10 @@ export const compareLocalLlmModels = (payload, options) =>
   request('/local-llm/compare', { method: 'POST', body: JSON.stringify(payload), ...options });
 
 // Streaming variant of testLocalLlmModel. POSTs the same payload but reads the
-// NDJSON response body so `onToken(delta)` fires per content chunk for live
-// rendering. Resolves with the terminal result object (same shape as
+// NDJSON response body so `onToken(delta, kind)` fires per chunk for live
+// rendering — kind is 'content' or 'reasoning' so the caller can render a
+// reasoning model's chain-of-thought on its own channel. Resolves with the
+// terminal result object (same shape as
 // testLocalLlmModel, including `error`/`text` for a timed-out partial). The
 // caller passes `signal` to cancel — aborting rejects the read with AbortError,
 // which the caller should swallow when `signal.aborted` (intentional cancel).
@@ -98,7 +100,7 @@ export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
     if (!trimmed) return;
     let frame;
     try { frame = JSON.parse(trimmed); } catch { return; }
-    if (frame.type === 'token') onToken?.(frame.delta || '');
+    if (frame.type === 'token') onToken?.(frame.delta || '', frame.kind || 'content');
     else if (frame.type === 'result') result = frame.result;
   };
 

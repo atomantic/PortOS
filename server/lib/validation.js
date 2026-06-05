@@ -795,6 +795,23 @@ export const restoreRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+// CyberCity snapshot pipeline (issue #877): how often to capture a city-state
+// frame and how many to retain. Validated as a settings slice on PUT /api/settings;
+// service-side defaults (DEFAULT_SNAPSHOT_CONFIG) fill any absent field so an
+// install with no `citySnapshots` key still captures.
+export const citySnapshotConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional(),
+  maxSnapshots: z.number().int().min(10).max(100000).optional()
+});
+
+// Query for GET /api/city/snapshots — `since` (ISO timestamp) and `limit`
+// (most-recent N) both arrive as strings on the query string.
+export const citySnapshotsQuerySchema = z.object({
+  since: z.string().datetime().optional(),
+  limit: z.coerce.number().int().min(1).max(100000).optional()
+});
+
 // Per-feature AI provider assignment: which configured CLI provider/model a
 // feature runs through (e.g. `settings.autofixer`, `settings.calendarSync`).
 // Empty string (UI "unset" sentinel) is coerced to undefined so it round-trips

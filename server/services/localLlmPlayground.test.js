@@ -172,11 +172,61 @@ describe('runLocalLlmTest timeout/abort contract', () => {
 
     const result = await runLocalLlmTest({
       backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
-      onToken: (delta) => tokens.push(delta),
+      onToken: (delta, kind) => tokens.push([delta, kind]),
     });
 
-    expect(tokens).toEqual(['Hel', 'lo']);
+    expect(tokens).toEqual([['Hel', 'content'], ['lo', 'content']]);
     expect(result.text).toBe('Hello');
+  });
+
+  it('forwards reasoning deltas live on the reasoning channel, content on the content channel', async () => {
+    stubStream(makeReader([
+      sse({ reasoning: 'let me ' }),
+      sse({ reasoning: 'think…' }),
+      sse({ content: 'Answer.' }),
+    ], { abort: false }));
+    const tokens = [];
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: (delta, kind) => tokens.push([delta, kind]),
+    });
+
+    expect(tokens).toEqual([
+      ['let me ', 'reasoning'],
+      ['think…', 'reasoning'],
+      ['Answer.', 'content'],
+    ]);
+    // The final text is content-only — reasoning streamed live but doesn't pollute the answer.
+    expect(result.text).toBe('Answer.');
+  });
+
+  it('does NOT re-emit a reasoning-only stream at the end (no double output)', async () => {
+    stubStream(makeReader([sse({ reasoning: 'thinking ' }), sse({ reasoning: 'aloud' })], { abort: false }));
+    const tokens = [];
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: (delta, kind) => tokens.push([delta, kind]),
+    });
+
+    // Exactly two reasoning tokens — the old end-of-stream onChunk(resolved) re-emit
+    // would have appended the whole joined reasoning a third time.
+    expect(tokens).toEqual([['thinking ', 'reasoning'], ['aloud', 'reasoning']]);
+    // The reasoning-only run still resolves its text from reasoning for the record.
+    expect(result.text).toBe('thinking aloud');
+  });
+
+  it('records TTFT for a reasoning-only run (reasoning marks first-chunk timing)', async () => {
+    stubStream(makeReader([sse({ reasoning: 'hmm' })], { abort: false }));
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: () => {},
+    });
+
+    expect(result.timings.ttftMs).not.toBeNull();
+    expect(result.timings.ttftMs).toBeGreaterThanOrEqual(0);
   });
 
   it('awaits onToken before reading the next upstream chunk (honours backpressure)', async () => {

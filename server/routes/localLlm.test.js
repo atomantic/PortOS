@@ -90,9 +90,29 @@ describe('local LLM playground routes', () => {
     expect(res.headers['content-type']).toMatch(/application\/x-ndjson/);
     const frames = res.text.trim().split('\n').map((l) => JSON.parse(l));
     expect(frames).toEqual([
-      { type: 'token', delta: 'Hel' },
-      { type: 'token', delta: 'lo' },
+      { type: 'token', delta: 'Hel', kind: 'content' },
+      { type: 'token', delta: 'lo', kind: 'content' },
       { type: 'result', result: { backend: 'ollama', modelId: 'llama3.2', text: 'Hello', runId: 'run-1' } },
+    ]);
+  });
+
+  it('tags reasoning tokens with kind:reasoning so the client can render them separately', async () => {
+    runLocalLlmTest.mockImplementation(async ({ onToken }) => {
+      onToken('thinking…', 'reasoning');
+      onToken('Answer.', 'content');
+      return { backend: 'ollama', modelId: 'deepseek-r1', text: 'Answer.', runId: 'run-2' };
+    });
+
+    const res = await request(makeApp())
+      .post('/api/local-llm/test/stream')
+      .send({ backend: 'ollama', modelId: 'deepseek-r1', prompt: 'Think then answer' });
+
+    expect(res.status).toBe(200);
+    const frames = res.text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(frames).toEqual([
+      { type: 'token', delta: 'thinking…', kind: 'reasoning' },
+      { type: 'token', delta: 'Answer.', kind: 'content' },
+      { type: 'result', result: { backend: 'ollama', modelId: 'deepseek-r1', text: 'Answer.', runId: 'run-2' } },
     ]);
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../services/api', () => ({
@@ -15,7 +15,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 import LocalLlmPlayground from './LocalLlmPlayground';
-import { getLocalLlmCatalog, getLocalLlmStatus } from '../services/api';
+import { getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const renderPlayground = () => render(
   <MemoryRouter initialEntries={['/local-llm/playground?backend=ollama&model=command-r-plus%3A104b']}>
@@ -68,5 +68,35 @@ describe('LocalLlmPlayground', () => {
     expect(screen.getByText('104B · 59 GB · ~71 GB RAM')).toBeTruthy();
     expect(screen.getByText('Tool use')).toBeTruthy();
     expect(screen.getByText('Multilingual')).toBeTruthy();
+  });
+
+  it('renders a live "Thinking" block for streamed reasoning, separate from the answer', async () => {
+    // Drive reasoning tokens then a content token through the streaming callback,
+    // mirroring a reasoning model (deepseek-r1, qwq) that emits its chain-of-thought
+    // first. The reasoning must render in its own block; the answer text stays clean.
+    // Hold the run open (gate) so the live streaming panel stays mounted while we
+    // assert — once the promise resolves, the panel is replaced by the result.
+    let releaseRun;
+    const runGate = new Promise((resolve) => { releaseRun = resolve; });
+    streamLocalLlmTest.mockImplementation(async (_payload, { onToken }) => {
+      onToken('reasoning step one ', 'reasoning');
+      onToken('reasoning step two', 'reasoning');
+      onToken('Final answer.', 'content');
+      await runGate;
+      return { backend: 'ollama', modelId: 'command-r-plus:104b', text: 'Final answer.', runId: 'run-x', timings: {} };
+    });
+
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByText('Run chat'));
+
+    // The reasoning block label and its streamed text appear (flushed on the 80ms timer).
+    await waitFor(() => expect(screen.getByText('Thinking')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/reasoning step one reasoning step two/)).toBeTruthy());
+    // The streaming answer renders the content channel only — reasoning isn't mixed in.
+    await waitFor(() => expect(screen.getByText('Final answer.')).toBeTruthy());
+
+    releaseRun();
   });
 });

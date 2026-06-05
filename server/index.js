@@ -69,6 +69,7 @@ import dataManagerRoutes from './routes/dataManager.js';
 import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
+import cityRoutes from './routes/cityRoutes.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
 import codeReviewRoutes from './routes/codeReview.js';
@@ -137,6 +138,7 @@ import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
+import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings, settingsEvents } from './services/settings.js';
@@ -424,6 +426,7 @@ app.use('/api/media/annotations', mediaAnnotationsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/client-errors', clientErrorsRoutes);
 app.use('/api/backup', backupRoutes);
+app.use('/api/city', cityRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/uploads', uploadsRoutes);
 app.use('/api/image-clean', imageCleanRoutes);
@@ -534,6 +537,9 @@ initBrainMemoryBridge();
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Initialize CyberCity snapshot scheduler — records periodic city-state frames
+// for the historical timeline scrubber (issue #877).
+startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
