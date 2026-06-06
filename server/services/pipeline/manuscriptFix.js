@@ -83,7 +83,10 @@ function resolveEditSection(raw, targets) {
   if (targets.length === 1) return targets[0];
   const find = typeof raw?.find === 'string' ? raw.find : '';
   if (find) {
-    const matches = targets.filter((s) => (s.content || '').includes(find));
+    // Whitespace-tolerant (same as accept), so a multi-section / story-level
+    // comment whose `find` differs only in spacing still resolves to its section
+    // instead of being dropped before normalizeFix's tolerant check.
+    const matches = targets.filter((s) => locateFindSpan(s.content || '', find) !== null);
     if (matches.length === 1) return matches[0];
   }
   return null;

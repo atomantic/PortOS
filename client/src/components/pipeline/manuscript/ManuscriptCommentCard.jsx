@@ -29,7 +29,7 @@ export function CopyId({ id }) {
   return (
     <button
       type="button"
-      onClick={() => { copyToClipboard(id); toast.success('Comment id copied'); }}
+      onClick={() => copyToClipboard(id, 'Comment id copied')}
       title={`Copy comment id: ${id}`}
       className="inline-flex items-center gap-1 text-[10px] font-mono text-gray-500 hover:text-gray-300"
     >
