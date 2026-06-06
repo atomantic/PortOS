@@ -13,6 +13,7 @@ import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth } from '../lib/db.js';
+import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { getIo } from './socket.js';
 
@@ -231,21 +232,29 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
  * Returns an explicit status so the caller can distinguish "no PG configured"
  * (benign, file mode) from "PG configured but dump failed" (data at risk):
- *   { status: 'ok', sizeBytes, tableCount, path }
- *   { status: 'skipped', reason: 'not_configured' }   (file/auto mode, no PG)
+ *   { status: 'ok', sizeBytes, tableCount }
+ *   { status: 'skipped', reason: 'not_configured' }   (PG not the active backend)
  *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'dump_error'|'empty_dump', error }
+ *     (pg_unreachable fires when Postgres is the active backend — explicit or
+ *      auto-detected — but the DB is down at backup time)
  * @param {string} outputPath - Path to write the SQL dump file
  */
 export async function dumpPostgres(outputPath) {
   const health = await checkHealth();
   if (!health.connected || !health.hasSchema) {
-    // PG unreachable or uninitialized. In file/auto mode this is the expected,
-    // benign case (the install legitimately runs without Postgres). But when the
-    // install EXPLICITLY requires Postgres (MEMORY_BACKEND=postgres), an
-    // unreachable DB is a real backup failure — data that lives only in PG won't
-    // be captured — so degrade the backup and alert rather than silently skip.
-    if (process.env.MEMORY_BACKEND === 'postgres') {
-      return { status: 'failed', reason: 'pg_unreachable', error: health.error || 'PostgreSQL required (MEMORY_BACKEND=postgres) but not reachable' };
+    // PG unreachable or uninitialized. When the install legitimately runs
+    // without Postgres this is the expected, benign case. But when Postgres is
+    // the ACTIVE memory backend, an unreachable DB is a real backup failure —
+    // data that lives only in PG won't be captured — so degrade the backup and
+    // alert rather than silently skip. Postgres is active when it's required
+    // explicitly (MEMORY_BACKEND=postgres) OR when it was auto-detected at
+    // startup (MEMORY_BACKEND unset and the resolved backend is 'postgres').
+    // The auto-detect case is the common default install, so gating only on the
+    // env var would let a real DB outage read as a green "not configured" run.
+    const env = process.env.MEMORY_BACKEND;
+    const postgresIsActive = env === 'postgres' || (env !== 'file' && getBackendName() === 'postgres');
+    if (postgresIsActive) {
+      return { status: 'failed', reason: 'pg_unreachable', error: health.error || 'PostgreSQL is the active memory backend but is not reachable' };
     }
     return { status: 'skipped', reason: 'not_configured' };
   }
@@ -302,7 +311,12 @@ export async function dumpPostgres(outputPath) {
       const sql = await readFile(outputPath, 'utf-8').catch(() => '');
       const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
       console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
-      resolve({ status: 'ok', sizeBytes: info.size, tableCount, path: outputPath });
+      // Don't return the absolute dump path: this result is persisted into
+      // state.pgBackup and surfaced to the client via GET /api/backup/status,
+      // the backup:completed socket event, and the /run response. No client
+      // reads it (restorePostgres recomputes its own sqlPath), so leaking an
+      // internal FS path serves no purpose.
+      resolve({ status: 'ok', sizeBytes: info.size, tableCount });
     });
 
     proc.on('error', (err) => {

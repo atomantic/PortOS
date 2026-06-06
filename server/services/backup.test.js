@@ -18,6 +18,12 @@ vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
 }));
 
+// Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
+// the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.
+vi.mock('./memoryBackend.js', () => ({
+  getBackendName: vi.fn(() => null),
+}));
+
 import { EventEmitter } from 'events';
 import { spawn } from 'child_process';
 // Partial mock: only override spawn. Preserve execFile et al. because
@@ -36,6 +42,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 
 import { checkHealth } from '../lib/db.js';
+import { getBackendName } from './memoryBackend.js';
 import * as fs from 'fs/promises';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes } from './backup.js';
 
@@ -154,13 +161,15 @@ describe('dumpPostgres status classification', () => {
     ({ dumpPostgres } = await import('./backup.js'));
   });
 
-  it('returns skipped/not_configured when PG is not connected (file/auto mode)', async () => {
+  it('returns skipped/not_configured when PG is not connected and not the active backend', async () => {
     const prev = process.env.MEMORY_BACKEND;
     delete process.env.MEMORY_BACKEND;
+    getBackendName.mockReturnValue('file'); // auto-detect resolved to file
     checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
     const result = await dumpPostgres('/tmp/x.sql');
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
     expect(spawn).not.toHaveBeenCalled();
+    getBackendName.mockReturnValue(null);
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
@@ -172,6 +181,35 @@ describe('dumpPostgres status classification', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('pg_unreachable');
     expect(spawn).not.toHaveBeenCalled();
+    if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
+  });
+
+  it('returns failed/pg_unreachable when PG was auto-detected (MEMORY_BACKEND unset) but is down at backup time', async () => {
+    // Regression: in the common default config PortOS auto-detects Postgres as
+    // the active backend at startup. A later DB outage must degrade the backup,
+    // not read as a benign "not configured" skip — otherwise a green backup
+    // silently omits everything that lives in Postgres.
+    const prev = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    getBackendName.mockReturnValue('postgres'); // resolved backend at startup
+    checkHealth.mockResolvedValue({ connected: false, hasSchema: false, error: 'ECONNREFUSED' });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('pg_unreachable');
+    expect(spawn).not.toHaveBeenCalled();
+    getBackendName.mockReturnValue(null);
+    if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
+  });
+
+  it('returns skipped/not_configured in explicit file mode even if a stale backend name says postgres', async () => {
+    const prev = process.env.MEMORY_BACKEND;
+    process.env.MEMORY_BACKEND = 'file';
+    getBackendName.mockReturnValue('postgres'); // must be ignored — file is explicit
+    checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
+    expect(spawn).not.toHaveBeenCalled();
+    getBackendName.mockReturnValue(null);
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 

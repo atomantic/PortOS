@@ -122,8 +122,16 @@ export function BackupTab() {
     } else {
       setPgBackup(result?.pgBackup ?? null);
       setBackupStatus(result?.status ?? 'ok');
-      const dbNote = result?.pgBackup?.status === 'failed' ? ' (DB dump FAILED)' : '';
-      toast.success(`Backup complete — ${result?.filesChanged ?? 0} files changed${dbNote}`, { icon: '💾' });
+      const filesChanged = result?.filesChanged ?? 0;
+      if (result?.pgBackup?.status === 'failed') {
+        // Degraded run: the file backup succeeded but the DB dump didn't. Don't
+        // dress it up as a success — and don't double-announce the DB failure,
+        // which the BACKUP_DB_DUMP_FAILED socket error toast already surfaces
+        // (useErrorNotifications). This toast just acknowledges the file portion.
+        toast(`Backup complete — ${filesChanged} files changed; database dump failed`, { icon: '⚠️' });
+      } else {
+        toast.success(`Backup complete — ${filesChanged} files changed`, { icon: '💾' });
+      }
       getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch(() => {});
     }
     return result;
