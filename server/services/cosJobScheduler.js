@@ -200,10 +200,13 @@ export async function executeScheduledJob(jobId) {
     } else if (cosBudget.budget?.maxActionsPerDay != null) {
       // In-flight = autonomous agents already running PLUS jobs admitted this
       // tick whose agent hasn't registered yet (`spawningJobIds`), so a burst of
-      // concurrently-due jobs can't all pass before any usage is recorded. (A
-      // sub-second double-fire of two *inline* script/shell jobs can still nudge
-      // a soft daily cap by one — an accepted limit under the single-process
-      // trust model, not worth a synchronous reservation subsystem.)
+      // concurrently-due jobs can't all pass before any usage is recorded.
+      // Residual: two jobs coming due in the SAME event-loop tick can each clear
+      // this gate before either is counted (agent jobs reserve `spawningJobIds`
+      // only after later awaits; inline script/shell record only post-execution),
+      // nudging a SOFT daily cap by one. Closing that needs a synchronous
+      // reservation across every exit path — deferred as over-engineering for a
+      // soft guardrail under the single-process trust model. Tracked in #984.
       const runningAutonomous = Object.values(state.agents).filter(
         (a) => a.status === 'running' && a.metadata?.taskType && a.metadata.taskType !== 'user'
       ).length;
