@@ -141,3 +141,27 @@ describe('remainingActionBudget', () => {
     expect(remainingActionBudget({ maxActionsPerDay: 4 }, undefined)).toBe(4);
   });
 });
+
+// The shipped default MUST be unlimited on every domain/dimension — this is what
+// makes budgets a pure opt-in (an install that never sets a cap is never gated,
+// reproducing pre-#711 behavior). A future edit that accidentally seeds a default
+// cap would silently start throttling every install's autonomous work; this
+// regression test ties that contract to the real DEFAULT_CONFIG.
+describe('DEFAULT_CONFIG is unlimited (opt-in budgets, no constraint by default)', () => {
+  it('every default domain budget is fully unlimited and gates to no-op', async () => {
+    const { DEFAULT_CONFIG } = await import('../services/cosState.js');
+    for (const id of DOMAIN_IDS) {
+      const budget = getDomainBudget(DEFAULT_CONFIG, id);
+      // Both caps null → unlimited.
+      expect(budget).toEqual({ maxActionsPerDay: null, maxMinutesPerDay: null });
+      // No cap set → ledger read is short-circuited (getDomainBudgetStatus stays within budget).
+      expect(hasBudget(budget)).toBe(false);
+      // Arbitrarily large usage never trips the cap.
+      expect(evaluateBudget(budget, { actions: 1e9, ms: 1e12 }).withinBudget).toBe(true);
+      // Action allowance is Infinity, so the evaluator/dequeue ceiling
+      // (min(availableSlots, spawned + remaining)) collapses to availableSlots —
+      // i.e. zero constraint on autonomous spawns.
+      expect(remainingActionBudget(budget, { actions: 1e9 }, 1e9)).toBe(Infinity);
+    }
+  });
+});
