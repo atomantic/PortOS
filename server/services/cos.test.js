@@ -694,14 +694,13 @@ describe('cos.js source — priority + capacity invariants', () => {
       .toMatch(/idleReviewEnabled\s*&&\s*getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)\s*===\s*['"]execute['"]/);
   });
 
-  it('both on-demand loops dedupe markAppReviewStarted per app via reviewStartedApps set', () => {
-    // Multiple on-demand requests targeting the same app should mark its
-    // activity record review-started only once per cycle — without the guard,
-    // each request rewrites the same record. BOTH on-demand loops carry the
-    // duplication: the startup/manual `evaluateTasks` loop AND the
-    // event-driven `dequeueNextTask` loop (the common "Run Now" path). Pin
-    // (a) the set is declared and (b) markAppReviewStarted is gated on it in
-    // each.
+  it('both on-demand loops dedupe the cooldown stamp per app via reviewStartedApps set', () => {
+    // Multiple on-demand requests targeting the same app should advance its
+    // cooldown only once per cycle — without the guard, each request rewrites
+    // the same record. BOTH on-demand loops carry the duplication: the
+    // startup/manual `evaluateTasks` loop AND the event-driven `dequeueNextTask`
+    // loop (the common "Run Now" path). Pin (a) the set is declared and (b) the
+    // cooldown stamp is gated on it in each.
     // evaluateTasks now lives in cosTaskGenerator.js; dequeueNextTask stays in cos.js.
     for (const { fnName, src } of [
       { fnName: 'export async function evaluateTasks', src: GEN_SRC },
@@ -714,8 +713,34 @@ describe('cos.js source — priority + capacity invariants', () => {
       ).toMatch(/const\s+reviewStartedApps\s*=\s*new\s+Set\(/);
       expect(
         fnBody,
-        `${fnName} must gate markAppReviewStarted on !reviewStartedApps.has(targetApp.id)`
+        `${fnName} must gate markAppReviewCooldown on !reviewStartedApps.has(targetApp.id)`
       ).toMatch(/if\s*\(\s*!\s*reviewStartedApps\.has\(\s*targetApp\.id\s*\)\s*\)/);
+    }
+  });
+
+  it('on-demand loops defer bindAppReviewAgent until a task is produced (issue #978)', () => {
+    // The phantom-active-agent bug: binding activeAgentId before the per-app
+    // task generator runs strands the marker when the generator returns null.
+    // Pin that both on-demand loops (a) advance the cooldown with
+    // markAppReviewCooldown, NOT markAppReviewStarted, and (b) only bind the
+    // active agent inside an `if (task)` guard after generation.
+    for (const { fnName, src } of [
+      { fnName: 'export async function evaluateTasks', src: GEN_SRC },
+      { fnName: 'async function dequeueNextTask', src: COS_SRC },
+    ]) {
+      const fnBody = extractFnBody(src, src.indexOf(fnName));
+      expect(
+        fnBody,
+        `${fnName} must advance cooldown via markAppReviewCooldown (not the conflated markAppReviewStarted)`
+      ).toMatch(/markAppReviewCooldown\(\s*targetApp\.id\s*\)/);
+      expect(
+        fnBody,
+        `${fnName} must NOT call markAppReviewStarted (conflates cooldown + bind, the #978 bug)`
+      ).not.toMatch(/markAppReviewStarted\(/);
+      expect(
+        fnBody,
+        `${fnName} must bind the active agent only after a task exists`
+      ).toMatch(/if\s*\(\s*task\s*\)\s*\{\s*await\s+bindAppReviewAgent\(\s*targetApp\.id/);
     }
   });
 

@@ -18,7 +18,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, markAppReviewStarted, clearStaleActiveAgents } from './appActivity.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, clearStaleActiveAgents } from './appActivity.js';
 import { getActiveApps } from './apps.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
@@ -718,12 +718,18 @@ async function dequeueNextTask() {
 
     if (targetApp) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+      // Advance the cooldown eagerly (deduped per app per cycle), but defer
+      // binding the active agent until a task is produced — a null result
+      // here must not strand `activeAgentId` (issue #978).
       if (!reviewStartedApps.has(targetApp.id)) {
-        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        await markAppReviewCooldown(targetApp.id);
         reviewStartedApps.add(targetApp.id);
       }
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
+      if (task) {
+        await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
+      }
     } else {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);

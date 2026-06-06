@@ -31,7 +31,7 @@ import { getDomainBudgetStatus } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
-import { isAppOnCooldown, markAppReviewStarted, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
@@ -403,12 +403,18 @@ export async function evaluateTasks(options) {
 
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+        // Advance the cooldown eagerly (deduped per app per cycle), but defer
+        // binding the active agent until a task is produced — a null result
+        // here must not strand `activeAgentId` (issue #978).
         if (!reviewStartedApps.has(targetApp.id)) {
-          await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+          await markAppReviewCooldown(targetApp.id);
           reviewStartedApps.add(targetApp.id);
         }
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
+        if (task) {
+          await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
+        }
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
         await taskSchedule.recordExecution(`task:${request.taskType}`);
@@ -678,9 +684,14 @@ export async function generateIdleReviewTask(state) {
     const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
 
     if (nextApp) {
-      // Mark that we're starting an idle review
+      // Mark that we're starting an idle review. Advance the per-app cooldown
+      // eagerly (so this app isn't re-picked on the next idle tick) but do NOT
+      // bind an active agent yet — the task generator below may return null
+      // (no claimable PLAN item, watcher no-op, precondition skip), in which
+      // case binding here would strand `activeAgentId` and leave the app stuck
+      // reading "in review" until stale-agent cleanup (issue #978).
       await markIdleReviewStarted();
-      await markAppReviewStarted(nextApp.id, `idle-review-${Date.now()}`);
+      await markAppReviewCooldown(nextApp.id);
 
       // Update lastIdleReview timestamp
       await withStateLock(async () => {
@@ -690,7 +701,12 @@ export async function generateIdleReviewTask(state) {
       });
 
       emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
-      return await generateManagedAppImprovementTask(nextApp, state);
+      const idleTask = await generateManagedAppImprovementTask(nextApp, state);
+      // Only bind the active marker once a real task exists.
+      if (idleTask) {
+        await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
+      }
+      return idleTask;
     }
   }
 
