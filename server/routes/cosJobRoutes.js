@@ -12,6 +12,24 @@ import { createCosJobSchema, updateCosJobSchema } from '../lib/validation.js';
 
 const router = Router();
 
+// Validate a 5-field cron expression for job create/update. Throws a 400
+// ServerError on a malformed field count or an unparseable expression.
+function validateCronExpression(cronExpression) {
+  const parts = cronExpression.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  let nextRun;
+  try {
+    nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
+  } catch (err) {
+    throw new ServerError(`Invalid cronExpression: ${err?.message || 'unable to parse'}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (nextRun === null) {
+    throw new ServerError('Invalid cronExpression: no valid run time could be determined', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+}
+
 // GET /api/cos/jobs - Get all autonomous jobs
 router.get('/jobs', asyncHandler(async (req, res) => {
   const jobs = await autonomousJobs.getAllJobs();
@@ -83,19 +101,7 @@ router.post('/jobs', asyncHandler(async (req, res) => {
     }
   }
   if (cronExpression) {
-    const parts = cronExpression.trim().split(/\s+/);
-    if (parts.length !== 5) {
-      throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    let nextRun;
-    try {
-      nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
-    } catch (err) {
-      throw new ServerError(`Invalid cronExpression: ${err?.message || 'unable to parse'}`, { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    if (nextRun === null) {
-      throw new ServerError('Invalid cronExpression: no valid run time could be determined', { status: 400, code: 'VALIDATION_ERROR' });
-    }
+    validateCronExpression(cronExpression);
   }
 
   const job = await autonomousJobs.createJob({
@@ -112,19 +118,7 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
   const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,
     enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly, appId, taskMetadata } = parsedJobUpdate.data;
   if (cronExpression) {
-    const parts = cronExpression.trim().split(/\s+/);
-    if (parts.length !== 5) {
-      throw new ServerError('cronExpression must be a 5-field cron expression', { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    let nextRun;
-    try {
-      nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
-    } catch (err) {
-      throw new ServerError(`Invalid cronExpression: ${err?.message || 'unable to parse'}`, { status: 400, code: 'VALIDATION_ERROR' });
-    }
-    if (nextRun === null) {
-      throw new ServerError('Invalid cronExpression: no valid run time could be determined', { status: 400, code: 'VALIDATION_ERROR' });
-    }
+    validateCronExpression(cronExpression);
   }
   const job = await autonomousJobs.updateJob(req.params.id, {
     name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,

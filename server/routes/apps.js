@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import { readFile, writeFile, stat, access, mkdir } from 'fs/promises';
 import { join, resolve, extname } from 'path';
-import { PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile, readJSONFile, safeJSONParse } from '../lib/fileUtils.js';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
@@ -15,7 +15,6 @@ import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata } fro
 import * as git from '../services/git.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
 import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
@@ -36,9 +35,6 @@ function deriveUiPort(uiPort, apiPort, devUiPort) {
   if (!uiPort && apiPort && devUiPort) return apiPort;
   return uiPort;
 }
-
-/** Read and parse a JSON file, returning null on any failure (missing file, bad JSON, etc.) */
-const safeReadJson = (path) => readFile(path, 'utf-8').then(JSON.parse).catch(() => null);
 
 /**
  * Middleware to load app by :id param and attach to req.loadedApp
@@ -187,7 +183,7 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
   // Read version from app's package.json if available
   let appVersion = null;
   if (app.repoPath) {
-    const pkg = await safeReadJson(join(app.repoPath, 'package.json'));
+    const pkg = await readJSONFile(join(app.repoPath, 'package.json'), null, { logError: false });
     appVersion = pkg?.version || null;
   }
 
