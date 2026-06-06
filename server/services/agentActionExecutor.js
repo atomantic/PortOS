@@ -17,6 +17,10 @@ import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js'
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Throttle between successive platform writes (votes/comments/replies) so a
+// single agent run doesn't burst the platform API.
+const INTER_ACTION_DELAY_MS = 1500;
+
 /**
  * Execute an action based on type
  */
@@ -248,7 +252,7 @@ async function executeEngage(client, agent, params) {
     });
     if (suspended) break;
     votes.push({ postId: post.id, title: post.title });
-    await delay(1500);
+    await delay(INTER_ACTION_DELAY_MS);
   }
 
   // Comment on best matches
@@ -276,7 +280,7 @@ async function executeEngage(client, agent, params) {
         postTitle: opportunity.post.title,
         reason: opportunity.reason
       });
-      await delay(1500);
+      await delay(INTER_ACTION_DELAY_MS);
     }
   }
 
@@ -352,7 +356,7 @@ async function executeMonitor(client, agent, schedule, params) {
           });
           if (suspended) break;
           upvoted.push({ commentId: comment.id, postId, postTitle: post.title });
-          await delay(1500);
+          await delay(INTER_ACTION_DELAY_MS);
         }
       }
 
@@ -369,7 +373,7 @@ async function executeMonitor(client, agent, schedule, params) {
             postId,
             postTitle: post.title
           });
-          await delay(1500);
+          await delay(INTER_ACTION_DELAY_MS);
         }
       }
 
@@ -549,7 +553,7 @@ async function executeMoltworldInteract(client, account, params) {
 
   // Optionally build
   if (params.buildType) {
-    await delay(1500);
+    await delay(INTER_ACTION_DELAY_MS);
     const buildResult = await client.build({
       x,
       y,

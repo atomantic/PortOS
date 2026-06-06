@@ -49,14 +49,21 @@ import { itemKey } from '../lib/mediaItemKey.js';
 
 const router = Router();
 
+// Shared validation limits. MAX_REFERENCE_IMAGES must stay in sync with the
+// number of `referenceImageN` upload field names below.
+const MAX_PROMPT_LENGTH = 8000;
+const MAX_LORAS = 8;
+const MAX_REFERENCE_IMAGES = 4;
+const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
-  prompt: z.string().max(8000).optional().default(''),
-  negativePrompt: z.string().max(8000).optional(),
+  prompt: z.string().max(MAX_PROMPT_LENGTH).optional().default(''),
+  negativePrompt: z.string().max(MAX_PROMPT_LENGTH).optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
@@ -72,9 +79,9 @@ const generateSchema = z.object({
   // Filenames only (basenames) — server resolves against PATHS.loras and
   // applies the prefix-check. Old payloads sent absolute server paths
   // (`loraPaths`); accept both for back-compat with stored gallery sidecars.
-  loraFilenames: z.array(z.string().max(256).regex(/^[^/\\]+$/, 'lora filename must not contain path separators')).max(8).optional(),
-  loraPaths: z.array(z.string().max(512)).max(8).optional(),
-  loraScales: z.array(z.number().min(0).max(2)).max(8).optional(),
+  loraFilenames: z.array(z.string().max(256).regex(/^[^/\\]+$/, 'lora filename must not contain path separators')).max(MAX_LORAS).optional(),
+  loraPaths: z.array(z.string().max(512)).max(MAX_LORAS).optional(),
+  loraScales: z.array(z.number().min(0).max(2)).max(MAX_LORAS).optional(),
   // i2i: pick an existing gallery image (basename) as the init image. If
   // initImage was uploaded via multipart, this is ignored in favor of the
   // upload. Strength: 0.0 = ignore source, 1.0 = max influence.
@@ -86,7 +93,7 @@ const generateSchema = z.object({
   // reference, 1.0 = full influence). The schema only constrains the strengths
   // array — file presence is enforced at the upload layer, and the route
   // pairs filled slots with their strengths positionally.
-  referenceStrengths: z.array(z.number().min(0).max(1)).max(4).optional(),
+  referenceStrengths: z.array(z.number().min(0).max(1)).max(MAX_REFERENCE_IMAGES).optional(),
   // Per-render override of the cleaners. When omitted, the route inherits
   // from `settings.imageGen.{mode}.{cleanC2PA,denoise}`. Explicit booleans
   // here force the value for this one render. Legacy `autoClean` is still
@@ -109,11 +116,11 @@ const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '
 // Multi-reference editing accepts up to 4 references on dedicated field names.
 // The legacy single `initImage` upload (mflux i2i) stays on its own slot so a
 // FLUX.2 multi-ref upload and an mflux i2i upload don't collide.
-const REFERENCE_IMAGE_FIELDS = ['referenceImage1', 'referenceImage2', 'referenceImage3', 'referenceImage4'];
+const REFERENCE_IMAGE_FIELDS = Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => `referenceImage${i + 1}`);
 const IMAGE_UPLOAD_FIELDS = ['initImage', ...REFERENCE_IMAGE_FIELDS];
 
 const imageGenUploads = optionalUploadFields(IMAGE_UPLOAD_FIELDS, {
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: MAX_IMAGE_UPLOAD_BYTES },
   fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
@@ -159,7 +166,7 @@ const avatarSchema = z.object({
 const regenerateSchema = z.object({
   strength: z.number().min(REGEN_STRENGTH_MIN).max(REGEN_STRENGTH_MAX).optional(),
   steps: z.number().int().min(1).max(50).optional(),
-  prompt: z.string().max(8000).optional(),
+  prompt: z.string().max(MAX_PROMPT_LENGTH).optional(),
   // 'flux' (default) = GPU img2img round-trip; 'light' = CPU-only spatial pass
   // for installs without a FLUX runner (strength/steps/prompt ignored).
   method: z.enum(['flux', 'light']).optional(),
