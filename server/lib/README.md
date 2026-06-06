@@ -171,6 +171,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `civitai.js` | Civitai URL parsing + API client. |
 | `localLlmCatalog.js` | Curated cross-backend (Ollama↔LM Studio) local-LLM catalog + install-id mapping for the migrate flow. Pure. |
 | `localLlmDisk.js` | Pure on-disk reasoning for the migrate "copy GGUF locally instead of re-downloading" fast-path (Ollama manifest/blob parsing, LM Studio path layout, MLX/projector/shard detection). |
+| `localModelHeuristics.js` | Capability heuristics for untyped local (Ollama/LM Studio) models. `isEmbeddingModel`/`isGenerationModel` (so a generation/fallback run never picks an embedding model like `nomic-embed-text`); `recommendEditorialModel(models)` ranks installed models for editorial review/editing. Pure. Mirror `isEmbeddingModel` in `client/src/utils/providers.js`. |
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |

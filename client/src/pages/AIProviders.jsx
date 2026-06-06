@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli } from '../utils/providers';
+import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
   formatDurationMs,
@@ -633,15 +634,28 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   const [newEnvValue, setNewEnvValue] = useState('');
   const [newEnvSecret, setNewEnvSecret] = useState(false);
 
-  const availableModels = formData.models || [];
+  // Live installed Ollama/LM Studio models, folded into the model pickers so a
+  // local provider shows what's actually installed — not just the stale `models`
+  // list stored on the provider record (the "Command R+ / Gemma missing" bug).
+  const localModels = useLocalModels();
+  const liveModelsFor = (p) => {
+    const backend = localBackendForProvider(p);
+    return backend ? localModels[backend] : [];
+  };
+
+  const availableModels = mergeModelLists(formData.models, liveModelsFor(formData));
 
   // Filter out current provider from fallback options (treat undefined enabled as enabled)
   const fallbackOptions = allProviders.filter(p => p.id !== provider?.id && p.enabled !== false);
 
   // The fallback model is a model OF the selected fallback provider, so its
-  // option list comes from that provider's `models` — not this provider's.
+  // option list comes from that provider's `models` — merged with the live
+  // installed list for local backends, and embedding-only models dropped (a
+  // fallback runs prompts, so `nomic-embed-text` must never be selectable here).
   const selectedFallbackProvider = allProviders.find(p => p.id === formData.fallbackProvider);
-  const fallbackModelOptions = selectedFallbackProvider?.models || [];
+  const fallbackModelOptions = filterGenerationModels(
+    mergeModelLists(selectedFallbackProvider?.models, liveModelsFor(selectedFallbackProvider)),
+  );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -860,7 +874,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               >
                 <option value="">None</option>
                 {availableModels.map(model => (
-                  <option key={model} value={model}>{model}</option>
+                  <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
                 ))}
               </select>
             ) : (
@@ -896,7 +910,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   >
                     <option value="">None</option>
                     {availableModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
+                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
                     ))}
                   </select>
                 ) : (
@@ -922,7 +936,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   >
                     <option value="">None</option>
                     {availableModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
+                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
                     ))}
                   </select>
                 ) : (
@@ -948,7 +962,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   >
                     <option value="">None</option>
                     {availableModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
+                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
                     ))}
                   </select>
                 ) : (
@@ -1030,7 +1044,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   >
                     <option value="">Use fallback provider's default</option>
                     {fallbackModelOptions.map(model => (
-                      <option key={model} value={model}>{model}</option>
+                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
                     ))}
                   </select>
                 ) : (

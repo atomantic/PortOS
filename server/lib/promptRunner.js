@@ -32,17 +32,17 @@ import { executeTuiRun } from './tuiPromptRunner.js';
 import { ServerError } from './errorHandler.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
+import { isGenerationModel } from './localModelHeuristics.js';
 import { getAIToolkitInstance } from './aiToolkitState.js';
 import { createSingleFlight } from './singleFlight.js';
 
-// noteFallbackHandled lives in services/autoFixer.js, which transitively
-// pulls in services/cos.js (PM2 + fs + sockets). Importing it lazily on
-// the failure path keeps anything that imports promptRunner.js from
-// dragging the CoS stack along on the happy path. Node caches the module
-// after the first dynamic import, so the cost is one-time.
-async function loadNoteFallbackHandled() {
-  const mod = await import('../services/autoFixer.js');
-  return mod.noteFallbackHandled;
+// The fallback-lifecycle notifiers live in services/autoFixer.js, which
+// transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
+// lazily on the failure path keeps anything that imports promptRunner.js from
+// dragging the CoS stack along on the happy path. Node caches the module after
+// the first dynamic import, so the cost is one-time.
+function loadAutoFixer() {
+  return import('../services/autoFixer.js');
 }
 
 export const DEFAULT_TIMEOUT_MS = 300000;
@@ -107,13 +107,27 @@ export const providerHonorsModelOverride = (provider) => (
  */
 export function resolveEffectiveModel(provider, callerModel) {
   if (providerHonorsModelOverride(provider)) {
-    return callerModel || provider?.defaultModel || provider?.models?.[0] || null;
+    return callerModel || provider?.defaultModel || firstGenerationModel(provider) || null;
   }
   // Non-honoring CLI/TUI path: args-baked model id wins over defaultModel.
   const baked = (provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI) && hasModelFlag(provider?.args)
     ? extractBakedModel(provider.args)
     : null;
-  return baked || provider?.defaultModel || provider?.models?.[0] || null;
+  return baked || provider?.defaultModel || firstGenerationModel(provider) || null;
+}
+
+/**
+ * First model in `provider.models` usable for generation (skips embedding-only
+ * models). Without this, a local provider whose `models[0]` is an embedding
+ * model (e.g. Ollama with `nomic-embed-text:latest` listed first and a null
+ * defaultModel) would resolve the embedding model for a chat/fallback run and
+ * fail — the exact nomic-embed-text fallback bug. Falls back to `models[0]`
+ * only when every listed model looks like an embedding model (better to try
+ * something than resolve null).
+ */
+function firstGenerationModel(provider) {
+  const models = provider?.models || [];
+  return models.find((m) => m && isGenerationModel(m)) || models[0] || null;
 }
 
 /**
@@ -269,6 +283,21 @@ export async function runPromptThroughProvider(args) {
 
     console.log(`⚡ Retrying ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
 
+    // Tell the autofixer a fallback is now in flight for this failure so it
+    // suppresses the deferred investigation task IMMEDIATELY — before the
+    // backstop timer (TASK_DEFER_MS) can fire. Without this, a slow CLI
+    // fallback (Claude Code can take 20–30s) outruns the timer and a
+    // successfully-recovered failure still leaves a task in the user's plan.
+    // Keys must match what server/index.js's onRunFailed hook published
+    // (metadata.providerName + metadata.model). Best-effort throughout: a
+    // failure here must never turn a working fallback into a user-visible error.
+    const fallbackKey = { provider: failed.name || failed.id, model: failedModel };
+    const autoFixer = await loadAutoFixer().catch((err) => {
+      console.error(`❌ autoFixer load failed (investigation task not suppressed): ${err.message}`);
+      return null;
+    });
+    try { autoFixer?.noteFallbackStarted(fallbackKey); } catch { /* best-effort */ }
+
     // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
     // when one is set (so the user's chosen fallback provider+model pair is
     // honored); otherwise `undefined` lets the fallback pick its own default.
@@ -283,27 +312,16 @@ export async function runPromptThroughProvider(args) {
         runId: undefined, // fresh runId so the failed primary's record stays intact
       });
     } catch (fallbackError) {
-      // Both failed — let both deferred tasks fire and rethrow.
+      // Both failed — release the primary's suppression (the fallback's own
+      // failure already queued its investigation task) and rethrow.
+      try { autoFixer?.noteFallbackFailed(fallbackKey); } catch { /* best-effort */ }
       throw stripFallbackContext(fallbackError);
     }
 
-    // Fallback succeeded — cancel the queued investigation task that fired
-    // for the provider that actually failed, so the user doesn't see a
-    // noisy "investigate" entry in their plan for a failure that was
-    // auto-recovered. Keys must match what server/index.js's onRunFailed
-    // hook published (metadata.providerName + metadata.model).
-    //
-    // Best-effort: a failure to load the autoFixer module or in the
-    // suppress call itself must not turn a successful fallback run into
-    // a user-visible error. The worst case is a stale investigation
-    // task in the user's plan — the actual result still flows through.
-    try {
-      const noteFallbackHandled = await loadNoteFallbackHandled();
-      noteFallbackHandled({
-        provider: failed.name || failed.id,
-        model: failedModel,
-      });
-    } catch (suppressErr) {
+    // Fallback succeeded — clear the primary's suppression so the user doesn't
+    // see a noisy "investigate" entry in their plan for a failure that was
+    // auto-recovered.
+    try { autoFixer?.noteFallbackHandled(fallbackKey); } catch (suppressErr) {
       console.error(`❌ noteFallbackHandled failed (investigation task not suppressed): ${suppressErr.message}`);
     }
 
@@ -399,6 +417,12 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
     ? runnerAnalysis
     : analyzeError(errorMessage || '');
   const category = analysis?.category || ERROR_CATEGORIES.UNKNOWN;
+
+  // A content/safety refusal is prompt-specific, not a provider outage — the
+  // provider is healthy and other prompts still work. Don't bench it (which
+  // would route every subsequent task to the fallback for a full cooldown);
+  // this single call still falls back via the caller's retry path.
+  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL) return;
 
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
     await providerStatus.markUsageLimit(failed.id, {

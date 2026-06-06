@@ -4,7 +4,7 @@ import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, Ex
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes, timeAgo } from '../../utils/formatters';
+import { formatBytes, formatContextLength, timeAgo } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
@@ -792,7 +792,7 @@ export function LocalLlmTab() {
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-white truncate">{m.name}</div>
                 <div className="text-xs text-gray-500 truncate">
-                  {[m.params, m.quantization, m.family].filter(Boolean).join(' · ')}
+                  {[m.params, m.quantization, m.family, formatContextLength(m.contextLength)].filter(Boolean).join(' · ')}
                 </div>
               </div>
               {m.size != null && <span className="text-xs text-gray-400 shrink-0">{formatBytes(m.size)}</span>}

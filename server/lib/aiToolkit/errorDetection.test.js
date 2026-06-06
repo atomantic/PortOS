@@ -10,6 +10,26 @@ import {
 
 describe('Error Detection', () => {
   describe('analyzeError', () => {
+    it('detects a Codex/OpenAI content-safety refusal', () => {
+      const result = analyzeError(
+        "Invalid prompt: we've limited access to this content for safety reasons. This type of information may be used to benefit or to harm people."
+      );
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);
+      expect(result.requiresFallback).toBe(true);
+      expect(result.actionable).toBe(false);
+    });
+
+    it('detects an Anthropic refusal stop reason', () => {
+      const result = analyzeError('{"stop_reason":"refusal"}');
+      expect(result.category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);
+    });
+
+    it('does not misclassify a generic failure as a refusal', () => {
+      const result = analyzeError('Process exited with code 1', 1);
+      expect(result.category).toBe(ERROR_CATEGORIES.UNKNOWN);
+    });
+
     it('should detect rate limit errors', () => {
       const result = analyzeError('API Error: 429 Too Many Requests');
       expect(result.hasError).toBe(true);

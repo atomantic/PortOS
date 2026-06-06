@@ -30,6 +30,16 @@ export function useErrorNotifications() {
         return;
       }
 
+      // A model declined a prompt on content/safety grounds. Not an error —
+      // the server is auto-retrying with a fallback model. Surface a calm,
+      // informative notice (not a red error toast) so the user knows why their
+      // primary model balked. Handled before the warning-drop below.
+      if (error.code === 'AI_PROVIDER_CONTENT_REFUSED') {
+        toast(error.message, { duration: 7000, icon: '🛟' });
+        console.warn(`[${error.code}] ${error.message}`, error.context);
+        return;
+      }
+
       // `severity: 'warning'` routes (e.g. speculative GET /api/media-jobs/:id
       // 404s for jobs past the 24h archive TTL) opt out of toast + console
       // surfacing entirely — the network-tab 404 is sufficient signal.
