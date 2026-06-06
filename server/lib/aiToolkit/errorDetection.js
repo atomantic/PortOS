@@ -13,11 +13,30 @@ export const ERROR_CATEGORIES = {
   NETWORK_ERROR: 'network-error',
   TIMEOUT: 'timeout',
   QUOTA_EXCEEDED: 'quota-exceeded',
+  // A frontier model declined the prompt on content/safety grounds. NOT a
+  // provider fault — the provider is healthy and other prompts still work, so
+  // this must not bench the provider or spawn an investigation task. We do try
+  // a fallback (a local model often doesn't refuse) and tell the UI what
+  // happened. See server/index.js#onRunFailed + autoFixer.handleAIProviderError.
+  CONTENT_REFUSAL: 'content-refusal',
   UNKNOWN: 'unknown'
 };
 
 // Order matters — more specific patterns first.
 const ERROR_PATTERNS = [
+  {
+    // High-precision markers for a model safety/content refusal. Codex (OpenAI)
+    // returns "Invalid prompt: we've limited access to this content for safety
+    // reasons. This type of information may be used to benefit or to harm…";
+    // Anthropic surfaces a `refusal` stop reason. Matched FIRST so a refusal is
+    // never misclassified as an auth/unknown failure that would bench the
+    // provider and queue a CoS investigation task.
+    pattern: /limited access to this content for safety|may be used to benefit or to harm|content[_ ]policy[_ ]violation|stop_reason["']?\s*:\s*["']?refusal|"type"\s*:\s*"refusal"/i,
+    category: ERROR_CATEGORIES.CONTENT_REFUSAL,
+    requiresFallback: true,
+    actionable: false,
+    suggestedFix: 'Model declined the prompt on content/safety grounds — retrying with a fallback model.'
+  },
   {
     pattern: /billing|payment|credit|insufficient funds/i,
     category: ERROR_CATEGORIES.QUOTA_EXCEEDED,

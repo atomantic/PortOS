@@ -68,7 +68,8 @@ export const WORKFLOW_STAGES = [
       'error-handling',
       'typing',
       'ui-bugs',
-      'mobile-responsive'
+      'mobile-responsive',
+      'refresh-local-llm-catalog'
     ],
     jobIds: ['job-wiki-maintenance']
   },

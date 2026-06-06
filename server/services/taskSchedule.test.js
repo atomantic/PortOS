@@ -870,6 +870,33 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('refresh-local-llm-catalog defaults', () => {
+    it('is registered as a self-improvement task type', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('refresh-local-llm-catalog')
+    })
+
+    it('defaults to weekly, disabled, with CoS-managed worktree + PR', () => {
+      const cfg = DEFAULT_TASK_INTERVALS['refresh-local-llm-catalog']
+      expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
+      expect(cfg.enabled).toBe(false)
+      // CoS manages the worktree + PR (like feature-ideas), so these are NOT
+      // in MANAGED_AGENT_OPTIONS (the user could turn them off if they wanted).
+      expect(cfg.taskMetadata.useWorktree).toBe(true)
+      expect(cfg.taskMetadata.openPR).toBe(true)
+      expect(MANAGED_AGENT_OPTIONS['refresh-local-llm-catalog']).toBeUndefined()
+    })
+
+    it('prompt guards on the PortOS catalog file and targets the catalog + ranking', async () => {
+      const prompt = await getTaskPrompt('refresh-local-llm-catalog')
+      // No-ops on any repo lacking the catalog file (so enabling on a non-PortOS app is safe).
+      expect(prompt).toContain('server/lib/localLlmCatalog.js')
+      expect(prompt).toContain('LOCAL_LLM_CATALOG')
+      expect(prompt).toContain('EDITORIAL_FAMILY_RANK')
+      // Must not open an empty PR when nothing changed (phrase may be line-wrapped).
+      expect(prompt).toContain('empty PR')
+    })
+  })
+
   describe('resetExecutionHistory', () => {
     it('should reset global execution history', async () => {
       mockSchedule({

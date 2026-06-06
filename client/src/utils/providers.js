@@ -1,3 +1,5 @@
+import { formatContextLength } from './formatters.js';
+
 /**
  * Sentinel value used by the Codex provider to indicate the model is configured
  * via ~/.codex/config.toml rather than PortOS. Filter this out of selectable
@@ -28,6 +30,77 @@ export const PROVIDER_TYPES = Object.freeze({
  */
 export const filterSelectableModels = (models) =>
   (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
+
+/**
+ * Embedding-only model detector — mirror of `isEmbeddingModel` in
+ * server/lib/localModelHeuristics.js. Keep the two regexes in lockstep (the
+ * server lib can't be imported here). Used to keep embedding models (e.g.
+ * `nomic-embed-text`) out of generation/chat model pickers.
+ * @param {string} id
+ * @returns {boolean}
+ */
+export const isEmbeddingModel = (id) =>
+  typeof id === 'string' && id.length > 0 &&
+  /(?:^|[-_/:])(?:embed|embedding|bge|nomic|mxbai|gte|e5|snowflake-arctic-embed)(?:[-_/:]|$)|text-embedding/i.test(id);
+
+/**
+ * Selectable models for a generation/chat picker: drops internal sentinels AND
+ * embedding-only models. Use anywhere the user picks a model that will run a
+ * prompt (provider editor model lists, fallback model, manuscript review).
+ * @param {string[]} models
+ * @returns {string[]}
+ */
+export const filterGenerationModels = (models) =>
+  filterSelectableModels(models).filter((m) => !isEmbeddingModel(m));
+
+/**
+ * Classify a provider as a local-LLM backend by its endpoint/name, so callers
+ * can fold in live-installed models (Ollama/LM Studio) that aren't in the
+ * provider's stored `models` list. Ollama's native + OpenAI-compat ports are
+ * 11434; LM Studio defaults to 1234.
+ * @param {{endpoint?:string,name?:string}} provider
+ * @returns {'ollama'|'lmstudio'|null}
+ */
+export const localBackendForProvider = (provider) => {
+  const endpoint = String(provider?.endpoint || '');
+  const name = String(provider?.name || '').toLowerCase();
+  if (/:11434\b/.test(endpoint) || name.includes('ollama')) return 'ollama';
+  if (/:1234\b/.test(endpoint) || name.includes('lm studio') || name.includes('lmstudio')) return 'lmstudio';
+  return null;
+};
+
+/**
+ * Union of one or more model-id lists, de-duplicated, order-preserving, falsy
+ * values dropped. Used to merge a provider's stored `models` with the live
+ * installed list for local backends.
+ * @param {...(string[]|undefined)} lists
+ * @returns {string[]}
+ */
+export const mergeModelLists = (...lists) => {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const m of list || []) {
+      if (m && !seen.has(m)) { seen.add(m); out.push(m); }
+    }
+  }
+  return out;
+};
+
+/**
+ * Display label for a model `<option>`: the id plus a "(32K ctx)" parenthetical
+ * when the model's context window is known (local models, via the `ctxById` map
+ * from `useLocalModels`). The option's `value` stays the raw id — only the label
+ * carries the annotation.
+ * @param {string} id
+ * @param {Record<string, number>} [ctxById]
+ * @returns {string}
+ */
+export const modelOptionLabel = (id, ctxById) => {
+  const ctx = ctxById?.[id];
+  const label = formatContextLength(ctx);
+  return label ? `${id} (${label})` : id;
+};
 
 /**
  * Check if a provider is a TUI-backed agent provider. Mirror of

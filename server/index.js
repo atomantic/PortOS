@@ -133,6 +133,7 @@ import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { initTaskLearning } from './services/taskLearning.js';
 import { recordSession, recordMessages } from './services/usage.js';
 import { errorEvents } from './lib/errorHandler.js';
+import { ERROR_CATEGORIES } from './lib/aiToolkit/errorDetection.js';
 import { initSpawner } from './services/subAgentSpawner.js';
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
@@ -241,11 +242,20 @@ const aiToolkitHooks = {
   },
   onRunFailed: (metadata, error, output) => {
     const errorMessage = error?.message ?? String(error);
+    // A content/safety refusal is a known, self-explanatory outcome — not a
+    // provider fault. Emit a distinct code + warning severity so (a) the
+    // autofixer skips it (it only spawns investigation tasks for
+    // AI_PROVIDER_EXECUTION_FAILED) and (b) the client shows a calm "model
+    // declined, trying a fallback" notice instead of a red error toast. The
+    // fallback retry itself is driven by promptRunner.js.
+    const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
     errorEvents.emit('error', {
-      code: 'AI_PROVIDER_EXECUTION_FAILED',
-      message: `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-      severity: 'error',
-      canAutoFix: true,
+      code: isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED',
+      message: isRefusal
+        ? `${metadata.providerName} declined this prompt on content/safety grounds — trying a fallback model if one is configured.`
+        : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
+      severity: isRefusal ? 'warning' : 'error',
+      canAutoFix: !isRefusal,
       timestamp: Date.now(),
       context: {
         runId: metadata.id,

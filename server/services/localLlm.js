@@ -31,6 +31,7 @@ import { Readable } from 'stream'
 import { PATHS, atomicWrite } from '../lib/fileUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
+import { recommendEditorialModel } from '../lib/localModelHeuristics.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { getProviderById, updateProvider } from './providers.js'
@@ -545,12 +546,14 @@ function normalizeModels(backend, models) {
   if (backend === 'ollama') {
     return models.map((m) => ({
       id: m.id, name: m.name, size: m.size ?? null,
-      params: m.params || null, quantization: m.quantization || null, family: m.family || null
+      params: m.params || null, quantization: m.quantization || null, family: m.family || null,
+      contextLength: m.contextLength ?? null
     }))
   }
   return models.map((m) => ({
     id: m.id, name: m.id, size: null,
-    params: null, quantization: m.quantization || null, family: m.arch || null
+    params: null, quantization: m.quantization || null, family: m.arch || null,
+    contextLength: m.maxContextLength ?? null
   }))
 }
 
@@ -582,6 +585,8 @@ export async function getStatus() {
     listModels('lmstudio', true).catch(() => [])
   ])
 
+  const ollamaModels = normalizeModels('ollama', ollamaStatus.models)
+  const lmStudioRecommendation = recommendEditorialModel(lmStudioModels)
   return {
     backend: getBackend(),
     ollama: {
@@ -590,7 +595,10 @@ export async function getStatus() {
       version: ollamaStatus.version,
       baseUrl: ollamaStatus.baseUrl,
       modelCount: ollamaStatus.modelCount,
-      models: normalizeModels('ollama', ollamaStatus.models),
+      models: ollamaModels,
+      // Best installed model for editorial review/editing, surfaced so the
+      // manuscript editor can suggest it (and warn against the embedding model).
+      recommendations: { editorial: recommendEditorialModel(ollamaModels) },
       canControl: ollamaCli || ollamaStatus.available,
       service: ollamaStatus.service,
       canAutoInstall: canAutoInstall('ollama'),
@@ -604,6 +612,7 @@ export async function getStatus() {
       baseUrl: lmStudioStatus.baseUrl,
       modelCount: lmStudioModels.length,
       models: lmStudioModels,
+      recommendations: { editorial: lmStudioRecommendation },
       // Non-null when LM Studio answered the availability probe but the model
       // list call failed — lets the UI tell "0 models" from "couldn't list".
       modelsError: lmStudioManager.getLastListError(),

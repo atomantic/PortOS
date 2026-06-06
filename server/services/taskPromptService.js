@@ -1266,7 +1266,75 @@ this prompt explicitly say to. This default behavior is review-and-comment only;
 the operator customizes this prompt to change what happens on each opened PR.
 
 Finish with a 2–3 sentence assistant summary: how many PRs you handled and what
-you did for each (one line per PR with its number).`
+you did for each (one line per PR with its number).`,
+
+  'refresh-local-llm-catalog': `[Improvement: {appName}] Refresh the bundled local-LLM suggested-models catalog
+
+You maintain PortOS's curated catalog of suggested local models so the in-app
+install picker and the editorial-model recommendation keep pace with what's
+actually current. Models move fast (new Qwen / Llama / Gemma / Mistral releases,
+deprecations), and this catalog is shipped in the app — so it goes stale unless
+refreshed.
+
+Repository: {repoPath}
+Default branch: {defaultBranch}
+
+## Guard — PortOS only
+
+1. Check that \`{repoPath}/server/lib/localLlmCatalog.js\` exists. If it does NOT,
+   this repository is not PortOS — make NO changes, open NO PR, and finish with a
+   one-line summary saying the catalog file was not found so there was nothing to do.
+
+## What to do (only when the catalog file exists)
+
+2. Read the current catalog at \`server/lib/localLlmCatalog.js\` (the
+   \`LOCAL_LLM_CATALOG\` array; each entry is
+   \`{ key, name, category, params, size, family, description, capabilities, ollama?, lmstudio? }\`)
+   and the editorial ranking \`EDITORIAL_FAMILY_RANK\` in
+   \`server/lib/localModelHeuristics.js\`.
+
+3. Research the current best-in-class local models for EACH category in
+   \`LOCAL_LLM_CATEGORIES\` (chat, reasoning, coding, vision/image-analysis,
+   embedding, lightweight/small-&-fast, multilingual). Prefer models that are:
+   - Pullable on Ollama (use the canonical \`ollama pull\` id) and/or available
+     as a well-known GGUF build on LM Studio / Hugging Face (use the canonical
+     repo id, e.g. \`lmstudio-community/<Model>-GGUF\`).
+   - Genuinely current and widely used — not every brand-new release. Verify the
+     pull id actually exists before adding it (cite your source in the PR body).
+   Use web search / fetch if the tools are available; otherwise rely on your
+   most current knowledge and clearly mark any entry you could not verify.
+
+4. Update \`LOCAL_LLM_CATALOG\`:
+   - Add newly-prominent models, refresh \`params\`/\`size\`/\`description\` on
+     existing entries, and remove models that are clearly deprecated/superseded.
+   - Keep the module's shape EXACTLY: do not change the exports
+     (\`BACKENDS\`, \`isBackend\`, \`LOCAL_LLM_CATEGORIES\`, \`LOCAL_LLM_CATALOG\`),
+     the entry field names, or \`category\` values (they must stay within
+     \`LOCAL_LLM_CATEGORIES\` ids). A missing \`ollama\`/\`lmstudio\` id is fine
+     when no well-known build exists for that backend.
+
+5. Review \`EDITORIAL_FAMILY_RANK\` in \`server/lib/localModelHeuristics.js\` (used
+   to recommend a model for editorial review/editing — it favors tight
+   instruction-following over chatty/RAG-tuned families). Only adjust it if a new
+   family clearly belongs or an existing one should move; keep the
+   longest-match-first ordering (\`command-r-plus\` before \`command-r\` before
+   \`command\`). Do not change the function signatures or other exports.
+
+6. Run the affected tests and make sure they pass:
+   \`cd {repoPath}/server && npx vitest run lib/localLlmCatalog lib/localModelHeuristics lib/index.test.js\`.
+   If you changed the catalog's exported shape you broke the contract — revert
+   that part. Fix any test you legitimately invalidated (e.g. an entry count).
+
+7. Add a one-line entry to \`{repoPath}/.changelog/NEXT.md\` under \`## Changed\`
+   summarizing the catalog refresh.
+
+## Output
+
+- If the catalog is already current and accurate, make NO changes — do not open
+  an empty PR. Finish with a summary saying it was already up to date.
+- Otherwise commit your changes with a clear message (a PR will be opened for
+  the branch). Finish with a 2–4 sentence summary listing exactly which models
+  were added, updated, or removed and the sources you verified them against.`
 };
 
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
@@ -1279,7 +1347,8 @@ export const PROMPT_VERSIONS = {
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'reference-watch': 2, // v2: append slug-tagged checklist items to PLAN.md (Adopt + Maybe) instead of writing REFERENCE_REVIEW.md; security-flagged commits get no PLAN entry (mentioned only in final summary)
-  'pr-watcher': 1       // v1: review-and-comment default for newly-opened PRs on the app's default branch
+  'pr-watcher': 1,      // v1: review-and-comment default for newly-opened PRs on the app's default branch
+  'refresh-local-llm-catalog': 1 // v1: research current local models, refresh LOCAL_LLM_CATALOG + EDITORIAL_FAMILY_RANK, PR (PortOS repo only)
 };
 
 // Audit anchor for reference-watch's read/write coupling.

@@ -26,7 +26,8 @@ import InlineDiff from '../components/ui/InlineDiff';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { timeAgo } from '../utils/formatters';
-import { filterSelectableModels } from '../utils/providers';
+import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
+import useLocalModels from '../hooks/useLocalModels';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
   patchPipelineManuscriptComment, savePipelineManuscriptSection, restorePipelineStageVersion,
@@ -153,7 +154,43 @@ export default function PipelineManuscriptEditor() {
   }, []);
 
   const overrideProvider = providers.find((p) => p.id === overrideProviderId) || null;
-  const overrideModels = filterSelectableModels(overrideProvider?.models || [overrideProvider?.defaultModel]);
+  // Live installed local-LLM models, so a local provider's picker shows what's
+  // actually installed in Ollama/LM Studio — not just its stale stored `models`.
+  const localModels = useLocalModels();
+  const overrideBackend = localBackendForProvider(overrideProvider);
+  // Memoized so the array identity is stable across renders — it's a dependency
+  // of the auto-select effect below, which would otherwise re-run every render.
+  const overrideModels = useMemo(
+    () => filterGenerationModels(
+      mergeModelLists(
+        overrideProvider?.models || [overrideProvider?.defaultModel],
+        overrideBackend ? localModels[overrideBackend] : [],
+      ),
+    ),
+    [overrideProvider, overrideBackend, localModels],
+  );
+  // Best installed model for editorial review/editing (Ollama/LM Studio only).
+  const editorialPick = overrideBackend ? localModels.recommendations?.[overrideBackend] : null;
+  const showEditorialPick = Boolean(
+    editorialPick?.id && overrideModels.includes(editorialPick.id) && overrideModel !== editorialPick.id,
+  );
+
+  // Keep the model selection honest. A controlled <select> whose value isn't one
+  // of its options shows the first option but holds an empty value — so a
+  // provider with no defaultModel (Ollama: defaultModel null) looked like a real
+  // model was picked while the override sent to the server was empty, and the
+  // server fell through to models[0] (the embedding model). Once a provider is
+  // chosen, pin a concrete in-list model (the editorial recommendation when
+  // available, else the first) so what the user sees is what actually runs.
+  useEffect(() => {
+    if (!overrideProviderId || overrideModels.length === 0) return;
+    if (overrideModel && overrideModels.includes(overrideModel)) return;
+    const pick = (editorialPick?.id && overrideModels.includes(editorialPick.id))
+      ? editorialPick.id
+      : overrideModels[0];
+    setOverrideModel(pick);
+  }, [overrideProviderId, overrideModels, editorialPick, overrideModel]);
+
   // undefined (not '') so the server treats it as "no override" → system default.
   const providerOverride = overrideProviderId || undefined;
   const modelOverride = overrideModel || undefined;
@@ -161,6 +198,8 @@ export default function PipelineManuscriptEditor() {
   const changeOverrideProvider = (id) => {
     setOverrideProviderId(id);
     const p = providers.find((pr) => pr.id === id);
+    // Provisional; the effect above pins a valid in-list model once the
+    // (possibly async) live model list resolves.
     setOverrideModel(p?.defaultModel || '');
   };
 
@@ -419,10 +458,23 @@ export default function PipelineManuscriptEditor() {
                   onChange={(e) => setOverrideModel(e.target.value)}
                   className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white"
                 >
-                  {overrideModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                  {overrideModels.map((m) => <option key={m} value={m}>{modelOptionLabel(m, localModels.ctxById)}</option>)}
                 </select>
               ) : null}
             </div>
+            {/* One-tap suggestion of the best installed local model for editorial
+                work — only when a local provider is selected and the pick isn't
+                already chosen. */}
+            {showEditorialPick ? (
+              <button
+                type="button"
+                onClick={() => setOverrideModel(editorialPick.id)}
+                title={editorialPick.reason}
+                className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:underline"
+              >
+                <Sparkles size={11} /> Recommended for editing: {editorialPick.id}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => runEditorialReview(freshReview ? 'fresh' : 'merge')}
