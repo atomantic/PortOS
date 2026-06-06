@@ -55,12 +55,18 @@ export default function ManuscriptLiveSection({
   };
 
   // Position the popover just below the open comment's first underline mark.
-  useLayoutEffect(() => {
-    if (!openComment || !backdropRef.current) return;
-    const marks = backdropRef.current.querySelectorAll('mark[data-cids]');
+  // `offsetTop` is a content coordinate, so subtract the textarea's scrollTop —
+  // otherwise a note opened after scrolling a long (>400-row) section lands far
+  // from the visible underline. Recomputed on scroll (see the textarea handler).
+  const positionPopover = () => {
+    const backdrop = backdropRef.current;
+    if (!openComment || !backdrop) return;
+    const marks = backdrop.querySelectorAll('mark[data-cids]');
     const mark = [...marks].find((m) => (m.dataset.cids || '').split(',').includes(openComment.id));
-    setPopTop(mark ? mark.offsetTop + mark.offsetHeight + 4 : 0);
-  }, [openComment, content, segments]);
+    const scrollTop = taRef.current?.scrollTop || 0;
+    setPopTop(mark ? mark.offsetTop + mark.offsetHeight + 4 - scrollTop : 0);
+  };
+  useLayoutEffect(positionPopover, [openComment, content, segments]);
 
   // Esc closes the popover.
   useEscapeKey(openComment, onCloseComment);
@@ -128,12 +134,14 @@ export default function ManuscriptLiveSection({
           // keyup re-open it because the caret still sits inside the span.
           onKeyUp={(e) => { if (e.key !== 'Escape') handleCaret(); }}
           // Keep the underline backdrop aligned when a section longer than the
-          // row cap scrolls internally (the backdrop is overflow-hidden).
+          // row cap scrolls internally (the backdrop is overflow-hidden), and
+          // re-pin the open popover to its now-moved underline.
           onScroll={(e) => {
             if (backdropRef.current) {
               backdropRef.current.scrollTop = e.target.scrollTop;
               backdropRef.current.scrollLeft = e.target.scrollLeft;
             }
+            positionPopover();
           }}
           rows={rowsFor(content)}
           spellCheck
