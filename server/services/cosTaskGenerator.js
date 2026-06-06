@@ -25,6 +25,7 @@ import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
+import { getDomainMode } from '../lib/domainAutonomy.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
@@ -38,8 +39,8 @@ import { isRecoveryTask } from './recoveryTasks.js';
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
  */
 export async function blockIfExceedsMaxSpawns(task, taskType) {
+  if (!exceedsMaxSpawns(task)) return false;
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
-  if (totalSpawns < MAX_TOTAL_SPAWNS) return false;
   emitLog('info', `🚫 Blocking task ${task.id} — exceeded max spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, { taskId: task.id });
   await updateTask(task.id, {
     status: 'blocked',
@@ -48,6 +49,73 @@ export async function blockIfExceedsMaxSpawns(task, taskType) {
     emitLog('warn', `Failed to block task ${task.id}: ${err.message}`, { taskId: task.id });
   });
   return true;
+}
+
+/**
+ * Non-mutating sibling of `blockIfExceedsMaxSpawns` — true when a task has hit
+ * the max-total-spawns ceiling, WITHOUT blocking/persisting it. Used by the
+ * dry-run eligibility pass, which must predict execute's skip without mutating.
+ */
+export function exceedsMaxSpawns(task) {
+  return (Number(task.metadata?.totalSpawnCount) || 0) >= MAX_TOTAL_SPAWNS;
+}
+
+/**
+ * Dry-run eligibility pass over auto-approved system tasks. Walks the tasks in
+ * file order applying the SAME gates execute mode uses — global slot cap,
+ * max-total-spawns, app cooldown, per-project cap — while tracking virtual
+ * capacity, and returns the ordered subset execute mode WOULD spawn. It never
+ * blocks, persists, or emits anything, so a dry-run can log exactly the set
+ * execute would spawn instead of over-reporting (logging tasks execute would
+ * skip) or under-reporting (stopping early before applying the gates).
+ *
+ * The two spawn engines (`dequeueNextTask` in cos.js and `evaluateTasks` here)
+ * have small execute-path differences, expressed via the optional per-task
+ * hooks so each engine's dry-run plan matches its own execute path:
+ * `extraSkip` adds an engine-specific gate (dequeue's disabled-analysis-type
+ * check); `cooldownExempt` exempts a task from the cooldown gate (this engine's
+ * pipeline-continuation bypass).
+ *
+ * @param {object[]} autoApproved - auto-approved system tasks, file order
+ * @param {object} ctx
+ * @param {number} ctx.availableSlots - global free slots at the start of this cycle
+ * @param {number} ctx.alreadySpawned - slots already consumed by higher-priority picks (on-demand/user)
+ * @param {number} ctx.perProjectLimit - per-project concurrent cap
+ * @param {Record<string, number>} ctx.spawnProjectCounts - running+spawned counts per project (cloned, not mutated)
+ * @param {(appId: string) => Promise<boolean>} ctx.isOnCooldown - async cooldown probe
+ * @param {(task: object) => boolean} [ctx.cooldownExempt] - true ⇒ skip the cooldown gate for this task
+ * @param {(task: object) => boolean} [ctx.extraSkip] - true ⇒ task ineligible (engine-specific gate)
+ * @returns {Promise<object[]>} the tasks execute mode would spawn, in order
+ */
+export async function selectDryRunAutoApproved(autoApproved, ctx) {
+  const {
+    availableSlots,
+    alreadySpawned = 0,
+    perProjectLimit,
+    spawnProjectCounts = {},
+    isOnCooldown,
+    cooldownExempt = () => false,
+    extraSkip = () => false
+  } = ctx;
+
+  const counts = { ...spawnProjectCounts };
+  let spawned = alreadySpawned;
+  const spawnable = [];
+
+  for (const task of autoApproved) {
+    if (spawned >= availableSlots) break;
+    if (exceedsMaxSpawns(task)) continue;
+    if (extraSkip(task)) continue;
+    const appId = task.metadata?.app;
+    if (appId && !cooldownExempt(task) && (await isOnCooldown(appId))) continue;
+    const project = appId || '_self';
+    if ((counts[project] || 0) >= perProjectLimit) continue;
+    counts[project] = (counts[project] || 0) + 1;
+    spawned++;
+    spawnable.push(task);
+  }
+
+  return spawnable;
 }
 
 // Task types where the scheduler reads PLAN.md to find an in-flight-aware pick.
@@ -242,6 +310,12 @@ export async function evaluateTasks(options) {
   // Track per-project counts including tasks we're about to spawn in this batch
   const spawnProjectCounts = { ...agentsByProject };
 
+  // Per-domain CoS auto-run gate. Off/dry-run withhold all AUTOMATIC internal
+  // spawns (auto-approved system tasks, mission, feature-agent, idle-review);
+  // user and on-demand tasks are unaffected. dry-run logs the concrete already-
+  // queued auto-approved tasks it would have spawned without emitting them.
+  const cosAutonomyMode = getDomainMode(state.config, 'cos');
+
   // Helper: check if a task can spawn (within both global and per-project limits)
   const canSpawnTask = (task) => {
     if (tasksToSpawn.length >= availableSlots) return false;
@@ -345,8 +419,27 @@ export async function evaluateTasks(options) {
     trackSpawn(userTask);
   }
 
-  // Priority 2: Auto-approved system tasks (if slots available)
-  if (tasksToSpawn.length < availableSlots && cosTaskData.exists) {
+  // Priority 2: Auto-approved system tasks (if slots available) — gated by the
+  // CoS auto-run domain. off/dry-run withhold the unattended spawn; dry-run logs
+  // what would have run so the user can see the plan without it executing.
+  if (tasksToSpawn.length < availableSlots && cosTaskData.exists && cosAutonomyMode !== 'execute') {
+    if (cosAutonomyMode === 'dry-run') {
+      // Log only the tasks execute mode would ACTUALLY spawn — applying the same
+      // max-spawns / cooldown / per-project gates against virtual capacity —
+      // rather than every auto-approved task regardless of eligibility.
+      const wouldSpawn = await selectDryRunAutoApproved(cosTaskData.autoApproved || [], {
+        availableSlots,
+        alreadySpawned: tasksToSpawn.length,
+        perProjectLimit,
+        spawnProjectCounts,
+        isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+        cooldownExempt: (task) => task.metadata?.pipeline?.currentStage > 0
+      });
+      for (const task of wouldSpawn) {
+        emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
+      }
+    }
+  } else if (tasksToSpawn.length < availableSlots && cosTaskData.exists) {
     const autoApproved = cosTaskData.autoApproved || [];
     for (const task of autoApproved) {
       if (tasksToSpawn.length >= availableSlots) break;
@@ -391,13 +484,15 @@ export async function evaluateTasks(options) {
 
   // Background: Queue eligible self-improvement tasks as system tasks
   // Only queue if there are NO pending user tasks (user tasks always take priority)
-  // Skip on initial startup to avoid auto-spawning agents on fresh installs
-  if (state.config.idleReviewEnabled && !hasPendingUserTasks && !initialStartup) {
+  // Skip on initial startup to avoid auto-spawning agents on fresh installs.
+  // Also skip when CoS auto-run isn't `execute` — queueing creates autonomous work.
+  if (state.config.idleReviewEnabled && !hasPendingUserTasks && !initialStartup && cosAutonomyMode === 'execute') {
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
 
-  // Priority 3: Mission-driven proactive tasks (if no user tasks)
-  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.proactiveMode) {
+  // Priority 3: Mission-driven proactive tasks (if no user tasks). Autonomous —
+  // gated by the CoS auto-run domain (off/dry-run skip generation entirely).
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
     const missionTasks = await generateMissionTasks({ maxTasks: availableSlots - tasksToSpawn.length }).catch(err => {
       emitLog('debug', `Mission task generation failed: ${err.message}`);
       return [];
@@ -431,8 +526,9 @@ export async function evaluateTasks(options) {
   // which caused duplicate agent spawns on startup when both paths fired
   // for the same past-due job within seconds of each other.
 
-  // Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks)
-  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks) {
+  // Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks).
+  // Autonomous — gated by the CoS auto-run domain.
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
     const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
     const dueAgents = await getDueFeatureAgents().catch(err => {
       emitLog('debug', `Feature agents check failed: ${err.message}`);
@@ -454,7 +550,7 @@ export async function evaluateTasks(options) {
   // 1. Nothing to spawn
   // 2. No pending user tasks (even on cooldown)
   // 3. No system tasks queued
-  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks) {
+  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
@@ -930,85 +1026,15 @@ async function generateManagedAppImprovementTask(app, state) {
 
   emitLog('info', `Generating improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
 
-  // Get interval settings to determine provider/model and pipeline config
-  const interval = await taskSchedule.getTaskInterval(nextType);
-
-  const metadata = {
-    app: app.id,
-    appName: app.name,
-    repoPath: app.repoPath,
-    analysisType: nextType,
-    autoGenerated: true,
-    comprehensiveImprovement: true
-  };
-
-  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify, pipeline)
-  const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
-  if (sanitizedGlobalMeta) {
-    Object.assign(metadata, sanitizedGlobalMeta);
-  }
-
-  // Apply sanitized per-app taskMetadata overrides (merge on top of global).
-  // Strip managed-agent fields from the override first so an existing
-  // app-level value for a now-managed field can't overwrite the global's
-  // enforced default (the UI locks the toggle, the merge has to honor that).
-  const appOverrides = await getAppTaskTypeOverrides(app.id);
-  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
-    nextType, appOverrides[nextType]?.taskMetadata
-  );
-  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
-  if (sanitizedAppMeta) {
-    Object.assign(metadata, sanitizedAppMeta);
-  }
-
-  initializePipelineMetadata(metadata);
-  if (shouldSkipForPrecondition(metadata, app, nextType)) return null;
-
-  const planMeta = await applyPlanIdMetadata(nextType, app.repoPath, metadata);
-  if (planMeta.skipReason) {
-    emitLog('info', `Skipping ${nextType} for ${app.name}: ${planMeta.skipReason}`, { appId: app.id });
-    return null;
-  }
-  const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-
-  const promptTemplate = metadata.pipeline?.stages
-    ? await taskSchedule.getStagePrompt(nextType, 0)
-    : await taskSchedule.getTaskPrompt(nextType);
-  const reviewersCsv = normalizeReviewers(metadata).join(',');
-  const description = promptTemplate
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewers\}/g, reviewersCsv)
-    .replace(/\{planConstraint\}/g, () => planConstraintBlock);
-
-  applyAppWorktreeDefault(metadata, app);
-
-  if (interval.providerId) {
-    metadata.provider = interval.providerId;
-    metadata.providerId = interval.providerId;
-  }
-  if (interval.model) {
-    metadata.model = interval.model;
-  } else if (!metadata.provider) {
-    // Only default to Claude when no per-stage provider overrides the selection
-    metadata.model = 'claude-opus-4-5-20251101';
-  }
-
-  const approval = await resolveConfidenceApproval(state, `app-improve:${nextType}`, `Task app-improve:${nextType} for ${app.name}`);
-
-  const task = {
-    id: `app-improve-${app.id}-${nextType}-${Date.now().toString(36)}`,
-    status: 'pending',
-    priority: state.config.idleReviewPriority || 'MEDIUM',
-    priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
-    description,
-    metadata,
-    taskType: 'internal',
-    ...approval
-  };
-
-  return task;
+  // Delegate the actual task build to the per-type generator so the dynamic
+  // blocks run on the idle-review path too: pr-watcher's PR poll +
+  // {prData}/{repoFullName}/{defaultBranch} injection, and reference-watch's
+  // {referenceData} injection. Without delegation this path replaced only the
+  // generic placeholders, so a watcher type selected here would spawn a prompt
+  // with the literal {prData}/{referenceData} markers and never poll. The
+  // recordExecution + activity bump above already accounted for the idle
+  // spawn; the per-type generator does not record execution itself.
+  return generateManagedAppImprovementTaskForType(nextType, app, state);
 }
 
 /**
@@ -1114,6 +1140,68 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     referenceDataBlock = blocks.join('\n\n---\n\n');
   }
 
+  // pr-watcher: poll the app's GitHub repo for PRs newly opened against the
+  // default branch, gated on authorship (self / others / any). Dispatches one
+  // agent run covering all new PRs; injects {prData}/{repoFullName}/
+  // {defaultBranch}. State (the lastSeenPrNumber high-water mark) is persisted
+  // inline on the app, mirroring reference-watch's lastReviewedSha.
+  let prDataBlock = '';
+  let prRepoFullName = '';
+  let prDefaultBranch = '';
+  if (taskType === 'pr-watcher') {
+    const prWatcher = await import('./prWatcher.js');
+    // prAuthorFilter was already merged (global → per-app override) and
+    // value-constrained into `metadata` by sanitizeTaskMetadata above, so read
+    // it from there rather than re-merging the raw configs.
+    const authorFilter = metadata.prAuthorFilter || 'any';
+
+    const check = await prWatcher.checkPullRequests(app, { authorFilter });
+    const checkedAt = new Date().toISOString();
+
+    // The gh poll IS the cadence-bearing work for pr-watcher, so a poll that
+    // dispatches nothing still has to advance the interval. The queue path
+    // (queueEligibleImprovementTasks) only records execution AFTER a task is
+    // queued, so a bare `return null` would leave lastRun unset — and a CUSTOM
+    // task with no lastRun reads as perpetually "due", re-polling GitHub every
+    // scheduler tick and (being CUSTOM-priority) starving the app's other task
+    // types until a PR appears. Record the poll here on every no-dispatch path.
+    const recordPoll = () => taskSchedule.recordExecution(taskType, app.id);
+
+    if (!check.ok) {
+      await prWatcher.persistPrWatcherState(app.id, { lastCheckedAt: checkedAt, lastError: check.reason });
+      await recordPoll();
+      emitLog('info', `Skipping pr-watcher for ${app.name}: ${check.reason}`, { appId: app.id });
+      return null;
+    }
+
+    // Always advance the high-water mark + clear any prior error. First run
+    // baselines silently; later runs mark every evaluated PR (dispatched AND
+    // gated-out) as seen so a fixed author filter doesn't re-fire them.
+    await prWatcher.persistPrWatcherState(app.id, {
+      lastSeenPrNumber: check.newLastSeen,
+      lastCheckedAt: checkedAt,
+      lastError: null
+    });
+
+    if (check.firstRun) {
+      await recordPoll();
+      emitLog('info', `pr-watcher baselined ${app.name} at PR #${check.newLastSeen} — no dispatch on first run`, { appId: app.id });
+      return null;
+    }
+    if (check.newPrs.length === 0) {
+      await recordPoll();
+      emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})`, { appId: app.id });
+      return null;
+    }
+
+    prDataBlock = prWatcher.formatPullRequestsForPrompt(check.newPrs, {
+      repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
+    });
+    prRepoFullName = check.repoFullName;
+    prDefaultBranch = check.defaultBranch;
+    emitLog('info', `pr-watcher dispatching for ${app.name}: ${check.newPrs.length} new PR(s)`, { appId: app.id, analysisType: taskType });
+  }
+
   const planMeta = await applyPlanIdMetadata(taskType, app.repoPath, metadata);
   if (planMeta.skipReason) {
     emitLog('info', `Skipping ${taskType} for ${app.name}: ${planMeta.skipReason}`, { appId: app.id });
@@ -1132,6 +1220,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     // legitimately contain `$` (env-var docs, prices, awk snippets) and
     // would get mangled. The function form passes the value verbatim.
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
+    .replace(/\{prData\}/g, () => prDataBlock)
+    .replace(/\{repoFullName\}/g, () => prRepoFullName)
+    .replace(/\{defaultBranch\}/g, () => prDefaultBranch)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);
 
   applyAppWorktreeDefault(metadata, app);

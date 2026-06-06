@@ -93,7 +93,7 @@ export function computeGoalVelocity(goal) {
   }
 
   const daysDiff = (new Date(last.date) - new Date(first.date)) / (1000 * 60 * 60 * 24);
-  if (daysDiff < 1) return null;
+  if (Number.isNaN(daysDiff) || daysDiff < 1) return null;
 
   const monthsDiff = daysDiff / 30.44;
   const totalChange = last.value - first.value;

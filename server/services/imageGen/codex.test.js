@@ -132,8 +132,22 @@ describe('codex provider — generateImage', () => {
     await flush();
   });
 
-  it('rejects when prompt is empty', async () => {
+  it('rejects when prompt is empty and there is no init image', async () => {
     await expect(codex.generateImage({ prompt: '   ' })).rejects.toThrow(/Prompt is required/);
+  });
+
+  it('allows an empty prompt when editing an init image', async () => {
+    // resolveGalleryImage requires the file to exist under PATHS.images.
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'editme.png'), 'fake');
+    await codex.generateImage({ prompt: '', initImagePath: 'editme.png', initImageStrength: 0.2 });
+    const { args } = spawnCalls[0];
+    expect(args.indexOf('-i')).toBeGreaterThan(-1);
+    // Edit-prefix still drives the render even with no text target.
+    expect(args[args.length - 1]).toMatch(/edit the attached reference image/i);
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
   });
 
   it('forwards initImagePath via `-i <FILE>` and reshapes the prompt for image-edit', async () => {

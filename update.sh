@@ -49,8 +49,9 @@ safe_install() {
     return 0
   fi
 
-  log "⚠️  npm install failed for $label — cleaning node_modules and retrying..."
+  log "⚠️  npm install failed for $label — cleaning node_modules + package-lock.json and retrying..."
   rm -rf "$dir/node_modules"
+  rm -f "$dir/package-lock.json"
   if (cd "$dir" && run npm install); then
     return 0
   fi

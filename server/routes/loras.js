@@ -11,7 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { validateRequest } from '../lib/validation.js';
+import { emptyToUndefined, validateRequest } from '../lib/validation.js';
 import {
   deleteLora,
   getLora,
@@ -19,8 +19,9 @@ import {
   listLoras,
   patchLoraSidecar,
 } from '../services/loras.js';
-import { getSuggestions } from '../services/civitaiSuggestions.js';
+import { getSuggestions, searchLorasInFamily } from '../services/civitaiSuggestions.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { RUNNER_FAMILIES } from '../lib/runners.js';
 
 const router = Router();
 
@@ -36,6 +37,28 @@ router.get('/suggestions', asyncHandler(async (req, res) => {
   const force = req.query.force === '1' || req.query.force === 'true';
   const limit = Math.max(1, Math.min(24, Number(req.query.limit) || 4));
   res.json(await getSuggestions({ force, limit }));
+}));
+
+// Live keyword search + cursor pagination within one runner family. Backs the
+// per-category search box and "Load more" button on /media/loras. Uncached —
+// results are query/cursor-specific. `query` blank = top ranking for that
+// family (so "Load more" with no keyword just pages the leaderboard).
+const searchQuerySchema = z.object({
+  runner: z.enum(Object.values(RUNNER_FAMILIES)),
+  // emptyToUndefined: a blank box (`query=`) is a valid "top ranking" request,
+  // not a validation error — coerce '' → undefined before the optional check.
+  query: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
+  cursor: z.preprocess(emptyToUndefined, z.string().max(512).optional()),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+router.get('/search', asyncHandler(async (req, res) => {
+  const { runner, query, cursor, limit } = validateRequest(searchQuerySchema, req.query);
+  res.json(await searchLorasInFamily({
+    runnerFamily: runner,
+    query: query || '',
+    cursor: cursor || null,
+    limit: limit || 12,
+  }));
 }));
 
 // Civitai auth status — returns just whether a key is configured (the key

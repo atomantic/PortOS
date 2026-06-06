@@ -30,6 +30,7 @@ import {
 } from '../services/localLlm.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
+import { awaitWritableDrain } from '../lib/streamBackpressure.js'
 import { getLoadedModels as getLoadedOllamaModels, unloadModel as unloadOllamaModel } from '../services/ollamaManager.js'
 
 const router = Router()
@@ -233,7 +234,8 @@ router.post('/test', asyncHandler(async (req, res) => {
 
 // POST /api/local-llm/test/stream — same as /test, but streams the model's
 // output token-by-token as newline-delimited JSON (NDJSON) so the playground
-// can render live. Frames: `{ type: 'token', delta }` per content chunk, then a
+// can render live. Frames: `{ type: 'token', delta, kind }` per chunk (kind is
+// 'content' or 'reasoning' so the client can render thinking separately), then a
 // terminal `{ type: 'result', result }` carrying the same object /test returns
 // (text, timings, runId, and any error). `runLocalLlmTest` resolves rather than
 // throws — including on timeout/abort — so the result frame always lands while
@@ -251,9 +253,18 @@ router.post('/test/stream', asyncHandler(async (req, res) => {
   // Once headers are flushed the response is "in stream mode" — never throw past
   // here. A write after the client disconnected can throw ERR_STREAM_WRITE_AFTER_END;
   // treat any failure as a dead socket and drop the frame.
-  const write = (frame) => {
+  //
+  // Honour socket backpressure: when `res.write` returns false the kernel/send
+  // buffer is full, so await the next `drain` before letting the producer queue
+  // more NDJSON. A fast local model writing to a slow reader would otherwise
+  // buffer the whole response in memory. The producer awaits `onToken`, so
+  // returning this promise actually pauses the upstream read until the socket
+  // catches up. (`awaitWritableDrain` is the same helper routes/ask.js uses.)
+  const write = async (frame) => {
     if (res.writableEnded || res.destroyed) return
-    try { res.write(`${JSON.stringify(frame)}\n`) } catch { /* client gone */ }
+    let writeOk
+    try { writeOk = res.write(`${JSON.stringify(frame)}\n`) } catch { return /* client gone */ }
+    if (!writeOk) await awaitWritableDrain(res)
   }
 
   // `runLocalLlmTest` resolves for in-stream failures, but can still THROW before
@@ -263,14 +274,14 @@ router.post('/test/stream', asyncHandler(async (req, res) => {
   const result = await runLocalLlmTest({
     ...body,
     signal: abortSignalFromResponse(res),
-    onToken: (delta) => { if (delta) write({ type: 'token', delta }) },
+    onToken: (delta, kind = 'content') => (delta ? write({ type: 'token', delta, kind }) : undefined),
   }).catch((err) => ({
     backend: body.backend,
     modelId: body.modelId,
     error: err?.message || 'Local LLM test failed',
     text: '',
   }))
-  write({ type: 'result', result })
+  await write({ type: 'result', result })
   res.end()
 }))
 

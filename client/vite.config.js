@@ -36,6 +36,11 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: 5554,
+      // Fail loudly if 5554 is taken instead of auto-incrementing. Without this,
+      // Vite walks up to the next free port and can land on a reserved PortOS
+      // port (5555 API, 5556 browser CDP) — squatting on the CDP port makes the
+      // browser keep-alive read Vite's HTML index and spam JSON-parse errors.
+      strictPort: true,
       open: false,
       allowedHosts: ['.ts.net', 'localhost'],
       proxy: {
@@ -68,17 +73,27 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
-      rollupOptions: {
+      rolldownOptions: {
         output: {
-          manualChunks: {
-            // Core React dependencies
-            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-            // Socket dependencies
-            'vendor-realtime': ['socket.io-client'],
-            // Drag and drop library (only used in CoS)
-            'vendor-dnd': ['@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
-            // Icon library (largest dependency)
-            'vendor-icons': ['lucide-react']
+          // Vite 8 ships the rolldown bundler, whose canonical chunking API is
+          // `output.codeSplitting.groups` — each group captures the modules whose
+          // id matches `test` into a named chunk. This replaces the legacy
+          // `rollupOptions.output.manualChunks` function (still accepted via
+          // rolldown's compat layer, but slated to drop in a future Vite). The
+          // groups below reproduce the same four vendor chunks as before.
+          // Note: use `[\\/]` (not `/`) for the path separator so the regexes
+          // also match on Windows.
+          codeSplitting: {
+            groups: [
+              // Core React dependencies
+              { name: 'vendor-react', test: /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom)[\\/]/ },
+              // Socket dependencies
+              { name: 'vendor-realtime', test: /[\\/]node_modules[\\/]socket\.io-client[\\/]/ },
+              // Drag and drop library (only used in CoS)
+              { name: 'vendor-dnd', test: /[\\/]node_modules[\\/]@dnd-kit[\\/]/ },
+              // Icon library (largest dependency)
+              { name: 'vendor-icons', test: /[\\/]node_modules[\\/]lucide-react[\\/]/ },
+            ]
           }
         }
       },

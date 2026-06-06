@@ -6,11 +6,25 @@ const emptySlot = () => ({ file: null, previewUrl: null, strength: 1.0 });
 const fourEmpty = () => Array.from({ length: 4 }, emptySlot);
 
 describe('ReferenceImagePicker', () => {
-  it('renders an Add tile per empty slot', () => {
+  it('renders an Upload tile per empty slot', () => {
     render(<ReferenceImagePicker referenceImages={fourEmpty()} onPick={vi.fn()} onClear={vi.fn()} onStrengthChange={vi.fn()} />);
-    expect(screen.getAllByText('Add')).toHaveLength(4);
+    expect(screen.getAllByText('Upload')).toHaveLength(4);
     expect(screen.getByText('Ref 1')).toBeTruthy();
     expect(screen.getByText('Ref 4')).toBeTruthy();
+  });
+
+  it('renders a per-slot Gallery button when onBrowse is set and fires it with the slot index', () => {
+    const onBrowse = vi.fn();
+    render(<ReferenceImagePicker referenceImages={fourEmpty()} onPick={vi.fn()} onClear={vi.fn()} onStrengthChange={vi.fn()} onBrowse={onBrowse} />);
+    const galleryButtons = screen.getAllByText('Gallery');
+    expect(galleryButtons).toHaveLength(4);
+    fireEvent.click(galleryButtons[2]);
+    expect(onBrowse).toHaveBeenCalledWith(2);
+  });
+
+  it('omits the Gallery button when onBrowse is absent', () => {
+    render(<ReferenceImagePicker referenceImages={fourEmpty()} onPick={vi.fn()} onClear={vi.fn()} onStrengthChange={vi.fn()} />);
+    expect(screen.queryByText('Gallery')).toBeNull();
   });
 
   it('renders a thumbnail + strength slider for a populated slot', () => {
@@ -19,7 +33,7 @@ describe('ReferenceImagePicker', () => {
     render(<ReferenceImagePicker referenceImages={slots} onPick={vi.fn()} onClear={vi.fn()} onStrengthChange={vi.fn()} />);
     expect(screen.getByAltText('Reference 2')).toBeTruthy();
     expect(screen.getByText(/Strength 0.60/)).toBeTruthy();
-    expect(screen.getAllByText('Add')).toHaveLength(3);
+    expect(screen.getAllByText('Upload')).toHaveLength(3);
   });
 
   it('fires onClear with the slot index', () => {

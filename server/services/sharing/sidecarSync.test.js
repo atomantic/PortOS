@@ -98,7 +98,8 @@ describe('pullSidecarForImage', () => {
     await pullSidecarForImage(fakePeer, fakeBase, 'my image.png');
     expect(peerFetch).toHaveBeenCalledWith(
       `${fakeBase}/data/images/${encodeURIComponent('my image.metadata.json')}`,
-      expect.objectContaining({ maxBytes: expect.any(Number), signal: expect.any(AbortSignal) })
+      expect.objectContaining({ maxBytes: expect.any(Number), signal: expect.any(AbortSignal) }),
+      fakePeer
     );
   });
 

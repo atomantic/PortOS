@@ -24,7 +24,7 @@
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
     "ws": "8.20.1",
-    "zod": "3.24.1"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "4.1.8",

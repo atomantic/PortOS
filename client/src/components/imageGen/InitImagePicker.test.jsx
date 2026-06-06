@@ -16,8 +16,52 @@ describe('InitImagePicker', () => {
         onClear={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Upload image to remix/i)).toBeTruthy();
+    expect(screen.getByText(/Upload \(PNG\/JPG\/WebP\)/i)).toBeTruthy();
     expect(screen.getByText(/image-to-image — Flux only/i)).toBeTruthy();
+  });
+
+  it('drops the "Flux only" caveat on the codex backend', () => {
+    render(
+      <InitImagePicker
+        initImage={EMPTY}
+        initImageStrength={0.4}
+        onStrengthChange={vi.fn()}
+        onPick={vi.fn()}
+        onClear={vi.fn()}
+        backend="codex"
+      />,
+    );
+    expect(screen.getByText('(image-to-image)')).toBeTruthy();
+    expect(screen.queryByText(/Flux only/i)).toBeNull();
+  });
+
+  it('renders a Browse gallery button when onBrowse is provided and fires it', () => {
+    const onBrowse = vi.fn();
+    render(
+      <InitImagePicker
+        initImage={EMPTY}
+        initImageStrength={0.4}
+        onStrengthChange={vi.fn()}
+        onPick={vi.fn()}
+        onClear={vi.fn()}
+        onBrowse={onBrowse}
+      />,
+    );
+    fireEvent.click(screen.getByText(/Browse gallery/i));
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits the Browse gallery button when onBrowse is absent', () => {
+    render(
+      <InitImagePicker
+        initImage={EMPTY}
+        initImageStrength={0.4}
+        onStrengthChange={vi.fn()}
+        onPick={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Browse gallery/i)).toBeNull();
   });
 
   it('shows the required-source label and warning copy when editOnly', () => {

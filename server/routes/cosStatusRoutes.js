@@ -9,6 +9,7 @@ import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbedd
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { z } from 'zod';
+import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
 
 const router = Router();
 
@@ -42,6 +43,11 @@ export const cosConfigSchema = z.object({
   proactiveMode: z.boolean().optional(),
   autonomousJobsEnabled: z.boolean().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
+  // Per-domain autonomy guardrails (#711): partial map of domainId → mode.
+  // Partial is fine — updateConfig() merges it over the stored map.
+  domainAutonomy: z.object(
+    Object.fromEntries(DOMAIN_IDS.map((id) => [id, z.enum(DOMAIN_MODES).optional()]))
+  ).strict().optional(),
   rehabilitationGracePeriodDays: z.number().int().min(1).optional(),
   completedAgentRetentionMs: z.number().int().min(0).optional(),
   embeddingProviderId: z.string().optional(),

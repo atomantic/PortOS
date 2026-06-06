@@ -13,6 +13,7 @@
  */
 
 import { spawn } from 'child_process';
+import sharp from 'sharp';
 import { writeFile, readFile, readdir, stat, unlink, rm, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
@@ -27,6 +28,7 @@ import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { computePixelDelta } from './regen.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -287,6 +289,13 @@ export function buildSidecarMeta({
   initImageStrength = null,
   referenceImagePaths = [],
   referenceImageStrengths = [],
+  // SynthID-defeat regen lineage. When `regenOf` is set, this render is a
+  // post-hoc round-trip of an existing gallery image through local FLUX
+  // img2img (issue #912) — stamp the source filename as `cleanedFrom` (so the
+  // lightbox variant toggle groups the regen under its source the same way a
+  // cleaned copy is) plus explicit `regenerated`/`regenSteps`/`regenStrength`/
+  // `regenModelId` so the sidecar lineage stays honest about how it was made.
+  regenOf = null,
   resolveInputPath,
   loraExists,
   now = () => new Date().toISOString(),
@@ -361,6 +370,27 @@ export function buildSidecarMeta({
   // each reference's V slice by the corresponding strength (1.0 = upstream
   // baseline, 0.0 = ignored). Mirrors the Python sidecar's `referenceStrengths`.
   const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, createdAt: now() };
+  // Regen lineage (issue #912). `regenOf` is the source gallery filename this
+  // render was generated from. We reuse the existing `cleanedFrom` field so the
+  // lightbox's `computeImageVariantGroup` groups the regen under its source with
+  // zero changes to the grouping key, and add explicit regen* fields so the
+  // sidecar honestly records that the per-pixel watermark was overwritten by a
+  // fresh sampling pass rather than stripped. `regenStrength`/`regenSteps`/
+  // `regenModelId` mirror the resolved render params (not the raw inputs) so a
+  // replayed/clamped value is what's recorded.
+  // Only stamp the lineage when the init image actually resolved — if the
+  // source path was rejected/missing, this render degraded to txt2img and is
+  // NOT a regen of anything, so claiming `regenerated: true` would be a lie.
+  if (typeof regenOf === 'string' && regenOf && validInitImagePath) {
+    meta.cleanedFrom = regenOf;
+    meta.regenerated = true;
+    // Explicit method so consumers never infer it by absence — the CPU path
+    // stamps 'light-spatial', this GPU round-trip stamps 'flux'.
+    meta.regenMethod = 'flux';
+    meta.regenStrength = validInitImageStrength;
+    meta.regenSteps = actualSteps;
+    meta.regenModelId = modelId;
+  }
   return {
     meta,
     actualSeed,
@@ -374,8 +404,11 @@ export function buildSidecarMeta({
   };
 }
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false }) {
-  if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null }) {
+  // Empty prompt is allowed: img2img / edit / unconditional renders are driven
+  // by the init image (or run unconditionally), so text isn't required. The
+  // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
+  // has always relied on this for minimal-mutation, watermark-overwriting img2img.
   // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
   // callers that bypass the queue must not run two concurrent renders — the
   // activeProcess handle below would be clobbered and cancel() would orphan
@@ -435,6 +468,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
     initImageStrength,
     referenceImagePaths,
     referenceImageStrengths,
+    regenOf,
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
@@ -671,6 +705,43 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       imageGenEvents.emit('failed', { generationId: jobId, error: userMessage || reason });
     } else {
       job.status = 'complete';
+      // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
+      // resolution. Upscale the result back to the requested delivery size so
+      // the watermark-free copy matches the original's resolution. `meta.width/
+      // height` currently hold the render dims; record those as render* and
+      // promote the delivered dims so the gallery shows the real file size.
+      const targetW = Math.round(Number(upscaleTo?.width));
+      const targetH = Math.round(Number(upscaleTo?.height));
+      if (targetW > 0 && targetH > 0 && (targetW !== meta.width || targetH !== meta.height)) {
+        const resized = await sharp(outputPath)
+          .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
+          // compressionLevel 6 (sharp default) — near-identical size to 9 but
+          // markedly faster, and this re-encode is on the render-completion path.
+          .png({ compressionLevel: 6 })
+          .toBuffer()
+          .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
+        if (resized) {
+          await writeFile(outputPath, resized).catch(() => {});
+          meta.renderWidth = meta.width;
+          meta.renderHeight = meta.height;
+          meta.width = targetW;
+          meta.height = targetH;
+          console.log(`🔍 Upscaled regen [${jobId.slice(0, 8)}] ${meta.renderWidth}x${meta.renderHeight} → ${targetW}x${targetH}`);
+        }
+      }
+      // Regen fidelity (issue #912): for a regen pass, measure how much the
+      // delivered image actually changed vs. the source so the sidecar records
+      // the *realized* delta, not just the requested strength. Catches the
+      // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
+      // Best-effort — a decode failure just skips the stamp.
+      if (regenOf && validInitImagePath) {
+        const delta = await computePixelDelta(validInitImagePath, outputPath).catch(() => null);
+        if (delta) {
+          meta.regenPixelDeltaPct = delta.pixelDeltaPct;
+          meta.regenPsnr = delta.psnr;
+          console.log(`📐 Regen fidelity [${jobId.slice(0, 8)}]: ${delta.pixelDeltaPct}% changed, PSNR ${delta.psnr}dB`);
+        }
+      }
       // Sidecar: persist a metadata record next to the PNG so the gallery
       // and Remix flow can recover prompt/seed/steps even if mflux's own
       // --metadata sidecar lives at a slightly different filename shape.

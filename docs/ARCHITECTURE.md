@@ -269,6 +269,7 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - Spawns Claude CLI with crash context (error logs + app info) to auto-repair
 - Stores fix sessions in `data/autofixer/sessions/` (prompt, output, metadata)
 - **UI** (:5560): Standalone Express server with SSE real-time log streaming
+  - Serves HTTPS with the shared Tailscale cert (`data/certs/`) when one is present, plain HTTP otherwise — matching the scheme the sidebar's `//<host>:5560` link inherits from the main app
 - Fix history viewer, process status dashboard
 
 ### Shell Service (`server/services/shell.js`)

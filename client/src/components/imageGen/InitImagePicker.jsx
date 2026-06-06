@@ -9,7 +9,7 @@
 // `editOnly` flips the label copy/styling: edit-only models need a source
 // image (shown as a required warning), regular i2i is optional.
 
-import { Image as ImageIcon, X } from 'lucide-react';
+import { Image as ImageIcon, Images, X } from 'lucide-react';
 
 export default function InitImagePicker({
   initImage,
@@ -17,15 +17,22 @@ export default function InitImagePicker({
   onStrengthChange,
   onPick,
   onClear,
+  onBrowse,
   editOnly = false,
+  backend = 'local',
   disabled = false,
 }) {
+  // i2i runs on both local (FLUX) and codex; the "Flux only" caveat applies only
+  // to the local backend (non-FLUX local models ignore the init image).
+  const subtitle = editOnly
+    ? '(required — this model edits an existing image)'
+    : backend === 'codex' ? '(image-to-image)' : '(image-to-image — Flux only)';
   return (
     <div>
       <label className="block text-xs font-medium text-gray-400 mb-1">
         {editOnly ? 'Source image' : 'Init image'}{' '}
         <span className={`font-normal ${editOnly ? 'text-port-warning' : 'text-gray-500'}`}>
-          {editOnly ? '(required — this model edits an existing image)' : '(image-to-image — Flux only)'}
+          {subtitle}
         </span>
       </label>
       {initImage.previewUrl ? (
@@ -48,7 +55,20 @@ export default function InitImagePicker({
             </button>
           </div>
           <div className="flex-1 min-w-0 space-y-1">
-            <div className="text-xs text-gray-400 truncate" title={initImage.name}>{initImage.name}</div>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-gray-400 truncate" title={initImage.name}>{initImage.name}</span>
+              {onBrowse && (
+                <button
+                  type="button"
+                  onClick={onBrowse}
+                  disabled={disabled}
+                  className="shrink-0 inline-flex items-center gap-1 text-[10px] text-port-accent hover:text-white disabled:opacity-50"
+                  title="Pick a different image from your gallery"
+                >
+                  <Images className="w-3 h-3" /> Gallery
+                </button>
+              )}
+            </div>
             <label className="block text-[11px] text-gray-500">
               Strength {initImageStrength.toFixed(2)}
               <input
@@ -62,11 +82,24 @@ export default function InitImagePicker({
           </div>
         </div>
       ) : (
-        <label className="flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed border-port-border rounded-lg text-xs text-gray-400 hover:text-white hover:border-port-accent cursor-pointer transition-colors">
-          <ImageIcon className="w-4 h-4" />
-          Upload image to remix (PNG/JPG/WebP)
-          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={onPick} disabled={disabled} />
-        </label>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2 border border-dashed border-port-border rounded-lg text-xs text-gray-400 hover:text-white hover:border-port-accent cursor-pointer transition-colors">
+            <ImageIcon className="w-4 h-4" />
+            Upload (PNG/JPG/WebP)
+            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={onPick} disabled={disabled} />
+          </label>
+          {onBrowse && (
+            <button
+              type="button"
+              onClick={onBrowse}
+              disabled={disabled}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 border border-port-border rounded-lg text-xs text-gray-400 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
+            >
+              <Images className="w-4 h-4" />
+              Browse gallery
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

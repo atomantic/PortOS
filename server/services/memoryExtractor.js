@@ -10,6 +10,7 @@ import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
+import { getDomainAutonomyMode } from './cosState.js';
 
 const DEDUP_SIMILARITY_THRESHOLD = 0.82;
 
@@ -201,6 +202,15 @@ async function findExistingDuplicate(embedding, content, pendingMemories) {
  * Uses LLM-based classification when available, falls back to pattern matching.
  */
 export async function extractAndStoreMemories(agentId, taskId, output, task = null) {
+  // Per-domain autonomy gate: `off` skips memory extraction entirely; `dry-run`
+  // routes even high-confidence memories to pending approval (nothing stores as
+  // active without a human confirm); `execute` is the historical behavior.
+  const mode = await getDomainAutonomyMode('memory');
+  if (mode === 'off') {
+    console.log(`🧠 Memory auto-extract is OFF — skipping extraction for agent ${agentId}`);
+    return { created: 0, pendingApproval: 0, memories: [], pendingMemories: [], skipped: 'domain-off' };
+  }
+
   const allMemories = [];
   let usedLLM = false;
 
@@ -295,13 +305,21 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     }, embedding);
   }
 
+  // In dry-run, high-confidence memories that would auto-store as active are
+  // instead routed to pending approval — nothing enters active memory without a
+  // human confirm, but the extraction work is still surfaced for review.
   const created = [];
+  const pendingMemories = [];
   for (const mem of highConfidence) {
-    const memory = await dedupAndCreate(mem);
-    if (memory) created.push(memory);
+    if (mode === 'dry-run') {
+      const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
+      if (memory) pendingMemories.push(memory);
+    } else {
+      const memory = await dedupAndCreate(mem);
+      if (memory) created.push(memory);
+    }
   }
 
-  const pendingMemories = [];
   for (const mem of mediumConfidence) {
     const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
     if (memory) pendingMemories.push(memory);

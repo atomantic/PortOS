@@ -10,11 +10,23 @@ const fileStore = new Map();
 
 vi.mock('../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn(async (path) => (fileStore.has(path) ? fileStore.get(path) : null)),
-  // Stubs to satisfy notifications.js (the real module imports these at load).
-  PATHS: { data: '/mock/data' },
+  // Stubs to satisfy notifications.js and cosState.js (the latter is pulled in
+  // by the bridge's per-domain messages gate; it needs PATHS.cos + ensureDirs).
+  PATHS: { data: '/mock/data', cos: '/mock/data/cos', reports: '/mock/data/reports', scripts: '/mock/data/scripts', root: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  ensureDirs: vi.fn().mockResolvedValue(undefined),
+  safeJSONParse: vi.fn((str, defaultVal) => { if (!str) return defaultVal; try { return JSON.parse(str); } catch { return defaultVal; } }),
   readJSONFile: vi.fn(async (_path, defaultValue = null) => defaultValue),
   atomicWrite: vi.fn().mockResolvedValue(undefined)
+}));
+
+// The bridge's per-domain "messages" gate reads getDomainAutonomyMode from
+// cosState. Mock it with a mutable mode so we can exercise off/dry-run without
+// a real state.json. Default 'execute' keeps the pre-existing forwarding tests
+// behaving as before.
+let mockMessagesMode = 'execute';
+vi.mock('./cosState.js', () => ({
+  getDomainAutonomyMode: vi.fn(async () => mockMessagesMode)
 }));
 
 // We import the real notifications module so the bridge can subscribe to the
@@ -86,6 +98,7 @@ describe('telegramBridge service', () => {
     // Reset module-level state and unsubscribe from the EventEmitter.
     await cleanup();
     updateCachedForwardTypes(null);
+    mockMessagesMode = 'execute';
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -283,6 +296,30 @@ describe('telegramBridge service', () => {
       });
       await flush();
       expect(fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage'))).toHaveLength(1);
+    });
+
+    it('suppresses forwarding when the messages domain is off or dry-run (#711)', async () => {
+      for (const mode of ['off', 'dry-run']) {
+        mockMessagesMode = mode;
+        seedCredentials();
+        const fetchSpy = mockTelegramFetch();
+        vi.stubGlobal('fetch', fetchSpy);
+        await init();
+        fetchSpy.mockClear();
+
+        notificationEvents.emit('added', {
+          type: NOTIFICATION_TYPES.HEALTH_ISSUE,
+          title: 'Should not send',
+          priority: PRIORITY_LEVELS.HIGH
+        });
+        await flush();
+
+        expect(
+          fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage')),
+          `messages mode "${mode}" must not forward to Telegram`
+        ).toHaveLength(0);
+        await cleanup();
+      }
     });
   });
 });

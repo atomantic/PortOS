@@ -80,10 +80,13 @@ function Safe-Install {
     Invoke-Logged npm install
     if ($LASTEXITCODE -eq 0) { Pop-Location; return }
 
-    Write-SafeHost "⚠️  npm install failed for $Label — cleaning node_modules and retrying..." -ForegroundColor Yellow
+    Write-SafeHost "⚠️  npm install failed for $Label — cleaning node_modules + package-lock.json and retrying..." -ForegroundColor Yellow
     Pop-Location
     if (Test-Path "$Dir/node_modules") {
         Remove-Item -Recurse -Force "$Dir/node_modules" -ErrorAction SilentlyContinue
+    }
+    if (Test-Path "$Dir/package-lock.json") {
+        Remove-Item -Force "$Dir/package-lock.json" -ErrorAction SilentlyContinue
     }
     Push-Location $Dir
     Invoke-Logged npm install

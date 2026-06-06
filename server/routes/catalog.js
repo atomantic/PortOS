@@ -487,7 +487,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
     const mergedTags = Array.from(new Set([...(entry.tags || []), ...defaultTags]));
     const result = catalogIngredientCreateSchema.safeParse({ ...entry, tags: mergedTags });
     if (!result.success) {
-      const msg = result.error.errors?.[0]?.message || result.error.message;
+      const msg = result.error.issues?.[0]?.message || result.error.message;
       throw new ServerError(`Bulk import entry ${i} invalid: ${msg}`, { status: 400 });
     }
     entries.push(result.data);

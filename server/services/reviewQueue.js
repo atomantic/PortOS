@@ -270,19 +270,23 @@ const PRODUCERS = [
     label: 'Failed backups',
     drillTo: '/settings/backup',
     async gather() {
-      // A backup that errored on its last run needs acknowledgement. The
-      // backup service records failure as status 'error' with an `error` field.
+      // A backup needing acknowledgement is either a full failure (status
+      // 'error') or a degraded run (status 'degraded' — file rsync succeeded but
+      // the DB dump failed; it also carries an `error` string). Both warrant a
+      // queue item, but they map to different severities below.
       const state = await backup.getState();
-      const failed = state && (state.status === 'error' || state.error);
-      return failed ? [state] : [];
+      const needsAttention = state && (state.status === 'error' || state.status === 'degraded' || state.error);
+      return needsAttention ? [state] : [];
     },
     map(state) {
+      // Degraded = files saved, DB dump failed → a warning, not a full failure.
+      const degraded = state.status === 'degraded';
       return {
         id: 'backup:last-run',
-        title: 'Backup failed',
+        title: degraded ? 'Backup degraded (DB dump failed)' : 'Backup failed',
         summary: (state.error || 'The most recent backup did not complete.').slice(0, 200),
         timestamp: state.lastRun || null,
-        severity: 'high',
+        severity: degraded ? 'normal' : 'high',
         drillTo: '/settings/backup'
       };
     }

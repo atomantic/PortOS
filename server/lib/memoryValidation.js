@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { partialWithoutDefaults } from './zodCompat.js';
 
 // Memory types enum
 export const memoryTypeEnum = z.enum([
@@ -36,7 +37,7 @@ export const memoryCreateSchema = z.object({
   tags: z.array(z.string().max(50)).max(20).optional().default([]),
   confidence: z.number().min(0).max(1).optional().default(0.8),
   importance: z.number().min(0).max(1).optional().default(0.5),
-  relatedMemories: z.array(z.string().uuid()).optional().default([]),
+  relatedMemories: z.array(z.string().guid()).optional().default([]),
   sourceTaskId: z.string().optional(),
   sourceAgentId: z.string().optional(),
   sourceAppId: z.string().nullable().optional()
@@ -44,7 +45,7 @@ export const memoryCreateSchema = z.object({
 
 // Full memory schema (includes system-generated fields)
 export const memorySchema = memoryCreateSchema.extend({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   embedding: z.array(z.number()).optional(),
   embeddingModel: z.string().optional(),
   accessCount: z.number().int().min(0).default(0),
@@ -56,7 +57,7 @@ export const memorySchema = memoryCreateSchema.extend({
 });
 
 // Partial schema for updates
-export const memoryUpdateSchema = memoryCreateSchema.partial().extend({
+export const memoryUpdateSchema = partialWithoutDefaults(memoryCreateSchema).extend({
   status: memoryStatusEnum.optional()
 });
 
@@ -109,13 +110,13 @@ export const memoryConsolidateSchema = z.object({
 
 // Link memories request schema
 export const memoryLinkSchema = z.object({
-  sourceId: z.string().uuid(),
-  targetId: z.string().uuid()
+  sourceId: z.string().guid(),
+  targetId: z.string().guid()
 });
 
 // Single sync memory item schema (incoming from remote peer)
 const syncMemoryItemSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   type: memoryTypeEnum,
   content: z.string().min(1).max(10240),
   summary: z.string().max(500).nullable().optional(),

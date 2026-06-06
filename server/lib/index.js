@@ -93,6 +93,7 @@ export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';
 export * from './imageClean.js';
 export * from './multipart.js';
+export * from './safetensors.js';
 export * from './assetHash.js';
 export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
@@ -163,12 +164,15 @@ export * from './timezone.js';
 // === General utilities ===
 export * from './asyncMutex.js';
 export * from './authGate.js';
+export * from './domainAutonomy.js';
 export * from './errorHandler.js';
 export * from './mapWithConcurrency.js';
 export * from './objects.js';
 export * from './singleFlight.js';
+export * from './streamBackpressure.js';
 export * from './sseUtils.js';
 export * from './uuid.js';
+export * from './zodCompat.js';
 
 // === Test support (consumed by *.test.js files) ===
 export * from './mockPathsDataRoot.js';

@@ -25,6 +25,7 @@ export default function ImageGenSettingsForm({
   showLoras = false,
   availableLoras = [],
   currentRunnerFamily = null,
+  currentCompatKey = null,
   onAppendTrigger = null,
   // Style preset picker — sits above the extra-style textarea. `cfg.stylePreset`
   // holds the full preset object (not just the id) so consumers can compose
@@ -95,6 +96,7 @@ export default function ImageGenSettingsForm({
           selected={Array.isArray(cfg.loras) ? cfg.loras : []}
           onChange={(loras) => merge({ loras })}
           currentRunnerFamily={currentRunnerFamily}
+          currentCompatKey={currentCompatKey}
           onAppendTrigger={onAppendTrigger}
           disabled={disabled}
         />

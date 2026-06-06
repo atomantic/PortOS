@@ -16,6 +16,7 @@ import { brainEvents } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
+import { sanitizePeerForClient } from './instances.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
@@ -62,6 +63,15 @@ const instanceSubscribers = new Set();
 const loopSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
+
+/**
+ * Return the module-level Socket.IO instance (null before initSocket runs).
+ * Lets services emit to clients from unattended paths (cron handlers) that
+ * don't receive an `io` argument.
+ */
+export function getIo() {
+  return ioInstance;
+}
 
 const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers];
 
@@ -835,7 +845,13 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
-  instanceEvents.on('peers:updated', (data) => broadcastToInstances('instances:peers:updated', data));
+  // Redact each peer's stored proxy password before it reaches the browser
+  // (keep username + hasPassword) — same secret-stripping the GET /instances
+  // route applies. `data` is the full peers array.
+  instanceEvents.on('peers:updated', (data) => {
+    const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
+    broadcastToInstances('instances:peers:updated', sanitized);
+  });
 }
 
 // Set up peer agent event forwarding (remote agent streaming)

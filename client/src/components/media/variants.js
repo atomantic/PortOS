@@ -46,6 +46,13 @@ export function computeImageVariantGroup(item, items) {
   const group = [];
   if (original) group.push({ label: 'Original', item: original });
   for (const c of cleaned) {
+    // SynthID-defeat regens (issue #912) reuse `cleanedFrom` for grouping but
+    // are a different operation than the lossless/denoise clean — label them
+    // distinctly so the toggle reads "Regenerated" instead of "Cleaned".
+    if (c.regenerated) {
+      group.push({ label: 'Regenerated', item: c });
+      continue;
+    }
     const levelTag = c.cleanLevel ? ` (${c.cleanLevel})` : '';
     group.push({ label: `Cleaned${levelTag}`, item: c });
   }

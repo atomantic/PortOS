@@ -48,7 +48,7 @@ router.put('/method', asyncHandler(async (req, res) => {
     throw new ServerError('Validation failed', {
       status: 400,
       code: 'VALIDATION_ERROR',
-      context: { details: result.error.errors }
+      context: { details: result.error.issues }
     });
   }
 
@@ -103,7 +103,7 @@ router.put('/config', asyncHandler(async (req, res) => {
     throw new ServerError('Validation failed', {
       status: 400,
       code: 'VALIDATION_ERROR',
-      context: { details: result.error.errors }
+      context: { details: result.error.issues }
     });
   }
 
@@ -173,7 +173,7 @@ router.post('/test', asyncHandler(async (req, res) => {
     throw new ServerError('Validation failed', {
       status: 400,
       code: 'VALIDATION_ERROR',
-      context: { details: result.error.errors }
+      context: { details: result.error.issues }
     });
   }
 

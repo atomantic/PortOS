@@ -24,7 +24,7 @@ import {
 const router = Router();
 
 const clipSchema = z.object({
-  clipId: z.string().uuid(),
+  clipId: z.string().guid(),
   inSec: z.number().min(0),
   outSec: z.number().min(0),
 }).refine((c) => c.outSec > c.inSec, { message: 'outSec must be > inSec', path: ['outSec'] });

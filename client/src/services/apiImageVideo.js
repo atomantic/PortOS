@@ -26,6 +26,26 @@ export const cleanGalleryImage = (filename) => request(`/image-gen/${encodeURICo
   method: 'POST',
   body: JSON.stringify({}),
 });
+// SynthID-defeat regen (issue #912). Enqueues a local-FLUX img2img round-trip
+// of a gallery image; returns the queue ack ({ jobId, position, ... }) — the
+// finished render lands in the gallery via the normal queue-completion refresh.
+// `silent` so the lightbox owns its own error toast (single-layer rule).
+// `method: 'light'` runs the CPU-only spatial pass (synchronous — returns the
+// new variant directly, not a queue ack), for installs without a FLUX runner.
+export const regenerateGalleryImage = (filename, { strength, steps, prompt, method } = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/regenerate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(strength != null ? { strength } : {}),
+      ...(steps != null ? { steps } : {}),
+      ...(prompt != null ? { prompt } : {}),
+      ...(method != null ? { method } : {}),
+    }),
+    silent: true,
+  });
+// Whether the local FLUX regen backend is installed (hardware gate). Also carries
+// the strength slider bounds: `{ available, modelId, reason, strengthMin, strengthMax, strengthDefault }`.
+export const getRegenAvailability = () => request('/image-gen/regen/availability', { silent: true });
 
 // HuggingFace token (gated local Flux models). Stored in settings.imageGen.hfToken;
 // reads fall back to HF_TOKEN env var and then ~/.cache/huggingface/token.
@@ -172,6 +192,21 @@ export const installLoraFromCivitai = ({ url, silent = false } = {}) => request(
 // Pass `force: true` to bust the cache and re-fetch from Civitai.
 export const getCivitaiSuggestions = ({ force = false } = {}) =>
   request(`/loras/suggestions${force ? '?force=1' : ''}`);
+
+// Live keyword search + cursor pagination within one runner family. Backs the
+// per-category search box and "Load more" button on /media/loras. `query`
+// blank pages the plain top-ranking; pass the previous response's `nextCursor`
+// to load the next page. Returns `{ runnerFamily, query, items, nextCursor }`.
+// `silent` defaults true because the caller (SuggestionsSection.fetchPage) owns
+// its own error toast — leaving it false would double-toast on a failed search.
+export const searchCivitaiLoras = ({ runner, query = '', cursor = null, limit, silent = true } = {}) => {
+  const params = new URLSearchParams();
+  params.set('runner', runner);
+  if (query) params.set('query', query);
+  if (cursor) params.set('cursor', cursor);
+  if (limit) params.set('limit', String(limit));
+  return request(`/loras/search?${params.toString()}`, { silent });
+};
 
 // Civitai auth — read/save/clear the API key. The key never round-trips back
 // to the client; the GET only returns `{ hasKey, source }`.

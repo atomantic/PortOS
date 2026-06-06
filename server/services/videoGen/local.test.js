@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
 
 // ─── dep mocks (must be declared before the module import) ───────────────────
@@ -435,13 +435,17 @@ describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
 });
 
 describe('FFLF/ltx2 pixel-budget helpers', () => {
-  const DEFAULT_BUDGET = 704 * 448 * 25; // ≈7.9M pixel-frames
+  const DEFAULT_BUDGET = 704 * 448 * 25; //  7,884,800 — 48 GB floor
+  const BUDGET_128GB = 768 * 512 * 97; // 38,141,952 — 128 GB anchor
+  const GB = 1024 ** 3;
 
   let resolveFflfLtx2PixelBudget;
+  let computeFflfLtx2PixelBudget;
   let computeFflfSafeFrames;
 
   beforeEach(async () => {
-    ({ resolveFflfLtx2PixelBudget, computeFflfSafeFrames } = await import('./local.js'));
+    ({ resolveFflfLtx2PixelBudget, computeFflfLtx2PixelBudget, computeFflfSafeFrames } =
+      await import('./local.js'));
     delete process.env.FFLF_LTX2_PIXEL_BUDGET;
   });
 
@@ -449,9 +453,52 @@ describe('FFLF/ltx2 pixel-budget helpers', () => {
     delete process.env.FFLF_LTX2_PIXEL_BUDGET;
   });
 
+  describe('computeFflfLtx2PixelBudget (RAM-scaled, pure)', () => {
+    it('hits the measured anchors exactly: 128 GB validated, tested-safe value at 48 GB', () => {
+      expect(computeFflfLtx2PixelBudget(48 * GB)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(128 * GB)).toBe(BUDGET_128GB);
+    });
+
+    it('holds the tested-safe floor through 64 GB so no already-running machine gets a larger untested cap', () => {
+      // 64 GB Macs are documented to OOM at full resolution — keep their cap
+      // EXACTLY where it shipped, don't extrapolate them upward.
+      expect(computeFflfLtx2PixelBudget(8 * GB)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(16 * GB)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(32 * GB)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(48 * GB)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(64 * GB)).toBe(DEFAULT_BUDGET);
+      // Just past the ramp start it begins to rise.
+      expect(computeFflfLtx2PixelBudget(65 * GB)).toBeGreaterThan(DEFAULT_BUDGET);
+    });
+
+    it('scales monotonically with RAM above the 64 GB ramp start', () => {
+      const b80 = computeFflfLtx2PixelBudget(80 * GB);
+      const b96 = computeFflfLtx2PixelBudget(96 * GB);
+      const b256 = computeFflfLtx2PixelBudget(256 * GB);
+      expect(b80).toBeGreaterThan(DEFAULT_BUDGET);
+      expect(b96).toBeGreaterThan(b80);
+      expect(BUDGET_128GB).toBeGreaterThan(b96);
+      expect(b256).toBeGreaterThan(BUDGET_128GB);
+    });
+
+    it('reaches the 97-frame smooth-motion regime at 768×512 by 128 GB', () => {
+      // The whole point of #737: a 128 GB box must be able to render 97 frames
+      // at 768×512 (the validated smooth config) without an env override.
+      expect(computeFflfSafeFrames(768, 512, 97, computeFflfLtx2PixelBudget(128 * GB))).toBe(97);
+    });
+
+    it('falls to the floor on invalid memory inputs', () => {
+      expect(computeFflfLtx2PixelBudget(0)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(NaN)).toBe(DEFAULT_BUDGET);
+      expect(computeFflfLtx2PixelBudget(-1)).toBe(DEFAULT_BUDGET);
+    });
+  });
+
   describe('resolveFflfLtx2PixelBudget', () => {
-    it('defaults to the 48 GB-RAM budget when the env var is unset', () => {
-      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+    it('defaults to the RAM-scaled budget for this machine when the env var is unset', () => {
+      expect(resolveFflfLtx2PixelBudget()).toBe(computeFflfLtx2PixelBudget(totalmem()));
+      // Floor always holds, on any machine the suite runs on.
+      expect(resolveFflfLtx2PixelBudget()).toBeGreaterThanOrEqual(DEFAULT_BUDGET);
     });
 
     it('honors a positive numeric FFLF_LTX2_PIXEL_BUDGET override', () => {
@@ -459,13 +506,14 @@ describe('FFLF/ltx2 pixel-budget helpers', () => {
       expect(resolveFflfLtx2PixelBudget()).toBe(12_000_000);
     });
 
-    it('ignores a non-positive or non-numeric override and falls back to the default', () => {
+    it('ignores a non-positive or non-numeric override and falls back to the RAM-scaled budget', () => {
+      const scaled = computeFflfLtx2PixelBudget(totalmem());
       process.env.FFLF_LTX2_PIXEL_BUDGET = '0';
-      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+      expect(resolveFflfLtx2PixelBudget()).toBe(scaled);
       process.env.FFLF_LTX2_PIXEL_BUDGET = '-5';
-      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+      expect(resolveFflfLtx2PixelBudget()).toBe(scaled);
       process.env.FFLF_LTX2_PIXEL_BUDGET = 'lots';
-      expect(resolveFflfLtx2PixelBudget()).toBe(DEFAULT_BUDGET);
+      expect(resolveFflfLtx2PixelBudget()).toBe(scaled);
     });
   });
 

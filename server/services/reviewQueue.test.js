@@ -120,6 +120,16 @@ describe('reviewQueue.buildQueue', () => {
     expect(queue.items.find(i => i.source === 'backup')).toMatchObject({ title: 'Backup failed', summary: 'disk full' });
   });
 
+  it('surfaces a degraded backup as a normal-severity warning, not a high-severity failure', async () => {
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+    // Degraded shape: files saved (status 'degraded') but the DB dump failed,
+    // so an `error` string is also present. Must NOT read as a full failure.
+    backup.getState.mockResolvedValue({ status: 'degraded', error: 'DB dump dump_error', lastRun: '2026-06-03T07:00:00.000Z' });
+    const queue = await buildQueue();
+    const row = queue.items.find(i => i.source === 'backup');
+    expect(row).toMatchObject({ title: 'Backup degraded (DB dump failed)', severity: 'normal' });
+  });
+
   it('gives same-type health alerts unique ids', async () => {
     proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
       { type: 'system_resource', severity: 'high', title: 'High memory', detail: 'mem', link: '/apps' },

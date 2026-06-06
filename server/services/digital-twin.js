@@ -111,6 +111,17 @@ export {
 } from './digital-twin-analysis.js';
 
 export {
+  compareSpokenWrittenStyle,
+  parseStyleComparison
+} from './digital-twin-style-comparison.js';
+
+export {
+  analyzeIdentityImage,
+  saveIdentityImageDocument,
+  parseIdentityImage
+} from './digital-twin-image-identity.js';
+
+export {
   analyzeImportedData,
   saveImportAsDocument,
   getImportSources,

@@ -45,7 +45,7 @@ grep -i "what you want to do" client/src/lib/README.md
 |---|---|
 | `pipelineImageDefaults.js` | Pipeline comic-page image-gen defaults + settings reader. |
 | `wrImageDefaults.js` | Writers Room per-scene image-gen defaults + style discriminators. |
-| `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata. |
+| `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata; `deriveAvailableBackends`; `I2I_CAPABLE_MODES` / `isI2iCapableMode(mode)` / `pickI2iMode(backends)` — image-to-image capability gating + best-backend selection. |
 | `imageGenDefaults.js` | Shared `DEFAULT_NEGATIVE_PROMPT` used by the Image Gen form and quick-submit entry points. Mirrors server-side default. |
 | `imageGenResolutions.js` | Shared resolution presets for image generation. |
 | `videoGenResolutions.js` | Shared resolution presets for video generation (companion to image side; LTX-2 latent-friendly sizes). |
@@ -66,12 +66,14 @@ grep -i "what you want to do" client/src/lib/README.md
 | `clinicianReport.js` | Pure builders for the MeatSpace clinician-export view (`/meatspace/export`). `buildClinicianReport({ tests, config })` → structured report model (blood panels grouped by category with reference ranges + out-of-range flags, plus a lifestyle summary); `reportToMarkdown(report)` → copy-paste markdown. Reuses the Blood tab's `REFERENCE_RANGES` / `getBloodValueStatus` so printed flags match the UI. Also exports `buildBloodTestModel`, `buildLifestyleModel`, `getCategoryForKey`, `formatRange`. |
 | `clipboard.js` | `copyToClipboard`, `writeClipboardSilently`, `readClipboard` — safe across insecure-origin contexts. Use these instead of `navigator.clipboard.writeText` inline. |
 | `compareHelpers.js` | `equalByKeys(a, b, keys)` / `equalListByKeys(a, b, keys)` — typed key-based equality for `useAutoRefetch`'s `compare`. Keys are property names, dotted paths (`'context.running'`), or `(item) => value` accessors. The typed alternative to `sameJsonShape` when a monotonic timestamp or unrendered field would break stringify-equality dedup. |
+| `consoleFilters.js` | `installConsoleFilters()` — drops a small allow-list of known-noise console strings (THREE.js `Clock` deprecation, expected WebGL `Context Lost.`) from `console.{warn,log,debug}`. Idempotent; auto-installed on import. Imported for its side effect from `main.jsx`. |
 | `genUtils.js` | Shared bits between Image Gen and Video Gen pages. |
 | `healthProvenance.js` | `PROVENANCE_LEVELS` / `getProvenanceLevel(level)` — the `data-backed`/`inferred`/`experimental`/`speculative` trust taxonomy (label, tone, description, "what would change this?" copy) behind the `ProvenanceChip` source-style chips on MeatSpace / genome / death-clock / longevity views. Pure data; the chip component maps tone→color and id→icon. |
 | `joinInfluenceList.js` | Mirror of `joinInfluenceList` in server universe builder. |
 | `localLlmTargetKey.js` | `localLlmTargetKey({ backend, modelId })` — stable string key for a local-LLM compare target. Shared by the LocalLlmTab checkbox grid and the LocalLlmPlayground compare URL so a delimiter change can't desync the round-trip. |
 | `loopbackHost.js` | `isLoopbackHost(host)` / `isLoopbackOrigin()` / `describeMicAvailability()` — Secure Context / loopback-origin heuristics. Use these in any new mic, clipboard, or `getUserMedia`-gated surface; matches the full `127.0.0.0/8` range, IPv6 `::1`, and the browser-bracketed `[::1]` form. |
 | `mediaNavigation.js` | `getAdjacentMedia(items, item)` — prev/next computation for lightboxes. |
+| `mediaSearch.js` | `buildMediaHaystack`, `tokenizeQuery`, `matchHaystack`, `filterByQuery` — client-side AND-token search over normalized media items (prompt/model/seed/LoRA/universe tags). Shared by MediaHistory + the Image Gen gallery picker. |
 | `sameJsonShape.js` | `sameJsonShape(prev, next)` — JSON.stringify-based equality for `useAutoRefetch`'s `compare` option on small, deterministically-shaped poll payloads. |
 | `unsorted.js` | Synthetic "Unsorted" collection from media not filed in any real collection. |
 | `upsertByIdPrepend.js` | Newest-first upsert into an id-keyed list. |
@@ -81,6 +83,7 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | Module | Purpose |
 |---|---|
+| `cityPlaybackFrame.js` | Map a recorded CyberCity snapshot frame onto the prop shape CityScene/CityHud consume for the timeline scrubber (`mergeFrameIntoCityProps`, `buildPlaybackApps`, `buildPlaybackAgentMap`, `isPlayableFrame`). Honors `schemaVersion` and the capture-side null sentinels; returns only snapshot-backed props so unfed landmarks stay live. |
 | `universeBuilderExpand.js` | `mergeExpandIntoDraft(draft, result)` — pure merge of a Universe Builder draft with the LLM expand-API response (lock honoring, category/sheet merge with `kind` precedence, canon dedupe by name/slugline/alias). Also exports `mergeVariations`, `mergeCanonByName`, and `extractPreservedFromDraft` for callers that need the building blocks (per-category Generate, save-time refetch+merge). |
 | `wrSceneCursor.js` | Resolve which script scene the editor caret sits in (`sceneAtCursor`, `sceneAnchorIndex`) — inverse of WorkEditor's jump-to-scene text search; drives the live render preview's "scene at cursor" target. |
 | `writingGuide.js` | Canonical Writers Room reference data + craft principles rendered by the Guide page (`/writers-room/guide`): `WRITING_LENGTH_TARGETS` (microfiction→novel word/char bands), `BOOK_LENGTH_ESTIMATES` (page-based), `WRITING_PRINCIPLES`, `PLANNED_ANALYSES` (e.g. the emotional-roadmap evaluator), and `classifyByWordCount(n)` for labelling a draft's length. Future word-count gauges / length checks read from here so targets don't drift from the docs. |

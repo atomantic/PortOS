@@ -100,8 +100,9 @@ const videoModelMemoryGb = (model) => {
 // Mirror of server computeFflfSafeFrames (server/services/videoGen/local.js):
 // the largest numFrames that fits the FFLF/ltx2 stage-2 pixel-frame budget at
 // this resolution, rounded down to the LTX 8k+1 latent boundary. The budget
-// itself comes from /status (`fflfLtx2PixelBudget`, honors the env override) so
-// only this back-solve arithmetic is duplicated — not the constant. Lets the
+// itself comes from /status (`fflfLtx2PixelBudget`, which scales with the box's
+// unified memory and honors the env override) so only this back-solve arithmetic
+// is duplicated — not the constant. Lets the
 // multi-keyframe picker reject out-of-budget indices before submit instead of
 // letting the worker 400 mid-render. Returns numFrames when it already fits or
 // the budget is unknown (fail-open — the server still enforces the real cap).

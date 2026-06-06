@@ -269,7 +269,7 @@ export default function MediaCollectionDetail() {
   // the cleaned image to THIS collection + seed imagesByName so hydrate()
   // renders it immediately, no refresh round-trip) is wired through
   // `onCleanComplete`.
-  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
+  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
     onCleanComplete: async (cleaned) => {
       // The server's clean route auto-files the cleaned filename into every
       // collection that contained the source — including this one — so this
@@ -514,6 +514,7 @@ export default function MediaCollectionDetail() {
                   onPreview={selectMode ? undefined : setPreview}
                   onClick={selectMode ? () => toggleSelect(key) : undefined}
                   onRemix={!selectMode && item.kind === 'image' ? handleRemix : undefined}
+                  onSendToImage={!selectMode && item.kind === 'image' ? handleSendToImage : undefined}
                   onSendToVideo={!selectMode && item.kind === 'image' ? handleSendToVideo : undefined}
                   onContinue={!selectMode && item.kind === 'video' ? handleContinue : undefined}
                   onDelete={!selectMode ? handleDelete : undefined}
@@ -554,6 +555,7 @@ export default function MediaCollectionDetail() {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onRemix={handleRemix}
+        onSendToImage={handleSendToImage}
         onSendToVideo={handleSendToVideo}
         onContinue={(i) => handleContinue(i.raw || i)}
         onClean={(i) => handleClean(i?.raw || i)}

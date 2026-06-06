@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeArtifacts, ARTIFACTS } from '../../utils/cityArtifacts';
 
 // CyberCity's earned artifacts (roadmap 3.5): a "Hall of Achievements" cluster of trophies
@@ -10,7 +10,7 @@ import { computeArtifacts, ARTIFACTS } from '../../utils/cityArtifacts';
 // — visually distinct from the goal monuments' tower/scaffold so milestones don't read as
 // goals. The emblems shimmer in unison via a single per-frame ref mutation, gated on the
 // quality dial. Mirrors CityGoalMonuments / CityProductivityDistrict.
-function Artifact({ artifact }) {
+function Artifact({ artifact, dayMix = 0 }) {
   const { color, intensity, label, position } = artifact;
   const { pedestalWidth: pw, pedestalHeight: ph, emblemSize } = ARTIFACTS;
   const emblemY = ph + emblemSize * 0.6;
@@ -20,7 +20,7 @@ function Artifact({ artifact }) {
       {/* Pedestal base */}
       <mesh position={[0, ph / 2, 0]}>
         <cylinderGeometry args={[pw * 0.6, pw * 0.7, ph, 6]} />
-        <meshStandardMaterial color="#0a0e16" emissive={color} emissiveIntensity={0.12} metalness={0.7} roughness={0.4} />
+        <meshStandardMaterial color={tintStructure('#0a0e16')} emissive={color} emissiveIntensity={0.12} metalness={0.7} roughness={0.4} />
       </mesh>
 
       {/* Glowing faceted emblem — the artifact itself */}
@@ -33,9 +33,9 @@ function Artifact({ artifact }) {
       <pointLight position={[0, emblemY, 0]} color={color} intensity={intensity * 1.5} distance={10} />
 
       {/* Label below the pedestal */}
-      <Text position={[0, ph + emblemSize * 1.7, 0]} fontSize={0.5} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={6}>
+      <CityLabel position={[0, ph + emblemSize * 1.7, 0]} fontSize={0.5} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={6}>
         {label}
-      </Text>
+      </CityLabel>
     </group>
   );
 }
@@ -53,6 +53,7 @@ export default function CityArtifacts({ character, goals, productivityData, sett
   // Honor the quality dial: drop the shimmer on the lowest preset, but keep the static glow so
   // earned artifacts stay legible.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   useFrame(({ clock }) => {
     if (!animate || !groupRef.current) return;
@@ -69,17 +70,17 @@ export default function CityArtifacts({ character, goals, productivityData, sett
     <group>
       <group ref={groupRef}>
         {artifacts.map((artifact) => (
-          <Artifact key={artifact.id} artifact={artifact} />
+          <Artifact key={artifact.id} artifact={artifact} dayMix={dayMix} />
         ))}
       </group>
 
       {/* District title behind the cluster */}
-      <Text position={[base[0], 10, base[2] + 4]} fontSize={1.2} color="#f59e0b" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={24}>
+      <CityLabel position={[base[0], 10, base[2] + 4]} fontSize={1.2} color="#f59e0b" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={24}>
         ACHIEVEMENTS
-      </Text>
-      <Text position={[base[0], 9, base[2] + 4]} fontSize={0.7} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={24}>
+      </CityLabel>
+      <CityLabel position={[base[0], 9, base[2] + 4]} fontSize={0.7} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={24}>
         {`${total} EARNED`}
-      </Text>
+      </CityLabel>
     </group>
   );
 }

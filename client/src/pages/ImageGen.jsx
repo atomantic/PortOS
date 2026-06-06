@@ -18,11 +18,12 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
-import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
+import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import HfTokenBanner from '../components/imageGen/HfTokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import InitImagePicker from '../components/imageGen/InitImagePicker';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import ReferenceImagePicker from '../components/imageGen/ReferenceImagePicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
@@ -35,7 +36,8 @@ import {
   AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import { deriveAvailableBackends, IMAGE_GEN_MODE, isI2iCapableMode, pickI2iMode } from '../lib/imageGenBackends';
+import { clampImageDimensions } from '../lib/imageGenResolutions';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
@@ -46,7 +48,7 @@ import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
   getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
-  buildFormData, listMediaJobs,
+  buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability,
 } from '../services/api';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
@@ -54,6 +56,12 @@ import {
 // blob-URL revoke pairs with the slot the user cleared.
 const REFERENCE_SLOT_COUNT = 4;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
+
+// Revoke an object URL only when it's a blob: URL we created — gallery `/data/...`
+// previews must never be revoked.
+const revokeIfBlob = (url) => {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+};
 
 // Append LoRA trigger words to a prompt comma-separated, skipping any
 // already present. Compares against comma-separated prompt segments rather
@@ -132,6 +140,9 @@ export default function ImageGen() {
   const selectedModeRef = useRef(null);
   selectedModeRef.current = selectedMode;
   const [availableBackends, setAvailableBackends] = useState([]);
+  // Set when we arrive with an i2i init image but no i2i-capable backend has
+  // loaded yet — a deferred effect flips to one once backends resolve.
+  const wantI2iModeRef = useRef(false);
 
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE_PROMPT);
@@ -151,6 +162,10 @@ export default function ImageGen() {
   // the whole object so previewUrl can never out-live its file/name.
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const [initImageStrength, setInitImageStrength] = useState(0.4);
+  // Visual gallery picker target: null (closed), { kind: 'init' }, or
+  // { kind: 'reference', slot: i }. The search/browse alternative to the plain
+  // file inputs in InitImagePicker / ReferenceImagePicker.
+  const [galleryPicker, setGalleryPicker] = useState(null);
   // Form posts populated slots as `referenceImage1` … `referenceImage4`
   // multipart fields with a parallel `referenceStrengths` array.
   const [referenceImages, setReferenceImages] = useState(() => Array.from({ length: REFERENCE_SLOT_COUNT }, () => ({ ...EMPTY_REF_SLOT })));
@@ -208,6 +223,9 @@ export default function ImageGen() {
   const isLocalMode = effectiveMode === IMAGE_GEN_MODE.LOCAL;
   const isCodexMode = effectiveMode === IMAGE_GEN_MODE.CODEX;
   const isAsyncMode = isLocalMode || isCodexMode;
+  // Whether the active backend supports image-to-image (init image). Distinct
+  // concept from isAsyncMode (queued vs sync) even though they coincide today.
+  const i2iCapable = isI2iCapableMode(effectiveMode);
   // Prefer the socket-driven hook (carries currentImage for both modes since
   // local mflux now writes stepwise frames). Fall back to the local SSE's
   // simpler progress shape if the hook hasn't received its first event yet.
@@ -245,9 +263,24 @@ export default function ImageGen() {
   }, []);
   useMediaCompletionRefresh({ onImageCompleted: refreshGallery });
 
+  // SynthID-defeat regen (issue #912) is hardware-gated on a local FLUX
+  // runner — only surface the lightbox action when the backend is installed.
+  // Re-checked on mount AND when the Settings drawer closes (via
+  // reloadBackends) so installing the FLUX venv mid-session reveals the action
+  // without a hard reload, matching how the other backend gates refresh.
+  // Full availability payload ({ available, strengthMin/Max/Default, … }) so the
+  // lightbox slider reads its bounds from the server.
+  const [regenInfo, setRegenInfo] = useState(null);
+  const regenAvailable = !!regenInfo?.available;
+  const refreshRegenAvailability = useCallback(() => {
+    getRegenAvailability().then((r) => setRegenInfo(r || null)).catch(() => {});
+  }, []);
+  useEffect(() => { refreshRegenAvailability(); }, [refreshRegenAvailability]);
+
   // Re-runnable so the Settings drawer can trigger a refresh on close
   // without forcing a full page reload.
   const reloadBackends = useCallback(() => {
+    refreshRegenAvailability();
     return getSettings().then((s) => {
       const backends = deriveAvailableBackends(s);
       // Per-mode saved defaults via the shared helper (mirrored from
@@ -278,12 +311,15 @@ export default function ImageGen() {
       setCleanC2PA(c2[next] === true);
       setDenoise(dn[next] === true);
     }).catch(() => {});
-  }, []);
+  }, [refreshRegenAvailability]);
 
-  // Re-seed the cleaner checkboxes when the user manually picks a different
-  // backend chip — without this, switching external→local would leave the
-  // external values in the form.
-  const handleSelectMode = useCallback((next) => {
+  // Switch the active backend AND re-seed the cleaner checkboxes from the
+  // target backend's saved defaults — without the reseed, switching
+  // external→local would leave the external cleaner values in the form. Shared
+  // by the manual chip, the deferred i2i nudge, and ensureI2iCapableMode so an
+  // auto-switch queues with the right per-backend defaults too (not just the
+  // chip path).
+  const switchMode = useCallback((next) => {
     setSelectedMode(next);
     setCleanC2PA(savedCleanC2PAByMode[next] === true);
     setDenoise(savedDenoiseByMode[next] === true);
@@ -342,15 +378,19 @@ export default function ImageGen() {
     refreshStatus(effectiveMode);
   }, [effectiveMode, refreshStatus]);
 
-  // ?initImageFile=foo.png pre-fills from a gallery basename — supports a
-  // future "Send to Image (i2i)" gallery action.
+  // Deferred i2i mode nudge: once backends resolve, flip to an i2i-capable
+  // backend so the URL-supplied init image actually takes effect (the picker +
+  // generate payload are local/codex only). Give up quietly if neither exists.
   useEffect(() => {
-    const fromUrl = searchParams.get('initImageFile');
-    if (fromUrl && initImage.source == null) {
-      setInitImage({ source: 'gallery', file: null, name: fromUrl, previewUrl: `/data/images/${fromUrl}` });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+    if (!wantI2iModeRef.current) return;
+    if (i2iCapable) { wantI2iModeRef.current = false; return; }
+    if (!availableBackends.length) return; // wait for load
+    const mode = pickI2iMode(availableBackends);
+    // Only clear the pending flag once we actually switch — if no i2i backend
+    // exists at first load, leave it set so a later install (Settings drawer
+    // close → reloadBackends) still flips us over.
+    if (mode) { switchMode(mode); wantI2iModeRef.current = false; }
+  }, [availableBackends, i2iCapable, switchMode]);
 
   // ?lora=<filename> preselects a LoRA when the user clicks "Test" on the
   // /media/loras manager page. Defers until availableLoras has loaded so the
@@ -376,13 +416,16 @@ export default function ImageGen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, availableLoras]);
 
-  // Remix payload from Media History (?prompt=…&modelId=…&seed=…). Populate
-  // form state once on mount, then strip the params so a hot-reload or back-
-  // nav doesn't re-clobber edits the user has made since.
+  // Inbound params from Media History / Send-to-i2i (?prompt=…&modelId=…&seed=…
+  // and/or ?initImageFile=…). Populate form state once on mount, then strip ALL
+  // consumed params in a SINGLE setSearchParams so a hot-reload/back-nav doesn't
+  // re-clobber later edits — and so the init-image strip and the remix-keys strip
+  // can't race as two competing updates (which left initImageFile in the URL).
   useEffect(() => {
     const remixKeys = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
+    const initFile = searchParams.get('initImageFile');
     const present = remixKeys.filter((k) => searchParams.get(k) != null);
-    if (present.length === 0) return;
+    if (!initFile && present.length === 0) return;
     const get = (k) => searchParams.get(k);
     if (get('prompt')) setPrompt(get('prompt'));
     if (get('negativePrompt')) setNegativePrompt(get('negativePrompt'));
@@ -393,9 +436,16 @@ export default function ImageGen() {
     if (get('steps')) setSteps(get('steps'));
     if (get('guidance')) setGuidance(get('guidance'));
     if (get('quantize')) setQuantize(get('quantize'));
+    // Send-to-i2i: queue the gallery source + request an i2i-capable backend
+    // (deferred via the ref since backends may not have loaded on this nav).
+    if (initFile && initImage.source == null) {
+      setInitImage({ source: 'gallery', file: null, name: initFile, previewUrl: `/data/images/${initFile}` });
+      wantI2iModeRef.current = true;
+    }
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
       remixKeys.forEach((k) => n.delete(k));
+      n.delete('initImageFile');
       return n;
     }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -422,16 +472,44 @@ export default function ImageGen() {
     return new File([blob], newName, { type: 'image/png' });
   };
 
+  // Decode an image File to its baked pixel dimensions (post-EXIF-rotation).
+  const readImageDimensions = async (file) => {
+    const bitmap = await window.createImageBitmap(file).catch(() => null);
+    if (!bitmap) return null;
+    const dims = { width: bitmap.width, height: bitmap.height };
+    bitmap.close?.();
+    return dims;
+  };
+
   const handlePickInitImage = async (e) => {
     const raw = e.target.files?.[0];
     if (!raw) return;
     const file = await normalizeImageOrientation(raw);
-    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
+    revokeIfBlob(initImage.previewUrl);
     setInitImage({ source: 'upload', file, name: file.name, previewUrl: URL.createObjectURL(file) });
+    // Default the output resolution to the uploaded image's dimensions, clamped
+    // to the server's edge/pixel caps so a large phone photo doesn't 400 on Generate.
+    const dims = await readImageDimensions(file);
+    const clamped = dims && clampImageDimensions(dims.width, dims.height);
+    if (clamped) { setWidth(clamped.width); setHeight(clamped.height); }
   };
   const handleClearInitImage = () => {
-    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
+    revokeIfBlob(initImage.previewUrl);
     setInitImage({ source: null, file: null, name: null, previewUrl: null });
+  };
+  // Pick an existing gallery image as the i2i source (from GalleryImagePicker).
+  // Bring over the source's prompt + render settings + dimensions (same as
+  // Send-to-i2i), then queue it as the init image. No EXIF normalization needed
+  // — gallery PNGs are already baked correct.
+  const handlePickGalleryInitImage = (item) => {
+    if (!item?.filename) return;
+    if (item.raw) {
+      handleRemix(item.raw, { applyModel: false });
+      // Source-authoritative prompt: clear the form when the source has none.
+      setPrompt(item.raw.prompt || '');
+    }
+    revokeIfBlob(initImage.previewUrl);
+    setInitImage({ source: 'gallery', file: null, name: item.filename, previewUrl: item.previewUrl || `/data/images/${item.filename}` });
   };
 
   const handlePickReferenceImage = async (slotIndex, e) => {
@@ -440,17 +518,15 @@ export default function ImageGen() {
     const file = await normalizeImageOrientation(raw);
     setReferenceImages((prev) => {
       const next = [...prev];
-      const prior = next[slotIndex];
-      if (prior?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(prior.previewUrl);
-      next[slotIndex] = { file, previewUrl: URL.createObjectURL(file), strength: prior?.strength ?? 1.0 };
+      revokeIfBlob(next[slotIndex]?.previewUrl);
+      next[slotIndex] = { file, previewUrl: URL.createObjectURL(file), strength: next[slotIndex]?.strength ?? 1.0 };
       return next;
     });
   };
   const handleClearReferenceImage = (slotIndex) => {
     setReferenceImages((prev) => {
       const next = [...prev];
-      const prior = next[slotIndex];
-      if (prior?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(prior.previewUrl);
+      revokeIfBlob(next[slotIndex]?.previewUrl);
       next[slotIndex] = { ...EMPTY_REF_SLOT };
       return next;
     });
@@ -461,6 +537,37 @@ export default function ImageGen() {
       next[slotIndex] = { ...next[slotIndex], strength };
       return next;
     });
+  };
+
+  // Fetch a gallery image into a File so it can ride the multipart reference
+  // upload path — the server has no gallery-basename field for references (unlike
+  // the init image). Gallery PNGs are already EXIF-correct, so no re-encode.
+  const galleryImageToFile = async (filename) => {
+    const res = await fetch(`/data/images/${encodeURIComponent(filename)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: blob.type || 'image/png' });
+  };
+  const handlePickGalleryReferenceImage = async (slotIndex, item) => {
+    if (!item?.filename) return;
+    const file = await galleryImageToFile(item.filename).catch((err) => {
+      toast.error(`Failed to load reference image: ${err.message}`);
+      return null;
+    });
+    if (!file) return;
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      revokeIfBlob(next[slotIndex]?.previewUrl);
+      next[slotIndex] = { file, previewUrl: item.previewUrl || `/data/images/${item.filename}`, strength: next[slotIndex]?.strength ?? 1.0 };
+      return next;
+    });
+  };
+
+  // Route a gallery pick to whichever picker opened it (init image or a
+  // specific reference slot).
+  const handleGallerySelect = (item) => {
+    if (galleryPicker?.kind === 'reference') handlePickGalleryReferenceImage(galleryPicker.slot, item);
+    else handlePickGalleryInitImage(item);
   };
 
   // Object URL cleanup on unmount — both the single init image and any
@@ -477,10 +584,8 @@ export default function ImageGen() {
   });
   useEffect(() => () => {
     const { init, refs } = previewUrlsRef.current;
-    if (init?.startsWith('blob:')) URL.revokeObjectURL(init);
-    for (const url of refs) {
-      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
-    }
+    revokeIfBlob(init);
+    for (const url of refs) revokeIfBlob(url);
   }, []);
 
   // When the user closes the Settings drawer, settings may have changed
@@ -501,9 +606,17 @@ export default function ImageGen() {
   // submit button + show a hint rather than letting the user hit a failed job.
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
+  // Codex text-to-image (no init image) still needs a prompt — mirror the server
+  // rule (codex.js requires a prompt only when there's no init image) so the user
+  // sees a disabled button + hint instead of a failed job toast. Local runs
+  // unconditionally and external (A1111) accepts an empty prompt, so neither gates.
+  const codexNeedsPrompt = isCodexMode && initImage.source == null && !prompt.trim();
   // mflux is the default runner for entries with no explicit `runner` field.
-  // LoraPicker filters compatible weights itself; we just pass the family.
+  // LoraPicker filters compatible weights itself; we pass the family (for the
+  // "install one matching X" copy) and the fine-grained compat key (which
+  // distinguishes FLUX.2 4B vs 9B so off-size LoRAs are hidden).
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
+  const currentCompatKey = loraCompatKey(currentModel);
 
   const refreshFlux2Status = useCallback((signal) => {
     const qs = modelId ? `?modelId=${encodeURIComponent(modelId)}` : '';
@@ -626,7 +739,8 @@ export default function ImageGen() {
       mode: IMAGE_GEN_MODE.LOCAL,
       cleanC2PA, denoise,
     };
-    const hasInitImage = isLocalMode && initImage.source != null;
+    // i2i works on local (mflux/FLUX) and codex (gpt-image edit) — not external.
+    const hasInitImage = i2iCapable && initImage.source != null;
     // Multi-reference editing is FLUX.2-only; gate the slot read so it can't
     // accidentally fire on mflux or codex, and pack the populated slots so a
     // gap (e.g. slots 1,3 filled, 2 empty) collapses to a packed two-image
@@ -706,7 +820,7 @@ export default function ImageGen() {
   // completed images so the queued ones become visible as they land.
   // Async-mode only; external is synchronous so submitting N would block N×.
   const queueAdditional = async (count = 1) => {
-    if (!prompt.trim() || count < 1) return;
+    if (count < 1) return;
     const submissions = Array.from({ length: count }, () =>
       submitGenerationPayload().then(({ data }) => data).catch((err) => err),
     );
@@ -720,11 +834,11 @@ export default function ImageGen() {
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
-    if (!prompt.trim()) return;
-    // The disabled submit button blocks clicks, but an Enter keypress in a
-    // number input still fires onSubmit — gate here too so an edit-only model
-    // without a source image hits the inline hint, not a server 400 toast.
-    if (editImageMissing) return;
+    // Empty prompt is allowed (e.g. i2i / unconditional generation). The disabled
+    // submit button blocks clicks, but an Enter keypress in a number input still
+    // fires onSubmit — gate here too so an edit-only model without a source image
+    // (or codex text-to-image with no prompt) hits the inline hint, not a 400 toast.
+    if (editImageMissing || codexNeedsPrompt) return;
     const batchN = isAsyncMode ? Math.max(1, batchCount) : 1;
     if (generating) return queueAdditional(batchN);
     setGenerating(true);
@@ -815,6 +929,32 @@ export default function ImageGen() {
     toast.success(`Cleaned → ${cleaned.filename}`);
   };
 
+  // SynthID-defeat regen (issue #912) — unlike clean, this is a queued local
+  // FLUX render: it returns a job ack, and the finished variant lands in the
+  // gallery via the queue-completion refresh (useMediaCompletionRefresh /
+  // pollQueue). Bump pendingQueued so the queue indicator + 4s poll engage.
+  const handleRegenerate = async (img, opts = {}) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    // CPU-only light path is synchronous (like Clean): it returns the new
+    // variant directly, so insert it into the gallery rather than waiting on
+    // the render queue.
+    if (opts.method === 'light') {
+      const variant = await regenerateGalleryImage(img.filename, { method: 'light' }).catch((err) => {
+        toast.error(err.message || 'Failed to run light regen');
+        throw err;
+      });
+      setGallery((g) => [variant, ...g.filter((x) => x.filename !== variant.filename)]);
+      toast.success(`Light regen → ${variant.filename}`);
+      return;
+    }
+    await regenerateGalleryImage(img.filename, { strength: opts.strength, prompt: opts.prompt }).catch((err) => {
+      toast.error(err.message || 'Failed to start regeneration');
+      throw err;
+    });
+    setPendingQueued((n) => n + 1);
+    toast.success('Regenerating — the new image will appear when it finishes');
+  };
+
   const sendToVideo = (img) => {
     if (!img?.filename) return;
     const params = new URLSearchParams({ sourceImageFile: img.filename });
@@ -825,7 +965,12 @@ export default function ImageGen() {
     navigate(`/media/video?${params}`);
   };
 
-  const handleRemix = (img) => {
+  // applyModel=false skips restoring the source's modelId — used by the i2i
+  // paths, which are image-driven: switching to the source's model can flip the
+  // active family (e.g. away from FLUX.2), silently unmounting the reference
+  // picker and dropping staged reference slots. Mirrors the cross-page
+  // handleSendToImage, which drops modelId from the nav params for the same reason.
+  const handleRemix = (img, { applyModel = true } = {}) => {
     // Preset was already folded into the recorded prompt at submit time;
     // clear the picker so the user sees what actually produced the image.
     setStylePreset(null);
@@ -837,7 +982,7 @@ export default function ImageGen() {
     if (img.quantize) setQuantize(String(img.quantize));
     if (img.width) setWidth(img.width);
     if (img.height) setHeight(img.height);
-    if (img.modelId && models.some((m) => m.id === img.modelId)) setModelId(img.modelId);
+    if (applyModel && img.modelId && models.some((m) => m.id === img.modelId)) setModelId(img.modelId);
 
     // Restore LoRAs from the new `loraFilenames` field; fall back to the
     // legacy `loraPaths` (absolute server paths) for older sidecar metadata
@@ -853,6 +998,33 @@ export default function ImageGen() {
       setSelectedLoras(restored);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // The i2i init image only applies on an i2i-capable backend (local or codex).
+  // Switch to one now if installed; otherwise flag the deferred effect to retry
+  // once availableBackends resolves. Called by the in-page send-to-i2i handler;
+  // the cross-page ?initImageFile path instead sets wantI2iModeRef directly and
+  // lets the deferred effect do the switch. No-op when already on local/codex, so
+  // an explicit codex user stays on codex.
+  const ensureI2iCapableMode = useCallback(() => {
+    if (i2iCapable) return;
+    const mode = pickI2iMode(availableBackends);
+    if (mode) switchMode(mode);
+    else wantI2iModeRef.current = true;
+  }, [i2iCapable, availableBackends, switchMode]);
+
+  // Send to image-to-image (in-page): reuse the remix settings AND queue this
+  // image as the i2i source on an i2i-capable backend.
+  const handleSendToImage = (img) => {
+    if (!img?.filename) return;
+    handleRemix(img, { applyModel: false });
+    // i2i is source-authoritative: an empty source prompt must clear the form, not
+    // leave stale text conditioning the render (handleRemix only sets when truthy).
+    setPrompt(img.prompt || '');
+    ensureI2iCapableMode();
+    revokeIfBlob(initImage.previewUrl);
+    setInitImage({ source: 'gallery', file: null, name: img.filename, previewUrl: `/data/images/${img.filename}` });
+    setInitImageStrength(0.4);
   };
 
   const notConnected = status && status.connected === false;
@@ -888,7 +1060,7 @@ export default function ImageGen() {
             <BackendChipStrip
               availableBackends={availableBackends}
               value={effectiveMode}
-              onChange={handleSelectMode}
+              onChange={switchMode}
               disabled={statusLoading}
               loadingId={statusLoading ? effectiveMode : null}
               titlePrefix="Use"
@@ -1007,19 +1179,22 @@ export default function ImageGen() {
               selected={selectedLoras}
               onChange={setSelectedLoras}
               currentRunnerFamily={currentRunnerFamily}
+              currentCompatKey={currentCompatKey}
               onAppendTrigger={(words) => setPrompt((p) => appendTriggerWords(p, words))}
               disabled={statusLoading}
             />
           )}
 
-          {isLocalMode && (
+          {i2iCapable && (
             <InitImagePicker
               initImage={initImage}
               initImageStrength={initImageStrength}
               onStrengthChange={setInitImageStrength}
               onPick={handlePickInitImage}
               onClear={handleClearInitImage}
+              onBrowse={() => setGalleryPicker({ kind: 'init' })}
               editOnly={isEditOnlyModel}
+              backend={effectiveMode}
               disabled={statusLoading}
             />
           )}
@@ -1030,6 +1205,7 @@ export default function ImageGen() {
               onPick={handlePickReferenceImage}
               onClear={handleClearReferenceImage}
               onStrengthChange={handleReferenceStrengthChange}
+              onBrowse={(slot) => setGalleryPicker({ kind: 'reference', slot })}
               disabled={statusLoading}
             />
           )}
@@ -1037,8 +1213,8 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
-              disabled={!prompt.trim() || notConnected || editImageMissing}
-              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : undefined}
+              disabled={notConnected || editImageMissing || codexNeedsPrompt}
+              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : codexNeedsPrompt ? 'Codex text-to-image needs a prompt — add one, or attach a source image to edit' : undefined}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
@@ -1046,6 +1222,9 @@ export default function ImageGen() {
             </button>
             {editImageMissing && (
               <span className="text-xs text-port-warning">Upload a source image to use this edit model</span>
+            )}
+            {codexNeedsPrompt && (
+              <span className="text-xs text-port-warning">Codex needs a prompt, or attach a source image to edit</span>
             )}
             {isAsyncMode && (
               <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
@@ -1235,6 +1414,7 @@ export default function ImageGen() {
                     item={item}
                     onPreview={() => setPreview(item)}
                     onRemix={() => handleRemix(img)}
+                    onSendToImage={() => handleSendToImage(img)}
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
@@ -1267,6 +1447,7 @@ export default function ImageGen() {
                     item={item}
                     onPreview={() => setPreview(item)}
                     onRemix={() => handleRemix(img)}
+                    onSendToImage={() => handleSendToImage(img)}
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
@@ -1286,10 +1467,19 @@ export default function ImageGen() {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onRemix={(item) => item?.raw && handleRemix(item.raw)}
+        onSendToImage={(item) => item?.raw?.filename && handleSendToImage(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
         onClean={(item) => handleClean(item?.raw)}
+        onRegenerate={(item, opts) => handleRegenerate(item?.raw, opts)}
+        regenAvailable={regenAvailable}
+        regenBounds={regenInfo}
       />
 
+      <GalleryImagePicker
+        open={!!galleryPicker}
+        onClose={() => setGalleryPicker(null)}
+        onSelect={handleGallerySelect}
+      />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
         <ImageGenTab />

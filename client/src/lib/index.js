@@ -37,18 +37,21 @@ export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';
+export * from './consoleFilters.js';
 export * from './genUtils.js';
 export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';
 export * from './localLlmTargetKey.js';
 export * from './loopbackHost.js';
 export * from './mediaNavigation.js';
+export * from './mediaSearch.js';
 export * from './sameJsonShape.js';
 export * from './unsorted.js';
 export * from './upsertByIdPrepend.js';
 export * from './voiceLabel.js';
 
 // === Page-scoped pure helpers ===
+export * from './cityPlaybackFrame.js';
 export * from './universeBuilderExpand.js';
 export * from './wrSceneCursor.js';
 export * from './writingGuide.js';

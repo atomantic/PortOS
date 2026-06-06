@@ -150,10 +150,15 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
     echo "❌ INSTALL_LTX2=1 requires git." >&2
     exit 1
   fi
-  # Pinned to a known-good commit (2026-05-05). To upgrade: bump this SHA
-  # and verify with PortOS's video gen smoke tests. Set LTX2_PIN=main to
-  # bypass the pin and track upstream HEAD for development.
-  LTX2_PIN="${LTX2_PIN:-f8f20c83ab7e2e929f3196f07ec5232ad1660bab}"
+  # Pinned to v0.14.8 (2026-05-22). To upgrade: bump this SHA and verify with
+  # PortOS's video gen smoke tests (text/image/fflf/extend/a2v). Set
+  # LTX2_PIN=main to bypass the pin and track upstream HEAD for development.
+  # NOTE: v0.14.x renamed every public pipeline class (TextToVideoPipeline →
+  # TI2VidOneStagePipeline, ExtendPipeline → RetakePipeline, etc.) and switched
+  # the output-rate kwarg from `fps` to `frame_rate`. generate_ltx2.py resolves
+  # pipeline classes and the rate kwarg defensively so it works against this pin
+  # AND older pre-rename pins an install may still have checked out.
+  LTX2_PIN="${LTX2_PIN:-d2ad8e9948157c14a063aca54e510d3d80c2c463}"
   LTX2_DIR="${HOME}/.portos/ltx-2-mlx"
   LTX2_PY="${LTX2_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"

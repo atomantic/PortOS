@@ -15,6 +15,7 @@ import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { getDomainAutonomyMode } from './cosState.js';
 import {
   classifierOutputSchema,
   digestOutputSchema,
@@ -134,28 +135,43 @@ export async function captureThought(text, providerOverride, modelOverride) {
   const provider = providerOverride || meta.defaultProvider;
   const model = modelOverride || meta.defaultModel;
 
-  // Create initial inbox log entry
+  // Per-domain autonomy gate: `off` captures the thought but skips auto-classify
+  // entirely (it lands in the inbox for manual review); `dry-run` classifies and
+  // surfaces the suggestion but doesn't auto-file it.
+  const mode = await getDomainAutonomyMode('brain');
+
+  // Create initial inbox log entry. When auto-classify is off the entry goes
+  // straight to needs_review rather than the transient classifying state — and
+  // carries no `ai` metadata, since no provider/model was ever invoked.
   const inboxEntry = await storage.createInboxLog({
     capturedText: text,
     source: 'brain_ui',
-    ai: {
-      providerId: provider,
-      modelId: model,
-      promptTemplateId: 'brain-classifier'
-    },
-    status: 'classifying'
+    ...(mode === 'off'
+      ? {}
+      : { ai: { providerId: provider, modelId: model, promptTemplateId: 'brain-classifier' } }),
+    status: mode === 'off' ? 'needs_review' : 'classifying'
   });
 
-  console.log(`🧠 Thought captured, classifying in background: ${inboxEntry.id}`);
+  if (mode === 'off') {
+    console.log(`🧠 Thought captured, auto-classify is OFF — left for manual review: ${inboxEntry.id}`);
+    return {
+      inboxLog: inboxEntry,
+      message: 'Thought captured! Auto-classify is off — review it in the inbox.'
+    };
+  }
+
+  console.log(`🧠 Thought captured, classifying in background${mode === 'dry-run' ? ' (dry-run, no auto-file)' : ''}: ${inboxEntry.id}`);
 
   // Run AI classification in background (don't await)
   // Pass resolved provider/model so callAI uses brain's configured provider, not the system active one
-  classifyInBackground(inboxEntry.id, text, meta, provider, model)
+  classifyInBackground(inboxEntry.id, text, meta, provider, model, mode)
     .catch(err => console.error(`❌ Background classification failed for ${inboxEntry.id}: ${err.message}`));
 
   return {
     inboxLog: inboxEntry,
-    message: 'Thought captured! AI is classifying...'
+    message: mode === 'dry-run'
+      ? 'Thought captured! AI is suggesting a classification (dry-run — confirm to file).'
+      : 'Thought captured! AI is classifying...'
   };
 }
 
@@ -163,7 +179,7 @@ export async function captureThought(text, providerOverride, modelOverride) {
  * Background AI classification for a captured thought.
  * Updates the inbox entry and emits a brain:classified event when done.
  */
-async function classifyInBackground(entryId, text, meta, providerOverride, modelOverride) {
+async function classifyInBackground(entryId, text, meta, providerOverride, modelOverride, mode = 'execute') {
   let classification = null;
   let aiError = null;
 
@@ -195,7 +211,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
       if (validationResult.success) {
         classification = validationResult.data;
       } else {
-        console.error(`🧠 Classification validation failed: ${validationResult.error.errors.length} issues, first: ${validationResult.error.errors[0]?.message}`);
+        console.error(`🧠 Classification validation failed: ${validationResult.error.issues.length} issues, first: ${validationResult.error.issues[0]?.message}`);
         aiError = new Error('Invalid classification output from AI');
       }
     } else {
@@ -236,6 +252,26 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
 
     console.log(`🧠 Low confidence (${classification.confidence}) for ${entryId}`);
     brainEvents.emit('classified', { entryId, status: 'needs_review', confidence: classification.confidence });
+    return;
+  }
+
+  // Dry-run: a confident classification was produced, but the auto-file side
+  // effect is withheld. Surface the suggestion as needs_review so the user can
+  // confirm filing it from the inbox.
+  if (mode === 'dry-run') {
+    await storage.updateInboxLog(entryId, {
+      ai: aiMeta,
+      classification,
+      status: 'needs_review'
+    });
+    console.log(`🧠 [dry-run] Classified ${entryId} → ${classification.destination} (not filed; awaiting confirmation)`);
+    brainEvents.emit('classified', {
+      entryId,
+      status: 'needs_review',
+      destination: classification.destination,
+      title: classification.title,
+      dryRun: true
+    });
     return;
   }
 
@@ -472,7 +508,7 @@ export async function runDailyDigest(providerOverride, modelOverride) {
   const validationResult = digestOutputSchema.safeParse(parsed);
 
   if (!validationResult.success) {
-    throw new Error(`Invalid digest output: ${JSON.stringify(validationResult.error.errors)}`);
+    throw new Error(`Invalid digest output: ${JSON.stringify(validationResult.error.issues)}`);
   }
 
   const digestData = validationResult.data;
@@ -534,7 +570,7 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
   const validationResult = reviewOutputSchema.safeParse(parsed);
 
   if (!validationResult.success) {
-    throw new Error(`Invalid review output: ${JSON.stringify(validationResult.error.errors)}`);
+    throw new Error(`Invalid review output: ${JSON.stringify(validationResult.error.issues)}`);
   }
 
   const reviewData = validationResult.data;

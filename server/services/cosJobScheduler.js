@@ -25,6 +25,7 @@ import { schedule as scheduleEvent, cancel as cancelEvent, parseCronToNextRun } 
 import { getUserTimezone, getLocalParts, nextLocalTime } from '../lib/timezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
 import { loadState, isDaemonRunning } from './cosState.js';
+import { getDomainMode } from '../lib/domainAutonomy.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getCosTasks } from './cosTaskStore.js';
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
@@ -168,6 +169,27 @@ export async function executeScheduledJob(jobId) {
   const state = await loadState();
   if (!state.config.autonomousJobsEnabled) {
     // Re-register so it fires when re-enabled
+    await registerSingleJobSchedule(jobId);
+    return;
+  }
+
+  // Per-domain CoS auto-run gate: a SCHEDULED job firing automatically is an
+  // autonomous action, so off/dry-run withhold it (dry-run logs what it would
+  // have run). Manual triggers run through POST /jobs/:id/trigger (which calls
+  // the spawn/execute helpers directly), not this scheduled path, so explicit
+  // user intent is unaffected. Record a skip first (advances
+  // lastRun without incrementing runCount, exactly like the gate-skip path) so
+  // re-registration computes a FUTURE fire time — re-registering a past-due job
+  // with stale lastRun would refire every second (the same 1s-loop the spawn
+  // branch's comment warns about).
+  const cosAutonomyMode = getDomainMode(state.config, 'cos');
+  if (cosAutonomyMode !== 'execute') {
+    if (cosAutonomyMode === 'dry-run') {
+      emitLog('info', `[dry-run] CoS auto-run would fire scheduled job: ${job.name}`, { jobId, domainAutonomy: 'cos' });
+    }
+    await recordJobGateSkip(jobId).catch(err =>
+      console.error(`❌ Failed to record autonomy-skip for ${jobId}: ${err.message}`)
+    );
     await registerSingleJobSchedule(jobId);
     return;
   }
@@ -338,7 +360,11 @@ export async function scheduleNextImprovementCheck() {
         if (paused) return;
 
         const state = await loadState();
-        if (state.config.idleReviewEnabled) {
+        // Gate on the CoS auto-run domain: queueing improvement tasks mutates
+        // COS-TASKS.md with autonomous internal work, so off/dry-run must not
+        // queue (dry-run is purely a planning posture; the spawn-side gate
+        // already withholds execution, but we also avoid the queue mutation).
+        if (state.config.idleReviewEnabled && getDomainMode(state.config, 'cos') === 'execute') {
           const cosTaskData = await getCosTasks();
           await queueEligibleImprovementTasks(state, cosTaskData);
           cosEvents.emit('cos:dequeue-requested');

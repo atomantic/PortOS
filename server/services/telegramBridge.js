@@ -13,6 +13,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { tryReadFile } from '../lib/fileUtils.js';
 import { notificationEvents, NOTIFICATION_TYPES } from './notifications.js';
+import { getDomainAutonomyMode } from './cosState.js';
 
 const CHANNELS_DIR = join(homedir(), '.claude', 'channels', 'telegram');
 const ENV_FILE = join(CHANNELS_DIR, '.env');
@@ -222,8 +223,21 @@ export function updateCachedForwardTypes(forwardTypes) {
  * Forward a notification to Telegram via HTTP API
  */
 async function forwardNotification(notification) {
+  // Cached forward-type filter first (mirrors telegram.js): a filtered-out
+  // notification skips the state read, and dry-run only reports what execute
+  // would actually send.
   if (Array.isArray(cachedForwardTypes) && cachedForwardTypes.length > 0) {
     if (!cachedForwardTypes.includes(notification.type)) return;
+  }
+
+  // Per-domain autonomy gate (mirrors telegram.js): `off` suppresses outbound
+  // forwarding; `dry-run` logs what would have been sent without messaging.
+  const mode = await getDomainAutonomyMode('messages');
+  if (mode !== 'execute') {
+    if (mode === 'dry-run') {
+      console.log(`📨 [dry-run] Messages auto-send would forward notification: ${notification.type} — "${notification.title}"`);
+    }
+    return;
   }
 
   const emoji = NOTIFICATION_EMOJI[notification.type] || '🔔';

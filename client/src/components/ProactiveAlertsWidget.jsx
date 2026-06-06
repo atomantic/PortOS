@@ -15,6 +15,19 @@ import {
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
+import ProvenanceChip from './ui/ProvenanceChip';
+
+// Alerts are detected by the Chief of Staff from trends in your goals, task
+// success rates, costs, and system metrics — inferred from your data, not
+// thresholds you configured. The chip declares that the same way the insights
+// and health surfaces do. Only rendered when there are alerts to attribute.
+const ALERT_PROVENANCE = {
+  level: 'inferred',
+  explainer:
+    'Detected by your Chief of Staff from trends in your goals, task success rates, costs, and system metrics — inferred from your data, not thresholds you set by hand.',
+  whatWouldChange:
+    'As the underlying trend reverses — a goal resumes progress, success rates recover, costs settle — the alert clears on the next sweep.',
+};
 
 const SEVERITY_STYLES = {
   critical: { bg: 'bg-port-error/10', text: 'text-port-error', border: 'border-port-error/30' },
@@ -59,33 +72,36 @@ const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${hasAlerts ? 'bg-port-warning/10' : 'bg-port-success/10'}`}>
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className={`shrink-0 p-2 rounded-lg ${hasAlerts ? 'bg-port-warning/10' : 'bg-port-success/10'}`}>
             {hasAlerts ? (
               <Bell className="w-5 h-5 text-port-warning" />
             ) : (
               <CheckCircle className="w-5 h-5 text-port-success" />
             )}
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">Proactive Alerts</h3>
-            <p className="text-sm text-gray-500">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-white truncate">Proactive Alerts</h3>
+            <p className="text-sm text-gray-500 truncate">
               {hasAlerts
                 ? `${counts.total} alert${counts.total !== 1 ? 's' : ''} detected`
                 : 'All systems nominal'}
             </p>
           </div>
         </div>
-        {hasAlerts && counts.total > 5 && (
-          <Link
-            to="/cos"
-            className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
-          >
-            <span className="hidden sm:inline">View All</span>
-            <ChevronRight size={16} />
-          </Link>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {hasAlerts && <ProvenanceChip {...ALERT_PROVENANCE} align="end" />}
+          {hasAlerts && counts.total > 5 && (
+            <Link
+              to="/cos"
+              className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+            >
+              <span className="hidden sm:inline">View All</span>
+              <ChevronRight size={16} />
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Severity badges */}

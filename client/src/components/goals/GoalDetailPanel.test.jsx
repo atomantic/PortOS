@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // The panel fires getActivities()/getCalendarAccounts() on mount; stub them so the
 // read view renders without network. The badge assertions below only care about
@@ -107,5 +107,29 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
     expect(priorityBadge.tagName).toBe('SPAN');
     expect(priorityBadge.className).toContain('px-1');
     expect(priorityBadge.className).not.toContain('inline-flex');
+  });
+});
+
+describe('GoalDetailPanel provenance chip', () => {
+  it('renders an Inferred provenance chip when an AI-derived reading is present', () => {
+    // baseGoal carries urgency: 0.8 → the urgency/feasibility readings are modeled,
+    // so the header must declare provenance the same way the insight surfaces do.
+    renderPanel();
+    expect(screen.getByText('Inferred')).toBeTruthy();
+  });
+
+  it('omits the provenance chip when there is no AI-derived reading', () => {
+    // A goal with neither urgency nor feasibility has nothing modeled to attribute.
+    renderPanel({ ...baseGoal, urgency: undefined, feasibility: undefined });
+    expect(screen.queryByText('Inferred')).toBeNull();
+  });
+
+  it('suppresses the provenance chip in edit mode (readings are off-screen)', async () => {
+    // Edit mode swaps the urgency/activity-budget read view for the edit form, so
+    // a chip attributing those readings would point at content no longer shown.
+    renderPanel();
+    expect(screen.getByText('Inferred')).toBeTruthy(); // read mode: present
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.queryByText('Inferred')).toBeNull();
   });
 });

@@ -88,6 +88,26 @@ const buildCard = (model) => {
   };
 };
 
+// Shape a model for a family-scoped list (top-N or keyword search) so the card
+// reflects the version that actually targets `runnerFamily` — NOT
+// modelVersions[0]. Civitai's `baseModels` filter matches a model if ANY of its
+// versions is in the family, but the newest version (what buildCard uses) may
+// target a different base model. Left unhandled, the card's badge, versionId,
+// and installUrl point at that wrong version and a "quick install" pulls an
+// incompatible LoRA. Reorder the first installable family-matching version to
+// the front so every field buildCard derives comes from it; drop the model if
+// no installable version maps to the family.
+const buildFamilyCard = (model, runnerFamily) => {
+  const versions = Array.isArray(model?.modelVersions) ? model.modelVersions : [];
+  const match = versions.find((v) => {
+    if (baseModelToRunner(v?.baseModel) !== runnerFamily) return false;
+    const files = Array.isArray(v.files) ? v.files : [];
+    return files.some((f) => /\.safetensors$/i.test(f?.name || ''));
+  });
+  if (!match) return null;
+  return buildCard({ ...model, modelVersions: [match, ...versions.filter((v) => v !== match)] });
+};
+
 // For a curated entry: walk every modelVersions[] entry (not just the
 // primary) and build a per-runner-family install map. The UI renders one
 // "Install for X" button per entry — clicking it installs the family-
@@ -169,15 +189,44 @@ const fetchSuggestionsFor = async (runnerFamily, { fetchImpl, force = false } = 
   const apiKey = await resolveCivitaiKey();
   // Civitai's API doesn't strictly require auth for SFW LoRA search but a
   // configured key gets cleaner ranking and avoids anonymous rate limits.
-  const items = await searchCivitaiLoras({
+  const { items } = await searchCivitaiLoras({
     runnerFamily,
     limit: MAX_SUGGESTIONS,
     apiKey,
     fetchImpl,
   });
-  const cards = items.map(buildCard).filter(Boolean);
+  // buildFamilyCard (not buildCard) so a multi-base-model model's card reflects
+  // its family-matching version, not whatever version is newest overall.
+  const cards = items.map((m) => buildFamilyCard(m, runnerFamily)).filter(Boolean);
   cache.set(runnerFamily, { fetchedAt: now(), items: cards });
   return cards;
+};
+
+// Live (uncached) search/pagination within one runner family. Backs the
+// per-category search box and "Load more" button on /media/loras:
+//   - `query` filters by keyword (model name/description) — blank = top ranking
+//   - `cursor` pages forward; pass the previous response's `nextCursor`
+// Uncached because results are query-/cursor-specific and short-lived; the
+// curated + top-N panel stays on the 1-hour cache. Returns the same card
+// shape `buildCard` produces plus Civitai's `nextCursor` for the next page.
+export const searchLorasInFamily = async ({ runnerFamily, query = '', cursor = null, limit = 12, fetchImpl } = {}) => {
+  const apiKey = await resolveCivitaiKey();
+  const { items, nextCursor } = await searchCivitaiLoras({
+    runnerFamily,
+    limit,
+    query,
+    cursor,
+    apiKey,
+    fetchImpl,
+  });
+  return {
+    runnerFamily,
+    query: typeof query === 'string' ? query.trim() : '',
+    // buildFamilyCard so a keyword hit on a multi-base-model model installs the
+    // version that targets THIS family, not its newest (possibly incompatible) one.
+    items: items.map((m) => buildFamilyCard(m, runnerFamily)).filter(Boolean),
+    nextCursor: nextCursor || null,
+  };
 };
 
 // Public API. Returns:

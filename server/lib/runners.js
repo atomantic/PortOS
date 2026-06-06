@@ -44,3 +44,37 @@ export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
 // `server/services/imageGen/local.js`.
 export const usesDiffusersRunner = (model) =>
   isZImage(model) || isErnie(model) || isHiDream(model) || isQwen(model);
+
+// FLUX.2 Klein ships in two sizes with DIFFERENT transformer hidden dims —
+// 4B = 3072, 9B = 4096 — so a LoRA trained for one physically can't load on
+// the other (diffusers throws a tensor shape-mismatch, which the runner
+// swallows into a silent base render). `runner === 'flux2'` alone can't tell
+// them apart, so we refine it. The size is already encoded in the model id
+// (`flux2-klein-4b`, `flux2-klein-9b-bf16`) and repo (`FLUX.2-klein-9B`), so
+// no data migration is needed. Returns '4b' | '9b' | null.
+export const flux2VariantFromModel = (model) => {
+  for (const s of [model?.id, model?.repo]) {
+    if (typeof s !== 'string') continue;
+    const m = s.match(/(?:^|[-_/])(?:klein-?)?([49])b(?:[-_./]|$)/i);
+    if (m) return `${m[1]}b`;
+  }
+  return null;
+};
+
+// Encode a (runner family, size variant) pair into the single compat-key
+// string the LoRA picker matches on: FLUX.2 with a known size → `flux2-4b` /
+// `flux2-9b`; any family without a variant → the bare family. This is the ONE
+// place the `<family>-<variant>` convention is written, so the model-side key
+// (loraCompatKey below) and the LoRA-side key (server/services/loras.js) can't
+// drift. `LoraPicker.familyOf` is the decode side.
+export const composeCompatKey = (family, variant) =>
+  family === RUNNER_FAMILIES.FLUX2 && variant ? `${family}-${variant}` : family;
+
+// Fine-grained LoRA compatibility key for a model. For FLUX.2 it refines the
+// runner family into a size-specific key (or bare `flux2` when the size can't
+// be determined); for every other family it's just the runner id.
+export const loraCompatKey = (model) =>
+  composeCompatKey(
+    model?.runner || RUNNER_FAMILIES.MFLUX,
+    isFlux2(model) ? flux2VariantFromModel(model) : null,
+  );

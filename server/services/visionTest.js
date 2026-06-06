@@ -60,9 +60,13 @@ async function loadImageAsBase64(imagePath) {
  * @param {string} options.imageDataUrl - Base64 image data URL
  * @param {string} options.prompt - Prompt to send with image
  * @param {number} options.timeout - Request timeout in ms
+ * @param {number} [options.maxTokens=500] - Completion budget. The default suits
+ *   short "describe this" calls; callers that ask the model for a larger
+ *   structured response (e.g. a JSON object) must raise it or the reply
+ *   truncates mid-output and fails to parse.
  * @returns {Promise<Object>} - API response
  */
-async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, timeout = DEFAULT_VISION_TIMEOUT_MS }) {
+async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, timeout = DEFAULT_VISION_TIMEOUT_MS, maxTokens = 500 }) {
   await ensureOllamaProviderReady({ endpoint }).then((ready) => {
     if (!ready.success) throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
   });
@@ -92,7 +96,7 @@ async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, ti
           ]
         }
       ],
-      max_tokens: 500,
+      max_tokens: maxTokens,
       temperature: 0.1
     })
   }, timeout);
@@ -215,9 +219,11 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
  * @param {string} options.prompt - What to ask about the image
  * @param {string} [options.providerId='lmstudio'] - Vision-capable API provider
  * @param {string} [options.model] - Model override (defaults to provider default)
+ * @param {number} [options.maxTokens] - Completion budget; raise it above the
+ *   default when asking the model for a long/structured reply (see callVisionAPI).
  * @returns {Promise<string>} - The model's description text
  */
-export async function describeImageDataUrl({ dataUrl, prompt, providerId = 'lmstudio', model }) {
+export async function describeImageDataUrl({ dataUrl, prompt, providerId = 'lmstudio', model, maxTokens }) {
   if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
     throw new Error('dataUrl must be a base64 image data URL');
   }
@@ -234,6 +240,7 @@ export async function describeImageDataUrl({ dataUrl, prompt, providerId = 'lmst
     imageDataUrl: dataUrl,
     prompt: prompt || 'Describe what you see in this image.',
     timeout: provider.timeout || DEFAULT_VISION_TIMEOUT_MS,
+    ...(maxTokens != null ? { maxTokens } : {}),
   });
   return apiResponse.choices?.[0]?.message?.content || '';
 }

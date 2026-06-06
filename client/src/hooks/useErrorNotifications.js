@@ -20,6 +20,16 @@ export function useErrorNotifications() {
     socket.emit('errors:subscribe');
 
     const handleError = (error) => {
+      // A degraded DB backup is warning-severity (the file backup succeeded)
+      // but MUST still surface — its whole point is "find out the day it
+      // breaks," including on unattended scheduled runs. Handle it before the
+      // blanket warning-drop below.
+      if (error.code === 'BACKUP_DB_DUMP_FAILED') {
+        toast.error(error.message, { duration: 8000, icon: '💾' });
+        console.warn(`[${error.code}] ${error.message}`, error.context);
+        return;
+      }
+
       // `severity: 'warning'` routes (e.g. speculative GET /api/media-jobs/:id
       // 404s for jobs past the 24h archive TTL) opt out of toast + console
       // surfacing entirely — the network-tab 404 is sufficient signal.

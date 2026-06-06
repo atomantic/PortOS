@@ -3,13 +3,27 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
+
+// `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:
+// `getWhileAwayActivity` already clamps an absent/garbage/future marker to a
+// 24h fallback, so a malformed value preprocesses to `undefined` (let the
+// service apply its fallback) rather than 400-ing the dashboard card into a
+// blank state. A valid datetime string passes through unchanged.
+const whileAwayQuerySchema = z.object({
+  since: z.preprocess(
+    (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : undefined),
+    z.string().optional()
+  )
+});
 
 // GET /api/cos/reports - List all reports
 router.get('/reports', asyncHandler(async (req, res) => {
@@ -117,6 +131,14 @@ router.post('/app-activity/:appId/clear-cooldown', asyncHandler(async (req, res)
 // GET /api/cos/activity/today - Get today's activity summary
 router.get('/activity/today', asyncHandler(async (req, res) => {
   const activity = await cos.getTodayActivity();
+  res.json(activity);
+}));
+
+// GET /api/cos/activity/while-away - What agents did since ?since=<ISO> (the
+// client's last-visit marker). Powers the "While You Were Away" dashboard card.
+router.get('/activity/while-away', asyncHandler(async (req, res) => {
+  const { since } = validateRequest(whileAwayQuerySchema, req.query);
+  const activity = await cos.getWhileAwayActivity(since);
   res.json(activity);
 }));
 

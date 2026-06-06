@@ -143,6 +143,7 @@ async function getJobEffectivePrompt(job) {
  */
 async function generateTaskFromJob(job) {
   const description = await getJobEffectivePrompt(job)
+  const meta = job.taskMetadata || {}
   return {
     id: `${job.id}-${Date.now().toString(36)}`,
     description,
@@ -152,7 +153,15 @@ async function generateTaskFromJob(job) {
       jobId: job.id,
       jobName: job.name,
       jobCategory: job.category,
-      autonomyLevel: job.autonomyLevel
+      autonomyLevel: job.autonomyLevel,
+      // App-scoped jobs carry the target app id so prepareAgentWorkspace resolves
+      // the agent's workspace to the app's repoPath. Absent = runs in PortOS root.
+      ...(job.appId != null ? { app: job.appId } : {}),
+      // Forward git-workflow options so an app-scoped task can isolate via a
+      // worktree and open a PR (same metadata flags the built-in task types use).
+      ...(meta.useWorktree != null ? { useWorktree: meta.useWorktree } : {}),
+      ...(meta.openPR != null ? { openPR: meta.openPR } : {}),
+      ...(meta.simplify != null ? { simplify: meta.simplify } : {})
     },
     taskType: 'internal',
     autoApprove: job.autonomyLevel === 'yolo'

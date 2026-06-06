@@ -62,7 +62,7 @@ export function validate(schema, data) {
   }
   return {
     success: false,
-    errors: result.error.errors.map(e => ({
+    errors: result.error.issues.map(e => ({
       path: e.path.join('.'),
       message: e.message
     }))

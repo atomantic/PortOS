@@ -39,7 +39,7 @@ const updateAccountSchema = z.object({
 });
 
 const createDraftSchema = z.object({
-  accountId: z.string().uuid(),
+  accountId: z.string().guid(),
   replyToMessageId: z.string().nullish(),
   threadId: z.string().nullish(),
   to: z.array(z.string()).optional().default([]),
@@ -59,7 +59,7 @@ const updateDraftSchema = z.object({
 });
 
 const generateDraftSchema = z.object({
-  accountId: z.string().uuid(),
+  accountId: z.string().guid(),
   replyToMessageId: z.string().nullish(),
   threadId: z.string().nullish(),
   context: z.string().optional().default(''),
@@ -364,7 +364,7 @@ router.get('/thread/:accountId/:threadId', asyncHandler(async (req, res) => {
 
 // === Message params schema (shared by detail + refresh routes) ===
 const messageParamsSchema = z.object({
-  accountId: z.string().uuid(),
+  accountId: z.string().guid(),
   messageId: z.string().min(1)
 });
 

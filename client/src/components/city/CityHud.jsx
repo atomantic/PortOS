@@ -39,8 +39,9 @@ function ControlsHint({ visible }) {
         </div>
         <div className="font-pixel text-[8px] text-gray-500 tracking-wide space-y-1">
           <div>MOUSE: LOOK AROUND (CLICK TO LOCK)</div>
+          <div>WASD: MOVE · Q/E: DOWN/UP</div>
           <div>SHIFT: SPRINT</div>
-          <div>E: INTERACT WITH BUILDING</div>
+          <div>F: INTERACT WITH BUILDING</div>
           <div>TAB: FLY OUT</div>
         </div>
       </div>
@@ -91,44 +92,6 @@ function HudCorner({ position = 'tl', color = 'cyan' }) {
   );
 }
 
-// Glitch text effect - brief visual corruption
-function GlitchTitle({ text, className }) {
-  const [glitching, setGlitching] = useState(false);
-  const intervalRef = useRef(null);
-
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      if (Math.random() > 0.92) {
-        setGlitching(true);
-        setTimeout(() => setGlitching(false), 100 + Math.random() * 150);
-      }
-    }, 2000);
-    return () => clearInterval(intervalRef.current);
-  }, []);
-
-  return (
-    <div className={`relative ${className}`}>
-      <span className={glitching ? 'opacity-0' : ''}>{text}</span>
-      {glitching && (
-        <>
-          <span
-            className="absolute inset-0 text-red-400/60"
-            style={{ transform: 'translateX(2px)' }}
-          >
-            {text}
-          </span>
-          <span
-            className="absolute inset-0 text-cyan-400/60"
-            style={{ transform: 'translateX(-2px)' }}
-          >
-            {text}
-          </span>
-        </>
-      )}
-    </div>
-  );
-}
-
 function StatButton({ label, valueClass, value, onClick, title, prefix = null }) {
   return (
     <button
@@ -162,7 +125,7 @@ function HealthBar({ value, max, color }) {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [time, setTime] = useState(new Date());
@@ -205,7 +168,10 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
   ).length;
 
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden">
+    // z-20 keeps the HUD above the CityScanlines CRT overlay (z-10) so the vignette
+    // + scanline-multiply + chromatic-aberration glow stay on the 3D scene and don't
+    // haze the (now theme-colored) HUD panels.
+    <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
       {/* Top-left: Clock + system status + vitals */}
       <div className="absolute top-3 left-3 pointer-events-auto">
         <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-3 overflow-hidden">
@@ -363,19 +329,8 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
         </div>
       </div>
 
-      {/* Top-center: CyberCity title with glitch effect */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
-        <GlitchTitle
-          text="CYBERCITY"
-          className="font-pixel text-cyan-400/50 text-sm tracking-[0.4em]"
-        />
-        <div className="font-pixel text-[8px] text-cyan-400/20 tracking-[0.2em] text-center mt-0.5">
-          v{totalApps}.{activeApps}.{activeAgentCount}
-        </div>
-      </div>
-
       {filter && onFilterChange && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2">
+        <div className="absolute top-3 left-1/2 -translate-x-1/2">
           <CityFilterBar
             filter={filter}
             onChange={onFilterChange}
@@ -498,6 +453,23 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
             <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+        )}
+
+        {/* History / playback mode — scrub recorded city-state snapshots */}
+        {onEnterPlayback && (
+          <button
+            onClick={onEnterPlayback}
+            className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
+            title="History — scrub back through past city states"
+          >
+            <HudCorner position="tl" />
+            <HudCorner position="br" />
+            <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v5h5" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.05 13A9 9 0 106 5.3L3 8" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 2" />
             </svg>
           </button>
         )}

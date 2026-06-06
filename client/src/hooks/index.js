@@ -88,12 +88,14 @@ export * from './useSwipeNav.js';
 
 // === Storage & persistence ===
 export * from './useLocalStorageBool.js';
+export * from './useNavWorkingSet.js';
 
 // === Domain: City / Voice / Mortality / Universe / Apps / Sessions ===
 export * from './useAppDeploy.js';
 export * from './useAppOperation.js';
 export * from './useCanonPatch.js';
 export * from './useCityData.js';
+export * from './useCityPlayback.js';
 export * from './useDeathClock.js';
 export * from './useGoalDetail.js';
 export * from './usePostSession.js';

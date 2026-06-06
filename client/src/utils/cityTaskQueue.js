@@ -4,6 +4,8 @@
 // in-progress task lights the warehouse, a blocked task tints it amber. No three.js /
 // React imports so the topology is unit-testable (mirrors cityBackupVault.js).
 
+import { tallyByKey } from './cityDistrictLayout';
+
 export const TASK_QUEUE = {
   position: [34, 0, -10], // east of the building grid, mirroring the backup vault to the west
   maxCrates: 8, // visible-crate cap; beyond this the warehouse reads as "overflow"
@@ -24,18 +26,10 @@ const STATE_COLORS = {
 
 // Tally CoS tasks by status. Tolerates a missing/non-array input (returns all-zero) and
 // buckets unrecognized statuses under `other` so the counts always sum to the input length.
+const KNOWN_TASK_STATUSES = ['pending', 'in_progress', 'blocked', 'completed'];
+const taskStatusKey = (t) => (KNOWN_TASK_STATUSES.includes(t?.status) ? t.status : 'other');
 export function countByStatus(tasks) {
-  const counts = { pending: 0, in_progress: 0, blocked: 0, completed: 0, other: 0 };
-  const list = Array.isArray(tasks) ? tasks : [];
-  for (const t of list) {
-    const s = t?.status;
-    if (s === 'pending') counts.pending++;
-    else if (s === 'in_progress') counts.in_progress++;
-    else if (s === 'blocked') counts.blocked++;
-    else if (s === 'completed') counts.completed++;
-    else counts.other++;
-  }
-  return counts;
+  return tallyByKey(tasks, taskStatusKey, [...KNOWN_TASK_STATUSES, 'other']);
 }
 
 // Overall queue mood for the warehouse lighting, in priority order: a blocked task is the

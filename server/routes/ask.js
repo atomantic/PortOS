@@ -22,6 +22,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { awaitWritableDrain } from '../lib/streamBackpressure.js';
 import * as convs from '../services/askConversations.js';
 import { runAsk, VALID_MODES } from '../services/askService.js';
 import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
@@ -171,10 +172,8 @@ router.post('/', asyncHandler(async (req, res) => {
 
   // Honour socket backpressure — for long answers with many delta frames,
   // a slow reader could otherwise force Node to buffer unbounded SSE data
-  // in memory. If `res.write` returns false, await the next `drain` (or
-  // `close`) before queuing more frames. Both listeners are torn down on
-  // settle so a slow client that disconnects mid-drain doesn't leak
-  // listeners.
+  // in memory. If `res.write` returns false, `awaitWritableDrain` parks on
+  // the next `drain` (or `close`) before we queue more frames.
   //
   // Guard the write itself: between the `aborted` check and the syscall,
   // the socket can transition to destroyed, in which case `res.write` would
@@ -191,17 +190,7 @@ router.post('/', asyncHandler(async (req, res) => {
       onClose();
       return;
     }
-    if (!writeOk) {
-      await new Promise((resolve) => {
-        const settle = () => {
-          res.off('drain', settle);
-          res.off('close', settle);
-          resolve();
-        };
-        res.once('drain', settle);
-        res.once('close', settle);
-      });
-    }
+    if (!writeOk) await awaitWritableDrain(res);
   };
 
   // Tell the client the conversation id up-front so it can deep-link the URL

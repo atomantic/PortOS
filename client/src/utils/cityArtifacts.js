@@ -8,6 +8,7 @@
 // unit-testable (mirrors cityGoalMonuments.js / cityProductivity.js).
 
 import { levelFromXP } from './characterXp';
+import { gridIndexToPosition } from './cityDistrictLayout';
 
 // Hall of Achievements — a clear cluster in the +X / -Z quadrant, between the task-queue
 // (x≈+34, z≈-10), health tower (x≈+48, z≈+28), goal-monument row (z≈-40) and voice marker
@@ -123,18 +124,17 @@ export function earnedArtifacts({ character, goals, productivityData } = {}) {
 // Place a descriptor into the cluster grid. `index` is the 0-based slot; the grid fills left→
 // right across ARTIFACTS.columns, then wraps to the next row toward -Z. Centered on base.x.
 export function placeArtifact(descriptor, index) {
-  const col = index % ARTIFACTS.columns;
-  const row = Math.floor(index / ARTIFACTS.columns);
-  const xOffset = (col - (ARTIFACTS.columns - 1) / 2) * ARTIFACTS.spacing;
-  const x = ARTIFACTS.base[0] + xOffset;
-  const z = ARTIFACTS.base[2] - row * ARTIFACTS.spacing;
   const tier = TIERS[descriptor.tier] || TIERS.bronze;
-
   return {
     ...descriptor,
     color: tier.color,
     intensity: tier.intensity,
-    position: [x, 0, z],
+    position: gridIndexToPosition(index, {
+      base: ARTIFACTS.base,
+      columns: ARTIFACTS.columns,
+      spacing: ARTIFACTS.spacing,
+      rowDir: -1, // rows wrap toward -Z
+    }),
   };
 }
 

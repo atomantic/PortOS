@@ -70,6 +70,21 @@ export function normalizeImage(i) {
     cleanLevel: i.cleanLevel || null,
     autoCleaned: i.autoCleaned === true,
     c2paStripped: typeof i.c2paStripped === 'boolean' ? i.c2paStripped : null,
+    // SynthID-defeat regen lineage (issue #912) — stamped by
+    // /api/image-gen/:filename/regenerate. `regenerated` is the discriminator
+    // computeImageVariantGroup uses to label a `cleanedFrom` sibling as
+    // "Regenerated" rather than "Cleaned", so it MUST survive normalization.
+    regenerated: i.regenerated === true,
+    regenStrength: typeof i.regenStrength === 'number' ? i.regenStrength : null,
+    regenSteps: typeof i.regenSteps === 'number' ? i.regenSteps : null,
+    regenModelId: i.regenModelId || null,
+    // 'flux' (GPU round-trip) | 'light-spatial' (CPU pass). Drives the "(light)"
+    // lineage label — must survive normalization or the label never renders.
+    regenMethod: i.regenMethod || null,
+    // Realized fidelity stamped by the server (% the pixels actually changed +
+    // PSNR); surfaced in the lightbox lineage row, so it must be lifted here too.
+    regenPixelDeltaPct: typeof i.regenPixelDeltaPct === 'number' ? i.regenPixelDeltaPct : null,
+    regenPsnr: typeof i.regenPsnr === 'number' ? i.regenPsnr : null,
     raw: i,
   };
 }

@@ -35,14 +35,14 @@
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
-    "@vitejs/plugin-react": "5.1.4",
+    "@vitejs/plugin-react": "6.0.2",
     "eslint": "9.23.0",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "5.2.0",
     "jsdom": "25.0.1",
     "rollup-plugin-visualizer": "6.0.11",
     "tailwindcss": "4.2.1",
-    "vite": "7.3.2",
+    "vite": "8.0.16",
     "vitest": "4.1.8"
   },
   "overrides": {

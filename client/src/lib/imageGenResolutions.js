@@ -45,6 +45,31 @@ export const RESOLUTIONS = [
   { label: '2880×2880 (4K square)', w: 2880, h: 2880, compatible: ['codex'] },
 ];
 
+// Mirror of server/lib/validation.js MAX_IMAGE_EDGE / MAX_IMAGE_PIXELS — the
+// gpt-image-2 / image-gen route ceiling (each edge ≤ 3840, total ≤ 8,294,400).
+// Keep in sync with that module.
+export const MAX_IMAGE_EDGE = 3840;
+export const MAX_IMAGE_PIXELS = 8_294_400;
+
+// Clamp arbitrary source dimensions (e.g. an uploaded photo) down to the
+// server's per-edge and total-pixel caps, preserving aspect ratio and snapping
+// to a multiple of 8 (runner-friendly). Returns integer { width, height } ≥ 64,
+// or null for non-finite/non-positive input. Already-valid sizes pass through
+// unchanged. Use this before seeding the resolution from any user-supplied image
+// so Generate doesn't 400 on imageEdgeSchema / refineImagePixelCap.
+export function clampImageDimensions(width, height) {
+  let w = Number(width);
+  let h = Number(height);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return null;
+  const edgeScale = Math.min(1, MAX_IMAGE_EDGE / Math.max(w, h));
+  w *= edgeScale; h *= edgeScale;
+  const pixelScale = Math.min(1, Math.sqrt(MAX_IMAGE_PIXELS / (w * h)));
+  w *= pixelScale; h *= pixelScale;
+  // Floor to a multiple of 8 so the snap never pushes us back over a cap.
+  const snap = (n) => Math.max(64, Math.floor(n / 8) * 8);
+  return { width: snap(w), height: snap(h) };
+}
+
 // Flux 1 (mflux/diffusers, `dev` / `schnell`) has no `runner` field — it's
 // the fallback for local mode when nothing more specific matches.
 const NATIVE_RUNNER_KEYS = new Set([

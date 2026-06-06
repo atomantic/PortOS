@@ -1,6 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { seededRand } from './cityConstants';
 
 // Matrix-style cascading data columns falling through the sky
 
@@ -69,8 +70,7 @@ export default function CityDataRain() {
     const bright = new Float32Array(total);
 
     // Seeded random
-    let s = 77;
-    const rand = () => { s = (s * 16807 + 0) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
+    const rand = seededRand(77);
 
     for (let col = 0; col < columns; col++) {
       const x = (rand() - 0.5) * 70;

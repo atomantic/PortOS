@@ -22,7 +22,11 @@ boroughs, archive district, weather, traffic, particles, neon signs, billboards,
 HUD with vitals + activity log + agent bar, exploration mode (WASD), and an
 OrbitControls default view.
 
-Tech: React Three Fiber + Three.js (no postprocessing lib — bloom is custom).
+Tech: React Three Fiber + Three.js (no postprocessing _library_ — bloom is custom
+emissive/additive materials, not a composer pass). The one composited effect is
+photo mode's depth-of-field, which mounts an `EffectComposer` + `BokehPass` from
+three's bundled addons (no extra npm dependency) only while photo mode is active —
+see `CityDepthOfField.jsx`.
 
 What it lacks:
 

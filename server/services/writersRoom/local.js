@@ -408,6 +408,25 @@ export async function linkToPipeline(id, { seriesId = null, issueId = null } = {
   return next;
 }
 
+/**
+ * Bidirectional bridge link: record that this work seeded a Creative Director
+ * project (Phase 5 CD-bridge slice). Set once by liveDirector.sendToCreativeDirector;
+ * the WR side reads it to render the "Open in Creative Director" CTA on the work
+ * detail page. Distinct from `updateWork` because the link isn't user-editable
+ * (the allow-list in updateWork excludes it, so a crafted PATCH can't set it).
+ * Mirrors `linkToPipeline`. Pass `null` to unlink.
+ */
+export async function linkToCreativeDirector(id, { projectId = null } = {}) {
+  const manifest = await getWork(id);
+  const next = {
+    ...manifest,
+    cdProjectId: projectId ? String(projectId).slice(0, 64) : null,
+    updatedAt: nowIso(),
+  };
+  await saveManifest(id, next);
+  return next;
+}
+
 // UTC day key (YYYY-MM-DD) for the daily budget window. UTC (not local) so the
 // reset boundary is deterministic across machines a single user federates.
 // Exported so the live-director's pre-call budget check compares against the

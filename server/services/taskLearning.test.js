@@ -188,6 +188,34 @@ describe('TaskLearning - resetTaskTypeLearning', () => {
     expect(savedData.totals.completed).toBe(0);
     expect(savedData.totals.avgDurationMs).toBe(0);
   });
+
+  it('clamps successDurationMs to >= 0 when a drifted store would go negative', async () => {
+    // Hand-edited / older store where the running total drifted below a single
+    // task type's accumulated successDurationMs. Subtracting unclamped would go
+    // negative and feed calculateDurationETA a negative avgDurationMs.
+    const data = makeLearningData({
+      byTaskType: {
+        'self-improve:ui': {
+          completed: 10, succeeded: 8, failed: 2,
+          totalDurationMs: 50000, avgDurationMs: 5000,
+          successDurationMs: 500000, successMaxDurationMs: 80000,
+          lastCompleted: '2026-01-25T00:00:00.000Z', successRate: 80
+        }
+      },
+      errorPatterns: {},
+      totals: {
+        completed: 10, succeeded: 8, failed: 2,
+        totalDurationMs: 50000, avgDurationMs: 5000,
+        successDurationMs: 100000, successMaxDurationMs: 80000
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    await resetTaskTypeLearning('self-improve:ui');
+
+    // 100000 - 500000 would be -400000; the clamp pins it at 0.
+    expect(savedData.totals.successDurationMs).toBe(0);
+  });
 });
 
 describe('TaskLearning - getSkippedTaskTypes', () => {

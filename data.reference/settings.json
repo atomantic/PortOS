@@ -45,5 +45,10 @@
       }
     },
     "vad": { "endOfSpeechMs": 700, "minUtteranceMs": 250 }
+  },
+  "citySnapshots": {
+    "enabled": true,
+    "intervalMinutes": 5,
+    "maxSnapshots": 1000
   }
 }

@@ -1,4 +1,6 @@
-import { extractToken, isAuthEnabled, verifySession } from '../services/auth.js';
+import { createHash } from 'node:crypto';
+import { extractToken, isAuthEnabled, verifyPassword, verifySession } from '../services/auth.js';
+import { settingsEvents } from '../services/settings.js';
 
 // Paths that bypass the auth gate even when a password is set:
 //   - /api/auth/status, /api/auth/whoami, /api/auth/login → the login UI
@@ -21,6 +23,37 @@ const PUBLIC_API_PATHS = new Set([
 // network reach but no auth must NOT be able to hit it. Add to this list any
 // future routes that live outside `/api`.
 const GATED_NON_API_PREFIXES = ['/sdapi/'];
+
+// Extract the password from an `Authorization: Basic <base64>` header.
+// PortOS is single-user so the username is ignored; only the password is
+// validated. Used by peer-to-peer federation: a remote PortOS instance probes
+// us with HTTP Basic credentials (set in the Instances UI) rather than a
+// browser session cookie.
+const extractBasicPassword = (req) => {
+  const authHeader = req.headers?.authorization;
+  if (typeof authHeader !== 'string') return null;
+  if (authHeader.slice(0, 6).toLowerCase() !== 'basic ') return null;
+  const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+  const colonIdx = decoded.indexOf(':');
+  return colonIdx === -1 ? decoded : decoded.slice(colonIdx + 1);
+};
+
+// Short-lived cache for Basic-auth scrypt results so probe cycles (3 parallel
+// HTTP requests every 30s) don't re-run scrypt each time. Keyed by sha256 of
+// the password so the plaintext never lives in the Map. Flushed on any
+// settings write (covers password rotation).
+const basicAuthCache = new Map();
+const BASIC_AUTH_CACHE_TTL_MS = 60_000;
+settingsEvents.on('settings:updated', () => basicAuthCache.clear());
+
+const verifyBasicPassword = async (password) => {
+  const key = createHash('sha256').update(password).digest('hex');
+  const cached = basicAuthCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.ok;
+  const ok = await verifyPassword(password);
+  basicAuthCache.set(key, { ok, expiresAt: Date.now() + BASIC_AUTH_CACHE_TTL_MS });
+  return ok;
+};
 
 const isPublicPath = (path) => {
   if (PUBLIC_API_PATHS.has(path)) return true;
@@ -101,6 +134,13 @@ export const authGate = async (req, res, next) => {
   if (isPublicPath(path)) return next();
   const token = extractToken(req);
   if (await verifySession(token)) return next();
+  // Also accept HTTP Basic auth — used by peer-to-peer federation probes.
+  // The peer sends `Authorization: Basic <base64(:password)>` (the Instances
+  // UI stores username + password; only the password is validated here since
+  // PortOS is single-user). scrypt verification is intentionally slow but runs
+  // in libuv's thread pool so it doesn't block the event loop.
+  const basicPassword = extractBasicPassword(req);
+  if (basicPassword && await verifyBasicPassword(basicPassword)) return next();
   // /data/* is hit directly by <img>/<audio>/<video> tags which don't show a
   // structured-JSON error — return a plain 401 there. API callers expect the
   // PortOS error envelope.
@@ -126,6 +166,9 @@ export const socketAuthGate = async (socket, next) => {
   }
   const token = extractToken(fakeReq);
   if (await verifySession(token)) return next();
+  // Also accept HTTP Basic auth for peer socket relay connections.
+  const basicPassword = extractBasicPassword(fakeReq);
+  if (basicPassword && await verifyBasicPassword(basicPassword)) return next();
   const err = new Error('Authentication required');
   err.data = { code: 'AUTH_REQUIRED' };
   next(err);

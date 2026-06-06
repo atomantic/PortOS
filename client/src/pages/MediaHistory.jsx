@@ -16,6 +16,7 @@ import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
+import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../lib/mediaSearch';
 import {
   listVideoHistory, deleteVideoHistoryItem, stitchVideos,
   upscaleVideo,
@@ -66,37 +67,14 @@ export default function MediaHistory() {
 
   // Precompute the searchable haystack per item once per items list — keystrokes
   // then only re-run token .includes() against a cached string instead of
-  // rebuilding the array + join + lowercase per item per keystroke.
-  const haystacks = useMemo(() => items.map((item) => [
-    item.prompt,
-    item.negativePrompt,
-    item.modelId,
-    item.filename,
-    item.kind,
-    item.seed != null ? `seed ${item.seed}` : '',
-    item.width && item.height ? `${item.width}x${item.height}` : '',
-    ...(Array.isArray(item.loraNames) ? item.loraNames : []),
-    // Universe Builder tags — searchable by entity name (e.g. "Ash"), universe
-    // name, kind, or category even when those tokens aren't in the prompt.
-    item.universeName,
-    item.entryName,
-    item.entryLabel,
-    item.entryCategory,
-    item.entryKind,
-    item.extractedFromVideoId ? 'extracted frame' : '',
-    item.stitchedFrom ? 'stitched' : '',
-    item.upscaledFrom ? 'upscaled 2x' : '',
-  ].filter(Boolean).join(' ').toLowerCase()), [items]);
-
-  // AND semantics across whitespace tokens — "sunset flux2 1024" matches items
-  // whose haystack contains all three substrings, in any order.
-  const tokens = useMemo(
-    () => query.trim().toLowerCase().split(/\s+/).filter(Boolean),
-    [query]
-  );
+  // rebuilding the array + join + lowercase per item per keystroke. The haystack
+  // shape + AND-token semantics live in lib/mediaSearch so the Image Gen gallery
+  // picker searches identically.
+  const haystacks = useMemo(() => items.map(buildMediaHaystack), [items]);
+  const tokens = useMemo(() => tokenizeQuery(query), [query]);
 
   const searched = useMemo(
-    () => tokens.length === 0 ? items : items.filter((_, idx) => tokens.every((t) => haystacks[idx].includes(t))),
+    () => tokens.length === 0 ? items : items.filter((_, idx) => matchHaystack(haystacks[idx], tokens)),
     [items, haystacks, tokens]
   );
   const kindFiltered = useMemo(
@@ -154,7 +132,7 @@ export default function MediaHistory() {
   // the cleaned image to the top of the local list) is page-specific —
   // wired through `onCleanComplete` so the cleaned record lands in `items`
   // without a full gallery refetch.
-  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
+  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
     onCleanComplete: (cleaned) => {
       const normalized = normalizeImage(cleaned);
       setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
@@ -274,6 +252,7 @@ export default function MediaHistory() {
                 onPreview={(media) => setPreview(media)}
                 onClick={inStitch ? () => toggleSelect(it.id) : undefined}
                 onRemix={!stitchMode ? handleRemix : undefined}
+                onSendToImage={!stitchMode ? handleSendToImage : undefined}
                 onSendToVideo={!stitchMode ? handleSendToVideo : undefined}
                 onContinue={!stitchMode ? handleContinue : undefined}
                 onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
@@ -297,6 +276,7 @@ export default function MediaHistory() {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onRemix={handleRemix}
+        onSendToImage={handleSendToImage}
         onSendToVideo={handleSendToVideo}
         onContinue={handleContinue}
         onClean={(item) => handleClean(item?.raw)}

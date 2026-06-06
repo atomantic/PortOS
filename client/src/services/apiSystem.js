@@ -94,6 +94,7 @@ export const getBackupStatus = (options) => request('/backup/status', options);
 export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
 export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
 export const restoreBackup = (data) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data) });
+export const restoreDatabase = (data, options) => request('/backup/restore-db', { method: 'POST', body: JSON.stringify(data), ...options });
 
 // Data Manager
 export const getDataOverview = () => request('/data');
@@ -166,7 +167,7 @@ export const navigateBrowser = (url) => request('/browser/navigate', {
 
 // Instances (Federation)
 export const getInstances = (options) => request('/instances', options);
-export const getSelfInstance = () => request('/instances/self');
+export const getSelfInstance = (options) => request('/instances/self', options);
 export const updateSelfInstance = (data) => request('/instances/self', { method: 'PUT', body: JSON.stringify(data) });
 export const addPeer = (data) => request('/instances/peers', { method: 'POST', body: JSON.stringify(data) });
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });

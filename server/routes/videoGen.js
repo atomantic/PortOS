@@ -132,7 +132,7 @@ const generateBodySchema = z.object({
   // routes through ExtendPipeline.extend_from_video which conditions on
   // the entire source video's latent rather than a single last frame).
   // The legacy chained-i2v path keeps using sourceImageFile.
-  extendFromVideoId: z.string().uuid().optional(),
+  extendFromVideoId: z.string().guid().optional(),
   // Multi-keyframe interpolation (ltx2 + mode='fflf'). Each entry pins one
   // gallery image at a specific pixel-frame index. Indices must be strictly
   // ascending and within [0, numFrames-1]. When set, overrides the legacy
@@ -837,10 +837,11 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
 }));
 
 // History ids are produced by crypto.randomUUID(), so validate them as
-// proper UUIDs rather than the looser /^[a-f0-9-]{36}$/ pattern (which
-// happily accepts e.g. 36 hyphens). Matches the .uuid() usage in the
-// other route schemas.
-const historyIdSchema = z.string().uuid('invalid history id');
+// UUIDs rather than the looser /^[a-f0-9-]{36}$/ pattern (which happily
+// accepts e.g. 36 hyphens). `.guid()` is Zod 4's name for the 8-4-4-4-12
+// hex-group check Zod 3's `.uuid()` performed (version-agnostic); matches
+// the .guid() usage in the other route schemas.
+const historyIdSchema = z.string().guid('invalid history id');
 
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);

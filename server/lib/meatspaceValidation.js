@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { partialWithoutDefaults } from './zodCompat.js';
 
 // =============================================================================
 // LIFE CALENDAR ACTIVITIES
@@ -11,7 +12,7 @@ export const activitySchema = z.object({
   icon: z.string().max(50).optional().default('circle'),
 });
 
-export const activityUpdateSchema = activitySchema.partial();
+export const activityUpdateSchema = partialWithoutDefaults(activitySchema);
 
 // =============================================================================
 // LIFE CALENDAR EVENTS
@@ -28,7 +29,7 @@ export const lifeEventSchema = z.object({
   enabled: z.boolean().optional().default(true),
 });
 
-export const lifeEventUpdateSchema = lifeEventSchema.partial();
+export const lifeEventUpdateSchema = partialWithoutDefaults(lifeEventSchema);
 
 // =============================================================================
 // MEATSPACE CONFIG & LIFESTYLE
@@ -55,8 +56,14 @@ export const configSchema = z.object({
   lifestyle: lifestyleSchema.optional()
 });
 
-export const configUpdateSchema = configSchema.partial();
-export const lifestyleUpdateSchema = lifestyleSchema.partial();
+// configSchema has no top-level defaults, but its nested `lifestyle` object is
+// field-merged by updateConfig() — so a config PATCH carrying `lifestyle` must
+// strip that object's inner defaults too, or the untouched lifestyle fields get
+// reset to their defaults on every save (top-level .partial() doesn't recurse).
+export const configUpdateSchema = configSchema.partial().extend({
+  lifestyle: partialWithoutDefaults(lifestyleSchema).optional(),
+});
+export const lifestyleUpdateSchema = partialWithoutDefaults(lifestyleSchema);
 
 // =============================================================================
 // ALCOHOL

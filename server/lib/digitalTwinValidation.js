@@ -6,6 +6,7 @@ import {
   BIG_FIVE_DELTA_MAX,
   EMOJI_USAGE_VALUES
 } from './personaTraitBlend.js';
+import { partialWithoutDefaults } from './zodCompat.js';
 
 // Document category enum
 export const documentCategoryEnum = z.enum([
@@ -67,10 +68,10 @@ export const documentMetaSchema = z.object({
 // optional — Zod strips unknown keys, so they MUST be declared here or they'd
 // be silently dropped on the next loadMeta.
 export const testHistoryEntrySchema = z.object({
-  runId: z.string().uuid(),
+  runId: z.string().guid(),
   providerId: z.string(),
   model: z.string(),
-  personaId: z.string().uuid().optional(),
+  personaId: z.string().guid().optional(),
   personaName: z.string().optional(),
   score: z.number().min(0).max(1),
   passed: z.number().int().min(0),
@@ -82,10 +83,10 @@ export const testHistoryEntrySchema = z.object({
 
 // Values-alignment run history entry (M34 P6). Same persona fields as above.
 export const valuesTestHistoryEntrySchema = z.object({
-  runId: z.string().uuid(),
+  runId: z.string().guid(),
   providerId: z.string(),
   model: z.string(),
-  personaId: z.string().uuid().optional(),
+  personaId: z.string().guid().optional(),
   personaName: z.string().optional(),
   score: z.number().min(0).max(1),
   aligned: z.number().int().min(0),
@@ -97,10 +98,10 @@ export const valuesTestHistoryEntrySchema = z.object({
 
 // Adversarial-boundary run history entry (M34 P6). Same persona fields as above.
 export const adversarialTestHistoryEntrySchema = z.object({
-  runId: z.string().uuid(),
+  runId: z.string().guid(),
   providerId: z.string(),
   model: z.string(),
-  personaId: z.string().uuid().optional(),
+  personaId: z.string().guid().optional(),
   personaName: z.string().optional(),
   score: z.number().min(0).max(1),
   held: z.number().int().min(0),
@@ -112,10 +113,10 @@ export const adversarialTestHistoryEntrySchema = z.object({
 
 // Multi-turn conversation run history entry (M34 P6). Same persona fields as above.
 export const multiTurnTestHistoryEntrySchema = z.object({
-  runId: z.string().uuid(),
+  runId: z.string().guid(),
   providerId: z.string(),
   model: z.string(),
-  personaId: z.string().uuid().optional(),
+  personaId: z.string().guid().optional(),
   personaName: z.string().optional(),
   score: z.number().min(0).max(1),
   consistent: z.number().int().min(0),
@@ -151,7 +152,7 @@ export const digitalTwinSettingsSchema = z.object({
   maxContextTokens: z.number().int().min(1000).max(100000).default(4000),
   // The persona currently driving the embodied-twin context (CoS agents, etc.).
   // null/absent = no persona (base twin). Tolerate the UI sentinel for "deactivate".
-  activePersonaId: z.string().uuid().nullable().optional()
+  activePersonaId: z.string().guid().nullable().optional()
 });
 export const soulSettingsSchema = digitalTwinSettingsSchema; // Alias for backwards compatibility
 
@@ -184,7 +185,7 @@ export const personaTraitAdjustmentsSchema = z.object({
 // twin context so the embodied twin modulates voice/behavior for a context
 // (Professional, Casual, Family, …) without forking the underlying documents.
 export const personaSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
   instructions: z.string().min(1).max(5000),
@@ -209,7 +210,7 @@ export const updatePersonaInputSchema = z.object({
 });
 
 export const setActivePersonaInputSchema = z.object({
-  personaId: z.string().uuid().nullable()
+  personaId: z.string().guid().nullable()
 });
 
 // --- Phase 1: Quantitative Personality Modeling Schemas ---
@@ -326,7 +327,7 @@ const optionalTestIds = z.preprocess(
 // so a base-twin run validates instead of 400-ing on the sentinel.
 const optionalPersonaId = z.preprocess(
   v => (v == null || v === '') ? undefined : v,
-  z.string().uuid().optional()
+  z.string().guid().optional()
 );
 
 // Run tests input
@@ -357,7 +358,7 @@ export const enrichmentQuestionInputSchema = z.object({
 
 // Enrichment answer input
 export const enrichmentAnswerInputSchema = z.object({
-  questionId: z.string().uuid(),
+  questionId: z.string().guid(),
   category: enrichmentCategoryEnum,
   question: z.string().min(1),
   answer: z.string().min(1).max(10000).optional(),
@@ -383,7 +384,7 @@ export const exportInputSchema = z.object({
 });
 
 // Settings update input
-export const settingsUpdateInputSchema = soulSettingsSchema.partial();
+export const settingsUpdateInputSchema = partialWithoutDefaults(soulSettingsSchema);
 
 // Test history query
 export const testHistoryQuerySchema = z.object({
@@ -407,6 +408,34 @@ export const writingAnalysisInputSchema = z.object({
   samples: z.array(z.string().min(10)).min(1).max(10),
   providerId: z.string().min(1),
   model: z.string().min(1)
+});
+
+// Spoken-vs-written style comparison input (M34 P5 — multi-modal capture).
+// writtenSamples is optional: when omitted the service falls back to the
+// user's enabled twin documents.
+export const spokenWrittenStyleInputSchema = z.object({
+  spokenTranscript: z.string().min(100).max(50000),
+  writtenSamples: z.array(z.string().min(10).max(20000)).max(10).optional(),
+  providerId: z.string().min(1),
+  model: z.string().min(1)
+});
+
+// Image identity-source input (M34 P5 — multi-modal capture). A base64 image
+// data URL plus the vision-capable provider/model. The data URL is capped well
+// under the server's 55mb JSON body limit (~15M chars ≈ 11MB of image bytes).
+export const identityImageInputSchema = z.object({
+  imageDataUrl: z.string()
+    .max(15_000_000)
+    .regex(/^data:image\/(png|jpe?g|gif|webp);base64,/, 'Must be a base64 image data URL'),
+  providerId: z.string().min(1),
+  model: z.string().min(1)
+});
+
+// Save the appearance analysis as an identity document. Mirrors the import/save
+// upsert shape — content is required, title optional.
+export const identityImageSaveInputSchema = z.object({
+  content: z.string().min(1).max(100000),
+  title: z.string().min(1).max(200).optional()
 });
 
 // List-based enrichment item
@@ -448,7 +477,7 @@ export const analyzeTraitsInputSchema = z.object({
 export const updateTraitsInputSchema = z.object({
   bigFive: bigFiveSchema.partial().optional(),
   valuesHierarchy: z.array(valuedTraitSchema).max(20).optional(),
-  communicationProfile: communicationProfileSchema.partial().optional()
+  communicationProfile: partialWithoutDefaults(communicationProfileSchema).optional()
 });
 
 // Calculate confidence input
@@ -601,6 +630,6 @@ export const createSnapshotInputSchema = z.object({
 });
 
 export const compareSnapshotsInputSchema = z.object({
-  id1: z.string().uuid(),
-  id2: z.string().uuid()
+  id1: z.string().guid(),
+  id2: z.string().guid()
 });

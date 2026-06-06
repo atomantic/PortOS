@@ -172,11 +172,98 @@ describe('runLocalLlmTest timeout/abort contract', () => {
 
     const result = await runLocalLlmTest({
       backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
-      onToken: (delta) => tokens.push(delta),
+      onToken: (delta, kind) => tokens.push([delta, kind]),
     });
 
-    expect(tokens).toEqual(['Hel', 'lo']);
+    expect(tokens).toEqual([['Hel', 'content'], ['lo', 'content']]);
     expect(result.text).toBe('Hello');
+  });
+
+  it('forwards reasoning deltas live on the reasoning channel, content on the content channel', async () => {
+    stubStream(makeReader([
+      sse({ reasoning: 'let me ' }),
+      sse({ reasoning: 'think…' }),
+      sse({ content: 'Answer.' }),
+    ], { abort: false }));
+    const tokens = [];
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: (delta, kind) => tokens.push([delta, kind]),
+    });
+
+    expect(tokens).toEqual([
+      ['let me ', 'reasoning'],
+      ['think…', 'reasoning'],
+      ['Answer.', 'content'],
+    ]);
+    // The final text is content-only — reasoning streamed live but doesn't pollute the answer.
+    expect(result.text).toBe('Answer.');
+  });
+
+  it('does NOT re-emit a reasoning-only stream at the end (no double output)', async () => {
+    stubStream(makeReader([sse({ reasoning: 'thinking ' }), sse({ reasoning: 'aloud' })], { abort: false }));
+    const tokens = [];
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: (delta, kind) => tokens.push([delta, kind]),
+    });
+
+    // Exactly two reasoning tokens — the old end-of-stream onChunk(resolved) re-emit
+    // would have appended the whole joined reasoning a third time.
+    expect(tokens).toEqual([['thinking ', 'reasoning'], ['aloud', 'reasoning']]);
+    // The reasoning-only run still resolves its text from reasoning for the record.
+    expect(result.text).toBe('thinking aloud');
+  });
+
+  it('records TTFT for a reasoning-only run (reasoning marks first-chunk timing)', async () => {
+    stubStream(makeReader([sse({ reasoning: 'hmm' })], { abort: false }));
+
+    const result = await runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000,
+      onToken: () => {},
+    });
+
+    expect(result.timings.ttftMs).not.toBeNull();
+    expect(result.timings.ttftMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('awaits onToken before reading the next upstream chunk (honours backpressure)', async () => {
+    const reader = makeReader([sse({ content: 'a' }), sse({ content: 'b' })], { abort: false });
+    stubStream(reader);
+
+    // A slow consumer (e.g. the streaming route awaiting a socket `drain`): hold
+    // the first token's promise open and assert the read loop has NOT pulled the
+    // next chunk until we let it settle. This is what makes the route's drain-await
+    // actually pause upstream reading instead of buffering unbounded.
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+    let firstSeen;
+    const firstArrived = new Promise((resolve) => { firstSeen = resolve; });
+    const tokens = [];
+    const onToken = vi.fn((delta) => {
+      tokens.push(delta);
+      if (tokens.length === 1) { firstSeen(); return firstHeld; }
+      return undefined;
+    });
+
+    const promise = runLocalLlmTest({
+      backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000, onToken,
+    });
+
+    // Wait until the first token is being handled (it's held open below). At that
+    // point only one read has resolved a line — the second chunk must NOT have been
+    // requested yet, since the loop is parked awaiting our held onToken. This is what
+    // makes the route's drain-await actually pause upstream reading.
+    await firstArrived;
+    expect(tokens).toEqual(['a']);
+    expect(reader.read).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    const result = await promise;
+    expect(tokens).toEqual(['a', 'b']);
+    expect(result.text).toBe('ab');
   });
 
   it('forwards a client cancel onto the upstream fetch so the reader tears down early', async () => {

@@ -8,7 +8,7 @@
 import { io } from 'socket.io-client';
 import { instanceEvents } from './instanceEvents.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch, peerSocketOptions } from '../lib/peerHttpClient.js';
+import { peerFetch, peerSocketOptionsFor } from '../lib/peerHttpClient.js';
 
 // Map<peerId, { socket, agents: Map<agentId, agent>, peer }>
 const peerConnections = new Map();
@@ -27,14 +27,17 @@ export function connectToPeer(peer) {
     reconnectionAttempts: 5,
     reconnectionDelay: 5000,
     timeout: CONNECT_TIMEOUT_MS,
-    ...peerSocketOptions
+    // peerSocketOptionsFor injects the peer's Basic-auth credential as
+    // extraHeaders so the relay handshake survives an auth-gating proxy.
+    ...peerSocketOptionsFor(peer)
   });
 
-  // `host` is required so fetchPeerAgents() can rebuild the HTTPS URL via peerBaseUrl()
+  // `host` is required so fetchPeerAgents() can rebuild the HTTPS URL via peerBaseUrl();
+  // `auth` is carried so its peerFetch presents the same credential as the probe.
   const conn = {
     socket,
     agents: new Map(),
-    peer: { id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port }
+    peer: { id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port, auth: peer.auth ?? null }
   };
 
   peerConnections.set(peer.id, conn);
@@ -103,7 +106,7 @@ async function fetchPeerAgents(conn) {
   const timeout = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
 
   try {
-    const res = await peerFetch(url, { signal: controller.signal });
+    const res = await peerFetch(url, { signal: controller.signal }, peer);
     if (!res.ok) return;
     const data = await res.json();
     const agents = data.running || data.agents || [];

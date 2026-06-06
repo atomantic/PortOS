@@ -949,7 +949,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: controller.signal,
-    }).catch((err) => {
+    }, peer).catch((err) => {
       console.log(`⚠️ peerSync: push to ${peer.name || peer.instanceId} failed: ${err.message}`);
       return null;
     }).finally(() => clearTimeout(timeoutId));
@@ -1991,7 +1991,7 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   // check fires. The plain-HTTP fetch path falls back to the
   // post-resolve checks below (Node's fetch doesn't accept maxBytes,
   // but Content-Length is universally set by serve-static).
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes: ASSET_PULL_MAX_BYTES })
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes: ASSET_PULL_MAX_BYTES }, peer)
     .finally(() => clearTimeout(timeoutId))
     .catch((err) => {
       // The HTTPS shim rejects with a thrown Error when maxBytes is
@@ -2265,7 +2265,7 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // a buggy/misbehaving peer streaming an oversized body is aborted mid-stream
   // rather than buffered whole. The shim rejects with an "exceed" Error.
   let tooLarge = false;
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES })
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES }, peer)
     .finally(() => clearTimeout(timeoutId))
     .catch((err) => {
       if (err?.message?.includes('exceed')) {

@@ -1,0 +1,53 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook } from '@testing-library/react';
+import useMediaPreviewActions from './useMediaPreviewActions';
+
+const navigate = vi.fn();
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
+vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../services/apiImageVideo', () => ({ cleanGalleryImage: vi.fn(), extractLastFrame: vi.fn() }));
+
+const parseNav = () => {
+  const url = navigate.mock.calls.at(-1)?.[0] || '';
+  const [path, qs] = url.split('?');
+  return { path, params: new URLSearchParams(qs) };
+};
+
+describe('useMediaPreviewActions.handleSendToImage', () => {
+  beforeEach(() => navigate.mockReset());
+
+  it('navigates to /media/image with the image queued as init + settings carried', () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    result.current.handleSendToImage({
+      kind: 'image', filename: 'cat.png', prompt: 'a cat', negativePrompt: 'blurry',
+      modelId: 'flux2', width: 1024, height: 768, seed: 7, steps: 8, guidance: 3.5, quantize: '8',
+    });
+    const { path, params } = parseNav();
+    expect(path).toBe('/media/image');
+    expect(params.get('initImageFile')).toBe('cat.png');
+    expect(params.get('prompt')).toBe('a cat');
+    expect(params.get('negativePrompt')).toBe('blurry');
+    expect(params.get('width')).toBe('1024');
+    expect(params.get('seed')).toBe('7');
+    // modelId is intentionally dropped — i2i may auto-switch backends, so the
+    // source's model (possibly provider-specific) must not poison the target form.
+    expect(params.get('modelId')).toBeNull();
+    // Distinct from Remix — no `remix` param.
+    expect(params.get('remix')).toBeNull();
+  });
+
+  it('skips the (no prompt) placeholder so it does not seed the next render', () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    result.current.handleSendToImage({ kind: 'image', filename: 'x.png', prompt: '(no prompt)' });
+    const { params } = parseNav();
+    expect(params.get('initImageFile')).toBe('x.png');
+    expect(params.get('prompt')).toBeNull();
+  });
+
+  it('is a no-op for videos and for items without a filename', () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    result.current.handleSendToImage({ kind: 'video', filename: 'clip.mp4' });
+    result.current.handleSendToImage({ kind: 'image' });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});

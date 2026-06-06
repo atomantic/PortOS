@@ -46,7 +46,8 @@ vi.mock('./apps.js', () => ({
   isTaskTypeEnabledForApp: vi.fn().mockResolvedValue(true),
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
   getActiveApps: vi.fn().mockResolvedValue([]),
-  getAppTaskTypeOverrides: vi.fn().mockResolvedValue({})
+  getAppTaskTypeOverrides: vi.fn().mockResolvedValue({}),
+  clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false })
 }))
 
 vi.mock('../lib/ports.js', () => ({
@@ -101,7 +102,7 @@ import {
 import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval } from './apps.js'
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState } from './apps.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js'
@@ -294,6 +295,19 @@ describe('taskSchedule', () => {
       })
       expect(result.type).toBe('daily')
       expect(result.enabled).toBe(true)
+    })
+
+    it('clears all pr-watcher state when pr-watcher is globally disabled', async () => {
+      clearAllPrWatcherState.mockClear()
+      await updateTaskInterval('pr-watcher', { enabled: false })
+      expect(clearAllPrWatcherState).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not clear pr-watcher state on enable or on other task disables', async () => {
+      clearAllPrWatcherState.mockClear()
+      await updateTaskInterval('pr-watcher', { enabled: true })
+      await updateTaskInterval('security', { enabled: false })
+      expect(clearAllPrWatcherState).not.toHaveBeenCalled()
     })
   })
 

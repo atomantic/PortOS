@@ -183,18 +183,27 @@ export async function getActiveApps() {
  * are reported separately under `unmanaged` so callers can show context
  * without inflating the running denominator.
  */
-export async function getAppStatusSummary() {
+/**
+ * Resolve each active app's overall PM2 status in one pass.
+ *
+ * Returns one entry per active app — PM2-runnable apps carry a derived
+ * `overallStatus` of `online` / `stopped` / `not_started`; native projects
+ * (Xcode, iOS, macOS) report `n/a` since they have no detectable runtime.
+ * Each unique PM2_HOME is queried at most once. This is the shared primitive
+ * behind both `getAppStatusSummary()` (counts) and the CyberCity snapshot
+ * pipeline (per-building status), so the two never drift.
+ *
+ * @returns {Promise<Array<{ id, name, type, repoPath, overallStatus, managed: boolean }>>}
+ */
+export async function getAppStatuses() {
   const apps = await getAllApps({ includeArchived: false });
 
-  const pm2Apps = apps.filter(a => usesPm2(a.type));
-  const unmanaged = apps.length - pm2Apps.length;
-
-  // Group by pm2Home so each unique home is queried at most once
+  // Group PM2 apps by pm2Home so each unique home is queried at most once.
   const homeGroups = new Map();
-  for (const app of pm2Apps) {
+  for (const app of apps) {
+    if (!usesPm2(app.type)) continue;
     const home = app.pm2Home || null;
-    if (!homeGroups.has(home)) homeGroups.set(home, []);
-    homeGroups.get(home).push(app);
+    if (!homeGroups.has(home)) homeGroups.set(home, true);
   }
 
   const procMaps = new Map();
@@ -203,28 +212,38 @@ export async function getAppStatusSummary() {
     procMaps.set(home, new Map(procs.map(p => [p.name, p])));
   }
 
-  let online = 0;
-  let stopped = 0;
-  let notStarted = 0;
-  for (const app of pm2Apps) {
+  return apps.map(app => {
+    const managed = usesPm2(app.type);
+    // repoPath is carried so callers can map an agent's workspacePath back to its
+    // app (the CyberCity snapshot's agent-assignment mapping, mirroring the
+    // client's agentMap) without a second apps read.
+    const base = { id: app.id, name: app.name, type: app.type, repoPath: app.repoPath };
+    if (!managed) {
+      return { ...base, overallStatus: 'n/a', managed: false };
+    }
     const procMap = procMaps.get(app.pm2Home || null) || new Map();
     const names = app.pm2ProcessNames || [];
-    if (names.length === 0) {
-      notStarted++;
-      continue;
+    let overallStatus = 'not_started';
+    if (names.length > 0) {
+      const statuses = names.map(n => procMap.get(n)?.status || 'not_found');
+      if (statuses.some(s => s === 'online')) overallStatus = 'online';
+      else if (statuses.some(s => s === 'stopped')) overallStatus = 'stopped';
+      else overallStatus = 'not_started';
     }
-    const statuses = names.map(n => procMap.get(n)?.status || 'not_found');
-    if (statuses.some(s => s === 'online')) online++;
-    else if (statuses.some(s => s === 'stopped')) stopped++;
-    else notStarted++;
-  }
+    return { ...base, overallStatus, managed: true };
+  });
+}
+
+export async function getAppStatusSummary() {
+  const statuses = await getAppStatuses();
+  const managed = statuses.filter(s => s.managed);
 
   return {
-    total: pm2Apps.length,
-    online,
-    stopped,
-    notStarted,
-    unmanaged
+    total: managed.length,
+    online: managed.filter(s => s.overallStatus === 'online').length,
+    stopped: managed.filter(s => s.overallStatus === 'stopped').length,
+    notStarted: managed.filter(s => s.overallStatus === 'not_started').length,
+    unmanaged: statuses.length - managed.length
   };
 }
 
@@ -416,6 +435,15 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
     overrides[taskType] = updated;
   }
 
+  // Disabling pr-watcher clears its high-water mark AND its execution cooldown
+  // so a later re-enable baselines promptly (like first enable) instead of
+  // dispatching the backlog of PRs opened while it was off. See prWatcher.js /
+  // cosTaskGenerator.js.
+  if (taskType === 'pr-watcher' && enabled === false) {
+    delete data.apps[id].prWatcherState;
+    await resetPrWatcherCooldown(id);
+  }
+
   data.apps[id].taskTypeOverrides = overrides;
   delete data.apps[id].disabledTaskTypes; // Remove legacy field
   data.apps[id].updatedAt = new Date().toISOString();
@@ -423,6 +451,38 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
 
   return { id, ...data.apps[id] };
+}
+
+/**
+ * Reset the schedule execution cooldown for an app's pr-watcher so a re-enable
+ * baselines on the next tick instead of waiting out the prior 30-min custom
+ * interval — otherwise PRs opened in that delayed window slip past the firstRun
+ * baseline. Dynamic import avoids a static apps↔taskSchedule cycle (taskSchedule
+ * already imports this module). Best-effort: a missing history is a no-op.
+ */
+async function resetPrWatcherCooldown(appId) {
+  const { resetExecutionHistory } = await import('./taskSchedule.js');
+  await resetExecutionHistory('pr-watcher', appId).catch(() => {});
+}
+
+/**
+ * Clear the pr-watcher high-water mark on every app. Called when pr-watcher is
+ * disabled GLOBALLY (CoS → Schedule), the counterpart to the per-app disable
+ * clears in updateAppTaskTypeOverride/bulk/toggle-all — so a later global
+ * re-enable baselines silently instead of dispatching the backlog of PRs
+ * opened while it was paused. See prWatcher.js.
+ */
+export async function clearAllPrWatcherState() {
+  const data = await loadApps();
+  let changed = false;
+  for (const app of Object.values(data.apps)) {
+    if (app.prWatcherState) {
+      delete app.prWatcherState;
+      changed = true;
+    }
+  }
+  if (changed) await saveApps(data);
+  return { changed };
 }
 
 /**
@@ -443,6 +503,12 @@ export async function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) 
       delete overrides[taskType];
     } else {
       overrides[taskType] = updated;
+    }
+
+    // See updateAppTaskTypeOverride: clear pr-watcher's mark + cooldown on disable.
+    if (taskType === 'pr-watcher' && enabled === false) {
+      delete data.apps[id].prWatcherState;
+      await resetPrWatcherCooldown(id);
     }
 
     data.apps[id].taskTypeOverrides = overrides;
@@ -469,6 +535,13 @@ export async function toggleAllAppTaskTypes(id, enabled) {
   for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
     const existing = overrides[taskType] || {};
     overrides[taskType] = { ...existing, enabled };
+  }
+
+  // Disabling everything disables pr-watcher too — clear its mark + cooldown so
+  // a later re-enable baselines promptly. See updateAppTaskTypeOverride.
+  if (enabled === false) {
+    delete data.apps[id].prWatcherState;
+    await resetPrWatcherCooldown(id);
   }
 
   data.apps[id].taskTypeOverrides = overrides;

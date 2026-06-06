@@ -15,6 +15,7 @@ import * as brainService from '../services/brain.js';
 import { getProviderById } from '../services/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import {
   captureInputSchema,
   resolveReviewInputSchema,
@@ -219,7 +220,7 @@ router.post('/projects', asyncHandler(async (req, res) => {
 }));
 
 router.put('/projects/:id', asyncHandler(async (req, res) => {
-  const data = validateRequest(projectInputSchema.partial(), req.body);
+  const data = validateRequest(partialWithoutDefaults(projectInputSchema), req.body);
   const project = await brainService.updateProject(req.params.id, data);
   if (!project) {
     throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
@@ -261,7 +262,7 @@ router.post('/ideas', asyncHandler(async (req, res) => {
 }));
 
 router.put('/ideas/:id', asyncHandler(async (req, res) => {
-  const data = validateRequest(ideaInputSchema.partial(), req.body);
+  const data = validateRequest(partialWithoutDefaults(ideaInputSchema), req.body);
   const idea = await brainService.updateIdea(req.params.id, data);
   if (!idea) {
     throw new ServerError('Idea not found', { status: 404, code: 'NOT_FOUND' });
@@ -303,7 +304,7 @@ router.post('/admin', asyncHandler(async (req, res) => {
 }));
 
 router.put('/admin/:id', asyncHandler(async (req, res) => {
-  const data = validateRequest(adminInputSchema.partial(), req.body);
+  const data = validateRequest(partialWithoutDefaults(adminInputSchema), req.body);
   const item = await brainService.updateAdminItem(req.params.id, data);
   if (!item) {
     throw new ServerError('Admin item not found', { status: 404, code: 'NOT_FOUND' });

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
+import { partialWithoutDefaults } from './zodCompat.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
@@ -96,7 +97,13 @@ export const agentSchema = z.object({
   aiConfig: agentAiConfigSchema
 });
 
-export const agentUpdateSchema = agentSchema.partial();
+// partialWithoutDefaults handles the top-level fields; the nested `personality`
+// object is also field-merged by updateAgent(), so it needs its own default-free
+// partial — otherwise a PATCH of one personality key (e.g. just `style`) injects
+// the other keys' defaults and clobbers the stored tone/topics/quirks/promptPrefix.
+export const agentUpdateSchema = partialWithoutDefaults(agentSchema).extend({
+  personality: partialWithoutDefaults(agentPersonalitySchema).optional(),
+});
 
 // =============================================================================
 // PLATFORM ACCOUNT SCHEMAS
@@ -120,7 +127,7 @@ export const platformAccountSchema = z.object({
   platformData: z.record(z.unknown()).optional().default({})
 });
 
-export const platformAccountUpdateSchema = platformAccountSchema.partial();
+export const platformAccountUpdateSchema = partialWithoutDefaults(platformAccountSchema);
 
 // Account registration (when creating new Moltbook account)
 export const accountRegistrationSchema = z.object({
@@ -178,7 +185,7 @@ export const automationScheduleSchema = z.object({
   enabled: z.boolean().default(true)
 });
 
-export const automationScheduleUpdateSchema = automationScheduleSchema.partial();
+export const automationScheduleUpdateSchema = partialWithoutDefaults(automationScheduleSchema);
 
 // =============================================================================
 // EXISTING SCHEMAS
@@ -316,7 +323,7 @@ export const referenceRepoUpdateSchema = z.object({
 // Partial schema for updates. referenceRepos is intentionally absent
 // from appSchema (see comment there) so it can't sneak in via PUT
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
-export const appUpdateSchema = appSchema.partial();
+export const appUpdateSchema = partialWithoutDefaults(appSchema);
 
 // Provider schema
 export const providerSchema = z.object({
@@ -368,7 +375,7 @@ export const socialAccountSchema = z.object({
   notes: z.string().max(2000).optional().default('')
 });
 
-export const socialAccountUpdateSchema = socialAccountSchema.partial();
+export const socialAccountUpdateSchema = partialWithoutDefaults(socialAccountSchema);
 
 // =============================================================================
 // AGENT TOOLS SCHEMAS
@@ -725,6 +732,17 @@ export const createCosJobSchema = z.object({
   promptTemplate: z.string().optional(),
   command: z.string().optional(),
   triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Optional managed-app scope. Empty string from the UI picker → null so a PUT
+  // can actively un-scope a job back to global (updateJob only skips `undefined`,
+  // so undefined would silently preserve the old scope). Absent key stays
+  // undefined (preserve existing on PUT, default null on create).
+  appId: z.preprocess(v => v === '' ? null : v, z.string().nullable().optional()),
+  // Optional git-workflow options for app-scoped agent jobs.
+  taskMetadata: z.object({
+    useWorktree: z.boolean().optional(),
+    openPR: z.boolean().optional(),
+    simplify: z.boolean().optional(),
+  }).optional(),
 });
 
 export const updateCosJobSchema = createCosJobSchema.partial().extend({
@@ -777,13 +795,35 @@ export const restoreRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+export const restoreDbRequestSchema = z.object({
+  snapshotId: z.string().min(1),
+  dryRun: z.boolean().optional().default(true)
+});
+
+// CyberCity snapshot pipeline (issue #877): how often to capture a city-state
+// frame and how many to retain. Validated as a settings slice on PUT /api/settings;
+// service-side defaults (DEFAULT_SNAPSHOT_CONFIG) fill any absent field so an
+// install with no `citySnapshots` key still captures.
+export const citySnapshotConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional(),
+  maxSnapshots: z.number().int().min(10).max(100000).optional()
+});
+
+// Query for GET /api/city/snapshots — `since` (ISO timestamp) and `limit`
+// (most-recent N) both arrive as strings on the query string.
+export const citySnapshotsQuerySchema = z.object({
+  since: z.string().datetime().optional(),
+  limit: z.coerce.number().int().min(1).max(100000).optional()
+});
+
 // Per-feature AI provider assignment: which configured CLI provider/model a
 // feature runs through (e.g. `settings.autofixer`, `settings.calendarSync`).
 // Empty string (UI "unset" sentinel) is coerced to undefined so it round-trips
 // as "use the default" rather than a bogus id. Both the autofixer (file edits
 // + pm2) and Google Calendar MCP sync require an agentic CLI provider; the
 // picker resolution layer (`pickCliProvider`) enforces type 'cli'.
-const emptyToUndefined = (v) => (v === '' ? undefined : v);
+export const emptyToUndefined = (v) => (v === '' ? undefined : v);
 export const featureProviderConfigSchema = z.object({
   providerId: z.preprocess(emptyToUndefined, z.string().optional()),
   model: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -865,7 +905,10 @@ export const writersRoomWorkUpdateSchema = z.object({
   status: writersRoomWorkStatusSchema.optional(),
   folderId: wrIdNullable.optional(),
   imageStyle: writersRoomImageStyleSchema.optional(),
-  liveMode: writersRoomLiveModeSchema.partial().optional(),
+  // partialWithoutDefaults (not .partial()) so a single-knob PATCH doesn't inject
+  // the other knobs' defaults and clobber their stored values (Zod 4 .partial()
+  // keeps inner defaults — see zodCompat.js). The service field-merges each knob.
+  liveMode: partialWithoutDefaults(writersRoomLiveModeSchema).optional(),
 }).strict();
 
 // Cursor-context payload for the live continuation suggest route. The three
@@ -882,6 +925,33 @@ export const writersRoomLiveSuggestSchema = z.object({
 // and the budget is server-owned. A strict empty object rejects any crafted
 // payload (e.g. an attempt to smuggle a usage counter) instead of ignoring it.
 export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
+
+// Cursor-context payload for the CD-bridge suggest route — identical shape to
+// the live continuation suggest (the server only needs a window around the
+// cursor, not the whole manuscript).
+export const writersRoomCdBridgeSuggestSchema = z.object({
+  before: z.string().max(12_000).optional().default(''),
+  after: z.string().max(12_000).optional().default(''),
+  selection: z.string().max(8_000).optional().default(''),
+}).strict();
+
+// The reviewed CD-bridge proposal the writer sends into a new Creative Director
+// project. Caps align with creativeDirectorTreatmentSchema / creativeDirectorSceneSchema
+// so a gate-passing proposal always validates again at setTreatment time. The
+// scene shape here is the PROPOSAL subset (intent/prompt/duration); the service
+// assigns sceneId/order/useContinuationFromPrior before calling setTreatment.
+export const writersRoomCdBridgeSendSchema = z.object({
+  proposal: z.object({
+    logline: z.string().trim().min(1).max(500),
+    synopsis: z.string().trim().min(1).max(5000),
+    styleSpec: z.string().max(5000).optional().default(''),
+    scenes: z.array(z.object({
+      intent: z.string().trim().min(1).max(1000),
+      prompt: z.string().trim().min(1).max(8000),
+      durationSeconds: z.number().int().min(1).max(10),
+    }).strict()).min(1).max(120),
+  }).strict(),
+}).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
   body: z.string().max(5_000_000), // 5 MB ceiling — well over a long novel in plain text
@@ -1047,11 +1117,14 @@ export const featureAgentSchema = z.object({
   description: z.string().min(1).max(2000),
   persona: z.string().max(5000).optional().default(''),
   appId: z.string().min(1),
+  // .prefault({}) (not .default({})) so the nested field defaults still apply
+  // when `schedule` is omitted — Zod 4's .default() no longer re-parses its
+  // value, so a bare .default({}) would yield {} instead of the filled object.
   schedule: z.object({
     mode: featureAgentScheduleModeSchema.default('continuous'),
     intervalMs: z.number().int().min(30000).optional(),
     pauseBetweenRunsMs: z.number().int().min(0).default(60000)
-  }).default({}),
+  }).prefault({}),
   goals: z.array(z.string()).default([]),
   constraints: z.array(z.string()).default([]),
   providerId: z.string().optional().nullable(),
@@ -1090,7 +1163,7 @@ export function validate(schema, data) {
   }
   return {
     success: false,
-    errors: result.error.errors.map(e => ({
+    errors: result.error.issues.map(e => ({
       path: e.path.join('.'),
       message: e.message
     }))
@@ -1209,7 +1282,7 @@ export const localLlmCompareSchema = z.object({
 export function validateRequest(schema, data) {
   const result = schema.safeParse(data);
   if (result.success) return result.data;
-  const errors = result.error.errors.map(e => ({
+  const errors = result.error.issues.map(e => ({
     path: e.path.join('.'),
     message: e.message
   }));
@@ -1271,6 +1344,12 @@ export const MAX_TOTAL_SPAWNS = 5;
 
 const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 
+// pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated
+// user (the PortOS operator / their automation); 'others' = everyone else;
+// 'any' = no gate. Kept here so both the sanitizer and the prWatcher service
+// agree on the vocabulary.
+export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
+
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
@@ -1312,6 +1391,13 @@ export function sanitizeTaskMetadata(raw) {
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewerApplies') && typeof raw.reviewerApplies === 'boolean') {
     clean.reviewerApplies = raw.reviewerApplies;
+    hasKeys = true;
+  }
+  // `prAuthorFilter` gates pr-watcher dispatch on PR authorship — constrained
+  // to a known value so a hand-edited config can't smuggle in an arbitrary
+  // string the watcher would silently treat as "any".
+  if (Object.prototype.hasOwnProperty.call(raw, 'prAuthorFilter') && PR_AUTHOR_FILTERS.includes(raw.prAuthorFilter)) {
+    clean.prAuthorFilter = raw.prAuthorFilter;
     hasKeys = true;
   }
   // Pass through pipeline config (validated shape: object with stages array)

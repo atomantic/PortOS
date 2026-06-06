@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { getTimeOfDayPreset } from './cityConstants';
+import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
 
 // Animated accent light that slowly shifts color, with reactive brightness
 function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef, neonScaleRef }) {
@@ -86,6 +86,7 @@ export default function CityLights({ settings }) {
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
   const skyTheme = settings?.skyTheme ?? 'cyberpunk';
   const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
+  const nightGlow = 1 - Math.min(1, preset.daylightFactor ?? 0);
 
   // Neon scale: dim neon point lights during daytime (30% at noon, 100% at night)
   const neonScaleRef = useRef(1);
@@ -136,6 +137,10 @@ export default function CityLights({ settings }) {
       <ReactivePointLight position={[0, 30, 0]} baseIntensity={1.2} color="#06b6d4" distance={100} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Secondary overhead fill - broad white/blue */}
       <ReactivePointLight position={[0, 20, 10]} baseIntensity={0.5} color="#4488cc" distance={90} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+      {/* Broad nighttime city glow — signage bounce + moonlit haze, faded in daylight */}
+      <ReactivePointLight position={[0, 16, 0]} baseIntensity={1.8 * nightGlow} color={CITY_COLORS.ground} distance={150} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+      <ReactivePointLight position={[-28, 10, 24]} baseIntensity={1.05 * nightGlow} color="#ec4899" distance={118} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+      <ReactivePointLight position={[30, 12, -22]} baseIntensity={1.1 * nightGlow} color="#60a5fa" distance={120} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Magenta accent from left - animated color shift */}
       <AnimatedLight position={[-20, 12, -15]} baseColor="#ec4899" baseIntensity={0.7} distance={60} speed={0.3} shiftRange={0.15} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Blue accent from right - animated shift */}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRightLeft, Check, ChevronDown, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
 import toast from '../components/ui/Toast';
@@ -173,8 +173,12 @@ function ResultPanel({ result }) {
 }
 
 // Live panel shown while a chat run streams tokens. Replaced by a final
-// ResultPanel (with timings) once the run settles.
+// ResultPanel (with timings) once the run settles. Reasoning (a reasoning
+// model's chain-of-thought) streams on its own channel and renders in a
+// distinct "Thinking" block above the answer, so the answer text stays clean.
 function StreamingPanel({ stream }) {
+  const hasReasoning = Boolean(stream.reasoning);
+  const hasText = Boolean(stream.text);
   return (
     <section className="border border-port-accent/40 rounded-lg bg-port-bg p-3 space-y-3">
       <div className="flex items-start justify-between gap-3">
@@ -184,12 +188,23 @@ function StreamingPanel({ stream }) {
         </div>
         <span className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-port-accent/15 text-port-accent">
           <BrailleSpinner />
-          Streaming
+          {!hasText && hasReasoning ? 'Thinking' : 'Streaming'}
         </span>
       </div>
-      {stream.text
+      {hasReasoning && (
+        <div className="rounded-lg border border-port-border bg-port-card/40 p-2 space-y-1">
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <Brain size={12} className="text-gray-600" />
+            Thinking
+          </div>
+          <div className="max-h-48 overflow-auto text-xs text-gray-400 whitespace-pre-wrap break-words">
+            {stream.reasoning}
+          </div>
+        </div>
+      )}
+      {hasText
         ? <div className="max-h-[28rem] overflow-auto"><PlaygroundOutput text={stream.text} /></div>
-        : <div className="text-sm text-gray-500">Waiting for the first token…</div>}
+        : !hasReasoning && <div className="text-sm text-gray-500">Waiting for the first token…</div>}
     </section>
   );
 }
@@ -222,10 +237,13 @@ export default function LocalLlmPlayground() {
   // in each run's .finally(). Abort the live request on unmount too.
   const runControllerRef = useRef(null);
   // Streaming tokens arrive faster than is worth re-rendering for (each render
-  // re-parses the whole accumulated output). Accumulate into a ref and flush to
+  // re-parses the whole accumulated output). Accumulate into refs and flush to
   // state on a ~80ms timer so the live panel updates smoothly without an
-  // O(n²) re-parse storm on long outputs.
+  // O(n²) re-parse storm on long outputs. Content and reasoning stream on
+  // separate channels so a reasoning model's chain-of-thought renders live in
+  // its own block instead of polluting the answer text.
   const streamBufRef = useRef('');
+  const reasoningBufRef = useRef('');
   const flushTimerRef = useRef(null);
   useEffect(() => () => {
     mountedRef.current = false;
@@ -237,7 +255,8 @@ export default function LocalLlmPlayground() {
     flushTimerRef.current = null;
     if (!mountedRef.current) return;
     const text = streamBufRef.current;
-    setStreamingChat((prev) => (prev ? { ...prev, text } : prev));
+    const reasoning = reasoningBufRef.current;
+    setStreamingChat((prev) => (prev ? { ...prev, text, reasoning } : prev));
   };
 
   const cancelRun = () => runControllerRef.current?.abort();
@@ -323,14 +342,16 @@ export default function LocalLlmPlayground() {
     setBusy(true);
     const target = primaryTarget;
     streamBufRef.current = '';
-    setStreamingChat({ backend: target.backend, modelId: target.modelId, text: '' });
+    reasoningBufRef.current = '';
+    setStreamingChat({ backend: target.backend, modelId: target.modelId, text: '', reasoning: '' });
     streamLocalLlmTest(
       { ...target, prompt: prompt.trim(), ...options() },
       {
         signal: controller.signal,
-        onToken: (delta) => {
+        onToken: (delta, kind) => {
           if (!mountedRef.current || !delta) return;
-          streamBufRef.current += delta;
+          if (kind === 'reasoning') reasoningBufRef.current += delta;
+          else streamBufRef.current += delta;
           if (!flushTimerRef.current) flushTimerRef.current = setTimeout(flushStream, 80);
         },
       },

@@ -313,6 +313,22 @@ describe('buildVoMuxArgs', () => {
     expect(filter).toContain('[vo0]apad[aout]');
     expect(filter).not.toContain('amix');
   });
+
+  it('falls back to DEFAULT_MUSIC_GAIN for a non-finite musicGain', () => {
+    // A non-numeric gain must never reach the filter string as "NaN" — that
+    // aborts the whole ffmpeg graph. The finite-gain guard substitutes the
+    // default so the bed still renders.
+    const args = buildVoMuxArgs({
+      inputVideoPath: '/v.mp4',
+      voLines: [{ path: '/a.wav', offsetSec: 0 }],
+      musicPath: '/m.mp3',
+      musicGain: 'loud',
+      outPath: '/out.mp4',
+    });
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain(`[2:a]volume=${DEFAULT_MUSIC_GAIN.toFixed(3)}`);
+    expect(filter).not.toContain('NaN');
+  });
 });
 
 describe('muxVoLines', () => {
@@ -514,6 +530,19 @@ describe('buildCueMuxArgs', () => {
     const filter = args[args.indexOf('-filter_complex') + 1];
     expect(filter).toContain('[cue0]apad[aout]');
     expect(filter).not.toContain('[cuebed]');
+  });
+
+  it('falls back to DEFAULT_MUSIC_GAIN for a non-finite per-cue gain', () => {
+    // Per-cue gain runs through the same finite-gain guard so a malformed cue
+    // gain can't inject "NaN" into the volume filter and abort the render.
+    const args = buildCueMuxArgs({
+      inputVideoPath: '/v.mp4',
+      cues: [{ path: '/c0.wav', startSec: 0, endSec: 30, gain: NaN }],
+      outPath: '/out.mp4',
+    });
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain(`volume=${DEFAULT_MUSIC_GAIN.toFixed(3)}`);
+    expect(filter).not.toContain('NaN');
   });
 
   it('ducks the cue bed under VO when VO lines are present', () => {

@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2 } from 'lucide-react';
+import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2, Search } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import Banner from '../components/ui/Banner';
@@ -23,6 +23,7 @@ import {
   setCivitaiAuth,
   clearCivitaiAuth,
   getCivitaiSuggestions,
+  searchCivitaiLoras,
 } from '../services/api';
 
 const RUNNER_LABEL = {
@@ -41,6 +42,13 @@ const RUNNER_BADGE_CLASS = {
   [RUNNER_FAMILIES.HIDREAM]: 'bg-rose-600/20 text-rose-300 border-rose-500/30',
   [RUNNER_FAMILIES.QWEN]: 'bg-sky-600/20 text-sky-300 border-sky-500/30',
 };
+
+// Stable identity for a suggestion's specific model+version — used for React
+// keys, install-in-flight tracking, and "Load more" dedup. Curated cards pass
+// a family-specific versionId that differs from the card's primary, so the key
+// takes the two ids explicitly rather than a whole card.
+const suggestionKey = (modelId, versionId) => `${modelId}-${versionId}`;
+const cardKey = (card) => suggestionKey(card.modelId, card.versionId);
 
 export default function Loras() {
   const [loras, setLoras] = useState([]);
@@ -200,7 +208,7 @@ export default function Loras() {
           // Curated cards pass a family-specific (url, versionId); non-curated
           // cards omit versionId and we fall back to the card's primary.
           const vid = versionId ?? card.versionId;
-          const key = `${card.modelId}-${vid}`;
+          const key = suggestionKey(card.modelId, vid);
           setInstallingSuggestion(key);
           await performInstall(url || card.installUrl);
           setInstallingSuggestion(null);
@@ -235,15 +243,17 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
   const runners = suggestions?.runners || {};
   const sections = [
     { key: 'curated', label: 'Curated picks', cards: curated, hint: 'Hand-picked LoRAs that work across multiple base models.' },
-    // The four runner-family sections always render, even when Civitai
-    // search returns zero — `alwaysShow` lets the user see all four
-    // headers at a glance instead of silently collapsing the empty ones.
-    { key: RUNNER_FAMILIES.MFLUX,   label: 'Top for Flux 1',  cards: runners[RUNNER_FAMILIES.MFLUX] || [],   hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.', alwaysShow: true },
-    { key: RUNNER_FAMILIES.FLUX2,   label: 'Top for Flux 2',  cards: runners[RUNNER_FAMILIES.FLUX2] || [],   hint: 'Most-downloaded LoRAs trained against Flux.2 Klein 4B / 9B.', alwaysShow: true },
-    { key: RUNNER_FAMILIES.Z_IMAGE, label: 'Top for Z-Image', cards: runners[RUNNER_FAMILIES.Z_IMAGE] || [], hint: 'Most-downloaded LoRAs trained against Z-Image / Z-Image-Turbo.', alwaysShow: true },
-    { key: RUNNER_FAMILIES.ERNIE,   label: 'Top for ERNIE',   cards: runners[RUNNER_FAMILIES.ERNIE] || [],   hint: 'Most-downloaded LoRAs trained against ERNIE-Image.', alwaysShow: true },
-    { key: RUNNER_FAMILIES.HIDREAM, label: 'Top for HiDream', cards: runners[RUNNER_FAMILIES.HIDREAM] || [], hint: 'Most-downloaded LoRAs trained against HiDream.', alwaysShow: true },
-    { key: RUNNER_FAMILIES.QWEN,    label: 'Top for Qwen',    cards: runners[RUNNER_FAMILIES.QWEN] || [],    hint: 'Most-downloaded LoRAs trained against Qwen-Image.', alwaysShow: true },
+    // The runner-family sections always render, even when Civitai search
+    // returns zero — `alwaysShow` lets the user see every base-model header at
+    // a glance instead of silently collapsing the empty ones. `runner` (the
+    // family key) marks the section as searchable + paginated; it's tracked
+    // separately from `alwaysShow` so the two concerns can't accidentally couple.
+    { key: RUNNER_FAMILIES.MFLUX,   runner: RUNNER_FAMILIES.MFLUX,   label: 'Top for Flux 1',  cards: runners[RUNNER_FAMILIES.MFLUX] || [],   hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.FLUX2,   runner: RUNNER_FAMILIES.FLUX2,   label: 'Top for Flux 2',  cards: runners[RUNNER_FAMILIES.FLUX2] || [],   hint: 'Most-downloaded LoRAs trained against Flux.2 Klein 4B / 9B.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.Z_IMAGE, runner: RUNNER_FAMILIES.Z_IMAGE, label: 'Top for Z-Image', cards: runners[RUNNER_FAMILIES.Z_IMAGE] || [], hint: 'Most-downloaded LoRAs trained against Z-Image / Z-Image-Turbo.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.ERNIE,   runner: RUNNER_FAMILIES.ERNIE,   label: 'Top for ERNIE',   cards: runners[RUNNER_FAMILIES.ERNIE] || [],   hint: 'Most-downloaded LoRAs trained against ERNIE-Image.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.HIDREAM, runner: RUNNER_FAMILIES.HIDREAM, label: 'Top for HiDream', cards: runners[RUNNER_FAMILIES.HIDREAM] || [], hint: 'Most-downloaded LoRAs trained against HiDream.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.QWEN,    runner: RUNNER_FAMILIES.QWEN,    label: 'Top for Qwen',    cards: runners[RUNNER_FAMILIES.QWEN] || [],    hint: 'Most-downloaded LoRAs trained against Qwen-Image.', alwaysShow: true },
   ];
   return (
     <div className="space-y-4">
@@ -273,6 +283,10 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
           hint={section.hint}
           cards={section.cards}
           alwaysShow={section.alwaysShow}
+          // Runner-family sections carry a `runner` key → keyword search box +
+          // "Load more" pagination; the curated section has none and stays static.
+          runner={section.runner || null}
+          resetSignal={suggestions?.fetchedAt}
           installedFilenames={installedFilenames}
           installingSuggestionKey={installingSuggestionKey}
           onInstall={onInstall}
@@ -282,29 +296,151 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
   );
 }
 
-function SuggestionsSection({ label, hint, cards, alwaysShow = false, installedFilenames, installingSuggestionKey, onInstall }) {
-  const list = cards || [];
-  if (list.length === 0 && !alwaysShow) return null;
+function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = null, resetSignal, installedFilenames, installingSuggestionKey, onInstall }) {
+  const baseCards = cards || [];
+  const searchable = !!runner;
+
+  // Live state for keyword search + "Load more" pagination. `liveCards === null`
+  // means we're showing the cached top-N from props; once the user searches or
+  // pages, we switch to the live list. `activeQuery` is the last submitted
+  // keyword ('' = top ranking); `cursor` is Civitai's next-page token.
+  const [query, setQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
+  const [liveCards, setLiveCards] = useState(null);
+  const [cursor, setCursor] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // Drop any live search/pagination so the section falls back to the cached
+  // top-N. Shared by Clear, the empty-box submit, and the Refresh effect.
+  // Stable identity (setters never change) so the effect can depend on it.
+  const resetToCached = useCallback(() => {
+    setActiveQuery(''); setLiveCards(null); setCursor(null);
+  }, []);
+
+  // A global Refresh (new fetchedAt) re-seeds the cached top-N — drop live
+  // results so the section doesn't show stale ones under the new header. Also
+  // fires once harmlessly on mount (all setters are no-ops at their defaults).
+  useEffect(() => { setQuery(''); resetToCached(); }, [resetSignal, resetToCached]);
+
+  const fetchPage = useCallback(async (q, { append, useCursor }) => {
+    setLoading(true);
+    await searchCivitaiLoras({ runner, query: q, cursor: useCursor, limit: 12 })
+      .then((res) => {
+        const items = res?.items || [];
+        setCursor(res?.nextCursor || null);
+        setActiveQuery(q);
+        setLiveCards((prev) => {
+          if (!append || prev === null) return items;
+          // Dedup by modelId-versionId — re-fetched leaders can repeat.
+          const seen = new Set(prev.map(cardKey));
+          return [...prev, ...items.filter((c) => !seen.has(cardKey(c)))];
+        });
+      })
+      .catch((err) => toast.error(err?.message || 'Civitai search failed'))
+      .finally(() => setLoading(false));
+  }, [runner]);
+
+  const handleSearch = (e) => {
+    e?.preventDefault?.();
+    if (loading) return; // Enter while a fetch is in flight → no overlapping requests
+    const q = query.trim();
+    if (!q) { resetToCached(); return; } // empty box → cached top-N
+    fetchPage(q, { append: false, useCursor: null });
+  };
+
+  const clearSearch = () => { setQuery(''); resetToCached(); };
+
+  const loadMore = () => {
+    if (loading) return;
+    // First click from the cached view fetches page 1 live (top ranking or the
+    // active query); later clicks page forward with the cursor.
+    if (liveCards === null) fetchPage(activeQuery, { append: false, useCursor: null });
+    else fetchPage(activeQuery, { append: true, useCursor: cursor });
+  };
+
+  const list = liveCards !== null ? liveCards : baseCards;
+  // "Load more" is available until we've gone live AND Civitai reports no
+  // further cursor. In the cached view we assume more exists (only top-4 shown).
+  const canLoadMore = searchable && (liveCards === null || cursor !== null);
+
+  if (list.length === 0 && !alwaysShow && !searchable) return null;
   return (
     <div>
       <div className="flex items-baseline gap-3 mb-2">
         <h3 className="text-sm font-medium text-gray-300">{label}</h3>
         <span className="text-xs text-gray-600">{list.length}</span>
+        {activeQuery && (
+          <span className="text-xs text-port-accent">results for “{activeQuery}”</span>
+        )}
       </div>
       {hint && <p className="text-xs text-gray-500 mb-2">{hint}</p>}
+      {searchable && (
+        <form onSubmit={handleSearch} className="flex gap-2 mb-3">
+          <div className="relative flex-1 max-w-md">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${RUNNER_LABEL[runner] || runner} LoRAs on Civitai…`}
+              aria-label={`Search ${RUNNER_LABEL[runner] || runner} LoRAs on Civitai`}
+              className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="bg-port-accent/90 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent disabled:opacity-50"
+          >
+            {loading ? 'Searching…' : 'Search'}
+          </button>
+          {activeQuery && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              className="px-2 py-1.5 rounded text-xs text-gray-400 hover:text-gray-200 border border-port-border"
+              title="Clear search — back to top ranking"
+            >
+              Clear
+            </button>
+          )}
+        </form>
+      )}
       {list.length === 0 ? (
-        <p className="text-xs text-gray-600 italic">No LoRAs found on Civitai for this base model yet.</p>
+        <p className="text-xs text-gray-600 italic">
+          {activeQuery
+            ? `No LoRAs match “${activeQuery}” for this base model${canLoadMore ? ' on this page — try Load more.' : '.'}`
+            : 'No LoRAs found on Civitai for this base model yet.'}
+        </p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {list.map((card) => (
             <SuggestionCard
-              key={`${card.modelId}-${card.versionId}`}
+              key={cardKey(card)}
               card={card}
               installedFilenames={installedFilenames}
               installingSuggestionKey={installingSuggestionKey}
               onInstall={onInstall}
             />
           ))}
+        </div>
+      )}
+      {/* "Load more" sits OUTSIDE the empty/non-empty branch on purpose: a live
+          Civitai page can come back empty yet carry a nextCursor (later pages
+          hold matches for some keyword + base-model combos), so the control
+          must stay reachable to advance past empty pages instead of trapping
+          the user on a false "no matches" state. */}
+      {canLoadMore && (
+        <div className="mt-3 flex justify-center">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loading}
+            className="text-xs text-gray-300 hover:text-white px-4 py-1.5 rounded border border-port-border hover:border-port-accent/40 disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {loading ? <RefreshCw size={12} className="animate-spin" /> : <Download size={12} />}
+            {loading ? 'Loading…' : 'Load more'}
+          </button>
         </div>
       )}
     </div>
@@ -322,7 +458,7 @@ function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onI
       : (card.runnerFamily ? [card.runnerFamily] : []));
   const isInstalled = (versionId) => versionId != null
     && [...installedFilenames].some((f) => f.endsWith(`-v${versionId}.safetensors`));
-  const isInstalling = (versionId) => installingSuggestionKey === `${card.modelId}-${versionId}`;
+  const isInstalling = (versionId) => installingSuggestionKey === suggestionKey(card.modelId, versionId);
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
       {card.previewImageUrl ? (

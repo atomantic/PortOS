@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeBackupVault } from '../../utils/cityBackupVault';
 import { timeAgo } from '../../utils/formatters';
 
@@ -17,6 +17,7 @@ export default function CityBackupVault({ backupStatus, settings }) {
   // Honor the quality dial: drop the seal pulse on the lowest preset, but keep the
   // static glow so the vault's health is still legible.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   useFrame(({ clock }) => {
     if (!animate || !sealRef.current) return;
@@ -38,7 +39,7 @@ export default function CityBackupVault({ backupStatus, settings }) {
       <mesh position={[0, height / 2, 0]}>
         <boxGeometry args={[width, height, width * 0.8]} />
         <meshStandardMaterial
-          color="#0a0e16"
+          color={tintStructure('#0a0e16')}
           emissive={color}
           emissiveIntensity={0.12 + vault.intensity * 0.18}
           metalness={0.6}
@@ -48,7 +49,7 @@ export default function CityBackupVault({ backupStatus, settings }) {
       {/* Beveled cap so it reads as a sealed bunker, not just a box */}
       <mesh position={[0, height + 0.25, 0]}>
         <boxGeometry args={[width * 1.1, 0.5, width * 0.9]} />
-        <meshStandardMaterial color="#0d131f" emissive={color} emissiveIntensity={0.25} metalness={0.7} roughness={0.4} />
+        <meshStandardMaterial color={tintStructure('#0d131f')} emissive={color} emissiveIntensity={0.25} metalness={0.7} roughness={0.4} />
       </mesh>
       {/* Circular vault seal on the front (+Z) face — the live health indicator */}
       <mesh ref={sealRef} position={[0, height * 0.5, width * 0.4 + 0.05]} rotation={[Math.PI / 2, 0, 0]}>
@@ -56,12 +57,12 @@ export default function CityBackupVault({ backupStatus, settings }) {
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={vault.intensity} toneMapped={false} />
       </mesh>
       {/* Label + status/time-since sublabel above the vault */}
-      <Text position={[0, height + 1.7, 0]} fontSize={1.3} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={18}>
+      <CityLabel position={[0, height + 1.7, 0]} fontSize={1.3} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={18}>
         VAULT
-      </Text>
-      <Text position={[0, height + 0.85, 0]} fontSize={0.85} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={18}>
+      </CityLabel>
+      <CityLabel position={[0, height + 0.85, 0]} fontSize={0.85} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={18}>
         {sublabel}
-      </Text>
+      </CityLabel>
     </group>
   );
 }

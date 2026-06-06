@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser,
+  X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
   ChevronLeft, ChevronRight, Maximize2, Minimize2, Star,
 } from 'lucide-react';
 import PromptRefineModal from './PromptRefineModal';
@@ -51,6 +51,16 @@ function describeCleanedLineage(item) {
   if (item.autoCleaned) {
     return `Auto-cleaned (${item.cleanLevel || 'aggressive'})${item.c2paStripped ? ' · C2PA stripped' : ''}`;
   }
+  // SynthID-defeat regen reuses `cleanedFrom` for grouping but is a generative
+  // round-trip, not a clean — describe it honestly (issue #912).
+  if (item.regenerated && item.cleanedFrom) {
+    const denoise = typeof item.regenStrength === 'number' ? ` · ${Math.round(item.regenStrength * 100)}% denoise` : '';
+    // Realized fidelity (how much the pixels actually changed) — stamped by the
+    // server so the lineage row reflects the true delta, not just the request.
+    const fidelity = typeof item.regenPixelDeltaPct === 'number' ? ` · ${item.regenPixelDeltaPct}% changed` : '';
+    const method = item.regenMethod === 'light-spatial' ? ' (light)' : '';
+    return `Regenerated${method} from ${item.cleanedFrom}${denoise}${fidelity}`;
+  }
   if (item.cleanedFrom) {
     return `${item.cleanLevel ? `Cleaned (${item.cleanLevel}) ` : 'Cleaned '}from ${item.cleanedFrom}`;
   }
@@ -69,9 +79,13 @@ export default function MediaLightbox({
   item,
   onClose,
   onRemix,
+  onSendToImage,
   onSendToVideo,
   onContinue,
   onClean,
+  onRegenerate,
+  regenAvailable = false,
+  regenBounds = null,
   onPrevious,
   onNext,
   hasPrevious = false,
@@ -310,9 +324,13 @@ export default function MediaLightbox({
             isVideo={isVideo}
             onClose={onClose}
             onRemix={onRemix}
+            onSendToImage={onSendToImage}
             onSendToVideo={onSendToVideo}
             onContinue={onContinue}
             onClean={onClean}
+            onRegenerate={onRegenerate}
+            regenAvailable={regenAvailable}
+            regenBounds={regenBounds}
             copy={copy}
             onRefine={() => setRefineOpen(true)}
             annotation={annotation}
@@ -354,17 +372,53 @@ function PeerNotes({ others }) {
 
 function SettingsPane({
   item, meta, isVideo,
-  onClose, onRemix, onSendToVideo, onContinue, onClean,
+  onClose, onRemix, onSendToImage, onSendToVideo, onContinue, onClean, onRegenerate, regenAvailable, regenBounds,
   copy, onRefine,
   annotation, onAnnotationChange,
   variantGroup, onSelectVariant,
 }) {
   const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
   const [cleaning, setCleaning] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [lightRegenerating, setLightRegenerating] = useState(false);
+  // Regen controls: the button toggles an inline panel (strength slider +
+  // optional prompt) so a watermark-defeat pass can be tuned without leaving the
+  // lightbox. Slider bounds come from the server (`regenBounds`) so the floor
+  // stays in lock-step with route validation.
+  const { strengthMin: regenMin = 0.02, strengthMax: regenMax = 0.6, strengthDefault: regenDefault = 0.25 } = regenBounds || {};
+  // CPU-only spatial fallback — always offered (sharp is server-side), so an
+  // install without a FLUX runner can still attempt a (less reliable) pass.
+  const regenLightAvailable = !!regenBounds?.lightAvailable;
+  const [regenOpen, setRegenOpen] = useState(false);
+  const [regenStrength, setRegenStrength] = useState(regenDefault);
+  // Track whether the user actually moved the slider. When untouched, the
+  // request OMITS strength so the server picks its provider-aware default
+  // (lighter for local-FLUX sources, conservative 0.25 for SynthID-bearing
+  // ones). Always sending the slider's initialized value would pin 0.25 and
+  // make that adaptive default unreachable from the UI.
+  const [strengthTouched, setStrengthTouched] = useState(false);
+  const [regenPrompt, setRegenPrompt] = useState('');
   const starred = !!annotation?.starred;
   const closeThenRun = (handler) => {
     onClose?.();
     handler?.(item);
+  };
+  // Shared handler for the in-place async actions (Clean / Regenerate): guard
+  // against double-fire, flip the busy flag, run the action (the caller toasts
+  // its own error so we just stay open on throw), and close on success.
+  const runBusyAction = (busy, setBusy, action) => async () => {
+    if (busy) return;
+    setBusy(true);
+    let ok = false;
+    try {
+      await action(item);
+      ok = true;
+    } catch {
+      // Caller toasts its own error; stay open so the user can retry.
+    } finally {
+      setBusy(false);
+    }
+    if (ok) onClose();
   };
   // Local draft state debounces saves so each keystroke doesn't PATCH.
   // onSaveRef keeps the debounce effect off the parent's render churn —
@@ -573,6 +627,16 @@ function SettingsPane({
             <Sparkles className="w-3.5 h-3.5" /> Remix
           </button>
         )}
+        {!isVideo && onSendToImage && (
+          <button
+            type="button"
+            onClick={() => closeThenRun(onSendToImage)}
+            title="Open this image in Image Gen as the image-to-image source"
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+          >
+            <Wand2 className="w-3.5 h-3.5" /> Send to i2i
+          </button>
+        )}
         {!isVideo && onSendToVideo && (
           <button
             type="button"
@@ -586,25 +650,94 @@ function SettingsPane({
           <button
             type="button"
             disabled={cleaning}
-            onClick={async () => {
-              if (cleaning) return;
-              setCleaning(true);
-              let ok = false;
-              try {
-                await onClean(item);
-                ok = true;
-              } catch {
-                // Caller toasts its own error; stay open so the user can retry.
-              } finally {
-                setCleaning(false);
-              }
-              if (ok) onClose();
-            }}
+            onClick={runBusyAction(cleaning, setCleaning, onClean)}
             title={CLEAN_TOOLTIP}
             aria-label="Clean image"
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Eraser className="w-3.5 h-3.5" /> {cleaning ? 'Cleaning…' : 'Clean'}
+          </button>
+        )}
+        {!isVideo && onRegenerate && regenAvailable && (
+          <button
+            type="button"
+            onClick={() => setRegenOpen((o) => !o)}
+            aria-expanded={regenOpen}
+            title="Regenerate through a local FLUX model (img2img) to overwrite SynthID watermarking. Creates a new variant; the original is kept."
+            aria-label="Regenerate image to defeat SynthID watermark"
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded ${regenOpen ? 'bg-port-accent' : 'bg-port-accent/80'}`}
+          >
+            <Wand2 className="w-3.5 h-3.5" /> Regenerate
+          </button>
+        )}
+        {!isVideo && onRegenerate && regenAvailable && regenOpen && (
+          <div className="w-full mt-1 p-2.5 rounded border border-port-border bg-port-bg/60 space-y-2">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="regen-strength" className="text-[11px] uppercase tracking-wide text-gray-400">Strength</label>
+                <span className="text-xs text-gray-200 tabular-nums">{regenStrength.toFixed(2)}</span>
+              </div>
+              <input
+                id="regen-strength"
+                type="range"
+                min={regenMin}
+                max={regenMax}
+                step={0.01}
+                value={regenStrength}
+                onChange={(e) => { setRegenStrength(Number(e.target.value)); setStrengthTouched(true); }}
+                disabled={regenerating}
+                className="w-full accent-port-accent"
+              />
+              <p className="mt-1 text-[10px] leading-snug text-gray-500">
+                Lower = more faithful (a re-encode floor of ~8% change). The watermark is overwritten by the round-trip regardless; raise it only if a low value doesn’t clear your detector.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="regen-prompt" className="block mb-1 text-[11px] uppercase tracking-wide text-gray-400">Prompt <span className="normal-case text-gray-500">(optional)</span></label>
+              <input
+                id="regen-prompt"
+                type="text"
+                value={regenPrompt}
+                onChange={(e) => setRegenPrompt(e.target.value)}
+                disabled={regenerating}
+                placeholder="Leave empty for minimal change"
+                className="w-full px-2 py-1 text-xs rounded bg-port-card border border-port-border text-gray-100 placeholder:text-gray-600 focus:outline-none focus:border-port-accent"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={regenerating || lightRegenerating}
+              onClick={runBusyAction(regenerating, setRegenerating, (it) => onRegenerate(it, { strength: strengthTouched ? regenStrength : undefined, prompt: regenPrompt.trim() || undefined }))}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Wand2 className="w-3.5 h-3.5" /> {regenerating ? 'Queuing…' : strengthTouched ? `Regenerate at ${regenStrength.toFixed(2)}` : 'Regenerate'}
+            </button>
+            {regenLightAvailable && (
+              <button
+                type="button"
+                disabled={regenerating || lightRegenerating}
+                onClick={runBusyAction(lightRegenerating, setLightRegenerating, (it) => onRegenerate(it, { method: 'light' }))}
+                title="CPU-only spatial pass (no GPU). Faster, but less reliable than the FLUX round-trip."
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-border hover:bg-port-border/70 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Wand2 className="w-3.5 h-3.5" /> {lightRegenerating ? 'Processing…' : 'Light (CPU, less reliable)'}
+              </button>
+            )}
+          </div>
+        )}
+        {/* No FLUX runner installed, but the CPU spatial pass is always available
+            — offer it standalone so these installs aren't left with no SynthID
+            defeat path at all. Honestly labeled as less reliable. */}
+        {!isVideo && onRegenerate && !regenAvailable && regenLightAvailable && (
+          <button
+            type="button"
+            disabled={lightRegenerating}
+            onClick={runBusyAction(lightRegenerating, setLightRegenerating, (it) => onRegenerate(it, { method: 'light' }))}
+            title="CPU-only spatial pass to disrupt SynthID watermarking (no GPU required). Less reliable than a FLUX round-trip; install a local FLUX runner for the stronger pass. Creates a new variant; the original is kept."
+            aria-label="Light CPU regen to disrupt SynthID watermark"
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Wand2 className="w-3.5 h-3.5" /> {lightRegenerating ? 'Processing…' : 'Regen (light)'}
           </button>
         )}
         {isVideo && onContinue && (

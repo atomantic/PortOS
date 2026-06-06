@@ -9,7 +9,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, validateRequest } from '../lib/validation.js';
 import { catalogUserTypesSettingsSchema } from '../lib/catalogValidation.js';
 
 const router = Router();
@@ -91,6 +91,11 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.embeddings !== undefined) {
     validateRequest(settingsEmbeddingsSchema.partial(), req.body.embeddings);
+  }
+  // CyberCity snapshot capture config — validate the slice when present so a
+  // malformed interval/cap can't reach disk and break the scheduler.
+  if (req.body?.citySnapshots !== undefined) {
+    validateRequest(citySnapshotConfigSchema.partial(), req.body.citySnapshots);
   }
   // User-defined catalog types — validate the whole slice (unique-id +
   // system-collision refinements) when the key is present, mirroring the

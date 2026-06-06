@@ -20,7 +20,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
@@ -139,6 +139,11 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
+  // Polls the app's GitHub repo for pull requests newly opened against the
+  // default branch and dispatches an agent (running the configurable
+  // pr-watcher prompt) for each one. `taskMetadata.prAuthorFilter` gates on
+  // PR authorship (self / others / any). See server/services/prWatcher.js.
+  'pr-watcher',
   // Watches `referenceRepos` configured on the app — fetches each upstream
   // repo, finds commits since lastReviewedSha, and appends slug-tagged
   // `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
@@ -198,7 +203,15 @@ export const DEFAULT_TASK_INTERVALS = {
   // `readOnly` is coupled to PROMPT_VERSIONS['reference-watch'] — see
   // REFERENCE_WATCH_AUDITED_VERSION above; bumping the prompt version requires
   // re-auditing this default (a guard test in taskSchedule.test.js enforces it).
-  'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } }
+  'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } },
+  // pr-watcher polls for newly-opened PRs, so it runs on a short custom
+  // interval rather than the loose rotation/daily cadence. 30 min keeps the
+  // gh polling cheap while still reacting to a PR within one cycle. Default
+  // gate is `prAuthorFilter: 'any'` (react to every PR); the operator narrows
+  // it to 'self' or 'others' in the schedule UI. `readOnly: false` so a
+  // customized prompt can make changes if the operator wants — the shipped
+  // default prompt only reviews + comments.
+  'pr-watcher':          { type: INTERVAL_TYPES.CUSTOM, intervalMs: 1800000, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'any', readOnly: false } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -497,7 +510,27 @@ export async function updateTaskInterval(taskType, settings) {
   // gets the locked value back in its response.
   enforceManagedAgentOptions(taskType, schedule.tasks[taskType]);
 
+  // Globally disabling pr-watcher also drops its execution cooldown so a later
+  // re-enable baselines on the very next tick rather than waiting out the prior
+  // 30-min interval — otherwise PRs opened in that delayed window slip past the
+  // firstRun baseline and are never dispatched. Paired with clearAllPrWatcherState
+  // below (the per-app disable paths in apps.js do the same via resetExecutionHistory).
+  if (taskType === 'pr-watcher' && settings.enabled === false) {
+    delete schedule.executions['task:pr-watcher'];
+  }
+
   await saveSchedule(schedule);
+
+  // Globally disabling pr-watcher clears every app's high-water mark, mirroring
+  // the per-app disable clears in apps.js — so a later global re-enable
+  // baselines silently instead of dispatching the backlog of PRs opened while
+  // it was paused. (`enabled` arrives as a real boolean from the schedule route.)
+  if (taskType === 'pr-watcher' && settings.enabled === false) {
+    await clearAllPrWatcherState().catch((err) => {
+      emitLog('warn', `pr-watcher global-disable state clear failed: ${err.message}`, {}, '📅 TaskSchedule');
+    });
+  }
+
   emitLog('info', `Updated task interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
   cosEvents.emit('schedule:changed', { taskType, settings });
 
@@ -1160,6 +1193,7 @@ function getTaskTypeDescription(taskType) {
     'error-handling': 'Improve error handling',
     'typing': 'Improve TypeScript types',
     'pr-reviewer': 'Review open PRs from contributors',
+    'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
     'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
     'jira-status-report': 'Generate JIRA weekly status report'
   };

@@ -76,13 +76,18 @@ vi.mock('../lib/validation.js', () => ({
   validate: vi.fn()
 }));
 
-// Mock fileUtils
+// Mock fileUtils. PATHS / atomicWrite / ensureDirs are consumed transitively by
+// cosState.js (pulled in via brain.js's per-domain autonomy gate) — keep them
+// stubbed so the mock stays complete.
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   safeJSONParse: vi.fn((str, defaultVal) => {
     if (!str) return defaultVal;
     try { return JSON.parse(str); } catch { return defaultVal; }
-  })
+  }),
+  PATHS: { data: '/tmp/portos-test', cos: '/tmp/portos-test/cos', reports: '/tmp/portos-test/reports', scripts: '/tmp/portos-test/scripts', root: '/tmp/portos-test' },
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  ensureDirs: vi.fn().mockResolvedValue(undefined)
 }));
 
 // Mock the central LLM handler — brain.js used to spawn child_process

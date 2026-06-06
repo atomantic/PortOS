@@ -3,7 +3,7 @@ import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
-import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS } from '../constants';
+import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS, AUTONOMY_DOMAINS, DOMAIN_AUTONOMY_MODES, getDomainMode } from '../constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
 
@@ -131,6 +131,64 @@ function AutonomyControl({ config, onLevelChange }) {
   );
 }
 
+// Mode pill colors for the per-domain selector
+const DOMAIN_MODE_COLORS = {
+  off: {
+    base: 'border-gray-500/30 bg-gray-500/10 text-gray-400 hover:bg-gray-500/20',
+    active: 'ring-2 ring-gray-500 border-gray-500 bg-gray-500 text-white'
+  },
+  'dry-run': {
+    base: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20',
+    active: 'ring-2 ring-yellow-500 border-yellow-500 bg-yellow-400 text-yellow-950'
+  },
+  execute: {
+    base: 'border-green-500/30 bg-green-500/10 text-green-500 hover:bg-green-500/20',
+    active: 'ring-2 ring-green-600 border-green-600 bg-green-500 text-white'
+  }
+};
+
+// Per-domain autonomy guardrails (#711) — independent off | dry-run | execute
+// knob per domain. Each change PATCHes only its domain (server merges).
+function DomainAutonomyControl({ config, onDomainChange }) {
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-4 mb-6">
+      <h4 className="text-sm font-medium text-gray-400 mb-1">Domain Guardrails</h4>
+      <p className="text-xs text-gray-600 mb-3">
+        Fine-grained control over what each domain does automatically. Default is Execute.
+      </p>
+      <div className="space-y-3">
+        {AUTONOMY_DOMAINS.map((domain) => {
+          const current = getDomainMode(config, domain.id);
+          return (
+            <div key={domain.id} className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <span className="text-sm text-gray-300">{domain.label}</span>
+                <p className="text-xs text-gray-600 truncate">{domain.description}</p>
+              </div>
+              <div className="flex gap-1 shrink-0">
+                {DOMAIN_AUTONOMY_MODES.map((mode) => {
+                  const isActive = current === mode.id;
+                  const colors = DOMAIN_MODE_COLORS[mode.id];
+                  return (
+                    <button
+                      key={mode.id}
+                      onClick={() => onDomainChange(domain.id, mode.id, mode.label, domain.label)}
+                      title={mode.description}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md border transition-all ${isActive ? colors.active : colors.base}`}
+                    >
+                      {mode.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle, evalCountdown }) {
   const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
   const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
@@ -167,6 +225,18 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     setFormData(updatedData);
     await api.updateCosConfig(params).catch(err => toast.error(err.message));
     onUpdate();
+  };
+
+  const handleDomainChange = async (domainId, mode, modeLabel, domainLabel) => {
+    // Custom error toast ⇒ pass { silent: true } so the helper doesn't also
+    // toast; and only show success / refresh AFTER the PUT actually resolves.
+    try {
+      await api.updateCosConfig({ domainAutonomy: { [domainId]: mode } }, { silent: true });
+      toast.success(`${domainLabel} autonomy set to ${modeLabel}`);
+      onUpdate();
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
   const handleSave = async () => {
@@ -211,6 +281,9 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
 
       {/* Autonomy Level Control */}
       <AutonomyControl config={config} onLevelChange={handleLevelChange} />
+
+      {/* Per-domain Autonomy Guardrails */}
+      <DomainAutonomyControl config={config} onDomainChange={handleDomainChange} />
 
       <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
         <ConfigRow

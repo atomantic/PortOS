@@ -1,10 +1,10 @@
 import { useMemo, useRef } from 'react';
-import { Text } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import CityLabel from './CityLabel';
 
-function SignalBeacon({ position, color, label, sublabel, intensity = 1 }) {
+function SignalBeacon({ position, color, label, sublabel, intensity = 1, dayMix = 0 }) {
   const groupRef = useRef();
   const glowRef = useRef();
   const beamRef = useRef();
@@ -34,7 +34,7 @@ function SignalBeacon({ position, color, label, sublabel, intensity = 1 }) {
 
       <mesh position={[0, 0.15, 0]}>
         <cylinderGeometry args={[0.35, 0.45, 0.3, 10]} />
-        <meshStandardMaterial color="#0a0a18" emissive={color} emissiveIntensity={0.35 * intensity} />
+        <meshStandardMaterial color={tintStructure('#0a0a18')} emissive={color} emissiveIntensity={0.35 * intensity} />
       </mesh>
 
       <mesh position={[0, 0.42, 0]}>
@@ -47,34 +47,37 @@ function SignalBeacon({ position, color, label, sublabel, intensity = 1 }) {
         <meshBasicMaterial color={color} transparent opacity={0.18} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
-      <Text
+      <CityLabel
         position={[0, 5.9, 0]}
         fontSize={0.32}
         color={color}
+        dayMix={dayMix}
         anchorX="center"
         anchorY="middle"
         font={PIXEL_FONT_URL}
       >
         {label}
-      </Text>
+      </CityLabel>
       {sublabel && (
-        <Text
+        <CityLabel
           position={[0, 5.45, 0]}
           fontSize={0.18}
           color="#cbd5e1"
+          dayMix={dayMix}
           anchorX="center"
           anchorY="middle"
           font={PIXEL_FONT_URL}
           maxWidth={6}
         >
           {sublabel}
-        </Text>
+        </CityLabel>
       )}
     </group>
   );
 }
 
-export default function CitySignalBeacons({ positions, reviewCounts, instances }) {
+export default function CitySignalBeacons({ positions, reviewCounts, instances, settings }) {
+  const dayMix = cityDayMix(settings);
   const config = useMemo(() => {
     if (!positions || positions.size === 0) return [];
 
@@ -123,7 +126,7 @@ export default function CitySignalBeacons({ positions, reviewCounts, instances }
   return (
     <group>
       {config.map(beacon => (
-        <SignalBeacon key={beacon.id} {...beacon} />
+        <SignalBeacon key={beacon.id} {...beacon} dayMix={dayMix} />
       ))}
     </group>
   );

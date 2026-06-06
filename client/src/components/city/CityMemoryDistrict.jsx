@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import CityLabel from './CityLabel';
 import CityTubeLine from './CityTubeLine';
 import { computeMemoryDistrict, MEMORY_DISTRICT } from '../../utils/cityMemoryDistrict';
 
@@ -16,7 +16,7 @@ import { computeMemoryDistrict, MEMORY_DISTRICT } from '../../utils/cityMemoryDi
 // One category's crystal cluster: a small ring of octahedra of varying height around the
 // cluster center, plus a category label. The tallest crystal carries the cluster's breathing
 // glow (one per-frame ref mutation per cluster).
-function CrystalCluster({ cluster, glowRef, isGlow }) {
+function CrystalCluster({ cluster, glowRef, isGlow, dayMix = 0 }) {
   const { position, color, height, crystals, label, count, isOverflow } = cluster;
   // Arrange the crystals in a tight ring; the count is already capped in the helper.
   const ring = useMemo(() => {
@@ -59,12 +59,12 @@ function CrystalCluster({ cluster, glowRef, isGlow }) {
           />
         </mesh>
       ))}
-      <Text position={[0, height + 1.3, 0]} fontSize={0.6} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
+      <CityLabel position={[0, height + 1.3, 0]} fontSize={0.6} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
         {label}
-      </Text>
-      <Text position={[0, height + 0.7, 0]} fontSize={0.42} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
+      </CityLabel>
+      <CityLabel position={[0, height + 0.7, 0]} fontSize={0.42} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
         {count}
-      </Text>
+      </CityLabel>
     </group>
   );
 }
@@ -75,6 +75,7 @@ export default function CityMemoryDistrict({ memoryGraph, inboxDepth = 0, settin
   const wellRef = useRef();
 
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   // The brightest (most important) cluster carries the breathing glow.
   const glowCategory = useMemo(() => {
@@ -87,7 +88,7 @@ export default function CityMemoryDistrict({ memoryGraph, inboxDepth = 0, settin
 
   // Inbox well: glows brighter and pulses faster the deeper the unclassified backlog.
   const inboxActive = inboxDepth > 0;
-  const wellColor = inboxActive ? '#06b6d4' : '#1e3a5f';
+  const wellColor = inboxActive ? '#06b6d4' : tintStructure('#1e3a5f');
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
@@ -115,6 +116,7 @@ export default function CityMemoryDistrict({ memoryGraph, inboxDepth = 0, settin
           cluster={cluster}
           glowRef={glowRef}
           isGlow={cluster.category === glowCategory}
+          dayMix={dayMix}
         />
       ))}
 
@@ -142,19 +144,19 @@ export default function CityMemoryDistrict({ memoryGraph, inboxDepth = 0, settin
           <meshStandardMaterial color={wellColor} emissive={wellColor} emissiveIntensity={0.4} side={2} toneMapped={false} transparent opacity={0.85} />
         </mesh>
         {inboxActive && (
-          <Text position={[0, 1.2, 0]} fontSize={0.5} color="#06b6d4" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
+          <CityLabel position={[0, 1.2, 0]} fontSize={0.5} color="#06b6d4" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={9}>
             {`${inboxDepth} TO SORT`}
-          </Text>
+          </CityLabel>
         )}
       </group>
 
       {/* District title */}
-      <Text position={[base[0], 14, base[2] - 3]} fontSize={1.3} color="#8b5cf6" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
+      <CityLabel position={[base[0], 14, base[2] - 3]} fontSize={1.3} color="#8b5cf6" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
         MEMORY
-      </Text>
-      <Text position={[base[0], 13, base[2] - 3]} fontSize={0.75} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
+      </CityLabel>
+      <CityLabel position={[base[0], 13, base[2] - 3]} fontSize={0.75} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={30}>
         {`${totalMemories} MEMORIES`}
-      </Text>
+      </CityLabel>
     </group>
   );
 }

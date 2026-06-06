@@ -167,44 +167,12 @@ export default function CitySettingsPanel() {
 
           {/* Visual Effects */}
           <div>
-            <SectionHeader title="VISUAL FX" subtitle="Post-processing and atmosphere" />
-            <SettingToggle
-              label="BLOOM"
-              value={settings.bloomEnabled}
-              onChange={(v) => updateSetting('bloomEnabled', v)}
-              description="Glowing light bloom around bright surfaces"
-            />
-            {settings.bloomEnabled && (
-              <SettingSlider
-                label="STRENGTH"
-                value={settings.bloomStrength}
-                onChange={(v) => updateSetting('bloomStrength', v)}
-                description="Intensity of the bloom glow effect"
-              />
-            )}
+            <SectionHeader title="VISUAL FX" subtitle="Reflections and atmosphere" />
             <SettingToggle
               label="REFLECTIONS"
               value={settings.reflectionsEnabled}
               onChange={(v) => updateSetting('reflectionsEnabled', v)}
               description="Wet street reflections and puddles"
-            />
-            <SettingToggle
-              label="CHROMATIC ABERRATION"
-              value={settings.chromaticAberration}
-              onChange={(v) => updateSetting('chromaticAberration', v)}
-              description="Color fringing at screen edges"
-            />
-            <SettingToggle
-              label="FILM GRAIN"
-              value={settings.filmGrain}
-              onChange={(v) => updateSetting('filmGrain', v)}
-              description="Subtle animated noise overlay"
-            />
-            <SettingToggle
-              label="COLOR GRADING"
-              value={settings.colorGrading}
-              onChange={(v) => updateSetting('colorGrading', v)}
-              description="Cinematic color correction"
             />
             <SettingToggle
               label="SCANLINES"
@@ -225,45 +193,9 @@ export default function CitySettingsPanel() {
 
           <div className="border-t border-cyan-500/10" />
 
-          {/* Sky Theme */}
-          <div>
-            <SectionHeader title="SKY THEME" subtitle="Change the world atmosphere" />
-            <div className="grid grid-cols-2 gap-1.5">
-              {[
-                { key: 'cyberpunk', label: 'CYBERPUNK', desc: 'Dark neon-lit night city' },
-                { key: 'dreamworld', label: 'DREAMWORLD', desc: 'Bright open-world sky with clouds' },
-              ].map(theme => (
-                <button
-                  key={theme.key}
-                  onClick={() => updateSetting('skyTheme', theme.key)}
-                  title={theme.desc}
-                  className={`font-pixel text-[9px] py-2 rounded border transition-all tracking-wide ${
-                    settings.skyTheme === theme.key
-                      ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
-                      : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
-                  }`}
-                >
-                  {theme.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="border-t border-cyan-500/10" />
-
           {/* Scene Lighting */}
           <div>
             <SectionHeader title="SCENE LIGHTING" subtitle="Brightness and time of day" />
-            <SettingSlider
-              label="EXPOSURE"
-              value={settings.sceneExposure ?? 1.0}
-              onChange={(v) => updateSetting('sceneExposure', v)}
-              min={0.5}
-              max={2.5}
-              step={0.1}
-              format={(v) => `${v.toFixed(1)}x`}
-              description="Post-bloom exposure adjustment — darkens or brightens assets without adding bloom"
-            />
             <SettingSlider
               label="AMBIENT BRIGHTNESS"
               value={settings.ambientBrightness}
@@ -286,21 +218,32 @@ export default function CitySettingsPanel() {
             />
             <div className="py-1.5">
               <div className="font-pixel text-[10px] text-gray-400 tracking-wide mb-2">TIME OF DAY</div>
-              <div className="grid grid-cols-4 gap-1.5">
-                {['sunrise', 'noon', 'sunset', 'midnight'].map(tod => (
-                  <button
-                    key={tod}
-                    onClick={() => updateSetting('timeOfDay', tod)}
-                    className={`font-pixel text-[9px] py-2 rounded border transition-all tracking-wide ${
-                      settings.timeOfDay === tod
-                        ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
-                        : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
-                    }`}
-                  >
-                    {tod.toUpperCase()}
-                  </button>
-                ))}
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { key: 'auto', label: 'AUTO' },
+                  { key: 'day', label: 'DAY' },
+                  { key: 'night', label: 'NIGHT' },
+                ].map(({ key, label }) => {
+                  // Legacy presets (sunrise/noon/sunset/midnight) read as Auto now.
+                  const active = (settings.timeOfDay === 'day' || settings.timeOfDay === 'night')
+                    ? settings.timeOfDay === key
+                    : key === 'auto';
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => updateSetting('timeOfDay', key)}
+                      className={`font-pixel text-[9px] py-2 rounded border transition-all tracking-wide ${
+                        active
+                          ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                          : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
+              <div className="font-pixel text-[8px] text-gray-600 tracking-wide mt-1.5">AUTO FOLLOWS YOUR THEME (DAY / NIGHT)</div>
             </div>
           </div>
 

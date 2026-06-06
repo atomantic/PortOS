@@ -713,6 +713,98 @@ html[data-port-theme-mode="day"] [class~="hover:text-slate-100"]:hover {
   color: rgb(var(--port-text)) !important;
 }
 
+/* === City (formerly CyberCity) HUD theming ===
+   Class/id names keep the `cybercity` slug as a stable internal contract; the
+   feature is branded "City" in the UI.
+   The CyberCity overlay (clock, vitals, intel pane, agent bar, mini-map, filter
+   bar, settings panel, photo overlay, holographic panels) was authored in a fixed
+   cyberpunk palette: near-black panels (`bg-black/85`), cyan accent text/borders
+   (`text-cyan-400`, `border-cyan-500/40`), and many very-low-opacity tokens
+   (`text-cyan-500/20`, `text-gray-600`, `border-cyan-500/15`). On a light theme
+   like Phosphor Paper that reads as dim teal on near-black floating over a cream
+   page — low contrast and off-theme. Rather than edit every component, we remap
+   those exact utility tokens to the active theme's `--port-*` vars, scoped to the
+   `.cybercity-themed` page root so nothing else is affected. Status colors
+   (red/amber/emerald/violet/...) are intentionally left to the global day-mode
+   remap above so they keep their semantic meaning. The low-opacity variants are
+   given a higher legibility floor than their original alpha.
+   When adding a new HUD element, prefer these same tokens so it themes for free. */
+
+/* Panels — near-black backgrounds follow the theme card color (dark in night
+   themes, paper in day themes). Kept fully opaque so the busy 3D scene behind
+   them never bleeds through and hurts text legibility. A two-tier split keeps
+   nested elements distinct: the main panels take the card color, inner fills
+   (agent items, list rows) take the slightly-different page bg color. */
+html[data-port-theme] .cybercity-themed [class~="bg-black/95"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/92"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/90"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/85"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/80"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/70"] { background-color: rgb(var(--port-card)) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-black/60"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/50"],
+html[data-port-theme] .cybercity-themed [class~="bg-black/40"] { background-color: rgb(var(--port-bg)) !important; }
+
+/* Accent text — cyan family → theme accent, tiered so emphasis survives. */
+html[data-port-theme] .cybercity-themed [class~="text-cyan-400"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-300"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500"] { color: rgb(var(--port-accent)) !important; }
+html[data-port-theme] .cybercity-themed [class~="text-cyan-400/80"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-400/70"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/70"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/60"] { color: rgb(var(--port-accent) / 0.82) !important; }
+html[data-port-theme] .cybercity-themed [class~="text-cyan-400/60"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-400/50"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/50"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/40"] { color: rgb(var(--port-accent) / 0.7) !important; }
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/30"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/25"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-500/20"],
+html[data-port-theme] .cybercity-themed [class~="text-cyan-400/20"] { color: rgb(var(--port-accent) / 0.55) !important; }
+html[data-port-theme] .cybercity-themed [class~="hover:text-cyan-400"]:hover,
+html[data-port-theme] .cybercity-themed [class~="hover:text-cyan-300"]:hover { color: rgb(var(--port-accent)) !important; }
+
+/* Neutral / muted text — gray tokens follow the theme text colors so faint
+   labels stay legible on both dark and paper panels (gray-600 on near-black was
+   the worst offender). */
+html[data-port-theme] .cybercity-themed [class~="text-gray-300"] { color: rgb(var(--port-text) / 0.92) !important; }
+html[data-port-theme] .cybercity-themed [class~="text-gray-400"],
+html[data-port-theme] .cybercity-themed [class~="text-gray-500"],
+html[data-port-theme] .cybercity-themed [class~="text-gray-600"] { color: rgb(var(--port-text-muted)) !important; }
+
+/* Borders — cyan accent borders → theme accent, with a visibility floor so the
+   hairline panel frames don't vanish on a light background. */
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/60"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/50"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/40"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-400/70"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-400/60"] { border-color: rgb(var(--port-accent) / 0.55) !important; }
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/35"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/30"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/25"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-400/50"] { border-color: rgb(var(--port-accent) / 0.42) !important; }
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/20"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/15"],
+html[data-port-theme] .cybercity-themed [class~="border-cyan-500/10"] { border-color: rgb(var(--port-accent) / 0.3) !important; }
+
+/* Accent fills — solid swatches (status dots, knobs, capture button) take the
+   full accent; the alpha variants (dividers, active chips, mini-map grid, hover
+   washes) scale down to match their original weight. */
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-400"],
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500"] { background-color: rgb(var(--port-accent)) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-400/60"] { background-color: rgb(var(--port-accent) / 0.6) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-400/40"],
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500/40"] { background-color: rgb(var(--port-accent) / 0.4) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500/25"],
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500/20"] { background-color: rgb(var(--port-accent) / 0.2) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500/15"],
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-400/15"] { background-color: rgb(var(--port-accent) / 0.16) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500/10"] { background-color: rgb(var(--port-accent) / 0.12) !important; }
+html[data-port-theme] .cybercity-themed [class~="bg-cyan-500/[0.03]"] { background-color: rgb(var(--port-accent) / 0.05) !important; }
+html[data-port-theme] .cybercity-themed [class~="hover:bg-cyan-300"]:hover { background-color: rgb(var(--port-accent) / 0.9) !important; }
+html[data-port-theme] .cybercity-themed [class~="hover:bg-cyan-500/10"]:hover { background-color: rgb(var(--port-accent) / 0.12) !important; }
+html[data-port-theme] .cybercity-themed [class~="hover:bg-cyan-500/5"]:hover { background-color: rgb(var(--port-accent) / 0.08) !important; }
+
 /* === Lumen Glass Day === */
 html[data-port-theme="lumen-glass-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
   border-color: rgb(var(--port-border) / 0.22) !important;

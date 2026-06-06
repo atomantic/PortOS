@@ -1,8 +1,8 @@
 import { useRef, useState, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
 import * as THREE from 'three';
-import { getBuildingColor, getBuildingHeight, getAccentColor, CITY_COLORS, BUILDING_PARAMS, PIXEL_FONT_URL } from './cityConstants';
+import { getBuildingColor, getBuildingHeight, getAccentColor, BUILDING_PARAMS, PIXEL_FONT_URL, mixHex, tintStructure, seededRand } from './cityConstants';
+import CityLabel from './CityLabel';
 import HolographicPanel from './HolographicPanel';
 import BuildingHologram from './BuildingHologram';
 
@@ -100,13 +100,13 @@ const createWindowTexture = (accentColor, width, height, seed) => {
   canvas.height = px * rowCount;
   const ctx = canvas.getContext('2d');
 
-  // Dark base
-  ctx.fillStyle = '#050510';
+  // Dark, but not black: facades need enough albedo for moon/neon bounce to
+  // reveal them. The theme tint keeps the texture in-family.
+  ctx.fillStyle = tintStructure('#24324f');
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Seeded random for consistent patterns
-  let s = seed;
-  const rand = () => { s = (s * 16807 + 0) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
+  const rand = seededRand(seed);
 
   // Draw random ambient windows (dimmer background pattern)
   for (let r = 1; r < rowCount - 1; r++) {
@@ -122,11 +122,35 @@ const createWindowTexture = (accentColor, width, height, seed) => {
         } else if (bright > 0.3) {
           ctx.fillStyle = accentColor + '20';
         } else {
-          ctx.fillStyle = '#0a0f1e';
+          ctx.fillStyle = tintStructure('#1d2b4a');
         }
         ctx.fillRect(c * px + 1, r * px + 1, px - 2, px - 2);
       }
     }
+  }
+
+  // Thin horizontal floor-light rows. These make large faces read as stacked
+  // occupied floors instead of a single blank slab, especially in night mode.
+  for (let r = 2; r < rowCount - 1; r += 3) {
+    const warmRow = rand() > 0.55;
+    const rowAlpha = rand() > 0.7 ? 0.44 : 0.28;
+    ctx.fillStyle = warmRow
+      ? `rgba(234, 244, 255, ${rowAlpha})`
+      : accentColor + (rowAlpha > 0.35 ? '70' : '45');
+
+    for (let c = 1; c < cols - 1; c++) {
+      if (rand() < 0.24) continue;
+      ctx.fillRect(c * px + 1, r * px + 3, px - 2, 2);
+    }
+  }
+
+  // Occasional brighter architectural bands, like stacked balcony/maintenance
+  // strips, to echo the city-light reference without covering every floor.
+  for (let r = 4 + (seed % 3); r < rowCount - 2; r += 8) {
+    ctx.fillStyle = accentColor + '85';
+    ctx.fillRect(0, r * px + 2, canvas.width, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(0, r * px + 1, canvas.width, 1);
   }
 
   // Draw pixel art icon mural centered on face
@@ -267,11 +291,77 @@ function NeonEdgeStrip({ position, height, color, delay, dimMul = 1 }) {
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false }) {
+function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMul = 1 }) {
+  const bands = useMemo(() => {
+    const rand = seededRand(seed + 97);
+    const floorCount = Math.max(4, Math.min(14, Math.floor(height / 1.05)));
+    const next = [];
+
+    for (let i = 1; i <= floorCount; i++) {
+      const y = (i / (floorCount + 1)) * height;
+      const isCrown = i === floorCount || i === floorCount - 1;
+      const show = isCrown || i % 3 === seed % 3 || rand() > 0.48;
+      if (!show) continue;
+
+      next.push({
+        key: `${i}-${Math.round(y * 100)}`,
+        y,
+        color: rand() > 0.45 ? mixHex('#f8fbff', accentColor, 0.28) : color,
+        opacity: isCrown ? 0.78 : 0.34 + rand() * 0.22,
+        thickness: isCrown ? 0.055 : 0.032,
+      });
+    }
+
+    return next;
+  }, [accentColor, color, height, seed]);
+
+  return (
+    <group>
+      {bands.map((band) => {
+        const horizontalGeo = [width * 0.96, band.thickness, 0.035];
+        const verticalGeo = [0.035, band.thickness, depth * 0.96];
+        const faces = [
+          { pos: [0, band.y, depth / 2 + 0.035], geo: horizontalGeo },
+          { pos: [0, band.y, -(depth / 2 + 0.035)], geo: horizontalGeo },
+          { pos: [width / 2 + 0.035, band.y, 0], geo: verticalGeo },
+          { pos: [-(width / 2 + 0.035), band.y, 0], geo: verticalGeo },
+        ];
+        return (
+          <group key={band.key}>
+            {faces.map((face, i) => (
+              <mesh key={i} position={face.pos}>
+                <boxGeometry args={face.geo} />
+                <meshBasicMaterial color={band.color} transparent opacity={band.opacity * dimMul} toneMapped={false} depthWrite={false} />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
+  const groupRef = useRef();
   const [hovered, setHovered] = useState(false);
+
+  // Construction/teardown animation state (playback/scrubber only — issue #967).
+  // In live mode buildings appear/disappear instantly as today; during playback a
+  // newly-present building scales in from 0 (construction) and a departing one
+  // scales out to 0 (teardown) before the cluster unmounts it.
+  const exiting = transitionState === 'exiting';
+  // Start small only when entering under playback; otherwise full size.
+  const initialScale = playback && !exiting ? 0.001 : 1;
+  const exitedFiredRef = useRef(false);
+  // Smoothly-lerped status color so a status change recolors over a beat rather
+  // than snapping. `displayed` is the current on-screen color; `target` is the
+  // status color it eases toward. Both are persistent THREE.Color instances so
+  // the per-frame lerp allocates nothing.
+  const displayedColorRef = useRef(null);
+  const targetColorRef = useRef(null);
 
   const height = getBuildingHeight(app);
   const edgeColor = getBuildingColor(app.overallStatus, app.archived);
@@ -280,6 +370,23 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   const isStopped = app.overallStatus === 'stopped' && !app.archived;
   const { width, depth } = BUILDING_PARAMS;
   const dimMul = dimmed ? 0.25 : 1;
+
+  // Daytime treatment: the building sheds its neon and reads as a sunlit solid. The
+  // facade lerps from the dark cyber body toward a light, faintly status-tinted
+  // wall; the dark window texture is dropped (it only reads at night) and the neon
+  // edge softens to a plain architectural outline.
+  // NOTE: dayMix is currently strictly 0 or 1 (the city renders only noon/sunset), so
+  // the continuous lerps and the `daytime` hard-switches agree today. The lerps are
+  // forward-looking — if an intermediate time-of-day is ever re-enabled, convert the
+  // `!daytime`-gated mounts (halo/strips/glow/ground-lines) to opacity fades too so a
+  // partial dayMix degrades gracefully instead of popping at 0.5.
+  const daytime = dayMix > 0.5;
+  // Mid-tone facade (not near-white) so strong daylight lands around a clean gray
+  // rather than clipping to white; a touch of the status color keeps variety.
+  const dayFacade = mixHex('#9aa0ac', edgeColor, 0.12);
+  const nightFacade = mixHex(app.archived ? '#273247' : '#26375d', edgeColor, app.archived ? 0.12 : 0.2);
+  const bodyColor = mixHex(nightFacade, dayFacade, dayMix);
+  const edgeLineColor = daytime ? mixHex('#4a4f57', edgeColor, 0.15) : edgeColor;
 
   // Name hash for seeded randomness
   const seed = useMemo(() => {
@@ -303,9 +410,46 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
     return (app.name || '').replace(/[-_.]/g, ' ').toUpperCase();
   }, [app.name]);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, delta) => {
+    // Construction/teardown scale animation (playback only). damp() eases the
+    // group scale toward 1 (entering) or 0 (exiting); reaching ~0 on exit fires
+    // onExited so the cluster can drop the building from the tree.
+    if (groupRef.current && playback) {
+      const target = exiting ? 0 : 1;
+      const cur = groupRef.current.scale.x;
+      const next = THREE.MathUtils.damp(cur, target, 6, delta || 0.016);
+      groupRef.current.scale.setScalar(next);
+      if (exiting && next < 0.02 && !exitedFiredRef.current) {
+        exitedFiredRef.current = true;
+        onExited?.(app.id);
+      }
+    } else if (groupRef.current && groupRef.current.scale.x !== 1) {
+      // Live mode (or after entering completes): ensure full size.
+      groupRef.current.scale.setScalar(1);
+    }
+
     if (!meshRef.current) return;
     const t = clock.getElapsedTime();
+
+    // Status recolor: ease the body emissive toward the current status color so a
+    // scrub that flips online→stopped fades cyan→red rather than snapping. Skip
+    // the work entirely once the displayed color has converged (the common case,
+    // including all of live mode) so it costs nothing per frame at rest.
+    const mat = meshRef.current.material;
+    if (mat?.emissive) {
+      if (!displayedColorRef.current) displayedColorRef.current = new THREE.Color(edgeColor);
+      if (!targetColorRef.current) targetColorRef.current = new THREE.Color();
+      targetColorRef.current.set(edgeColor);
+      const disp = displayedColorRef.current;
+      const tgt = targetColorRef.current;
+      if (Math.abs(disp.r - tgt.r) + Math.abs(disp.g - tgt.g) + Math.abs(disp.b - tgt.b) > 0.002) {
+        disp.lerp(tgt, Math.min(1, (delta || 0.016) * 6));
+        mat.emissive.copy(disp);
+      } else if (!disp.equals(tgt)) {
+        disp.copy(tgt);
+        mat.emissive.copy(disp);
+      }
+    }
 
     const nb = neonBrightness;
     const baseIntensity = (isOnline ? 0.5 : isStopped ? 0.35 : 0.2) * nb;
@@ -315,7 +459,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         ? Math.sin(t * 3.5 + seed) * 0.2 * nb
         : 0;
     const hoverBoost = hovered ? 0.4 * nb : 0;
-    meshRef.current.material.emissiveIntensity = (baseIntensity + pulse + hoverBoost) * dimMul;
+    // Neon self-glow fades out in daylight — the building is lit by the sun instead.
+    meshRef.current.material.emissiveIntensity = (baseIntensity + pulse + hoverBoost) * dimMul * (1 - dayMix * 0.9);
 
     if (glowRef.current) {
       glowRef.current.material.opacity = (0.35 + (isOnline ? Math.sin(t * 1.5) * 0.12 : 0) + (hovered ? 0.25 : 0)) * dimMul;
@@ -331,7 +476,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   });
 
   return (
-    <group position={[position.x, 0, position.z]}>
+    <group ref={groupRef} position={[position.x, 0, position.z]} scale={initialScale}>
       {/* Building body with window texture + pixel art icon */}
       <mesh
         ref={meshRef}
@@ -342,21 +487,24 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       >
         <boxGeometry args={[width, height, depth]} />
         <meshStandardMaterial
-          color={CITY_COLORS.buildingBody}
+          color={daytime ? bodyColor : '#ffffff'}
           emissive={edgeColor}
-          emissiveIntensity={0.35 * neonBrightness * dimMul}
-          map={windowTexture}
+          emissiveIntensity={0.7 * neonBrightness * dimMul * (1 - dayMix * 0.88)}
+          map={daytime ? undefined : windowTexture}
+          emissiveMap={daytime ? undefined : windowTexture}
+          roughness={daytime ? 0.9 : 0.78}
+          metalness={daytime ? 0.05 : 0.08}
           transparent
-          opacity={(app.archived ? 0.6 : 0.95) * dimMul}
+          opacity={(app.archived ? 0.78 : 1) * dimMul}
         />
       </mesh>
 
-      {/* Neon wireframe edges */}
+      {/* Building edges — bright neon by night, a plain architectural outline by day */}
       <lineSegments position={[0, height / 2, 0]} geometry={edgesGeom}>
         <lineBasicMaterial
-          color={edgeColor}
+          color={edgeLineColor}
           transparent
-          opacity={(app.archived ? 0.5 : 0.9) * dimMul}
+          opacity={((app.archived ? 0.5 : 0.9) - dayMix * 0.55) * dimMul}
         />
       </lineSegments>
 
@@ -380,8 +528,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         )}
       </mesh>
 
-      {/* Glow halo wireframe - slightly larger than building */}
-      {!app.archived && (
+      {/* Glow halo wireframe - slightly larger than building (night only) */}
+      {!app.archived && !daytime && (
         <lineSegments ref={haloRef} position={[0, height / 2, 0]}>
           <edgesGeometry args={[new THREE.BoxGeometry(width + 0.15, height + 0.15, depth + 0.15)]} />
           <lineBasicMaterial
@@ -392,8 +540,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         </lineSegments>
       )}
 
-      {/* Vertical neon edge strips on corners */}
-      {!app.archived && (
+      {/* Vertical neon edge strips on corners (night only) */}
+      {!app.archived && !daytime && (
         <>
           <NeonEdgeStrip position={[width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={0} dimMul={dimMul} />
           <NeonEdgeStrip position={[-width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={1} dimMul={dimMul} />
@@ -402,11 +550,25 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         </>
       )}
 
-      {/* Building name on front face - pixel font */}
-      <Text
+      {/* Lit floor bands stay on even for archived buildings so dark towers remain readable. */}
+      {!daytime && (
+        <FloorLightBands
+          width={width}
+          depth={depth}
+          height={height}
+          color={app.archived ? '#94a3b8' : edgeColor}
+          accentColor={app.archived ? '#64748b' : accentColor}
+          seed={seed}
+          dimMul={dimMul * (app.archived ? 0.58 : 1)}
+        />
+      )}
+
+      {/* Building name on front face - pixel font (dark ink + halo by day) */}
+      <CityLabel
         position={[0, height * 0.88, depth / 2 + 0.02]}
         fontSize={0.2}
         color={edgeColor}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -414,13 +576,14 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         maxWidth={width * 0.9}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
       {/* Building name on back face */}
-      <Text
+      <CityLabel
         position={[0, height * 0.88, -(depth / 2 + 0.02)]}
         fontSize={0.2}
         color={edgeColor}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -429,13 +592,14 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         maxWidth={width * 0.9}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
       {/* Name on left side */}
-      <Text
+      <CityLabel
         position={[-(width / 2 + 0.02), height * 0.88, 0]}
         fontSize={0.18}
         color={accentColor}
+        dayMix={dayMix}
         fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
@@ -444,21 +608,23 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         maxWidth={depth * 0.85}
       >
         {displayName}
-      </Text>
+      </CityLabel>
 
-      {/* Base glow circle - wider and brighter */}
-      <mesh ref={glowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-        <circleGeometry args={[1.8, 32]} />
-        <meshBasicMaterial
-          color={edgeColor}
-          transparent
-          opacity={0.25 * dimMul}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
+      {/* Base glow circle - wider and brighter (night only) */}
+      {!daytime && (
+        <mesh ref={glowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+          <circleGeometry args={[1.8, 32]} />
+          <meshBasicMaterial
+            color={edgeColor}
+            transparent
+            opacity={0.25 * dimMul}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
 
-      {/* Neon ground line accents */}
-      {!app.archived && (
+      {/* Neon ground line accents (night only) */}
+      {!app.archived && !daytime && (
         <>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, depth / 2 + 0.3]}>
             <planeGeometry args={[width + 0.5, 0.05]} />

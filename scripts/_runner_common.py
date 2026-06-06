@@ -20,6 +20,7 @@ walker that turns a buried `GatedRepoError` into a friendly link — belongs her
 
 import json
 import logging
+import os
 import sys
 import threading
 from contextlib import contextmanager
@@ -136,6 +137,98 @@ def apply_memory_optimizations(pipe) -> None:
         vae.enable_tiling()
 
 
+# Headroom reserved on top of the resident weights for activations + allocator
+# fragmentation when deciding whether a pipeline fits in *currently free* VRAM.
+# Catches the case where another process is hogging the card even for a
+# mid-size model.
+_ACTIVATION_RESERVE_BYTES = 3 * 1024 ** 3
+
+# Second, resolution-independent offload trigger: when the weights alone exceed
+# this fraction of the card's *total* VRAM, force offload regardless of how
+# much is momentarily free. A model that fills most of the card leaves no
+# bounded margin for high-res activations or the per-step stepwise VAE decode,
+# and on Windows the NVIDIA driver answers the overflow with silent sysmem
+# fallback (~50x slowdown) rather than OOM — so a fixed activation reserve
+# can't protect against it. Offload is cheap for these (the transformer stays
+# resident across the whole denoising loop), so erring toward it costs a few
+# seconds of one-time component paging and removes the thrash cliff entirely.
+# 0.5 keeps SDXL (~7 GB) / SD-1.5 (~2 GB) fully resident on a 24 GB card while
+# routing the ~19-20 GB Z-Image / ERNIE / Qwen bf16 pipelines to offload.
+_OFFLOAD_VRAM_FRACTION = 0.5
+
+
+def _pipeline_weight_bytes(pipe) -> int:
+    """Total bytes of the pipeline's parameters + buffers, de-duplicated by
+    storage pointer so tied / shared weights aren't double-counted."""
+    components = getattr(pipe, "components", None) or {}
+    modules = [m for m in components.values() if hasattr(m, "parameters")]
+    seen = set()
+    total = 0
+    for module in modules:
+        for tensor in list(module.parameters()) + list(module.buffers()):
+            key = tensor.data_ptr()
+            if key in seen or key == 0:
+                continue
+            seen.add(key)
+            total += tensor.numel() * tensor.element_size()
+    return total
+
+
+def place_pipeline(pipe, device: str) -> str:
+    """Move a loaded diffusers pipeline onto the compute device, choosing
+    between full-GPU residency and model CPU offload based on free VRAM.
+
+    On CUDA, a pipeline whose weights nearly fill the card (Z-Image-Turbo /
+    ERNIE / Qwen bf16 are ~20 GB on a 24 GB GPU) leaves no room for the
+    forward pass's activations. On Windows the NVIDIA driver then silently
+    spills the overflow into system RAM ("sysmem fallback") instead of
+    OOM-ing, and every denoising step thrashes across PCIe — ~50x slower than
+    the GPU is capable of. When the weights plus an activation reserve won't
+    fit in free VRAM, fall back to `enable_model_cpu_offload()`: the
+    transformer stays resident across the loop while the text encoder and VAE
+    are paged in only for their one-shot forward, so peak VRAM drops well
+    under the card's limit and the steps run at full GPU speed.
+
+    MPS / CPU keep the plain `.to(device)` path — offload is a CUDA+accelerate
+    feature and the sysmem-fallback failure mode it guards against is
+    CUDA-specific. Override the heuristic with `PORTOS_IMAGE_OFFLOAD=1`
+    (force offload) or `PORTOS_IMAGE_OFFLOAD=0` (force full residency).
+    Returns the effective placement string for logging.
+    """
+    if device != "cuda":
+        pipe.to(device)
+        return device
+
+    import torch
+
+    override = os.environ.get("PORTOS_IMAGE_OFFLOAD", "").strip().lower()
+    can_offload = hasattr(pipe, "enable_model_cpu_offload")
+    if override in ("0", "false", "never"):
+        force_offload = False
+    elif override in ("1", "true", "force", "always"):
+        force_offload = True
+    else:
+        weight_bytes = _pipeline_weight_bytes(pipe)
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        fits_now = (weight_bytes + _ACTIVATION_RESERVE_BYTES) <= free_bytes
+        fills_card = weight_bytes > _OFFLOAD_VRAM_FRACTION * total_bytes
+        force_offload = fills_card or not fits_now
+        gb = 1024 ** 3
+        reason = "fills card" if fills_card else ("low free VRAM" if not fits_now else "fits")
+        print(
+            f"🧮 image-gen VRAM: weights ~{weight_bytes / gb:.1f}GB, "
+            f"free ~{free_bytes / gb:.1f}GB, total ~{total_bytes / gb:.1f}GB ({reason}) → "
+            f"{'model CPU offload' if force_offload else 'full GPU residency'}",
+            file=sys.stderr, flush=True,
+        )
+
+    if force_offload and can_offload:
+        pipe.enable_model_cpu_offload()
+        return "cuda+offload"
+    pipe.to(device)
+    return device
+
+
 def write_sidecar(output: str, payload: dict) -> None:
     """Write `<output>.metadata.json` next to the generated image. The
     server's gallery scanner picks this up to surface prompt/seed/model
@@ -192,6 +285,16 @@ def make_stepwise_callback(
         vae_dtype, vae_device = vae_param.dtype, vae_param.device
     except StopIteration:
         vae_dtype, vae_device = None, None
+    # Under `enable_model_cpu_offload()` (see place_pipeline) the VAE's params
+    # rest on CPU but its forward runs on the accelerate hook's execution
+    # device (CUDA) — and the hook moves the *weights* there without moving the
+    # latents we hand it, so aligning the preview latents to the resting
+    # (CPU) device decodes with "weight on cuda:0, other tensors on cpu". Target
+    # the execution device instead, so the latents land where the VAE will run.
+    _vae_hook = getattr(vae, "_hf_hook", None)
+    _exec_device = getattr(_vae_hook, "execution_device", None)
+    if _exec_device is not None:
+        vae_device = _exec_device
 
     fired = {"count": 0, "saved": 0}
 

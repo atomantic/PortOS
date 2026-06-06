@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
-import { getBuildingHeight, BOROUGH_PARAMS } from './cityConstants';
+import { getBuildingHeight, BOROUGH_PARAMS, cityDayMix } from './cityConstants';
 import { hashString } from '../../utils/hashString';
 import Building from './Building';
 import AgentEntity from './AgentEntity';
 import ProcessBuilding from './ProcessBuilding';
 
-export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false, settings }) {
+export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false, settings, playback = false, transitionState = null, onExited }) {
   const agentData = agentMap.get(app.id);
   const agents = agentData?.agents || [];
   const height = getBuildingHeight(app);
@@ -17,6 +17,9 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
 
   // Build pm2Status lookup map
   const pm2Status = app.pm2Status || {};
+
+  // 0 at night, 1 in full daylight — buildings lighten and shed their neon by day.
+  const dayMix = cityDayMix(settings);
 
   // Compute ring positions for process buildings
   const processPositions = useMemo(() => {
@@ -46,6 +49,10 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
         neonBrightness={neonBrightness}
         isProximity={isProximity}
         dimmed={dimmed}
+        dayMix={dayMix}
+        playback={playback}
+        transitionState={transitionState}
+        onExited={onExited}
       />
 
       {/* Process buildings in ring around main building */}
@@ -57,6 +64,7 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
           position={[position.x + x, 0, position.z + z, rotation]}
           seed={seed}
           dimmed={dimmed}
+          dayMix={dayMix}
         />
       ))}
 

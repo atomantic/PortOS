@@ -4,6 +4,27 @@ import toast from '../components/ui/Toast';
 import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
 import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
+// Common image render-setting params shared by the image branch of Remix and by
+// Send-to-image-to-image — both open /media/image with these fields prefilled.
+// The callers diverge after: Remix adds `remix`, while Send-to-i2i adds
+// `initImageFile` AND drops `modelId` (i2i may auto-switch backends, so the
+// source's model must not poison the target form). `(no prompt)` is the
+// metadata-sidecar placeholder for items that lost their prompt — skip it so the
+// next render doesn't start with that literal.
+function buildImageGenParams(item) {
+  const params = new URLSearchParams();
+  if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
+  if (item.negativePrompt) params.set('negativePrompt', item.negativePrompt);
+  if (item.modelId) params.set('modelId', item.modelId);
+  if (item.width) params.set('width', String(item.width));
+  if (item.height) params.set('height', String(item.height));
+  if (item.seed != null) params.set('seed', String(item.seed));
+  if (item.steps) params.set('steps', String(item.steps));
+  if (item.guidance != null) params.set('guidance', String(item.guidance));
+  if (item.quantize) params.set('quantize', String(item.quantize));
+  return params;
+}
+
 /**
  * Shared MediaPreview / MediaLightbox action handlers. The same four
  * callbacks (`onRemix`, `onSendToVideo`, `onContinue`, `onClean`) used to
@@ -65,17 +86,28 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
       navigate(`/media/video?${params}`);
       return;
     }
-    const params = new URLSearchParams();
-    if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
-    if (item.negativePrompt) params.set('negativePrompt', item.negativePrompt);
-    if (item.modelId) params.set('modelId', item.modelId);
-    if (item.width) params.set('width', String(item.width));
-    if (item.height) params.set('height', String(item.height));
-    if (item.seed != null) params.set('seed', String(item.seed));
-    if (item.steps) params.set('steps', String(item.steps));
-    if (item.guidance != null) params.set('guidance', String(item.guidance));
-    if (item.quantize) params.set('quantize', String(item.quantize));
+    const params = buildImageGenParams(item);
     if (item.filename) params.set('remix', item.filename);
+    navigate(`/media/image?${params}`);
+  }, [navigate]);
+
+  // Send to image-to-image: open the Image Gen page with this image queued as
+  // the i2i init image AND the prompt + render settings pre-filled (like Remix),
+  // so the user lands in a full "iterate on this image" state. Images only — the
+  // ImageGen page resolves `?initImageFile=<basename>` against the gallery and
+  // nudges to an i2i-capable backend. Deliberately omits the `remix` param so it
+  // reads as a distinct intent from plain Remix.
+  const handleSendToImage = useCallback((item) => {
+    if (!item?.filename || item.kind === 'video') return;
+    const params = buildImageGenParams(item);
+    // Drop modelId: i2i is image-driven and the page may auto-switch the user to
+    // a different (i2i-capable) backend, so the source's model — often a
+    // provider-specific id like `gpt-image-2` or a checkpoint the target backend
+    // lacks — would poison the form and fail on Generate. Let the target keep its
+    // own current/default model. (The in-page handler routes through handleRemix,
+    // which already guards modelId against the loaded model list.)
+    params.delete('modelId');
+    params.set('initImageFile', item.filename);
     navigate(`/media/image?${params}`);
   }, [navigate]);
 
@@ -128,5 +160,5 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     return cleaned;
   }, [onCleanComplete]);
 
-  return { handleRemix, handleSendToVideo, handleContinue, handleClean };
+  return { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean };
 }

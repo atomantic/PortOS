@@ -115,6 +115,52 @@ describe('getRenderConfigForItem - image', () => {
   });
 });
 
+describe('normalizeImage - regen lineage (issue #912)', () => {
+  it('carries the regen lineage fields through normalization', () => {
+    const n = normalizeImage({
+      filename: 'r.png',
+      cleanedFrom: 'src.png',
+      regenerated: true,
+      regenStrength: 0.4,
+      regenSteps: 8,
+      regenModelId: 'flux2-klein-9b',
+      regenMethod: 'flux',
+      regenPixelDeltaPct: 7.3,
+      regenPsnr: 31.2,
+    });
+    // These MUST survive normalization — computeImageVariantGroup reads
+    // `regenerated` off normalized items to label the variant "Regenerated",
+    // and describeCleanedLineage reads regenMethod/regenPixelDeltaPct off the
+    // NORMALIZED item to render the "(light)" + "% changed" lineage row.
+    expect(n.regenerated).toBe(true);
+    expect(n.regenStrength).toBe(0.4);
+    expect(n.regenSteps).toBe(8);
+    expect(n.regenModelId).toBe('flux2-klein-9b');
+    expect(n.regenMethod).toBe('flux');
+    expect(n.regenPixelDeltaPct).toBe(7.3);
+    expect(n.regenPsnr).toBe(31.2);
+    expect(n.cleanedFrom).toBe('src.png');
+  });
+
+  it('carries the light-spatial method + fidelity for a CPU light regen', () => {
+    const n = normalizeImage({
+      filename: 'r_regen-light.png', cleanedFrom: 'src.png', regenerated: true,
+      regenMethod: 'light-spatial', regenPixelDeltaPct: 4.1,
+    });
+    expect(n.regenMethod).toBe('light-spatial');
+    expect(n.regenPixelDeltaPct).toBe(4.1);
+  });
+
+  it('defaults regen fields off for a normal (non-regen) image', () => {
+    const n = normalizeImage({ filename: 'a.png' });
+    expect(n.regenerated).toBe(false);
+    expect(n.regenStrength).toBeNull();
+    expect(n.regenModelId).toBeNull();
+    expect(n.regenMethod).toBeNull();
+    expect(n.regenPixelDeltaPct).toBeNull();
+  });
+});
+
 describe('normalize loraNames - snake_case sidecar coverage', () => {
   // MediaCard chips/search read `item.loraNames`; these must surface for
   // sidecars written in any of the four supported field shapes so the UI

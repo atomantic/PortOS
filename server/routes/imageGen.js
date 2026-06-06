@@ -38,6 +38,11 @@ import { join } from 'node:path';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer } from '../lib/imageClean.js';
+import {
+  resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
+  REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX,
+  resolveRegenStrengthDefault, applyLightRegen, computePixelDelta,
+} from '../services/imageGen/regen.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
 import { listCollections, addItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 import { itemKey } from '../lib/mediaItemKey.js';
@@ -47,7 +52,10 @@ const router = Router();
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
-  prompt: z.string().min(1).max(8000),
+  // Empty prompt allowed — i2i / edit / unconditional generation don't require
+  // one. The multipart FormData builder drops empty-string fields, so an empty
+  // prompt arrives as `undefined`; default it to '' rather than rejecting.
+  prompt: z.string().max(8000).optional().default(''),
   negativePrompt: z.string().max(8000).optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
@@ -144,6 +152,19 @@ const avatarSchema = z.object({
   prompt: z.string().max(2000).optional(),
 });
 
+// SynthID-defeat regen (issue #912). Body is optional — every field defaults
+// server-side (strength → DEFAULT_REGEN_STRENGTH, steps → the model default,
+// prompt → empty for minimal mutation). An empty/whitespace `prompt` is treated
+// as "no prompt" by buildRegenParams, so the UI can send '' for the default.
+const regenerateSchema = z.object({
+  strength: z.number().min(REGEN_STRENGTH_MIN).max(REGEN_STRENGTH_MAX).optional(),
+  steps: z.number().int().min(1).max(50).optional(),
+  prompt: z.string().max(8000).optional(),
+  // 'flux' (default) = GPU img2img round-trip; 'light' = CPU-only spatial pass
+  // for installs without a FLUX runner (strength/steps/prompt ignored).
+  method: z.enum(['flux', 'light']).optional(),
+});
+
 router.get('/status', asyncHandler(async (req, res) => {
   // Optional ?mode= override lets the Image Gen page probe a specific
   // backend (e.g. when the user flips the per-render chip to Codex but
@@ -158,6 +179,12 @@ router.get('/status', asyncHandler(async (req, res) => {
 
 router.get('/active', asyncHandler(async (_req, res) => {
   res.json({ activeJob: await imageGen.getActiveJob() });
+}));
+
+// SynthID-defeat regen availability (issue #912). Drives whether the lightbox
+// shows the "Regenerate" action — it's hardware-gated on a local FLUX runner.
+router.get('/regen/availability', asyncHandler(async (_req, res) => {
+  res.json(await getRegenAvailability());
 }));
 
 // Shape returned for any image-gen job that goes through the mediaJobQueue
@@ -288,6 +315,13 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   if (referenceImagePaths.length) {
     data.referenceImagePaths = referenceImagePaths;
     data.referenceImageStrengths = referenceImageStrengths;
+  }
+  // Empty prompt is allowed for i2i / local / external, but Codex text-to-image
+  // (no init image) still needs one — reject synchronously here so direct API
+  // callers get a 400 instead of a 200-then-async-job-failure. Mirrors the guard
+  // in codex.js and the client's codexNeedsPrompt gate.
+  if (mode === IMAGE_GEN_MODE.CODEX && !initImagePath && !data.prompt?.trim()) {
+    throw new ServerError('Prompt is required for Codex text-to-image', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (data.guidance == null && data.cfgScale != null) {
     data.guidance = data.cfgScale;
@@ -603,6 +637,132 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     cleanLevel: 'aggressive',
     c2paStripped: result.c2paStripped,
   });
+}));
+
+// CPU-only "light" regen (issue #912). The no-GPU fallback: applies sharp's
+// spatial-domain disruption stack (resize-squeeze + color nudge + median/sharpen)
+// to overwrite SynthID's resolution-dependent carriers without a FLUX runner.
+// Synchronous like Clean — writes a `_regen-light.png` variant + sidecar and
+// returns it. Honestly LESS reliable than the GPU round-trip (no FFT phase
+// subtraction); the sidecar stamps `regenMethod: 'light-spatial'` so the UI
+// never overclaims. Mirrors the manual-clean route's file/sidecar/collection shape.
+async function runLightRegen({ filename, sourceAbsPath, sourceMeta }) {
+  const buffer = await readFile(sourceAbsPath).catch((err) => {
+    if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
+    throw err;
+  });
+  const result = await applyLightRegen(buffer);
+  if (!result) {
+    throw new ServerError('Could not decode image for light regen', { status: 400, code: 'INVALID_IMAGE' });
+  }
+
+  const base = filename.slice(0, -'.png'.length);
+  const outFilename = `${base}_regen-light.png`;
+  const outPath = join(PATHS.images, outFilename);
+  const sidecarPath = join(PATHS.images, `${base}_regen-light.metadata.json`);
+  // Anchor the variant group at the root original (same rule as buildRegenParams):
+  // regenerating a cleaned/regenerated variant must group under the root, not orphan.
+  const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
+    ? sourceMeta.cleanedFrom : filename;
+  const createdAt = new Date().toISOString();
+  // Strip hidden/filename/id so the listGallery `...metadata` spread doesn't
+  // overwrite the disk-derived filename or re-hide the deliberate variant.
+  // Also strip the FLUX-regen-specific fields: when the source is itself a
+  // prior FLUX regen, carrying its regenStrength/Steps/ModelId + stale
+  // delta into a SPATIAL pass would make the lineage row falsely read
+  // "· N% denoise" (a light pass has no denoise) and show a stale fidelity.
+  const {
+    hidden: _hidden, filename: _srcFilename, id: _srcId,
+    regenStrength: _rs, regenSteps: _rst, regenModelId: _rm,
+    regenPixelDeltaPct: _rpd, regenPsnr: _rp,
+    ...sourceMetaForVariant
+  } = sourceMeta;
+
+  // Compare the in-memory source/output buffers — no need to re-read outPath
+  // off disk just to measure the delta.
+  const delta = await computePixelDelta(buffer, result.data).catch(() => null);
+  const variantMeta = {
+    ...sourceMetaForVariant,
+    createdAt,
+    cleanedFrom: groupRoot,
+    regenerated: true,
+    regenMethod: 'light-spatial',
+    ...(delta ? { regenPixelDeltaPct: delta.pixelDeltaPct, regenPsnr: delta.psnr } : {}),
+  };
+  await Promise.all([
+    writeFile(outPath, result.data),
+    writeFile(sidecarPath, JSON.stringify(variantMeta, null, 2)),
+  ]);
+
+  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
+    console.warn(`⚠️ Auto-file light-regen ${outFilename} → collections failed: ${err?.message || err}`);
+    return [];
+  });
+  console.log(`♻️ Light-regen ${filename} → ${outFilename} (${delta ? `${delta.pixelDeltaPct}% changed` : 'fidelity n/a'}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
+
+  // Response is the sidecar record plus the disk-derived fields listGallery adds.
+  return {
+    ...variantMeta,
+    filename: outFilename,
+    path: `/data/images/${outFilename}`,
+    width: result.width,
+    height: result.height,
+  };
+}
+
+// SynthID-defeat regeneration (issue #912). Round-trips an existing gallery
+// image through local FLUX img2img at low–moderate denoise so the per-pixel
+// watermark is overwritten by fresh sampling — the only honest defeat path
+// (the lossless clean above can't touch SynthID). Post-hoc + history-only:
+// enqueues a normal local image job (GPU lane) using the source's own prompt;
+// the new render lands in the gallery as a variant of the source. Hardware-
+// gated — 400s with an actionable message when no local FLUX runner exists.
+router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  local.assertGalleryFilename(filename);
+  const body = validateRequest(regenerateSchema, req.body || {});
+
+  const sourceAbsPath = resolveGalleryImage(filename);
+  if (!sourceAbsPath) {
+    throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  // Sidecar (for prompt/model) and the on-disk dimension probe have no data
+  // dependency — overlap the two reads.
+  const [{ metadata: sourceMeta }, sourceDims] = await Promise.all([
+    local.readImageSidecar(filename),
+    readImageDimensions(sourceAbsPath),
+  ]);
+
+  // CPU-only light path (no FLUX runner required). A best-effort spatial pass
+  // for installs that can't run the GPU round-trip — synchronous like Clean:
+  // it writes a `_regen-light.png` variant inline and returns it (no queue).
+  if (body.method === 'light') {
+    return res.json(await runLightRegen({ filename, sourceAbsPath, sourceMeta }));
+  }
+
+  const backend = await resolveRegenBackend({ sourceModelId: sourceMeta.modelId });
+  if (!backend.available) {
+    throw new ServerError(backend.reason, { status: 400, code: 'REGEN_BACKEND_UNAVAILABLE' });
+  }
+
+  // Provider-aware default (issue #912): SynthID-bearing sources keep the
+  // known-good 0.25; local FLUX sources use a lighter pass. The explicit
+  // `strength` override always wins.
+  const strength = body.strength ?? resolveRegenStrengthDefault(sourceMeta);
+  const params = buildRegenParams({
+    filename,
+    sourceAbsPath,
+    sourceMeta,
+    sourceDims,
+    model: backend.model,
+    pythonPath: backend.pythonPath,
+    strength,
+    steps: body.steps,
+    promptOverride: body.prompt,
+  });
+  const queued = enqueueJob({ kind: 'image', params });
+  console.log(`♻️ Regenerating ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
+  return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));
 }));
 
 // Add the cleaned-image filename to every collection that already contains

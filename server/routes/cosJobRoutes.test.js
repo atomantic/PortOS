@@ -204,6 +204,32 @@ describe('CoS Job Routes', () => {
 
       expect(response.status).toBe(400);
     });
+
+    it('should accept appId + taskMetadata and forward them to createJob', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'App Task', type: 'agent', promptTemplate: 'test', appId: 'app-xyz', taskMetadata: { useWorktree: true, openPR: true } });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ appId: 'app-xyz', taskMetadata: { useWorktree: true, openPR: true } })
+      );
+    });
+
+    it('should coerce empty-string appId to null (global job)', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Global Task', type: 'agent', promptTemplate: 'test', appId: '' });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ appId: null })
+      );
+    });
   });
 
   describe('PUT /api/cos/jobs/:id', () => {
@@ -226,6 +252,22 @@ describe('CoS Job Routes', () => {
         .send({ name: 'Fail' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('un-scopes a job to global when the client sends empty appId', async () => {
+      autonomousJobs.updateJob.mockResolvedValue({ id: 'j1', appId: null });
+
+      // The Global picker sends appId:'' (or null); the schema maps '' → null so
+      // updateJob actually clears the scope (it only skips `undefined`).
+      const response = await request(app)
+        .put('/api/cos/jobs/j1')
+        .send({ name: 'Now Global', appId: '' });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.updateJob).toHaveBeenCalledWith(
+        'j1',
+        expect.objectContaining({ appId: null })
+      );
     });
   });
 
@@ -284,6 +326,26 @@ describe('CoS Job Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('agent');
       expect(response.body.taskId).toBe('task-1');
+    });
+
+    it('should forward app scope + git options into addTask for an app-scoped agent job', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'App Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({
+        description: 'Review',
+        priority: 'MEDIUM',
+        metadata: { app: 'app-xyz', useWorktree: true, openPR: true, simplify: false }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-2' });
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({ app: 'app-xyz', useWorktree: true, openPR: true, simplify: false }),
+        'internal'
+      );
     });
 
     it('should return 404 if job not found', async () => {

@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen } from './runners.js';
+import { RUNNER_FAMILIES, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -46,5 +46,74 @@ describe('RUNNER_FAMILIES', () => {
     expect(isFlux2({ runner: 'mflux' })).toBe(false);
     expect(isFlux2(null)).toBe(false);
     expect(isFlux2(undefined)).toBe(false);
+  });
+});
+
+describe('flux2VariantFromModel', () => {
+  it('reads the size from the model id across all four flux2 ids', () => {
+    expect(flux2VariantFromModel({ id: 'flux2-klein-4b' })).toBe('4b');
+    expect(flux2VariantFromModel({ id: 'flux2-klein-9b' })).toBe('9b');
+    expect(flux2VariantFromModel({ id: 'flux2-klein-4b-int8' })).toBe('4b');
+    expect(flux2VariantFromModel({ id: 'flux2-klein-9b-bf16' })).toBe('9b');
+  });
+
+  it('falls back to the repo string when the id is opaque', () => {
+    expect(flux2VariantFromModel({ id: 'my-custom-model', repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit' })).toBe('9b');
+    expect(flux2VariantFromModel({ id: 'x', repo: 'aydin99/FLUX.2-klein-4B-int8' })).toBe('4b');
+  });
+
+  it('returns null when neither id nor repo encodes a size', () => {
+    expect(flux2VariantFromModel({ id: 'flux2-klein', repo: 'foo/bar' })).toBe(null);
+    expect(flux2VariantFromModel({})).toBe(null);
+    expect(flux2VariantFromModel(null)).toBe(null);
+  });
+
+  it('does not mistake unrelated "4b"/"9b" substrings for the size token', () => {
+    // No delimiter boundary around the digits → not a size token.
+    expect(flux2VariantFromModel({ id: 'model94bit', repo: '' })).toBe(null);
+  });
+});
+
+describe('loraCompatKey', () => {
+  it('refines flux2 into size-specific keys', () => {
+    expect(loraCompatKey({ runner: 'flux2', id: 'flux2-klein-4b' })).toBe('flux2-4b');
+    expect(loraCompatKey({ runner: 'flux2', id: 'flux2-klein-9b-bf16' })).toBe('flux2-9b');
+  });
+
+  it('falls back to bare flux2 when the size is unknown', () => {
+    expect(loraCompatKey({ runner: 'flux2', id: 'flux2-klein', repo: 'foo/bar' })).toBe('flux2');
+  });
+
+  it('passes other families through as their runner id', () => {
+    expect(loraCompatKey({ runner: 'z-image', id: 'z-image-turbo-bf16' })).toBe('z-image');
+    expect(loraCompatKey({ runner: 'mflux', id: 'dev' })).toBe('mflux');
+  });
+
+  it('defaults a runner-less model to mflux (matches the picker default)', () => {
+    expect(loraCompatKey({ id: 'dev' })).toBe('mflux');
+  });
+
+  it('client mirror carries the same helpers', () => {
+    const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
+    expect(text).toMatch(/export const flux2VariantFromModel/);
+    expect(text).toMatch(/export const loraCompatKey/);
+    expect(text).toMatch(/export const composeCompatKey/);
+  });
+});
+
+describe('composeCompatKey', () => {
+  it('encodes a flux2 size variant, leaves other cases as the bare family', () => {
+    expect(composeCompatKey('flux2', '4b')).toBe('flux2-4b');
+    expect(composeCompatKey('flux2', '9b')).toBe('flux2-9b');
+    expect(composeCompatKey('flux2', null)).toBe('flux2');   // size unknown
+    expect(composeCompatKey('mflux', '4b')).toBe('mflux');   // non-flux2 never carries a variant
+    expect(composeCompatKey('z-image', null)).toBe('z-image');
+    expect(composeCompatKey(null, null)).toBe(null);         // legacy LoRA, family unknown
+  });
+
+  it('is the single encoder behind both model-side and LoRA-side keys', () => {
+    // loraCompatKey(model) must agree with composeCompatKey on the same pair.
+    expect(loraCompatKey({ runner: 'flux2', id: 'flux2-klein-9b' }))
+      .toBe(composeCompatKey('flux2', '9b'));
   });
 });

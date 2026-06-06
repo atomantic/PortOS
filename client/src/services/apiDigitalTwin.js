@@ -112,6 +112,26 @@ export const analyzeWritingSamples = (samples, providerId, model) => request('/d
   method: 'POST',
   body: JSON.stringify({ samples, providerId, model })
 });
+// Spoken-vs-written style comparison (M34 P5). writtenSamples is optional —
+// omit it to compare the transcript against the twin's existing documents.
+export const compareSpokenWrittenStyle = (payload, options = {}) => request('/digital-twin/style/spoken-written', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options
+});
+
+// Image identity source (M34 P5). Analyze a photo with a vision model to extract
+// visible appearance / presentation, then optionally save it as an identity doc.
+export const analyzeIdentityImage = (payload, options = {}) => request('/digital-twin/identity/image', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options
+});
+export const saveIdentityImageDocument = (payload, options = {}) => request('/digital-twin/identity/image/save', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options
+});
 
 // Digital Twin - List-based Enrichment
 export const analyzeEnrichmentList = (category, items, providerId, model) => request('/digital-twin/enrich/analyze-list', {
@@ -130,9 +150,10 @@ export const analyzeDigitalTwinTraits = (providerId, model, forceReanalyze = fal
   method: 'POST',
   body: JSON.stringify({ providerId, model, forceReanalyze })
 });
-export const updateDigitalTwinTraits = (updates) => request('/digital-twin/traits', {
+export const updateDigitalTwinTraits = (updates, options = {}) => request('/digital-twin/traits', {
   method: 'PUT',
-  body: JSON.stringify(updates)
+  body: JSON.stringify(updates),
+  ...options
 });
 export const getDigitalTwinConfidence = () => request('/digital-twin/confidence');
 export const calculateDigitalTwinConfidence = (providerId, model) => request('/digital-twin/confidence/calculate', {

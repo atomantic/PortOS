@@ -1,6 +1,6 @@
 ---
 description: Claim the next unclaimed PLAN.md item (or GitHub issue with --issues) by its ID, do the work in an isolated worktree, ship a PR, and clean up.
-argument-hint: "[<slug|#issue>] [--issues] [--review-with=<copilot|codex|agy|claude>[,…]] [--no-review]"
+argument-hint: "[<slug|#issue>] [--issues] [--plan] [--review-with=<copilot|codex|agy|claude>[,…]] [--no-review]"
 ---
 
 # Claim — Pick the next PLAN.md item (or GitHub issue) and ship it
@@ -24,7 +24,8 @@ The two sources never mix in one run. In issues mode, treat `issue-<num>` as the
 
 - **`<slug>` / `#<issue>`** — claim THAT specific item instead of auto-picking. Useful for cherry-picking out-of-order work. In PLAN.md mode the token is a slug that must already exist in PLAN.md as a `- [ ]` line (this command never assigns new IDs — that's `/do:replan`'s job). In `--issues` mode the token is an issue number, written either bare (`123`) or with a leading `#` (`#123`); strip the `#` when parsing. The issue must be open and filed by the repo creator (see `--issues` below).
 - **`--issues`** — switch the work source from PLAN.md to **GitHub issues**. Auto-pick walks open issues *filed by the repo creator* (the repository owner — resolve with `gh repo view --json owner -q .owner.login`) oldest-first and claims the first one not already in flight. In this mode PLAN.md is never read or edited, and any major issue discovered during code review is filed as a **new GitHub issue** rather than appended to PLAN.md. Mutually compatible with `--review-with` / `--no-review`.
-- **`--review-with=<reviewer>[,<reviewer>…]`** — name which reviewer(s) run the post-PR review loop in Phase 6, where each `<reviewer>` is `copilot|codex|agy|claude` (the `agy` slug also accepts the aliases `gemini` and `antigravity`, which normalize to `agy` — the Antigravity CLI's binary, successor to the Gemini CLI). Comma-separate to request several (e.g. `--review-with=claude,codex` runs both review loops and converges when all agree). This flag expresses a **preference, not an absolute mandate**: it says "if a review runs, use these reviewer(s)" and leans strongly toward actually reviewing — but the agent may still skip `/simplify` and/or trim the external pass (down to a single reviewer, or skip it entirely) when the diff is *genuinely trivial* (a literal value swap, a typo/comment fix, a PLAN-only edit, a doc-only revert). Always state any skip/trim and why. **No default — when omitted, the agent decides from scratch in Phase 6 whether the diff warrants `/simplify` and/or an external review at all** (a 3-line value swap doesn't; a multi-file feature change does). `copilot` drives the GitHub Copilot review-and-fix loop via `/do:pr`; `codex`/`agy`/`claude` skip Copilot and run an iterative CLI-based review against the PR diff. Record the parsed value as `REVIEWER` (a list of reviewer names, with any `gemini`/`antigravity` normalized to `agy`; or `auto` when omitted) and reference it in Phase 6.
+- **`--plan`** — before writing any code, enter an **interactive plan-mode session**: present a written implementation plan, surface open questions, and get the user's explicit approval before implementing. The plan step runs in Phase 3.5 — *after* the worktree is claimed and the item is verified valid (Phase 1–3), so you plan with full worktree context and, in issues mode, the cross-machine `@me` marker already protects the claim while you deliberate. If the user rejects the plan or asks to stop, run Phase 7 cleanup (and, in issues mode, release the in-progress marker) exactly as a Phase 3 skip does. When omitted, `/claim` proceeds straight from verification to implementation with no interactive pause. Compatible with every other flag.
+- **`--review-with=<reviewer>[,<reviewer>…]`** — name which reviewer(s) run the post-PR review loop in Phase 6, where each `<reviewer>` is `copilot|codex|agy|claude` (the `agy` slug also accepts the aliases `gemini` and `antigravity`, which normalize to `agy` — the Antigravity CLI's binary, successor to the Gemini CLI). Comma-separate to request several (e.g. `--review-with=claude,codex` runs both review loops and converges when all agree). This flag expresses a **preference, not an absolute mandate**: it says "if a review runs, use these reviewer(s)" and leans strongly toward actually reviewing — but the agent may still skip `/simplify` and/or trim the external pass (down to a single reviewer, or skip it entirely) when the diff is *genuinely trivial* (a literal value swap, a typo/comment fix, a PLAN-only edit, a doc-only revert). Always state any skip/trim and why. **No default — when omitted, the agent decides from scratch in Phase 6 whether the diff warrants `/simplify` and/or an external review at all** (a 3-line value swap doesn't; a multi-file feature change does). `copilot` drives the GitHub Copilot review-and-fix loop via `/do:pr`; `codex`/`agy`/`claude` skip Copilot and run an iterative independent review against the PR diff. Note the dispatch difference (see Phase 6.2b): inside a Claude Code harness, the `claude` reviewer runs as a **sub-agent** (Agent/Task tool), not a `claude -p` subprocess — same independent-context review, native to the harness; `codex`/`agy` are reached via their CLI binaries. Record the parsed value as `REVIEWER` (a list of reviewer names, with any `gemini`/`antigravity` normalized to `agy`; or `auto` when omitted) and reference it in Phase 6.
 - **`--no-review`** — explicit opt-out from BOTH `/simplify` and the external review pass. Use when you want the agent to just ship without deliberation (e.g. a doc-only revert). Mutually exclusive with `--review-with`.
 
 ## Phase 1: Pick
@@ -70,7 +71,7 @@ For every ref in the combined output, split on `/` and collect every segment —
    - the issue already has an assignee (someone — human or agent, on this machine or another — has taken it via the Phase 2 marker below). This assignee check is the cross-machine half of the claim mechanism: a local-only `claim/issue-N` branch on a sibling machine is invisible here, but its assignee is not — so an already-assigned issue must be treated as taken even when no matching branch/PR shows up in the fetch.
 4. **Pick the target issue:**
    - **With argument**: the non-flag token is the issue number (strip a leading `#`). Verify it is open, authored by `$CREATOR`, and NOT in flight. If any check fails, print why and stop. (If the user explicitly named an in-flight issue, that's an error — don't silently re-claim it.)
-   - **Without argument**: pick the FIRST (oldest) candidate issue that is NOT in flight and does NOT carry a blocking label (`blocked`, `needs-input`, `wontfix`, `discussion`, or any label the repo uses to park issues — skip these and note the skip).
+   - **Without argument**: pick the FIRST (oldest) candidate issue that is NOT in flight and does NOT carry a blocking/parking label (`blocked`, `needs-input`, `wontfix`, `discussion`, `future`, or any other label the repo uses to park issues — skip these and note the skip). `future` marks work intentionally deferred to a later cycle; an explicit `/claim --issues <num>` can still claim such an issue, but auto-pick never surfaces it.
 5. **Stash `ISSUE_NUM=<num>` and set `SLUG="issue-${ISSUE_NUM}"`** — every later phase uses `SLUG` for the worktree/branch/commit/PR machinery (unchanged) and `ISSUE_NUM` for the `gh issue` calls (close, cross-reference).
 6. **If no eligible issue exists**, print why (none authored by creator / all in flight / all assigned / all blocked-labelled) and stop. Do NOT open new issues here — that only happens for work *discovered while implementing* (Phase 4/6).
 
@@ -138,6 +139,22 @@ If you ask the user and they confirm "proceed", continue. If they say "skip", re
 ```bash
 gh issue edit "$ISSUE_NUM" --remove-assignee @me --remove-label in-progress 2>/dev/null || true
 ```
+
+## Phase 3.5: Plan (interactive) — only when `--plan` was passed
+
+Skip this entire phase unless `--plan` is in the parsed flags. When present, do NOT touch code yet — first agree on *what* will be built.
+
+1. **Gather just enough context to plan.** Read the files the item names, grep for the identifiers it references, and confirm the integration points. Don't implement — read to plan.
+2. **Enter plan mode and present a written plan.** Use the harness's plan-mode entry (e.g. `EnterPlanMode`), then lay out: the item being claimed (slug or `issue-<num>`), the approach, the specific files you expect to add/change, the tests you'll write, and any migration/compat/changelog obligations the change triggers (per CLAUDE.md — e.g. a `NAV_COMMANDS` entry for a new page, a `scripts/migrations/` entry for an on-disk format or stage-prompt change, a `PROMPT_VERSIONS` bump). Call out anything you'd otherwise have to guess.
+3. **Clarify open questions interactively.** Ask the user the questions whose answers actually change the implementation — scope boundaries, ambiguous requirements, design trade-offs, which data source/API to use. Don't ask about choices with an obvious default; pick the default, state it, and move on. Iterate until the plan is unambiguous.
+4. **Get explicit approval.** Use the harness's plan-approval exit (e.g. `ExitPlanMode`) and wait for the user to approve before continuing to Phase 4. Do not start implementing on an unapproved plan.
+5. **Handle rejection / stop.** If the user rejects the plan or asks to stop, treat it exactly like a Phase 3 "skip": run Phase 7 cleanup to remove the worktree + branch, and **in issues mode also release the in-progress marker** so the item returns to the queue:
+   ```bash
+   gh issue edit "$ISSUE_NUM" --remove-assignee @me --remove-label in-progress 2>/dev/null || true
+   ```
+6. **Archive the approved plan.** Per CLAUDE.md's "Archive approved design plans" rule, once the plan is approved copy the finalized plan to `docs/plans/YYYY-MM-DD-<slug>.md` (the approval date, and `issue-<num>` for the slug in issues mode) as a design record before implementing. This commits with the rest of the work in Phase 4/5.
+
+Then continue to Phase 4 with the approved plan as your implementation spec.
 
 ## Phase 4: Implement
 
@@ -268,12 +285,16 @@ When `/simplify` is deferred but an external review will run, run `/simplify` fi
         --body "<PR body>"   # issues mode: include a "Closes #<num>" line so merge auto-closes the issue
       ```
       Capture the PR number as `PR_NUM`.
-   3. **Pick the CLI invocation per requested reviewer** (run each one when several are requested). **Pass the whole prompt — including the inlined diff — as the prompt ARGUMENT, never via stdin.** `agy -p` (`--print`) and `claude -p` take the prompt as the positional argument right after the flag; piping into them (`… | agy -p`, `agy -p < file`) fails with `agy --print takes the prompt as an argument, not stdin` and wastes an invocation. Build the prompt once with `PROMPT="$(cat /tmp/claim-${SLUG}-prompt.md)"` and pass `"$PROMPT"` as the argument. `codex exec` still *opens* stdin even when the prompt is an argument and will block forever waiting on it, so its row redirects `< /dev/null`:
-      | reviewer | Command |
-      |---|---|
-      | `codex`  | `codex --sandbox danger-full-access exec "$PROMPT" < /dev/null` |
-      | `agy`    | `agy --dangerously-skip-permissions -p "$PROMPT"` |
-      | `claude` | `claude -p "$PROMPT" --dangerously-skip-permissions` |
+   3. **Dispatch each requested reviewer** (run each one when several are requested). The dispatch mechanism differs by reviewer:
+
+      - **`claude` → dispatch a sub-agent, NOT `claude -p`.** When you are already running inside a Claude Code harness (you are — `/claim` is a Claude Code command), the `claude` reviewer must be a fresh **sub-agent** via the Agent/Task tool, not a `claude -p` subprocess. A sub-agent gives the same value `claude -p` was meant to provide — an independent, context-isolated Claude review — but native to the harness: structured return value, no separate auth/billing, no backgrounding quirks, and access to the session's tools so it can read repo files for context. Spawning `claude -p` from inside Claude Code launches a redundant second process and is the wrong call here. Pass the review prompt (with the inlined diff, or instruct the sub-agent to run `git diff origin/main...HEAD` itself) as the sub-agent prompt; have it return findings in the same `[SEVERITY] file:line — …` format ending in a `CLEAN`/`FINDINGS` verdict line.
+      - **`codex` / `agy` → CLI invocation.** These are genuinely different engines with no in-harness sub-agent equivalent, so they're reached via their binaries. **Pass the whole prompt — including the inlined diff — as the prompt ARGUMENT, never via stdin.** `agy -p` (`--print`) takes the prompt as the positional argument right after the flag; piping into it (`… | agy -p`, `agy -p < file`) fails with `agy --print takes the prompt as an argument, not stdin` and wastes an invocation. Build the prompt once with `PROMPT="$(cat /tmp/claim-${SLUG}-prompt.md)"` and pass `"$PROMPT"` as the argument. `codex exec` still *opens* stdin even when the prompt is an argument and will block forever waiting on it, so its row redirects `< /dev/null`. Run these in the background (so the loop can run codex + a claude sub-agent concurrently for the initial pass):
+        | reviewer | Command |
+        |---|---|
+        | `codex`  | `codex --sandbox danger-full-access exec "$PROMPT" < /dev/null` |
+        | `agy`    | `agy --dangerously-skip-permissions -p "$PROMPT"` |
+
+      (If for some reason you are NOT in a Claude Code harness — e.g. this flow is being driven by codex or agy as the main loop — then `claude` has no in-harness sub-agent and falls back to the CLI form `claude -p "$PROMPT" --dangerously-skip-permissions`. Inside Claude Code, always prefer the sub-agent.)
    4. **Review-and-fix loop — converge to mutual agreement, no iteration cap.** Loop until the main agent AND every requested review CLI agree the PR is ready to merge. The agent (you) decides when the review is producing real value vs. nit-grade churn; each review CLI decides when nothing actionable remains for it. With multiple reviewers, gather all of their findings each iteration, dedup, and converge only when they are all CLEAN. Each iteration:
       ```bash
       # 1. Capture the latest diff
@@ -296,10 +317,13 @@ Context: iteration <N>. Prior iterations flagged + fixed:
 $(cat /tmp/claim-${SLUG}-pr.diff)
 EOF
 
-      # 3. Run the chosen CLI against the prompt — pass it as the ARGUMENT, not via stdin.
-      #    (agy/claude -p read the prompt from the argument; `< file` is ignored and agy errors out.)
+      # 3. Run each requested reviewer against the prompt:
+      #    - claude  → dispatch a sub-agent (Agent/Task tool) with the prompt; capture its returned findings.
+      #    - codex/agy → run the CLI, passing the prompt as the ARGUMENT (not stdin; `< file` is ignored
+      #      and agy errors out). codex needs `< /dev/null` so it doesn't block on stdin.
       PROMPT="$(cat /tmp/claim-${SLUG}-prompt.md)"
-      <CLI_CMD for REVIEWER, with "$PROMPT" as the prompt argument per the table above> > /tmp/claim-${SLUG}-review.md
+      <codex/agy CLI for each requested CLI reviewer, with "$PROMPT" as the argument per the table above> > /tmp/claim-${SLUG}-review-<reviewer>.md
+      # (the claude reviewer's findings come back as the sub-agent's return value, not a file)
       ```
 
       **Loop-exit decision tree** (your call as the main agent):
@@ -365,4 +389,5 @@ Shipped issue #<num> "<Title>". PR #<PR_NUM>. Issue closed. Worktree + branch cl
 - **Empty pick is not a failure mode.** If every `- [ ]` is in flight, drifted, or NEEDS_INPUT (PLAN.md mode), or every creator-authored issue is in flight / assigned / blocked-labelled (issues mode), that's a healthy queue — exit clean and let the user know.
 - **No new PLAN.md items.** This command never adds work to its *own* queue from thin air; it only consumes. New PLAN.md items come from `/do:replan` (Phase 3 suggestions), `feature-ideas` brainstorm (when the plan is empty), or human edits. The exception in both modes is *discovered* work split out of the current item (Phase 4/6): PLAN.md mode files it as a new PLAN item, issues mode files it as a new GitHub issue.
 - **Issues mode — the in-progress marker is the cross-machine claim.** Phase 2 assigns the issue to `@me` (and labels it `in-progress`) the instant the worktree is verified; Phase 1 on every machine treats an assigned issue as in flight. This is what stops a `/claim --issues` on a *second machine* from grabbing an issue this machine is already working — the local `claim/issue-<num>` branch alone can't, since it isn't pushed until Phase 6. The marker is best-effort (two machines picking within the same sub-second window can still both assign), not a distributed lock; it shrinks the collision window to the moment of claiming. Abandoned claims release the marker (Phase 3/7); shipped issues close (Phase 6/7).
+- **`--plan` runs after the claim, not before.** Phase 3.5 deliberately sits *after* the worktree+marker are in place (Phase 2) so planning happens with full worktree context and the issues-mode `@me` marker protects the claim while you deliberate. The trade-off is a worktree gets created even if the plan is then rejected — that's why rejection routes straight to Phase 7 cleanup (and marker release in issues mode), leaving no stranded claim.
 - **Issues mode — creator-only is a hard filter.** Auto-pick and the explicit-`#num` path both reject issues NOT authored by the repo owner (`gh repo view --json owner -q .owner.login`). This keeps `/claim --issues` from acting on community/bot-filed issues without a human triaging them first — those are surfaced by `/do:replan`, not auto-claimed.

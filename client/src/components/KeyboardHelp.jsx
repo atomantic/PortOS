@@ -23,7 +23,7 @@ const SHORTCUT_SECTIONS = [
     ],
   },
   {
-    title: 'CyberCity',
+    title: 'City',
     shortcuts: [
       { keys: ['W', 'A', 'S', 'D'], description: 'Move around' },
       { keys: ['Tab'], description: 'Toggle mode' },

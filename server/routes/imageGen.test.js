@@ -31,6 +31,8 @@ vi.mock('../services/imageGen/index.js', () => ({
     listLoraFilenames: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
     deleteImage: vi.fn(async () => ({ ok: true })),
+    assertGalleryFilename: vi.fn(),
+    readImageSidecar: vi.fn(async () => ({ path: '', metadata: {} })),
   },
 }));
 
@@ -158,13 +160,27 @@ describe('Image Gen Routes', () => {
       expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'a fantasy landscape' }));
     });
 
-    it('should return 400 if prompt is missing', async () => {
+    it('accepts a missing/empty prompt (i2i / edit / unconditional), defaulting it to empty', async () => {
+      imageGen.generateImage.mockResolvedValue({
+        generationId: 'gen-empty',
+        filename: 'test.png',
+        path: '/data/images/test.png'
+      });
       const response = await request(app)
         .post('/api/image-gen/generate')
         .send({});
 
+      expect(response.status).toBe(200);
+      expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: '' }));
+    });
+
+    it('rejects a Codex text-to-image request with no prompt and no init image (synchronous 400)', async () => {
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ mode: 'codex' });
+
       expect(response.status).toBe(400);
-      expect(imageGen.generateImage).not.toHaveBeenCalled();
+      expect(response.body.code).toBe('VALIDATION_ERROR');
     });
 
     it('should validate width and height bounds', async () => {
@@ -787,6 +803,48 @@ describe('Image Gen Routes', () => {
       expect(r.body.archMismatch).toBe(false);
       expect(r.body.suggestedArm64Python).toBeNull();
       expect(detectArm64Python).not.toHaveBeenCalled();
+    });
+  });
+
+  // SynthID-defeat regen (issue #912).
+  describe('GET /api/image-gen/regen/availability', () => {
+    it('reports the local FLUX backend as available when the venv is healthy', async () => {
+      // isFlux2VenvHealthy is mocked to true and the real model registry
+      // carries FLUX.2 models, so a flux-venv model resolves.
+      const response = await request(app).get('/api/image-gen/regen/availability');
+      expect(response.status).toBe(200);
+      expect(response.body.available).toBe(true);
+      expect(typeof response.body.modelId).toBe('string');
+    });
+
+    it('carries the strength slider bounds for the lightbox control', async () => {
+      const response = await request(app).get('/api/image-gen/regen/availability');
+      expect(typeof response.body.strengthMin).toBe('number');
+      expect(typeof response.body.strengthMax).toBe('number');
+      expect(typeof response.body.strengthDefault).toBe('number');
+      // Floor is a small positive value (strength 0 is the degenerate
+      // ignore-the-init-image case), and the default sits within the bounds.
+      expect(response.body.strengthMin).toBeGreaterThan(0);
+      expect(response.body.strengthDefault).toBeGreaterThanOrEqual(response.body.strengthMin);
+      expect(response.body.strengthDefault).toBeLessThanOrEqual(response.body.strengthMax);
+    });
+  });
+
+  describe('POST /api/image-gen/:filename/regenerate', () => {
+    it('rejects an out-of-range strength before touching the filesystem (400)', async () => {
+      const response = await request(app)
+        .post('/api/image-gen/whatever.png/regenerate')
+        .send({ strength: 0.95 }); // max is 0.6
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('404s when the source image is not in the gallery', async () => {
+      const response = await request(app)
+        .post('/api/image-gen/does-not-exist.png/regenerate')
+        .send({});
+      expect(response.status).toBe(404);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 });

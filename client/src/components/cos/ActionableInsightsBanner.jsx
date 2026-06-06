@@ -16,6 +16,35 @@ import {
   Unlock
 } from 'lucide-react';
 import * as api from '../../services/api';
+import ProvenanceChip from '../ui/ProvenanceChip';
+
+// The chip answers "why am I seeing this?" the same way the taste-identity and
+// health surfaces do — but the honesty distinction the feature exists to enforce
+// means the level must match how each insight was actually derived. Most insight
+// types are direct counts read off records (N tasks awaiting approval, N blocked,
+// N health issues) → data-backed. Only the two that lean on success-rate
+// statistics — auto-skipped task types and the peak-productivity-hour suggestion
+// — are genuinely modeled → inferred.
+const INFERRED_INSIGHT_TYPES = new Set(['learning', 'peak-time']);
+
+const DATA_BACKED_PROVENANCE = {
+  level: 'data-backed',
+  explainer:
+    'Surfaced by your Chief of Staff from a live count of your own records — pending approvals, blocked tasks, health issues, your queue — then prioritized. The underlying number is read straight off your data, not modeled.',
+  whatWouldChange:
+    'Clearing the underlying items — approving, unblocking, resolving — updates or removes this on the next evaluation.',
+};
+
+const INFERRED_PROVENANCE = {
+  level: 'inferred',
+  explainer:
+    'Surfaced by your Chief of Staff from statistical patterns in your task history — success rates by task type and time of day — not a value you set or a direct count.',
+  whatWouldChange:
+    'As more task runs accumulate and those success rates shift, this recommendation is recomputed or drops away.',
+};
+
+export const insightProvenance = (type) =>
+  INFERRED_INSIGHT_TYPES.has(type) ? INFERRED_PROVENANCE : DATA_BACKED_PROVENANCE;
 
 const ICON_MAP = {
   AlertCircle,
@@ -139,6 +168,7 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
                 Urgent
               </span>
             )}
+            <ProvenanceChip {...insightProvenance(primaryInsight.type)} />
           </div>
           {primaryInsight.description && !isExpanded && (
             <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">

@@ -99,8 +99,21 @@ export const PATHS = {
  * await ensureDir('/custom/path/to/dir');
  */
 export async function ensureDir(dir) {
-  // mkdir with recursive: true is idempotent - it succeeds if dir exists
-  await mkdir(dir, { recursive: true });
+  // mkdir with recursive: true is idempotent - it succeeds if dir exists.
+  // BUT on Windows it can intermittently throw UNKNOWN/EPERM/EEXIST even when
+  // the directory already exists or is created concurrently — antivirus locks,
+  // OneDrive sync, and network/mapped drives all surface spurious failures that
+  // the POSIX-modeled `recursive: true` no-op contract doesn't anticipate.
+  // Swallow the error when the path is in fact a directory afterward.
+  await mkdir(dir, { recursive: true }).catch((err) => {
+    if (err?.code === 'EEXIST') return; // already exists — the intended state
+    const s = statSync(dir, { throwIfNoEntry: false });
+    if (s && s.isDirectory()) {
+      console.log(`⚠️ ensureDir swallowed spurious ${err?.code || 'error'} — dir exists: ${dir}`);
+      return;
+    }
+    throw err;
+  });
 }
 
 /**

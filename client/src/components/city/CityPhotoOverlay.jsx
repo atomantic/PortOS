@@ -72,7 +72,7 @@ function PresetControls({ presetId, onCycle }) {
   );
 }
 
-export default function CityPhotoOverlay({ active, presetId, onPresetChange, onExit, captureFnRef, statsSnapshot }) {
+export default function CityPhotoOverlay({ active, presetId, onPresetChange, onExit, captureFnRef, statsSnapshot, dofEnabled = true, onToggleDof }) {
   const [postcard, setPostcard] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -126,9 +126,26 @@ export default function CityPhotoOverlay({ active, presetId, onPresetChange, onE
         </button>
       </div>
 
-      {/* Bottom bar: preset cycle + capture */}
+      {/* Bottom bar: preset cycle + DoF toggle + capture */}
       <div className="absolute bottom-0 left-0 right-0 h-[10vh] flex items-center justify-between px-6 z-30">
-        <PresetControls presetId={presetId} onCycle={handleCycle} />
+        <div className="flex items-center gap-4">
+          <PresetControls presetId={presetId} onCycle={handleCycle} />
+          {onToggleDof && (
+            <button
+              type="button"
+              onClick={onToggleDof}
+              aria-pressed={dofEnabled}
+              className={`font-pixel text-[10px] tracking-wider rounded px-3 py-1.5 border transition-all pointer-events-auto ${
+                dofEnabled
+                  ? 'text-black bg-cyan-400 border-cyan-400 hover:bg-cyan-300'
+                  : 'text-cyan-400 border-cyan-500/40 hover:bg-cyan-500/10'
+              }`}
+              title="Toggle depth of field (D)"
+            >
+              ◐ DEPTH {dofEnabled ? 'ON' : 'OFF'}
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={handleCapture}

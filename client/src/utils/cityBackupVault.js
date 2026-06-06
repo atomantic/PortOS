@@ -21,18 +21,23 @@ const HEALTH_COLORS = {
   aging: '#f59e0b', // port-warning — getting old
   stale: '#ef4444', // port-error — overdue
   error: '#ef4444', // port-error — last run failed
+  degraded: '#f59e0b', // port-warning — files saved but DB dump failed
   never: '#64748b', // slate — never backed up / not configured
   running: '#3b82f6', // port-accent — a backup is in flight
 };
 
 // Map persisted backup state → a health classification. `state.status` is the stored
-// status ('never' | 'ok' | 'error'); `state.lastRun` is the ISO timestamp of the last
+// status ('never' | 'ok' | 'degraded' | 'error'); `state.lastRun` is the ISO timestamp of the last
 // run (or null); `state.running` is set true while a backup is in flight (socket-driven).
 // `now` is injected so the staleness derivation is deterministic in tests.
 export function vaultHealth(state, now = Date.now()) {
   if (state?.running) return 'running';
   const status = state?.status || 'never';
   if (status === 'error') return 'error';
+  // 'degraded' = files backed up but the DB dump failed — alert, don't read as
+  // PROTECTED. Classified before the staleness path so a recent degraded run
+  // (fresh lastRun) can't fall through to 'ok'.
+  if (status === 'degraded') return 'degraded';
   if (status === 'never' || !state?.lastRun) return 'never';
   const last = new Date(state.lastRun).getTime();
   if (!Number.isFinite(last)) return 'never';
@@ -48,7 +53,7 @@ export function vaultColor(health) {
 
 // Should the vault read as needing attention (urgent pulse, brighter glow)?
 export function vaultIsAlerting(health) {
-  return health === 'stale' || health === 'error';
+  return health === 'stale' || health === 'error' || health === 'degraded';
 }
 
 // Short uppercase label rendered under the monument.
@@ -59,6 +64,7 @@ export function vaultStatusLabel(health) {
     case 'aging': return 'AGING';
     case 'stale': return 'STALE';
     case 'error': return 'FAILED';
+    case 'degraded': return 'DB FAILED';
     default: return 'NO BACKUP';
   }
 }

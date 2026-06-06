@@ -97,6 +97,15 @@ describe('navManifest — shape invariants', () => {
     const ids = NAV_COMMANDS.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it('every section is one of the approved sidebar group labels', () => {
+    const ALLOWED_SECTIONS = new Set([
+      'Main', 'Apps', 'Brain', 'Calendar', 'Chief of Staff', 'Create',
+      'Dev Tools', 'Goals', 'Health', 'Settings', 'Identity', 'POST',
+    ]);
+    const bad = NAV_COMMANDS.filter((c) => !ALLOWED_SECTIONS.has(c.section));
+    expect(bad.map((c) => `${c.id}:${c.section}`)).toEqual([]);
+  });
 });
 
 describe('resolveNavCommand — fuzzy matching', () => {

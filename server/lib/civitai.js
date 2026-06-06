@@ -43,6 +43,17 @@ export const baseModelToRunner = (baseModel) => {
   return null;
 };
 
+// FLUX.2 Klein ships in two sizes (4B/9B) with incompatible transformer dims.
+// Civitai distinguishes them in the baseModel string ("Flux.2 Klein 4B" /
+// "Flux.2 Klein 9B"), so a Civitai-installed LoRA can be tagged without
+// reading its safetensors header. Returns '4b' | '9b' | null.
+export const flux2VariantFromBaseModel = (baseModel) => {
+  if (typeof baseModel !== 'string') return null;
+  if (baseModelToRunner(baseModel) !== RUNNER_FAMILIES.FLUX2) return null;
+  const m = baseModel.match(/\b([49])b\b/i);
+  return m ? `${m[1].toLowerCase()}b` : null;
+};
+
 // Extracts model id and optional modelVersionId from any Civitai URL shape:
 //   https://civitai.com/models/123456
 //   https://civitai.com/models/123456/some-slug
@@ -287,6 +298,9 @@ export const buildSidecar = ({ model, version, file, filename }) => {
       nsfw: !!model?.nsfw,
     },
     runnerFamily: baseModelToRunner(baseModel),  // 'mflux' | 'flux2' | 'z-image' | null
+    // '4b' | '9b' | null — only meaningful for the flux2 family. Lets the LoRA
+    // picker tell a Klein-4B LoRA apart from a Klein-9B one (incompatible dims).
+    fluxVariant: flux2VariantFromBaseModel(baseModel),
     triggerWords: Array.isArray(version?.trainedWords) ? version.trainedWords : [],
     recommendedScale: Number.isFinite(version?.settings?.strength) ? version.settings.strength : 1.0,
     file: {
@@ -318,10 +332,12 @@ const RUNNER_TO_BASE_MODELS = {
 };
 
 // Search Civitai for LoRA-family models targeting the given runner family.
-// Returns the raw `items` array from `/api/v1/models` (each entry has its
-// own `modelVersions[]` etc — let the suggestion service shape them).
-// fetchImpl is injectable for tests.
-export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Most Downloaded', nsfw = false, apiKey, fetchImpl = fetch } = {}) => {
+// Returns `{ items, nextCursor }` — `items` is the raw array from
+// `/api/v1/models` (each entry has its own `modelVersions[]` etc — let the
+// suggestion service shape them); `nextCursor` is Civitai's cursor token for
+// the next page (null when exhausted). Pass `query` to filter by keyword and
+// `cursor` to page forward. fetchImpl is injectable for tests.
+export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Most Downloaded', nsfw = false, query, cursor, apiKey, fetchImpl = fetch } = {}) => {
   const baseModels = RUNNER_TO_BASE_MODELS[runnerFamily];
   if (!baseModels) {
     throw new ServerError(`Unknown runner family for Civitai search: ${runnerFamily}`, { status: 400, code: 'CIVITAI_BAD_RUNNER' });
@@ -334,6 +350,13 @@ export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Mos
   params.set('sort', sort);
   params.set('nsfw', String(!!nsfw));
   for (const bm of baseModels) params.append('baseModels', bm);
+  // `query` is Civitai's keyword search over model name/description. Trim and
+  // skip when blank so an empty box falls back to the plain "top" ranking.
+  const trimmedQuery = typeof query === 'string' ? query.trim() : '';
+  if (trimmedQuery) params.set('query', trimmedQuery);
+  // Cursor-based pagination — Civitai returns `metadata.nextCursor`; feed it
+  // back here to fetch the next page. Cursor is opaque (string or number).
+  if (cursor != null && cursor !== '') params.set('cursor', String(cursor));
   const url = `${CIVITAI_API}/models?${params.toString()}`;
   const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildAuthHeaders(apiKey) } });
   if (!res.ok) {
@@ -346,7 +369,10 @@ export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Mos
     throw new ServerError(`Civitai search failed: ${res.status}`, { status: 502, code: 'CIVITAI_SEARCH_FAILED' });
   }
   const body = await readResponseJson(res);
-  return Array.isArray(body?.items) ? body.items : [];
+  return {
+    items: Array.isArray(body?.items) ? body.items : [],
+    nextCursor: body?.metadata?.nextCursor ?? null,
+  };
 };
 
 // Pull a sample prompt from Civitai's preview image metadata. The `meta`

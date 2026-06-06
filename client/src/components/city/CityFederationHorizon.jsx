@@ -1,8 +1,8 @@
 import { useMemo, useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Text } from '@react-three/drei';
 import * as THREE from 'three';
-import { PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import CityLabel from './CityLabel';
 import { computeFederationHorizon, FEDERATION } from '../../utils/cityFederation';
 
 // The sync link reaching inward from a peer toward the city. Solid + bright when
@@ -47,7 +47,7 @@ function FederationBridge({ from, color, broken, intensity }) {
 }
 
 // A distant peer (or the void marker) rendered as a neon-trimmed silhouette.
-function Monolith({ position, width, height, color, opacity, label, sublabel, online, animate }) {
+function Monolith({ position, width, height, color, opacity, label, sublabel, online, animate, dayMix = 0 }) {
   const capRef = useRef();
 
   useFrame(({ clock }) => {
@@ -62,7 +62,7 @@ function Monolith({ position, width, height, color, opacity, label, sublabel, on
       <mesh position={[0, height / 2, 0]}>
         <boxGeometry args={[width, height, width * 0.4]} />
         <meshStandardMaterial
-          color="#0a0a18"
+          color={tintStructure('#0a0a18')}
           emissive={color}
           emissiveIntensity={opacity}
           transparent
@@ -76,14 +76,14 @@ function Monolith({ position, width, height, color, opacity, label, sublabel, on
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={online ? 0.9 : 0.4} transparent opacity={Math.min(1, opacity + 0.4)} depthWrite={false} />
       </mesh>
       {label && (
-        <Text position={[0, height + 2.2, 0]} fontSize={1.6} color={color} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        <CityLabel position={[0, height + 2.2, 0]} fontSize={1.6} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
           {label}
-        </Text>
+        </CityLabel>
       )}
       {sublabel && (
-        <Text position={[0, height + 0.9, 0]} fontSize={1.0} color="#94a3b8" anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        <CityLabel position={[0, height + 0.9, 0]} fontSize={1.0} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
           {sublabel}
-        </Text>
+        </CityLabel>
       )}
     </group>
   );
@@ -98,6 +98,7 @@ export default function CityFederationHorizon({ instances, settings }) {
   // The horizon is a handful of distant static meshes, but honor the quality
   // dial: drop the gentle peer pulse on the lowest preset.
   const animate = (settings?.particleDensity ?? 1) >= 0.5;
+  const dayMix = cityDayMix(settings);
 
   return (
     <group>
@@ -113,6 +114,7 @@ export default function CityFederationHorizon({ instances, settings }) {
             sublabel={peer.online ? 'LINKED' : peer.status.toUpperCase()}
             online={peer.online}
             animate={animate}
+            dayMix={dayMix}
           />
           <FederationBridge from={peer.position} color={peer.color} broken={peer.bridge.broken} intensity={peer.bridge.intensity} />
         </group>
@@ -128,6 +130,7 @@ export default function CityFederationHorizon({ instances, settings }) {
         sublabel="PRIMARY"
         online={false}
         animate={false}
+        dayMix={dayMix}
       />
     </group>
   );

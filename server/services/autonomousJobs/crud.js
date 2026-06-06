@@ -80,6 +80,14 @@ async function createJob(jobData) {
       name: jobData.name,
       description: jobData.description || '',
       category: jobData.category || 'custom',
+      // Optional managed-app scope. When set, the spawned agent targets the
+      // app's repoPath (via task.metadata.app → prepareAgentWorkspace) instead
+      // of the PortOS root. Absent/null = global job (historical behavior).
+      appId: jobData.appId || null,
+      // Optional git-workflow options forwarded into the generated task's
+      // metadata (useWorktree/openPR/simplify) so an app-scoped custom task can
+      // do isolated work and open a PR like the built-in task types.
+      taskMetadata: jobData.taskMetadata || null,
       cronExpression: jobData.cronExpression || null,
       type: jobType,
       interval: jobData.interval || 'weekly',
@@ -135,7 +143,7 @@ async function updateJob(jobId, updates) {
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
       'scheduledTime', 'cronExpression', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
-      'command', 'triggerAction', 'config'
+      'command', 'triggerAction', 'config', 'appId', 'taskMetadata'
     ]
 
     for (const field of updatableFields) {

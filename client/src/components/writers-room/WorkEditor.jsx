@@ -46,6 +46,7 @@ import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import LiveContinuationPanel from './LiveContinuationPanel';
 import LiveRenderPanel from './LiveRenderPanel';
+import CdBridgePanel from './CdBridgePanel';
 import AnalysisHistory from './AnalysisHistory';
 import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
@@ -150,6 +151,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // imperative suggest fn; `liveTimerRef` is the post-typing debounce.
   const [liveMode, setLiveMode] = useState(work.liveMode || null);
   useEffect(() => { setLiveMode(work.liveMode || null); }, [work.liveMode]);
+  // Shared live text-suggest usage counter. The continuation panel and the CD
+  // bridge BOTH draw on the same server-side daily budget, so a single mirror
+  // lives here (not one per panel) — otherwise the panel that didn't make the
+  // most recent call shows a stale "N left today" readout until its own next
+  // call. Seeded from / re-synced to liveMode.usage (parent-driven changes:
+  // work swap, budget edit, toggle); updated by whichever panel suggests. The
+  // render-preview budget is a distinct counter owned by LiveRenderPanel.
+  const [liveUsage, setLiveUsage] = useState(liveMode?.usage || null);
+  useEffect(() => { setLiveUsage(liveMode?.usage || null); }, [liveMode?.usage]);
   const liveTriggerRef = useRef(null);
   const liveTimerRef = useRef(null);
   const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
@@ -437,6 +447,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const handleOpenInPipeline = () => {
     if (!work.pipelineIssueId) return;
     navigate(`/pipeline/issues/${encodeURIComponent(work.pipelineIssueId)}/prose`);
+  };
+
+  const handleOpenInCreativeDirector = () => {
+    if (!work.cdProjectId) return;
+    navigate(`/media/creative-director/${encodeURIComponent(work.cdProjectId)}/overview`);
   };
 
   const commitTitle = async () => {
@@ -862,6 +877,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 ) : (
                   <MenuItem icon={Film} label={promoting ? 'Promoting…' : 'Promote to pipeline'} running={promoting} onClick={closeOverflowAnd(handlePromoteToPipeline)} />
                 )}
+                {work.cdProjectId && (
+                  <MenuItem icon={ExternalLink} label="Open in Creative Director" onClick={closeOverflowAnd(handleOpenInCreativeDirector)} />
+                )}
               </MenuSection>
               <MenuSection label="View">
                 <MenuItem
@@ -995,11 +1013,21 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <LiveContinuationPanel
                   workId={work.id}
                   liveMode={liveMode}
+                  usage={liveUsage}
+                  onUsageChange={setLiveUsage}
                   getCursorContext={getCursorContext}
                   onInsert={insertAtCursor}
                   registerTrigger={registerLiveTrigger}
                 />
               </div>
+              <CdBridgePanel
+                workId={work.id}
+                liveMode={liveMode}
+                usage={liveUsage}
+                onUsageChange={setLiveUsage}
+                getCursorContext={getCursorContext}
+                onLinked={(cdProjectId) => onChange?.({ ...work, cdProjectId })}
+              />
             </>
           )}
           <StoryboardPanel

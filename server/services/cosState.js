@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
 export const AGENTS_DIR = join(PATHS.cos, 'agents');
@@ -56,6 +57,10 @@ export const DEFAULT_CONFIG = {
   proactiveMode: true,
   autonomousJobsEnabled: true,
   autonomyLevel: 'standby',
+  // Per-domain autonomy guardrails (#711). Each domain is off | dry-run | execute.
+  // Default is `execute` for every domain, reproducing pre-#711 behavior so no
+  // migration is needed — an install with no stored value reads `execute`.
+  domainAutonomy: normalizeDomainAutonomy({}),
   rehabilitationGracePeriodDays: 7,
   completedAgentRetentionMs: 86400000,
   embeddingProviderId: 'lmstudio',
@@ -181,6 +186,14 @@ export async function saveState(state) {
   await ensureDirectories();
   stateCache = state;
   await atomicWrite(STATE_FILE, state);
+}
+
+// Resolve a single domain's autonomy mode (off | dry-run | execute) without
+// importing cos.js (which would create circular deps). Domains gate their
+// automatic behavior off this; an absent/invalid value resolves to `execute`.
+export async function getDomainAutonomyMode(domainId) {
+  const state = await loadState();
+  return getDomainMode(state.config, domainId);
 }
 
 // Daemon state accessors — used by modules that need to check daemon status

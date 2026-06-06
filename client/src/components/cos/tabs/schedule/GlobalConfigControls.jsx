@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, RotateCcw, ChevronDown, AlertCircle, Package, Info } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE } from '../../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
@@ -100,6 +100,16 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     const model = newModel === '' ? null : newModel;
     await onUpdate(taskType, { model }).catch(() => {
       setSelectedModel(config.model || '');
+    });
+    setUpdating(false);
+  };
+
+  const handlePrAuthorFilterChange = async (value) => {
+    setUpdating(true);
+    // Send the full merged taskMetadata — updateTaskInterval replaces the
+    // object wholesale, and loadSchedule re-merges defaults on read.
+    await onUpdate(taskType, {
+      taskMetadata: { ...(config.taskMetadata || {}), prAuthorFilter: value }
     });
     setUpdating(false);
   };
@@ -207,6 +217,27 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
           </div>
         </>
+      )}
+
+      {taskType === 'pr-watcher' && (
+        <div>
+          <label htmlFor={`pr-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">PR Author Filter</label>
+          <select
+            id={`pr-author-filter-${taskType}`}
+            value={config.taskMetadata?.prAuthorFilter || 'any'}
+            onChange={(e) => handlePrAuthorFilterChange(e.target.value)}
+            disabled={updating}
+            className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+          >
+            {PR_AUTHOR_FILTER_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {PR_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.prAuthorFilter || 'any'))?.description}
+            {' '}Edit the prompt below to control what the agent does for each opened PR (it can use <code>{'{prData}'}</code>, <code>{'{repoFullName}'}</code>, <code>{'{defaultBranch}'}</code>).
+          </p>
+        </div>
       )}
 
       <PromptEditor

@@ -13,6 +13,7 @@ export default function MediaCard({
   onPreview,
   onClick, // overrides preview when set (e.g. stitch mode toggling selection)
   onRemix,
+  onSendToImage,
   onSendToVideo,
   onContinue,
   onUpscale,
@@ -118,6 +119,17 @@ export default function MediaCard({
                 title="Reuse settings"
               >
                 <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Remix</span>
+              </button>
+            )}
+            {!isVideo && onSendToImage && (
+              <button
+                type="button"
+                onClick={() => onSendToImage(item)}
+                className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
+                title="Send to image-to-image"
+                aria-label="Send to image-to-image"
+              >
+                <Wand2 className="w-3 h-3" />
               </button>
             )}
             {!isVideo && onSendToVideo && (

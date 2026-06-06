@@ -1,6 +1,6 @@
 import { request } from './apiCore.js';
 
-export const getPaletteManifest = () => request('/palette/manifest');
+export const getPaletteManifest = (options) => request('/palette/manifest', options);
 
 export const runPaletteAction = (id, args = {}) =>
   request(`/palette/action/${encodeURIComponent(id)}`, {

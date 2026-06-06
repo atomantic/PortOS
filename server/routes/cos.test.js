@@ -48,6 +48,7 @@ vi.mock('../services/cos.js', () => ({
   getScript: vi.fn(),
   forceSpawnTask: vi.fn(),
   getTodayActivity: vi.fn(),
+  getWhileAwayActivity: vi.fn(),
   getRecentTasks: vi.fn()
 }));
 
@@ -1071,6 +1072,39 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.stats.completed).toBe(5);
+    });
+  });
+
+  describe('GET /api/cos/activity/while-away', () => {
+    it('passes a valid ISO since through to the service', async () => {
+      cos.getWhileAwayActivity.mockResolvedValue({ stats: { completed: 3 } });
+      const since = '2026-06-01T00:00:00.000Z';
+
+      const response = await request(app).get(`/api/cos/activity/while-away?since=${encodeURIComponent(since)}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.stats.completed).toBe(3);
+      expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(since);
+    });
+
+    it('tolerates a garbage since (200 + service fallback, not 400)', async () => {
+      cos.getWhileAwayActivity.mockResolvedValue({ stats: { completed: 0 } });
+
+      const response = await request(app).get('/api/cos/activity/while-away?since=not-a-date');
+
+      expect(response.status).toBe(200);
+      // Malformed value is dropped to undefined so the service applies its
+      // own 24h fallback rather than the route 400-ing the dashboard card.
+      expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(undefined);
+    });
+
+    it('works with no since param', async () => {
+      cos.getWhileAwayActivity.mockResolvedValue({ stats: { completed: 1 } });
+
+      const response = await request(app).get('/api/cos/activity/while-away');
+
+      expect(response.status).toBe(200);
+      expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(undefined);
     });
   });
 });

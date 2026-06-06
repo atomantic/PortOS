@@ -17,6 +17,7 @@ const QuickIdeaCapture      = lazyWithReload(() => import('../QuickIdeaCapture')
 const QuickImagePrompt      = lazyWithReload(() => import('../QuickImagePrompt'));
 const QuickTaskWidget       = lazyWithReload(() => import('../QuickTaskWidget'));
 const ReviewHubCard         = lazyWithReload(() => import('../ReviewHubCard'));
+const WhileAwayWidget        = lazyWithReload(() => import('../WhileAwayWidget'));
 const AppsGridWidget        = lazyWithReload(() => import('./builtins/AppsGridWidget'));
 const QuickStatsWidget      = lazyWithReload(() => import('./builtins/QuickStatsWidget'));
 const ActivityStreakWidget  = lazyWithReload(() => import('./builtins/ActivityStreakWidget'));
@@ -35,7 +36,7 @@ const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActi
 //
 // `module` is optional micrographic chrome — when set, the dashboard
 // renders a SchematicLabel ("MODULE.04 // ALERTS ●") as a tab on the
-// widget's top border. Six widgets carry this by default; the rest are
+// widget's top border. Several widgets carry this by default; the rest are
 // label-free so the dashboard doesn't turn into a wall of HUD chrome.
 export const WIDGETS = [
   { id: 'quick-brain',       label: 'Quick Brain Capture',   Component: QuickBrainCapture,      width: 'half',    defaultH: 3 },
@@ -48,6 +49,7 @@ export const WIDGETS = [
   { id: 'upcoming-tasks',    label: 'Upcoming Tasks',        Component: UpcomingTasksWidget,    width: 'third',   defaultH: 5 },
   { id: 'proactive-alerts',  label: 'Proactive Alerts',      Component: ProactiveAlertsWidget,  width: 'quarter', defaultH: 4, module: { id: '04', status: 'ALERTS',  glyph: 'warning-tri' } },
   { id: 'review-hub',        label: 'Review Hub',            Component: ReviewHubCard,          width: 'quarter', defaultH: 4, module: { id: '05', status: 'REVIEW',  glyph: 'reticle' } },
+  { id: 'while-away',        label: 'While You Were Away',   Component: WhileAwayWidget,        width: 'third',   defaultH: 5, module: { id: '08', status: 'AWAY',    glyph: 'orbit' } },
   { id: 'system-health',     label: 'System Health',         Component: SystemHealthWidget,     width: 'quarter', defaultH: 8, module: { id: '01', status: 'HEALTH',  glyph: 'matrix' } },
   { id: 'network-exposure',  label: 'Network Exposure',      Component: NetworkExposureWidget,  width: 'quarter', defaultH: 5, module: { id: '07', status: 'EXPOSURE', glyph: 'reticle' } },
   { id: 'backup',            label: 'Backup',                Component: BackupWidget,           width: 'quarter', defaultH: 5 },

@@ -7,6 +7,7 @@ import ToggleSwitch from '../../ToggleSwitch';
 import * as api from '../../../services/api';
 import { AGENT_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
+import CustomTasksSection from './CustomTasksSection';
 
 const INTERVAL_OPTIONS = [
   { value: null, label: 'Inherit Global' },
@@ -238,6 +239,10 @@ export default function AutomationTab({ appId, appName }) {
           })}
         </div>
       )}
+
+      <div className="border-t border-port-border pt-4">
+        <CustomTasksSection appId={appId} appName={appName} />
+      </div>
     </div>
   );
 }

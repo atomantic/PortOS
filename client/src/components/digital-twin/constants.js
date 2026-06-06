@@ -26,7 +26,9 @@ import {
   PenLine,
   Target,
   Archive,
-  Drama
+  Drama,
+  Mic,
+  Camera
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -41,6 +43,8 @@ export const TABS = [
   { id: 'personas', label: 'Personas', icon: Drama },
   { id: 'goals', label: 'Goals', icon: Target },
   { id: 'interview', label: 'Interview', icon: MessageSquare },
+  { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'appearance', label: 'Appearance', icon: Camera },
   { id: 'autobiography', label: 'Autobiography', icon: PenLine },
   { id: 'import', label: 'Import', icon: Upload },
   { id: 'export', label: 'Export', icon: Download },

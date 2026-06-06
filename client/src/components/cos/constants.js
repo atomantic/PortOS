@@ -75,6 +75,17 @@ export const REVIEWER_OPTIONS = [
   { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
 ];
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
+
+// pr-watcher author gate (taskMetadata.prAuthorFilter). Mirrors
+// PR_AUTHOR_FILTERS in server/lib/validation.js. 'self' = PRs opened by the
+// gh-authenticated operator (or their automation); 'others' = external
+// contributors; 'any' = react to every opened PR.
+export const PR_AUTHOR_FILTER_OPTIONS = [
+  { value: 'any', label: 'Any author', description: 'React to every PR opened on the default branch' },
+  { value: 'self', label: 'Opened by me', description: 'Only PRs opened by the gh-authenticated user (or their automation)' },
+  { value: 'others', label: 'Opened by others', description: 'Only PRs opened by someone other than the gh-authenticated user' }
+];
+
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 
@@ -164,6 +175,30 @@ export const MEMORY_TYPE_COLORS = {
   decision: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
   preference: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
   context: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+};
+
+// Per-domain autonomy guardrails (#711). Mirrors server/lib/domainAutonomy.js —
+// each domain is independently set to off | dry-run | execute. Default is
+// `execute` (historical behavior). Keep this list in sync with the server.
+export const AUTONOMY_DOMAINS = [
+  { id: 'brain', label: 'Brain auto-classify', description: 'Auto-classify captured thoughts and file them.' },
+  { id: 'memory', label: 'Memory auto-extract', description: 'Auto-store high-confidence memories from agent runs.' },
+  { id: 'cos', label: 'CoS auto-run', description: 'Auto-spawn autonomous (non-user) tasks without approval.' },
+  { id: 'messages', label: 'Messages auto-send', description: 'Auto-forward notifications to outbound channels (Telegram).' }
+];
+
+export const DOMAIN_AUTONOMY_MODES = [
+  { id: 'off', label: 'Off', description: 'Never act automatically — leave it for manual action.' },
+  { id: 'dry-run', label: 'Dry-run', description: 'Plan the action and surface it, but don\'t commit the side effect.' },
+  { id: 'execute', label: 'Execute', description: 'Act automatically (default).' }
+];
+
+export const DEFAULT_DOMAIN_MODE = 'execute';
+
+// Resolve a domain's mode from config, tolerating absent/partial config.
+export const getDomainMode = (config, domainId) => {
+  const candidate = config?.domainAutonomy?.[domainId];
+  return DOMAIN_AUTONOMY_MODES.some(m => m.id === candidate) ? candidate : DEFAULT_DOMAIN_MODE;
 };
 
 // Autonomy level presets for CoS behavior

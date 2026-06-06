@@ -20,6 +20,10 @@ export default class ErrorBoundary extends Component {
 
   render() {
     if (this.state.hasError) {
+      // Callers can supply a custom fallback (including `null`) — used to degrade
+      // gracefully inside non-DOM trees like the R3F Canvas, where the default
+      // full-screen DOM error UI can't render.
+      if (this.props.fallback !== undefined) return this.props.fallback;
       return (
         <div className="min-h-screen bg-port-bg flex items-center justify-center p-4">
           <div className="bg-port-card border border-port-border rounded-xl p-8 max-w-md w-full">

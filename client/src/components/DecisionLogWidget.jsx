@@ -19,6 +19,19 @@ import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo } from '../utils/formatters';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
+import ProvenanceChip from './ui/ProvenanceChip';
+
+// Every row here is a record of an autonomous choice the Chief of Staff made —
+// what it skipped, switched, or deferred and why. That's read straight off the
+// decision ledger it wrote as it ran, so the provenance is data-backed: a log
+// of actions taken, not a model's guess about them.
+const DECISION_PROVENANCE = {
+  level: 'data-backed',
+  explainer:
+    'Read directly from the decision ledger your Chief of Staff writes as it runs — each row is an autonomous choice it actually made (skip, switch, defer) with the reason it recorded at the time.',
+  whatWouldChange:
+    'New entries appear as the Chief of Staff makes more scheduling decisions; the log only grows, it is never re-estimated.',
+};
 
 /**
  * DecisionLogWidget - Shows transparency into CoS decision-making
@@ -226,27 +239,30 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="text-2xl" aria-hidden="true">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="shrink-0 text-2xl" aria-hidden="true">
             <Eye className="w-6 h-6 text-purple-400" />
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">Decision Log</h3>
-            <p className="text-sm text-gray-500">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-white truncate">Decision Log</h3>
+            <p className="text-sm text-gray-500 truncate">
               {last24Hours.total > 0
                 ? `${last24Hours.total} decisions in last 24h`
                 : 'No recent decisions'}
             </p>
           </div>
         </div>
-        <Link
-          to="/cos/learning"
-          className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
-        >
-          <span className="hidden sm:inline">Details</span>
-          <ChevronRight size={16} />
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          <ProvenanceChip {...DECISION_PROVENANCE} align="end" />
+          <Link
+            to="/cos/learning"
+            className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+          >
+            <span className="hidden sm:inline">Details</span>
+            <ChevronRight size={16} />
+          </Link>
+        </div>
       </div>
 
       {/* Quick Stats Row */}

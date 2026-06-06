@@ -10,6 +10,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getSettings } from './settings.js';
 import { notificationEvents, NOTIFICATION_TYPES, getNotifications } from './notifications.js';
+import { getDomainAutonomyMode } from './cosState.js';
 import { approveMemory, rejectMemory, peekMemory } from './memoryBackend.js';
 import { ensureDir, PATHS, readJSONFile, formatDuration, atomicWrite } from '../lib/fileUtils.js';
 import { getActiveAgents } from './subAgentSpawner.js';
@@ -370,9 +371,21 @@ async function handleCallbackQuery(query) {
  * Forward a notification to Telegram
  */
 async function forwardNotification(notification) {
-  // Use cached forwardTypes to avoid disk I/O on every notification
+  // Use cached forwardTypes to avoid disk I/O on every notification.
+  // (Runs before the per-domain gate so a filtered-out notification skips the
+  // state read entirely, and so dry-run only reports what execute would send.)
   if (Array.isArray(cachedForwardTypes) && cachedForwardTypes.length > 0) {
     if (!cachedForwardTypes.includes(notification.type)) return;
+  }
+
+  // Per-domain autonomy gate: `off` suppresses outbound forwarding; `dry-run`
+  // logs what would have been sent without actually messaging the channel.
+  const mode = await getDomainAutonomyMode('messages');
+  if (mode !== 'execute') {
+    if (mode === 'dry-run') {
+      console.log(`📨 [dry-run] Messages auto-send would forward notification: ${notification.type} — "${notification.title}"`);
+    }
+    return;
   }
 
   const emoji = NOTIFICATION_EMOJI[notification.type] || '🔔';

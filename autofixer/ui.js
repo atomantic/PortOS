@@ -4,6 +4,8 @@ import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.js';
+import { certPaths } from '../lib/certPaths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -236,9 +238,17 @@ app.get('/logs', async (req, res) => {
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 [Autofixer UI] Running on http://localhost:${PORT}`);
+// Serve HTTPS with the same Tailscale cert the main PortOS server uses when one
+// is present, so the sidebar's `${window.location.protocol}//<host>:5560` link
+// (which inherits https:// on a cert-enabled install) hits a matching listener.
+// Falls back to plain HTTP when no cert is on disk.
+const { dir: CERT_DIR } = certPaths(DATA_DIR);
+const { server, httpsEnabled } = createTailscaleServers(app, { certDir: CERT_DIR, httpMirror: false });
+const scheme = httpsEnabled ? 'https' : 'http';
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 [Autofixer UI] Running on ${scheme}://localhost:${PORT}`);
 });
+if (httpsEnabled) watchCertReload(server, CERT_DIR);
 
 process.on('SIGINT', () => {
   console.log(`\n🛑 [Autofixer UI] Shutting down...`);

@@ -23,6 +23,8 @@ import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 
 function computeHealth(status) {
   if (!status || status.status === 'error') return 'critical';
+  // 'degraded' = files backed up but the DB dump failed — surface as a warning.
+  if (status.status === 'degraded') return 'warning';
   if (status.status === 'never') return 'warning';
   if (status.status === 'running') return 'healthy';
   if (!status.lastRun) return 'warning';

@@ -7,6 +7,7 @@
 // unit-testable (mirrors cityFederation.js / cityBackupVault.js).
 
 import { hashString } from './hashString';
+import { groupByFieldValue, scaleMetricToHeight } from './cityDistrictLayout';
 
 export const MEMORY_DISTRICT = {
   // Northwest quadrant — mirrors the artifact cluster at NE (+44,-28), clear of the
@@ -56,15 +57,10 @@ export function categoryKey(node) {
 // importance (importance defaults to 1 when absent so every memory contributes some mass).
 // Returns buckets sorted by count desc, then category asc for a stable order.
 export function groupByCategory(nodes) {
-  const buckets = new Map();
-  for (const node of Array.isArray(nodes) ? nodes : []) {
-    const key = categoryKey(node);
-    const entry = buckets.get(key) || { category: key, count: 0, importance: 0 };
-    entry.count += 1;
-    entry.importance += Number.isFinite(node?.importance) ? node.importance : 1;
-    buckets.set(key, entry);
-  }
-  return [...buckets.values()].sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
+  const nodeImportance = (node) => (Number.isFinite(node?.importance) ? node.importance : 1);
+  return groupByFieldValue(nodes, categoryKey, { weightFn: nodeImportance }).map(
+    ({ key, count, weight }) => ({ category: key, count, importance: weight }),
+  );
 }
 
 // Place a cluster on the district ring. Angle is seeded by the category name (not the index)
@@ -88,8 +84,12 @@ export function placeCluster(category, index, total, opts = {}) {
 // a huge category doesn't dwarf the skyline and a tiny one is still visible.
 export function clusterHeight(importance) {
   const { minCrystalHeight, maxCrystalHeight } = MEMORY_DISTRICT;
-  const scaled = minCrystalHeight + Math.log2(1 + Math.max(0, importance)) * 0.7;
-  return Math.min(maxCrystalHeight, Math.max(minCrystalHeight, scaled));
+  return scaleMetricToHeight(importance, {
+    min: minCrystalHeight,
+    max: maxCrystalHeight,
+    k: 0.7,
+    base: minCrystalHeight,
+  });
 }
 
 // Build the bridges between category clusters from the graph's cross-category edges. Each edge

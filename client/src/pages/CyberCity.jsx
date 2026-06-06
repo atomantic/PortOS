@@ -1,19 +1,24 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
+import { useCityPlayback } from '../hooks/useCityPlayback';
 import useCityAudio from '../hooks/useCityAudio';
 import useKeyboardControls from '../hooks/useKeyboardControls';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { mergeFrameIntoCityProps } from '../lib/cityPlaybackFrame';
 import * as api from '../services/api';
 import CityScene from '../components/city/CityScene';
 import CityHud from '../components/city/CityHud';
 import CityScanlines from '../components/city/CityScanlines';
 import CityPhotoOverlay from '../components/city/CityPhotoOverlay';
+import CityPlaybackOverlay from '../components/city/CityPlaybackOverlay';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
 import CitySettingsPanel from '../components/city/CitySettingsPanel';
 import { computeFilterResult } from '../utils/cityFilter';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
+import { CITY_COLORS, deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay } from '../components/city/cityConstants';
+import { useThemeContext } from '../components/ThemeContext';
 
 function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, backupStatus, cosTasks, healthMetrics, voiceState, character, aiActivity, loading, connected } = useCityData();
@@ -32,6 +37,31 @@ function CyberCityInner() {
   const { playSfx } = useCityAudio(settings, soundscape);
   const navigate = useNavigate();
   const location = useLocation();
+
+  // CyberCity follows the active PortOS theme: the HUD recolors via the
+  // `cybercity-themed` CSS scope (see index.css) and the 3D scene's brand colors
+  // + surround are derived from the same theme here.
+  const { theme: cityTheme } = useThemeContext();
+  const cityPalette = useMemo(() => {
+    const palette = deriveCityPalette(cityTheme);
+    // Recolor the shared CITY_COLORS singleton during render — before the scene
+    // children render — so the keyed remount below (key={cityPalette.themeId})
+    // reads fresh brand colors on a theme switch.
+    applyCityBrandColors(palette);
+    return palette;
+  }, [cityTheme]);
+
+  // The city renders day or night, following the theme mode by default (see
+  // resolveCityTimeOfDay). The resolved preset key is handed to the scene via a
+  // settings override (CitySky/CityLights/CityGround read settings.timeOfDay), and
+  // the backdrop swaps between the blue day sky and the dark night void to match.
+  const cityTimeOfDay = resolveCityTimeOfDay(settings?.timeOfDay, cityPalette.isDay);
+  const sceneBackground = cityTimeOfDay.daytime ? CITY_COLORS.timeOfDay.noon.midSky : cityPalette.nightBackground;
+  const sceneSettings = useMemo(
+    () => ({ ...settings, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey }),
+    [settings, cityTimeOfDay.presetKey],
+  );
+
   const [filter, setFilter] = useState(() => {
     // try/catch is necessary because sessionStorage values are external state
     // a corrupted/older-schema entry would throw and crash the page render.
@@ -80,19 +110,35 @@ function CyberCityInner() {
   // the overlay (outside the Canvas) can trigger a grab. Exiting photo mode clears the fn.
   const [photoMode, setPhotoMode] = useState(false);
   const [photoPresetId, setPhotoPresetId] = useState(DEFAULT_PRESET_ID);
+  // Depth-of-field for cinematic shots (roadmap 3.3) — on by default since it's the point of the
+  // mode; the user can toggle it off (D / overlay button) for a fully-sharp frame.
+  const [photoDof, setPhotoDof] = useState(true);
   const captureFnRef = useRef(null);
   const handlePhotoCaptureReady = useCallback((fn) => { captureFnRef.current = fn; }, []);
 
-  // Entering photo mode leaves exploration; they're mutually exclusive camera modes.
+  // Playback / "history" mode (roadmap 3.6): scrub recorded city-state snapshots.
+  // Transport state lives in the hook; the page swaps the current frame's data
+  // into the scene props below. Mutually exclusive with photo mode.
+  const playback = useCityPlayback();
+
+  // Entering photo mode leaves exploration + playback; they're mutually exclusive modes.
   const enterPhotoMode = useCallback(() => {
     updateSetting('explorationMode', false);
+    playback.exit();
     setPhotoPresetId(DEFAULT_PRESET_ID);
     setPhotoMode(true);
-  }, [updateSetting]);
+  }, [updateSetting, playback]);
   const exitPhotoMode = useCallback(() => setPhotoMode(false), []);
 
-  // Esc exits photo mode; ←/→ cycle the framing preset. Bound only while photo mode is on so it
-  // doesn't shadow other shortcuts. Ignores key events while typing in an input.
+  // Entering playback leaves photo + exploration mode.
+  const enterPlayback = useCallback(() => {
+    setPhotoMode(false);
+    updateSetting('explorationMode', false);
+    playback.enter();
+  }, [updateSetting, playback]);
+
+  // Esc exits photo mode; ←/→ cycle the framing preset; D toggles depth-of-field. Bound only while
+  // photo mode is on so it doesn't shadow other shortcuts. Ignores key events while typing.
   useEffect(() => {
     if (!photoMode) return;
     const onKey = (e) => {
@@ -101,10 +147,27 @@ function CyberCityInner() {
       if (e.key === 'Escape') setPhotoMode(false);
       else if (e.key === 'ArrowLeft') setPhotoPresetId(id => cyclePreset(id, -1));
       else if (e.key === 'ArrowRight') setPhotoPresetId(id => cyclePreset(id, 1));
+      else if (e.key === 'd' || e.key === 'D') setPhotoDof(v => !v);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [photoMode]);
+
+  // Playback keyboard transport: Esc exits, Space play/pause, ←/→ step a frame.
+  // Bound only while playback is active. Ignores key events while typing.
+  useEffect(() => {
+    if (!playback.active) return;
+    const onKey = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'Escape') playback.exit();
+      else if (e.key === ' ') { e.preventDefault(); playback.togglePlay(); }
+      else if (e.key === 'ArrowLeft') playback.step(-1);
+      else if (e.key === 'ArrowRight') playback.step(1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [playback.active, playback]);
 
   // Task-complete chime (roadmap 3.4): when a CoS task transitions to completed, play a reward
   // chime. Track the set of completed ids across socket updates and chime on each newly-seen one.
@@ -226,11 +289,26 @@ function CyberCityInner() {
     };
   }, [apps, cosAgents, instances, character, productivityData]);
 
+  // In playback mode, overlay the current snapshot frame's data onto the props
+  // the scene consumes. mergeFrameIntoCityProps returns ONLY the props the frame
+  // can faithfully drive (apps, agentMap, cosStatus, backupStatus, character),
+  // so anything it omits (the count-only and rich-array landmarks: task queue,
+  // federation, health tower, memory, goals, jira, activity, productivity) keeps
+  // its live value — the "freeze unfed landmarks at live" behavior; their
+  // captured numbers show in the playback overlay instead. Returns null for an
+  // unplayable frame → keep live.
+  const playbackProps = useMemo(() => {
+    if (!playback.active || !playback.currentFrame) return null;
+    return mergeFrameIntoCityProps(playback.currentFrame, { apps, agentMap });
+  }, [playback.active, playback.currentFrame, apps, agentMap]);
+
+  const v = useCallback((key, live) => (playbackProps && key in playbackProps ? playbackProps[key] : live), [playbackProps]);
+
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4" style={{ background: '#030308' }}>
+      <div className="flex flex-col items-center justify-center h-full gap-4 cybercity-themed" style={{ background: cityPalette.background }}>
         <div className="font-pixel text-cyan-400 text-lg tracking-widest animate-pulse" style={{ textShadow: '0 0 12px rgba(6,182,212,0.5)' }}>
-          INITIALIZING CYBERCITY
+          INITIALIZING CITY
         </div>
         <div className="w-48 h-1 bg-gray-800 rounded-full overflow-hidden">
           <div className="h-full bg-cyan-500 rounded-full animate-pulse" style={{ width: '60%', boxShadow: '0 0 8px rgba(6,182,212,0.5)' }} />
@@ -243,15 +321,17 @@ function CyberCityInner() {
   }
 
   return (
-    <div className="relative w-full h-full" style={{ background: '#030308', isolation: 'isolate' }}>
+    <div className="relative w-full h-full cybercity-themed" style={{ background: sceneBackground, isolation: 'isolate' }}>
       <CityScene
-        apps={apps}
-        agentMap={agentMap}
+        key={cityPalette.themeId}
+        background={sceneBackground}
+        apps={v('apps', apps)}
+        agentMap={v('agentMap', agentMap)}
         onBuildingClick={handleBuildingClick}
-        cosStatus={cosStatus}
+        cosStatus={v('cosStatus', cosStatus)}
         reviewCounts={reviewCounts}
         instances={instances}
-        backupStatus={backupStatus}
+        backupStatus={v('backupStatus', backupStatus)}
         cosTasks={cosTasks}
         healthMetrics={healthMetrics}
         voiceState={voiceState}
@@ -259,21 +339,24 @@ function CyberCityInner() {
         productivityData={productivityData}
         activityCalendar={activityCalendar}
         goals={goalsData}
-        character={character}
+        character={v('character', character)}
         chronotype={chronotypeData}
         memoryGraph={memoryGraph}
         inboxDepth={inboxData?.counts?.needs_review ?? 0}
         jiraTickets={jiraTickets}
+        playback={playback.active}
         photoMode={photoMode}
         photoPresetId={photoPresetId}
+        photoDof={photoDof}
         onPhotoCaptureReady={handlePhotoCaptureReady}
-        settings={settings}
+        settings={sceneSettings}
         playSfx={playSfx}
         keysRef={keysRef}
         dimmedAppIds={filterResult.dimmed}
       />
-      {/* The full HUD hides in photo mode so captures are clean; the photo overlay replaces it. */}
-      {!photoMode && (
+      {/* The full HUD hides in photo + playback mode so the view is clean; each
+          mode's overlay replaces it. */}
+      {!photoMode && !playback.active && (
         <CityHud
           cosStatus={cosStatus}
           cosAgents={cosAgents}
@@ -295,6 +378,7 @@ function CyberCityInner() {
           explorationMode={settings?.explorationMode}
           onSelectApp={handleBuildingClick}
           onEnterPhotoMode={enterPhotoMode}
+          onEnterPlayback={enterPlayback}
         />
       )}
       <CityPhotoOverlay
@@ -304,8 +388,26 @@ function CyberCityInner() {
         onExit={exitPhotoMode}
         captureFnRef={captureFnRef}
         statsSnapshot={photoStats}
+        dofEnabled={photoDof}
+        onToggleDof={() => setPhotoDof(v => !v)}
       />
-      <CityScanlines settings={settings} />
+      <CityPlaybackOverlay
+        active={playback.active}
+        loading={playback.loading}
+        error={playback.error}
+        snapshots={playback.snapshots}
+        frameIndex={playback.frameIndex}
+        currentFrame={playback.currentFrame}
+        stats={playback.stats}
+        playing={playback.playing}
+        speed={playback.speed}
+        onSeek={playback.seek}
+        onStep={playback.step}
+        onTogglePlay={playback.togglePlay}
+        onCycleSpeed={playback.cycleSpeed}
+        onExit={playback.exit}
+      />
+      <CityScanlines settings={settings} crt={cityPalette.crt} />
       {showSettings && <CitySettingsPanel />}
     </div>
   );

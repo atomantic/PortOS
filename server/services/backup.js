@@ -7,12 +7,15 @@
  */
 
 import { spawn } from 'child_process';
-import { access, readdir, stat, writeFile } from 'fs/promises';
+import { access, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth } from '../lib/db.js';
+import { getBackendName } from './memoryBackend.js';
+import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
+import { getIo } from './socket.js';
 
 // Module-level state
 let isRunning = false;
@@ -55,8 +58,20 @@ const DEFAULT_STATE = {
   status: 'never',
   lastSnapshotId: null,
   filesChanged: 0,
+  pgBackup: null,
   error: null
 };
+
+/**
+ * Map a dumpPostgres result to the overall backup status. Only a *failed*
+ * dump (PG configured but the dump errored) degrades the backup; a *skipped*
+ * dump (no PG — file mode) is benign and stays 'ok'.
+ * @param {{status: string}} pgResult
+ * @returns {'ok'|'degraded'}
+ */
+export function backupStatusForPg(pgResult) {
+  return pgResult?.status === 'failed' ? 'degraded' : 'ok';
+}
 
 // =============================================================================
 // INTERNAL HELPERS
@@ -169,7 +184,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
   const fail = async (err) => {
     isRunning = false;
-    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message });
+    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null });
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
   };
@@ -178,36 +193,70 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags).catch(fail);
   console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
-  // Dump PostgreSQL alongside the file backup
+  // Dump PostgreSQL alongside the file backup. Result is NO LONGER swallowed —
+  // a configured-but-failed dump must degrade the backup and alert the user.
   const pgDumpPath = join(snapshotDir, 'portos-db.sql');
-  const pgResult = await dumpPostgres(pgDumpPath).catch(() => ({ success: false }));
+  const pgResult = await dumpPostgres(pgDumpPath);
 
-  manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json')).catch(fail);
+  manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath).catch(fail);
 
+  const status = backupStatusForPg(pgResult);
   const lastRun = new Date().toISOString();
   await saveState({
     lastRun,
     lastSnapshotId: snapshotId,
-    status: 'ok',
+    status,
     filesChanged: changedFiles.length,
-    error: null
+    pgBackup: pgResult,
+    error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
   }).catch(fail);
 
-  if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length });
+  if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
 
-  return complete({ snapshotId, filesChanged: changedFiles.length, lastRun, manifest, pgDump: pgResult });
+  // Loud-on-failure: surface a degraded DB dump as a warning toast, even on
+  // unattended scheduled runs (which pass io=null) via the module-level io.
+  if (pgResult.status === 'failed') {
+    const errIo = io || getIo();
+    if (errIo) {
+      emitErrorEvent(errIo, new ServerError(
+        `Backup DB dump failed: ${pgResult.reason}`,
+        { status: 500, code: 'BACKUP_DB_DUMP_FAILED', severity: 'warning' }
+      ));
+    }
+  }
+
+  return complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult });
 }
 
 /**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
- * Silently skips if PostgreSQL is not available.
+ * Returns an explicit status so the caller can distinguish "no PG configured"
+ * (benign, file mode) from "PG configured but dump failed" (data at risk):
+ *   { status: 'ok', sizeBytes, tableCount }
+ *   { status: 'skipped', reason: 'not_configured' }   (PG not the active backend)
+ *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'dump_error'|'empty_dump', error }
+ *     (pg_unreachable fires when Postgres is the active backend — explicit or
+ *      auto-detected — but the DB is down at backup time)
  * @param {string} outputPath - Path to write the SQL dump file
- * @returns {Promise<{success: boolean, size?: number, error?: string}>}
  */
 export async function dumpPostgres(outputPath) {
   const health = await checkHealth();
   if (!health.connected || !health.hasSchema) {
-    return { success: false, error: 'PostgreSQL not available' };
+    // PG unreachable or uninitialized. When the install legitimately runs
+    // without Postgres this is the expected, benign case. But when Postgres is
+    // the ACTIVE memory backend, an unreachable DB is a real backup failure —
+    // data that lives only in PG won't be captured — so degrade the backup and
+    // alert rather than silently skip. Postgres is active when it's required
+    // explicitly (MEMORY_BACKEND=postgres) OR when it was auto-detected at
+    // startup (MEMORY_BACKEND unset and the resolved backend is 'postgres').
+    // The auto-detect case is the common default install, so gating only on the
+    // env var would let a real DB outage read as a green "not configured" run.
+    const env = process.env.MEMORY_BACKEND;
+    const postgresIsActive = env === 'postgres' || (env !== 'file' && getBackendName() === 'postgres');
+    if (postgresIsActive) {
+      return { status: 'failed', reason: 'pg_unreachable', error: health.error || 'PostgreSQL is the active memory backend but is not reachable' };
+    }
+    return { status: 'skipped', reason: 'not_configured' };
   }
 
   const pgHost = process.env.PGHOST || 'localhost';
@@ -220,6 +269,10 @@ export async function dumpPostgres(outputPath) {
   }
 
   return new Promise((resolve) => {
+    // --clean --if-exists: the dump DROPs each object before recreating it, so it
+    // replays cleanly into the live, already-initialized PortOS database (the
+    // common Restore-DB target) instead of erroring "relation already exists" on
+    // the first CREATE. Without it the dump is only restorable into an empty DB.
     const proc = spawn('pg_dump', [
       '-h', pgHost,
       '-p', pgPort,
@@ -227,6 +280,8 @@ export async function dumpPostgres(outputPath) {
       '-d', pgDb,
       '--no-owner',
       '--no-acl',
+      '--clean',
+      '--if-exists',
       '-f', outputPath
     ], {
       shell: false,
@@ -237,30 +292,51 @@ export async function dumpPostgres(outputPath) {
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
     proc.on('close', async (code) => {
-      if (code === 0) {
-        const info = await stat(outputPath).catch(() => null);
-        console.log(`💾 pg_dump complete: ${info ? Math.round(info.size / 1024) + 'KB' : 'unknown size'}`);
-        resolve({ success: true, size: info?.size ?? 0 });
-      } else {
+      if (code !== 0) {
         console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
-        resolve({ success: false, error: stderr.trim() });
+        // pg_dump can exit non-zero after writing a partial file (e.g. mid-dump
+        // connection loss). Remove it so a later restore can't trust a truncated
+        // dump on size alone — a failed dump must leave no restorable artifact.
+        await unlink(outputPath).catch(() => {});
+        resolve({ status: 'failed', reason: 'dump_error', error: stderr.trim() });
+        return;
       }
+      // Verify: a dump that exits 0 but is empty/truncated is still a failure.
+      const info = await stat(outputPath).catch(() => null);
+      if (!info || info.size === 0) {
+        console.warn('⚠️ pg_dump produced an empty dump file');
+        resolve({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
+        return;
+      }
+      const sql = await readFile(outputPath, 'utf-8').catch(() => '');
+      const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
+      console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
+      // Don't return the absolute dump path: this result is persisted into
+      // state.pgBackup and surfaced to the client via GET /api/backup/status,
+      // the backup:completed socket event, and the /run response. No client
+      // reads it (restorePostgres recomputes its own sqlPath), so leaking an
+      // internal FS path serves no purpose.
+      resolve({ status: 'ok', sizeBytes: info.size, tableCount });
     });
 
     proc.on('error', (err) => {
-      // pg_dump not installed — skip silently
+      // pg_dump not installed — a configured-but-unbacked-up DB is at risk,
+      // so this is a failure, not a silent skip.
       console.warn(`⚠️ pg_dump not available: ${err.message}`);
-      resolve({ success: false, error: err.message });
+      resolve({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
     });
   });
 }
 
 /**
- * Generate a SHA-256 manifest for all files in snapshotDataDir.
+ * Generate a SHA-256 manifest for all files in snapshotDataDir, plus the
+ * sibling pg dump (which lives outside the data/ tree). Hashing the dump means
+ * a truncated/corrupt portos-db.sql is detectable, not silently trusted.
  * @param {string} snapshotDataDir - Directory to hash
  * @param {string} manifestPath - Path to write manifest.json
+ * @param {string|null} [pgDumpPath=null] - Sibling SQL dump to also hash
  */
-export async function generateManifest(snapshotDataDir, manifestPath) {
+export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null) {
   const entries = await readdir(snapshotDataDir, { recursive: true }).catch(() => []);
   const files = {};
 
@@ -269,6 +345,16 @@ export async function generateManifest(snapshotDataDir, manifestPath) {
     const info = await stat(filePath).catch(() => null);
     if (!info || !info.isFile()) continue;
     files[entry] = await sha256File(filePath);
+  }
+
+  if (pgDumpPath) {
+    const dumpInfo = await stat(pgDumpPath).catch(() => null);
+    if (dumpInfo?.isFile()) {
+      // Parent-relative key: the dump lives one level ABOVE snapshotDataDir
+      // (alongside it, not inside it). A future manifest-verify must not assume
+      // every key resolves under snapshotDataDir.
+      files['../portos-db.sql'] = await sha256File(pgDumpPath);
+    }
   }
 
   const manifest = {
@@ -344,6 +430,87 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
 
   const changedFiles = await runRsync(srcDir, PATHS.data, flags);
   return { dryRun, snapshotId, subdirFilter, changedFiles };
+}
+
+/**
+ * Restore the PostgreSQL dump from a snapshot. Dry-run by default — mirrors
+ * restoreSnapshot's safety default. A real restore pipes the snapshot's
+ * portos-db.sql into psql; the dump was written with --no-owner --no-acl so
+ * it replays cleanly.
+ *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
+ *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
+ *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
+ *   { status: 'failed', reason: 'restore_error', error }
+ * @param {string} destPath - Backup destination root
+ * @param {string} snapshotId
+ * @param {{dryRun?: boolean}} [options]
+ */
+export async function restorePostgres(destPath, snapshotId, { dryRun = true } = {}) {
+  if (!snapshotId || !/^[\w\-.:T]+$/.test(snapshotId)) {
+    throw new Error(`Invalid snapshotId: ${snapshotId}`);
+  }
+  const snapshotsRoot = resolve(join(destPath, 'snapshots', MACHINE_HOST));
+  const sqlPath = join(snapshotsRoot, snapshotId, 'portos-db.sql');
+  const rel = relative(snapshotsRoot, resolve(sqlPath));
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`Path traversal detected for snapshotId: ${snapshotId}`);
+  }
+
+  const info = await stat(sqlPath).catch(() => null);
+  // An empty/0-byte dump is as good as absent — restoring it is a silent no-op.
+  // Mirror dumpPostgres's empty-dump guard so a truncated snapshot can't read
+  // as a successful "0 tables" restore.
+  if (!info || !info.isFile?.() || info.size === 0) {
+    return { status: 'skipped', reason: 'no_dump' };
+  }
+  const sql = await readFile(sqlPath, 'utf-8').catch(() => '');
+  const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
+
+  if (dryRun) {
+    return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
+  }
+
+  // Never half-restore: require a reachable DB before replaying.
+  const health = await checkHealth();
+  if (!health.connected) {
+    return { status: 'skipped', reason: 'not_configured' };
+  }
+
+  const pgHost = process.env.PGHOST || 'localhost';
+  const pgPort = process.env.PGPORT || '5432';
+  const pgDb = process.env.PGDATABASE || 'portos';
+  const pgUser = process.env.PGUSER || 'portos';
+
+  return new Promise((resolveP) => {
+    // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
+    // wraps the whole replay in one transaction so that abort ROLLs BACK every
+    // prior statement. Together they make the restore atomic: it either fully
+    // applies or leaves the live DB untouched — never a mixed snapshot/current
+    // state. (The dump is written with --clean --if-exists, so the DROPs and
+    // recreates all commit or roll back as one unit.)
+    const proc = spawn('psql', [
+      '-v', 'ON_ERROR_STOP=1',
+      '--single-transaction',
+      '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
+    ], { shell: false, env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
+        resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
+      } else {
+        console.warn(`⚠️ psql restore failed (code ${code}): ${stderr.trim()}`);
+        resolveP({ status: 'failed', reason: 'restore_error', error: stderr.trim() });
+      }
+    });
+    proc.on('error', (err) => {
+      console.warn(`⚠️ psql not available: ${err.message}`);
+      resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
+    });
+  });
 }
 
 /**

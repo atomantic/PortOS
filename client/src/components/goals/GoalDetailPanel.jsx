@@ -1,5 +1,6 @@
 import { X, AlertTriangle, Calendar, Activity, Tag, Check, Trash2 } from 'lucide-react';
 import Pill from '../ui/Pill';
+import ProvenanceChip from '../ui/ProvenanceChip';
 import {
   CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, GOAL_TYPE_OPTIONS, DEFAULT_NEW_GOAL
 } from './goalConstants';
@@ -25,6 +26,19 @@ const urgencyColor = (u) => {
   return 'text-green-400';
 };
 
+// The goal itself is yours — title, horizon, category are all stated outright.
+// The urgency and activity-budget readings, though, are computed from your life
+// expectancy, health timeline, and linked activities — modeled from your data,
+// not numbers you entered. The chip declares that so a derived reading never
+// reads as something you set. Only rendered when such a reading is present.
+const READING_PROVENANCE = {
+  level: 'inferred',
+  explainer:
+    'Urgency and activity-budget readings are computed from your life-expectancy and health timeline, this goal\'s horizon, and the activities you linked to it — modeled from your data, not values you entered.',
+  whatWouldChange:
+    'Updating your health timeline, the goal\'s horizon or target date, or the activities linked to it shifts these readings.',
+};
+
 export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) {
   const s = useGoalDetail({ goal, allGoals, onClose, onRefresh });
 
@@ -37,6 +51,13 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
 
   const excludedIds = s.getDescendantIds(goal.id);
   const parentOptions = (allGoals || []).filter(g => !excludedIds.has(g.id));
+
+  // Only declare provenance when an AI-derived reading is actually on the panel:
+  // a modeled urgency, or an activity-budget block (which needs `feasibility.links`
+  // to render). Edit mode replaces these readings with the edit form, so the chip
+  // is also suppressed there — see the `!s.editing` gate in the header below.
+  const hasDerivedReading = goal.urgency != null
+    || (goal.feasibility && Array.isArray(goal.feasibility.links));
 
   return (
     <div className="w-full sm:w-80 bg-port-card border-l border-port-border h-full overflow-y-auto p-4 space-y-4">
@@ -55,9 +76,12 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             </span>
           )}
         </div>
-        <button onClick={onClose} className="p-1 text-gray-500 hover:text-white shrink-0">
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {!s.editing && hasDerivedReading && <ProvenanceChip {...READING_PROVENANCE} align="end" />}
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-white shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {s.editing ? (

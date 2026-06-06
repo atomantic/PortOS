@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { partialWithoutDefaults } from './zodCompat.js';
 
 // Destination enum
 export const destinationEnum = z.enum(['people', 'projects', 'ideas', 'admin', 'memories', 'unknown']);
@@ -38,7 +39,7 @@ export const classificationSchema = z.object({
 // Filed info schema
 export const filedSchema = z.object({
   destination: destinationEnum.exclude(['unknown']),
-  destinationId: z.string().uuid()
+  destinationId: z.string().guid()
 });
 
 // Correction schema
@@ -57,7 +58,7 @@ export const errorSchema = z.object({
 
 // Inbox Log Record schema
 export const inboxLogRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   capturedText: z.string().min(1).max(10000),
   capturedAt: z.string().datetime(),
   source: z.literal('brain_ui'),
@@ -71,7 +72,7 @@ export const inboxLogRecordSchema = z.object({
 
 // People Record schema
 export const peopleRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string().min(1).max(200),
   context: z.string().max(2000).optional().default(''),
   followUps: z.array(z.string().max(500)).optional().default([]),
@@ -83,7 +84,7 @@ export const peopleRecordSchema = z.object({
 
 // Project Record schema
 export const projectRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string().min(1).max(200),
   status: projectStatusEnum,
   nextAction: z.string().min(1).max(500),
@@ -95,7 +96,7 @@ export const projectRecordSchema = z.object({
 
 // Idea Record schema
 export const ideaRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   title: z.string().min(1).max(200),
   status: ideaStatusEnum.default('active'),
   oneLiner: z.string().min(1).max(500),
@@ -107,7 +108,7 @@ export const ideaRecordSchema = z.object({
 
 // Admin Record schema
 export const adminRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   title: z.string().min(1).max(200),
   status: adminStatusEnum,
   dueDate: z.string().datetime().optional(),
@@ -119,7 +120,7 @@ export const adminRecordSchema = z.object({
 
 // Memory Record schema (journal entries, daily notes, personal memories)
 export const memoryRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   title: z.string().min(1).max(200),
   content: z.string().max(10000).optional().default(''),
   mood: z.string().max(50).optional(),
@@ -143,7 +144,7 @@ export const brainSettingsSchema = z.object({
 
 // Digest Record schema
 export const digestRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   generatedAt: z.string().datetime(),
   digestText: z.string().max(2000),
   topActions: z.array(z.string().max(200)).max(3),
@@ -154,7 +155,7 @@ export const digestRecordSchema = z.object({
 
 // Weekly Review Record schema
 export const reviewRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   generatedAt: z.string().datetime(),
   reviewText: z.string().max(3000),
   whatHappened: z.array(z.string().max(200)).max(5),
@@ -175,14 +176,14 @@ export const captureInputSchema = z.object({
 
 // Resolve review input schema
 export const resolveReviewInputSchema = z.object({
-  inboxLogId: z.string().uuid(),
+  inboxLogId: z.string().guid(),
   destination: destinationEnum.exclude(['unknown']),
   editedExtracted: z.record(z.unknown()).optional()
 });
 
 // Fix classification input schema
 export const fixInputSchema = z.object({
-  inboxLogId: z.string().uuid(),
+  inboxLogId: z.string().guid(),
   newDestination: destinationEnum.exclude(['unknown']),
   updatedFields: z.record(z.unknown()).optional(),
   note: z.string().max(500).optional()
@@ -238,7 +239,11 @@ export const memoryInputSchema = z.object({
 });
 
 // Settings update input schema
-export const settingsUpdateInputSchema = brainSettingsSchema.partial().omit({ version: true, lastDailyDigest: true, lastWeeklyReview: true });
+// partialWithoutDefaults (not .partial()) so a PATCH that touches only one
+// setting doesn't inject the other fields' defaults (e.g. defaultProvider:
+// 'lmstudio') and overwrite the stored values — Zod 4's .partial() keeps inner
+// defaults (see zodCompat.js).
+export const settingsUpdateInputSchema = partialWithoutDefaults(brainSettingsSchema).omit({ version: true, lastDailyDigest: true, lastWeeklyReview: true });
 
 // Inbox query schema
 export const inboxQuerySchema = z.object({
@@ -330,7 +335,7 @@ export const linkTypeEnum = z.enum(['github', 'article', 'documentation', 'tool'
 
 // Link Record schema
 export const linkRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   url: z.string().url(),
   title: z.string().min(1).max(500),
   description: z.string().max(2000).optional().default(''),
@@ -344,7 +349,7 @@ export const linkRecordSchema = z.object({
   cloneStatus: z.enum(['pending', 'cloning', 'cloned', 'failed', 'none']).default('none'),
   cloneError: z.string().max(500).optional(),
   // Bucket grouping (nullable = ungrouped)
-  bucketId: z.string().uuid().nullable().optional(),
+  bucketId: z.string().guid().nullable().optional(),
   bucketOrder: z.number().int().optional(),
   // Metadata
   createdAt: z.string().datetime(),
@@ -358,7 +363,7 @@ export const linkInputSchema = z.object({
   description: z.string().max(2000).optional(),
   linkType: linkTypeEnum.optional(),
   tags: z.array(z.string().max(50)).optional(),
-  bucketId: z.string().uuid().nullable().optional(),
+  bucketId: z.string().guid().nullable().optional(),
   bucketOrder: z.number().int().optional(),
   autoClone: z.boolean().optional().default(true)
 });
@@ -370,7 +375,7 @@ export const linkUpdateInputSchema = z.object({
   description: z.string().max(2000).optional(),
   linkType: linkTypeEnum.optional(),
   tags: z.array(z.string().max(50)).optional(),
-  bucketId: z.string().uuid().nullable().optional(),
+  bucketId: z.string().guid().nullable().optional(),
   bucketOrder: z.number().int().optional()
 });
 
@@ -402,7 +407,7 @@ export const bucketColorEnum = z.enum([
 
 // Bucket Record schema
 export const bucketRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string().min(1).max(100),
   color: bucketColorEnum.default('accent'),
   icon: z.string().max(50).optional().default(''),
@@ -428,7 +433,7 @@ export const bucketUpdateInputSchema = z.object({
 
 // Reorder buckets input schema (ordered list of bucket ids)
 export const bucketReorderSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1)
+  ids: z.array(z.string().guid()).min(1)
 });
 
 // Batch link reorder (POST /api/brain/links/reorder) — applies a dense
@@ -437,8 +442,8 @@ export const bucketReorderSchema = z.object({
 // concurrent single-record PUTs can.
 export const linkReorderSchema = z.object({
   updates: z.array(z.object({
-    id: z.string().uuid(),
-    bucketId: z.string().uuid().nullable(),
+    id: z.string().guid(),
+    bucketId: z.string().guid().nullable(),
     bucketOrder: z.number().int()
   })).min(1)
 });

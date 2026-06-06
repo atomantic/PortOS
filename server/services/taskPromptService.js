@@ -1114,7 +1114,41 @@ Repository: {repoPath}
    - How many commits you reviewed (across all refs).
    - How many security flags you raised (with one-line reasons + SHAs).
    - How many slug-tagged PLAN.md items you appended (Adopt + Maybe) vs
-     how many commits you skipped as not-for-us.`
+     how many commits you skipped as not-for-us.`,
+
+  'pr-watcher': `[Improvement: {appName}] Pull Request Watcher
+
+One or more pull requests were just opened against {appName}'s default branch
+(\`{defaultBranch}\`). React to each one according to the instructions below.
+
+Repository: {repoPath}
+GitHub repo: {repoFullName}
+
+## Newly opened pull requests
+
+{prData}
+
+## What to do
+
+For EACH pull request listed above:
+
+1. Inspect it. Read the description and the diff:
+   - \`gh pr view <number> --repo {repoFullName}\`
+   - \`gh pr diff <number> --repo {repoFullName}\`
+
+2. Review the change for correctness, obvious bugs, and security issues
+   (injection, path traversal, leaked secrets, auth/permission regressions).
+   Be specific — reference file paths and line numbers from the diff.
+
+3. Leave a concise review summary as a PR comment:
+   \`gh pr comment <number> --repo {repoFullName} --body "<your summary>"\`
+
+Do NOT merge, close, approve, or push code to the PR unless the instructions in
+this prompt explicitly say to. This default behavior is review-and-comment only;
+the operator customizes this prompt to change what happens on each opened PR.
+
+Finish with a 2–3 sentence assistant summary: how many PRs you handled and what
+you did for each (one line per PR with its number).`
 };
 
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
@@ -1125,7 +1159,8 @@ export const PROMPT_VERSIONS = {
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
-  'reference-watch': 2  // v2: append slug-tagged checklist items to PLAN.md (Adopt + Maybe) instead of writing REFERENCE_REVIEW.md; security-flagged commits get no PLAN entry (mentioned only in final summary)
+  'reference-watch': 2, // v2: append slug-tagged checklist items to PLAN.md (Adopt + Maybe) instead of writing REFERENCE_REVIEW.md; security-flagged commits get no PLAN entry (mentioned only in final summary)
+  'pr-watcher': 1       // v1: review-and-comment default for newly-opened PRs on the app's default branch
 };
 
 // Audit anchor for reference-watch's read/write coupling.
@@ -2378,7 +2413,12 @@ For each reference above:
 6. Once REFERENCE_REVIEW.md is written, your final assistant message must be a
    2-3 sentence summary of how many commits you reviewed, how many security
    flags you raised, and how many you marked Adopt vs. Maybe vs. Skip.`
-  ]
+  ],
+
+  // pr-watcher shipped at v1 — no prior defaults to recognize yet. Kept as an
+  // empty list so the auto-upgrade machinery has an entry to consult and the
+  // next prompt revision just appends the v1 body here.
+  'pr-watcher': []
 };
 
 // ============================================================

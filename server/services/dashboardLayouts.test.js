@@ -175,4 +175,28 @@ describe('dashboardLayouts service', () => {
       expect(existsSync(STATE_FILE)).toBe(false);
     });
   });
+
+  describe('built-in layout grids have no overlapping cells', () => {
+    // Regression: a hand-tuned grid edit can place two widgets in the same
+    // rows/cols, so fresh installs render stacked cards. Every built-in
+    // layout's grid rectangles must be pairwise non-overlapping.
+    const rectsOverlap = (a, b) =>
+      a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+    it('no two grid items overlap in any seeded built-in layout', async () => {
+      const state = await svc.getState();
+      const collisions = [];
+      for (const layout of state.layouts) {
+        const grid = layout.grid || [];
+        for (let i = 0; i < grid.length; i += 1) {
+          for (let j = i + 1; j < grid.length; j += 1) {
+            if (rectsOverlap(grid[i], grid[j])) {
+              collisions.push(`${layout.id}: ${grid[i].id} ∩ ${grid[j].id}`);
+            }
+          }
+        }
+      }
+      expect(collisions).toEqual([]);
+    });
+  });
 });

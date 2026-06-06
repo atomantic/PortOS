@@ -14,13 +14,14 @@
 // `onPick(slotIndex, event)` receives the raw file-input change event so the
 // caller can run EXIF orientation normalization before storing the File.
 
-import { Image as ImageIcon, X } from 'lucide-react';
+import { Image as ImageIcon, Images, X } from 'lucide-react';
 
 export default function ReferenceImagePicker({
   referenceImages = [],
   onPick,
   onClear,
   onStrengthChange,
+  onBrowse,
   disabled = false,
 }) {
   return (
@@ -67,21 +68,34 @@ export default function ReferenceImagePicker({
                   />
                 </>
               ) : (
-                <label
-                  htmlFor={slotId}
-                  className="flex flex-col items-center justify-center gap-1 h-[88px] border border-dashed border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent cursor-pointer transition-colors"
-                >
-                  <ImageIcon className="w-4 h-4" />
-                  Add
-                  <input
-                    id={slotId}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    className="hidden"
-                    onChange={(e) => onPick(i, e)}
-                    disabled={disabled}
-                  />
-                </label>
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor={slotId}
+                    className="flex flex-col items-center justify-center gap-1 h-[64px] border border-dashed border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent cursor-pointer transition-colors"
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                    Upload
+                    <input
+                      id={slotId}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(e) => onPick(i, e)}
+                      disabled={disabled}
+                    />
+                  </label>
+                  {onBrowse && (
+                    <button
+                      type="button"
+                      onClick={() => onBrowse(i)}
+                      disabled={disabled}
+                      className="flex items-center justify-center gap-1 h-[20px] border border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
+                      title="Pick a reference image from your gallery"
+                    >
+                      <Images className="w-3 h-3" /> Gallery
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           );

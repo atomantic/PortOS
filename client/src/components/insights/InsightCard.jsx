@@ -1,4 +1,18 @@
-export default function InsightCard({ title, subtitle, badge, children, sources, className = '' }) {
+import ProvenanceChip from '../ui/ProvenanceChip';
+
+// Generic card for an AI-generated or rule-derived insight. The header carries an
+// optional confidence `badge` (how strong) and an optional `provenance` chip (how
+// it was derived + what would change it) — the two answer different questions, so
+// a card can show both. `provenance` is the shared source-chip affordance from the
+// health views, surfaced here so every insight surface can declare "why am I seeing
+// this?" without re-implementing the popover.
+//
+//   provenance: { level, label?, explainer?, whatWouldChange? }
+//
+// `level` is a provenance taxonomy id (data-backed | inferred | experimental |
+// speculative); `explainer` / `whatWouldChange` override the per-level defaults for
+// surface-specific copy (e.g. taste themes vs. health markers).
+export default function InsightCard({ title, subtitle, badge, provenance, children, sources, className = '' }) {
   return (
     <div className={`bg-port-card border border-port-border rounded-lg p-4 ${className}`}>
       <div className="flex items-start justify-between gap-2 mb-1">
@@ -8,7 +22,19 @@ export default function InsightCard({ title, subtitle, badge, children, sources,
             <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
           )}
         </div>
-        {badge && <div className="shrink-0">{badge}</div>}
+        {(badge || provenance) && (
+          <div className="shrink-0 flex items-center gap-1.5">
+            {provenance && (
+              <ProvenanceChip
+                level={provenance.level}
+                label={provenance.label}
+                explainer={provenance.explainer}
+                whatWouldChange={provenance.whatWouldChange}
+              />
+            )}
+            {badge}
+          </div>
+        )}
       </div>
 
       {sources && sources.length > 0 && (

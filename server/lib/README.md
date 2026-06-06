@@ -102,6 +102,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
 | `imageClean.js` | `cleanImageBuffer` (sharp-based denoise + C2PA strip) + `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in `routes/imageClean.js` wraps `cleanImageBuffer`. |
 | `multipart.js` | Streaming multipart/form-data parser. |
+| `safetensors.js` | `readSafetensorsHeader(path)` reads only the JSON header of a `.safetensors` file (never the tensor payload). `detectFlux2VariantFromHeader(header)` / `detectFlux2Variant(path)` classify a LoRA as FLUX.2 Klein `'4b'` (hidden dim 3072) vs `'9b'` (4096) by transformer-block tensor shapes, so the LoRA picker can hide off-variant weights that would silently fail to load. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
 | `zipStream.js` | Streaming ZIP parser. |
 | `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. `sidecarGenParamsHash` canonically hashes a sidecar's gen-params (excludes the machine-local `sha256` cache block) for cross-machine sidecar-convergence comparisons. |
@@ -196,12 +197,15 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `authGate.js` | Express + Socket.IO middleware that gates `/api/*` and `/data/*` behind the password set in `settings.secrets.auth`. No-op when auth is off; emits 401 `AUTH_REQUIRED` (or plain text for `/data/*`) when on and the request has no valid session token. |
+| `domainAutonomy.js` | Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES` (`off`/`dry-run`/`execute`), `getDomainMode(config, id)`, and `normalizeDomainAutonomy(raw)` to coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so no migration needed). |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
 | `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |
 | `singleFlight.js` | `createSingleFlight()` → `run(key, fn)` — keyed in-flight coalescer: concurrent calls for the same key share one `fn()` execution and result; the slot auto-clears on settle. Minimal by design (no TTL/result cache layered on top, doesn't reject concurrent callers). Used by `promptRunner.js`'s fallback mark-and-pick. |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
+| `streamBackpressure.js` | `awaitWritableDrain(res)` — park a streaming-response producer on the socket's next `drain` (or `close`) when `res.write()` returned false, so SSE/NDJSON writes stay bounded for a slow reader. Shared by `routes/ask.js` (SSE) and `routes/localLlm.js` (NDJSON). |
 | `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
+| `zodCompat.js` | Zod 4 compatibility helpers. `partialWithoutDefaults(objectSchema)` — like `.partial()` but strips inner field defaults first, so a PATCH/update schema doesn't inject (and clobber) the stored values of fields the caller didn't send. Use for any update schema derived from a defaulted base. |
 
 ## Test support
 

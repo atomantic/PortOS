@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
+import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import CityGround from './CityGround';
@@ -32,22 +33,57 @@ import CityAiCore from './CityAiCore';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
-import CityEffects from './CityEffects';
-import CityClouds from './CityClouds';
 import CitySignalBeacons from './CitySignalBeacons';
 import CitySky from './CitySky';
+import CityGalaxySky from './CityGalaxySky';
+import CityLandscape from './CityLandscape';
 import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 import CityPhotoCamera from './CityPhotoCamera';
+import CityDepthOfField from './CityDepthOfField';
+import { cityDayMix } from './cityConstants';
+import ErrorBoundary from '../ErrorBoundary';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, photoMode, photoPresetId, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
+  const [webglLost, setWebglLost] = useState(false);
   const prevExplorationRef = useRef(false);
+  const orbitRef = useRef(null);
+  const contextCleanupRef = useRef(null);
+  const contextLostTimerRef = useRef(null);
+  const activeCanvasRef = useRef(null);
+  // Shared between CityDepthOfField (which owns the EffectComposer while photo mode is on) and
+  // CityPhotoCamera (whose capture path renders through that composer so the postcard matches the
+  // DoF preview). Null whenever DoF isn't mounted — capture then falls back to a plain render.
+  const photoComposerRef = useRef(null);
 
   const explorationMode = settings?.explorationMode || false;
+
+  const clearContextTimer = useCallback(() => {
+    if (contextLostTimerRef.current) {
+      window.clearTimeout(contextLostTimerRef.current);
+      contextLostTimerRef.current = null;
+    }
+  }, []);
+
+  // drei's `keyEvents` only (re)connects pointer events to the DOM element in this
+  // three-stdlib version — it does NOT attach the keydown listener OrbitControls
+  // needs for arrow-key panning. Wire that explicitly when the orbital controls are
+  // mounted (re-runs when the mode flips them in/out), with matching teardown.
+  useEffect(() => {
+    const controls = orbitRef.current;
+    if (!controls?.listenToKeyEvents) return undefined;
+    controls.listenToKeyEvents(window);
+    return () => controls.stopListenToKeyEvents?.();
+  }, [explorationMode, transitioning, photoMode]);
+
+  useEffect(() => () => {
+    clearContextTimer();
+    contextCleanupRef.current?.();
+  }, [clearContextTimer]);
 
   // Set transitioning=true when exploration mode toggles
   useEffect(() => {
@@ -72,28 +108,96 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
   const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online').length;
   const totalCount = apps.filter(a => !a.archived).length;
 
-  const dpr = settings?.dpr || [1, 1.5];
+  // Quality presets always express dpr as a [min, max] pair. Cap it to the live
+  // ceiling so a high preset can't push a context-losing pixel ratio; photo mode
+  // gets a touch more for crisp postcards.
+  const rawDpr = settings?.dpr || [1, 1.25];
+  const dprLimit = photoMode ? 1.5 : 1.25;
+  const dpr = rawDpr.map(value => Math.min(value, dprLimit));
+  const showGradientBackground = cityDayMix(settings) > 0.5;
+  const sceneClearColor = background || '#030308';
+  const fallbackBackground = showGradientBackground
+    ? 'linear-gradient(180deg, #0f4f9a 0%, #1e78bf 48%, #58a9dc 100%)'
+    : sceneClearColor;
+
+  const handleCanvasCreated = useCallback(({ gl }) => {
+    contextCleanupRef.current?.();
+    const canvas = gl.domElement;
+    activeCanvasRef.current = canvas;
+    clearContextTimer();
+    const handleContextLost = (event) => {
+      event.preventDefault();
+      clearContextTimer();
+      contextLostTimerRef.current = window.setTimeout(() => {
+        contextLostTimerRef.current = null;
+        if (activeCanvasRef.current !== canvas || !canvas.isConnected) return;
+        const context = gl.getContext?.();
+        if (context?.isContextLost?.()) {
+          setWebglLost(true);
+        }
+      }, 750);
+    };
+    const handleContextRestored = () => {
+      clearContextTimer();
+      setWebglLost(false);
+    };
+    canvas.addEventListener('webglcontextlost', handleContextLost, false);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
+    contextCleanupRef.current = () => {
+      clearContextTimer();
+      if (activeCanvasRef.current === canvas) {
+        activeCanvasRef.current = null;
+      }
+      canvas.removeEventListener('webglcontextlost', handleContextLost, false);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored, false);
+    };
+    setWebglLost(false);
+  }, [clearContextTimer]);
 
   return (
-    <Canvas
-      camera={{ position: [0, 25, 45], fov: 50 }}
-      dpr={dpr}
-      shadows={false}
-      style={{ background: '#030308', cursor: explorationMode ? 'crosshair' : 'auto' }}
-      // preserveDrawingBuffer lets photo mode read the frame back via toDataURL. It's a
-      // WebGL context-creation attribute, so it can't be toggled at runtime without recreating
-      // the renderer (which would flash the scene) — we accept it always-on. The cost on modern
-      // GPUs is a small per-frame copy; negligible against this scene's particle/bloom load.
-      gl={{ antialias: true, preserveDrawingBuffer: true }}
-    >
+    <div className="absolute inset-0" style={{ background: fallbackBackground }}>
+      <Canvas
+        key={photoMode ? 'photo' : 'live'}
+        camera={{ position: [0, 25, 45], fov: 50 }}
+        dpr={dpr}
+        shadows={false}
+        // Photo mode freezes the scene for a clean still (roadmap 3.6): "demand" stops the
+        // frameloop once the camera-fly settles, so particles/streams/weather/pulses pause for a
+        // deliberate shot. CityPhotoCamera pumps invalidate() during the fly; capture renders
+        // directly via gl.render(). Live mode keeps the always-on loop the dashboard relies on.
+        frameloop={photoMode ? 'demand' : 'always'}
+        onCreated={handleCanvasCreated}
+        style={{ background: sceneClearColor, cursor: explorationMode ? 'crosshair' : 'auto', opacity: webglLost ? 0 : 1 }}
+        // preserveDrawingBuffer is only needed while taking postcards. Keeping it
+        // always-on makes Chromium's WebGL context much easier to lose in the live
+        // dashboard, which reads as a blank white scene.
+        gl={{ antialias: true, preserveDrawingBuffer: Boolean(photoMode), alpha: false, powerPreference: 'high-performance' }}
+      >
+      {/* By day, the solid clear color is the scene background. At night, the galaxy
+          Environment below owns scene.background (the equirectangular spheremap), so we
+          must NOT also drive <color attach="background"> — both write scene.background and
+          would fight every frame. */}
+      {showGradientBackground && <color attach="background" args={[sceneClearColor]} />}
+      {/* Mount the galaxy environment only at night — keeps its 2.8MB panorama from being
+          fetched/decoded (and PMREM-processed) in full daylight, where it's faded out
+          anyway. Suspense keeps the texture load from suspending the whole canvas while it
+          streams in; the error boundary degrades to the plain dark sky if the texture is
+          missing/corrupt (e.g. a partial checkout) instead of crashing. */}
+      {!showGradientBackground && (
+        <ErrorBoundary fallback={null}>
+          <Suspense fallback={null}>
+            <CityGalaxySky settings={settings} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
       <CitySky settings={settings} />
-      <CityClouds settings={settings} />
       <CityLights settings={settings} />
+      <CityLandscape settings={settings} />
       <CityEnergyOverlay chronotype={chronotype} settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />
       {!explorationMode && <CityCelestial settings={settings} />}
-      <CitySkyline />
+      <CitySkyline settings={settings} />
       <CityFederationHorizon instances={instances} settings={settings} />
       <CityBackupVault backupStatus={backupStatus} settings={settings} />
       <CityTaskQueue cosTasks={cosTasks} settings={settings} />
@@ -120,6 +224,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         settings={settings}
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
+        playback={playback}
       />
       <CityDataStreams positions={positions} apps={apps} agentMap={agentMap} />
       <CityTraffic positions={positions} />
@@ -131,14 +236,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         instances={instances}
         productivityData={productivityData}
       />
-      <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} />
-      <CityVolumetricLights positions={positions} />
+      <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} settings={settings} />
+      <CityVolumetricLights positions={positions} settings={settings} />
       <CityNeonSigns positions={positions} />
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
       <CityDataRain />
       <CityEmbers />
       <CityParticles settings={settings} />
-      <CityEffects settings={settings} />
       {explorationMode && (
         <PlayerController
           keysRef={keysRef}
@@ -151,18 +255,37 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       )}
       {!explorationMode && !transitioning && !photoMode && (
         <OrbitControls
+          // Map-style navigation: left-drag pans the camera across the city (so you can
+          // reach off-center districts without first-person mode), right-drag rotates, scroll
+          // zooms, arrow keys pan (wired via listenToKeyEvents in the effect above). On a Mac
+          // trackpad, ctrl+drag registers as a right-click so it rotates. screenSpacePanning=
+          // false keeps panning in the ground plane (map feel).
+          ref={orbitRef}
+          enablePan
+          screenSpacePanning={false}
+          panSpeed={1.0}
+          keyPanSpeed={24}
           maxPolarAngle={Math.PI / 2.2}
           minDistance={5}
           maxDistance={120}
           enableDamping
           dampingFactor={0.05}
+          mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }}
+          touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }}
         />
       )}
       <CameraTransition
         active={explorationMode}
         onTransitionComplete={handleTransitionComplete}
       />
-      <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} />
-    </Canvas>
+      <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} composerRef={photoComposerRef} />
+      {/* Depth-of-field is photo-mode-only: mounting it here (never in the live dashboard) keeps the
+          extra composer render targets off the always-on frameloop. It stays mounted for the whole
+          photo session and toggles only the bokeh pass via `enabled` — mounting/unmounting per
+          toggle would churn render-loop ownership and could strand a blurred frozen frame on screen
+          when DoF flips off mid-freeze. */}
+      {photoMode && <CityDepthOfField presetId={photoPresetId} enabled={photoDof} composerRef={photoComposerRef} />}
+      </Canvas>
+    </div>
   );
 }
