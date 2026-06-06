@@ -75,9 +75,9 @@ export default function PipelineManuscriptEditor() {
   // chunked run means the model couldn't hold the whole manuscript at once
   // (small context window) — surfaced so the review's coverage isn't ambiguous.
   const [reviewMeta, setReviewMeta] = useState(null);
-  // Re-run mode for the editorial pass: false = merge (augment existing notes),
-  // true = fresh (clear prior open/accepted notes, keep dismissed). See the
-  // route's seedReviewFromFindings.
+  // Re-run mode for the editorial pass: false = merge (leave prior notes as-is),
+  // true = fresh (reconcile: auto-dismiss open notes this pass no longer finds;
+  // accepted/dismissed left untouched). See the route's seedReviewFromFindings.
   const [freshReview, setFreshReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
