@@ -3,6 +3,7 @@
 ## Added
 
 - **Daily budgets for the Chief of Staff's domains** — each domain (Brain auto-classify, Memory auto-extract, CoS auto-run, Messages auto-send) can now carry a daily cap on how many automatic actions it takes and how many minutes of work it does. When a domain reaches its cap it pauses that automatic work for the rest of the day and resumes after the counters reset at midnight; the Chief of Staff config panel shows each domain's usage so far today. Caps are off by default (blank means unlimited), so nothing changes until you set one. This rounds out the per-domain guardrails alongside the off / dry-run / execute controls.
+- **Scheduled "Claim Issue" task** — a new built-in CoS schedule (CoS → Schedule → Claim Issue) that runs the `/claim --issues` flow on a cadence: it picks the next open GitHub issue, creates its own `claim/issue-<num>` worktree, implements the fix, opens a PR that closes the issue, runs the configured reviewers, merges, and cleans up. Configurable per app via an **Issue Author Filter** — claim only issues filed by the repository owner (default) or any open issue regardless of author. Off by default; enable and pick a provider/model per app like the other improvement tasks.
 
 ## Changed
 

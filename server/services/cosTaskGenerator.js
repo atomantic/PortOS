@@ -1248,12 +1248,21 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
   const reviewersCsv = normalizeReviewers(metadata).join(',');
+  // claim-issue: expand {issueAuthorFilter} into a concrete directive telling
+  // the agent which open issues are claimable. The filter was already merged
+  // (global → per-app override) and value-constrained by sanitizeTaskMetadata,
+  // so read it from `metadata`. 'owner' (the default, matching /claim --issues)
+  // restricts to repo-owner-filed issues; 'any' claims any open issue.
+  const issueAuthorFilterBlock = (metadata.issueAuthorFilter || 'owner') === 'any'
+    ? '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — do NOT pass `--author` to `gh issue list` (leave `OWNER_FLAG` empty).'
+    : '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `gh repo view --json owner -q .owner.login` and set `OWNER_FLAG="--author <owner>"`; skip issues opened by anyone else.';
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
     .replace(/\{reviewers\}/g, reviewersCsv)
+    .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     // Use a replacer function — String.replace with a replacement STRING
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and

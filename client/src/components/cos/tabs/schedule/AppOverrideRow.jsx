@@ -1,7 +1,7 @@
 import { useState, memo } from 'react';
 import AppIcon from '../../../AppIcon';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
+import { AGENT_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
 import { isCronExpression, describeCron } from '../../../../utils/cronHelpers';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { INTERVAL_LABELS } from './scheduleConstants';
@@ -41,6 +41,19 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
   const handleMetaToggle = async (field) => {
     setUpdating(true);
     const taskMetadata = toggleAppMetadataOverride(override?.taskMetadata, globalTaskMetadata, field);
+    await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
+    setUpdating(false);
+  };
+
+  // claim-issue per-app author filter. '' = inherit the global default; any
+  // other value writes a per-app override. The server replaces taskMetadata
+  // wholesale, so preserve the app's other override keys (worktree, etc.).
+  const handleIssueAuthorFilterChange = async (value) => {
+    setUpdating(true);
+    const next = { ...(override?.taskMetadata || {}) };
+    if (value === '') delete next.issueAuthorFilter;
+    else next.issueAuthorFilter = value;
+    const taskMetadata = Object.keys(next).length ? next : null;
     await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
     setUpdating(false);
   };
@@ -119,6 +132,22 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
             );
           })}
         </div>
+
+        {taskType === 'claim-issue' && (
+          <select
+            value={override?.taskMetadata?.issueAuthorFilter || ''}
+            onChange={(e) => handleIssueAuthorFilterChange(e.target.value)}
+            disabled={updating}
+            aria-label={`Issue author filter for ${app.name}`}
+            title="Which open issues this app may claim"
+            className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
+          >
+            <option value="">Inherit ({ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (globalTaskMetadata?.issueAuthorFilter || 'owner'))?.label})</option>
+            {ISSUE_AUTHOR_FILTER_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
 
         <div className="hidden sm:block">
           <ToggleSwitch

@@ -574,6 +574,16 @@ describe('validation.js', () => {
         .toEqual({ useWorktree: true });
     });
 
+    it('should accept a valid issueAuthorFilter and drop invalid ones', () => {
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'owner' })).toEqual({ issueAuthorFilter: 'owner' });
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'any' })).toEqual({ issueAuthorFilter: 'any' });
+      // Arbitrary strings must not slip through (would silently read as "owner").
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toBeNull();
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 42 })).toBeNull();
+      expect(sanitizeTaskMetadata({ useWorktree: true, issueAuthorFilter: 'bogus' }))
+        .toEqual({ useWorktree: true });
+    });
+
     it('should accept an ordered reviewers list, dedupe, and drop unknowns', () => {
       expect(sanitizeTaskMetadata({ reviewers: ['codex', 'antigravity', 'copilot'] }))
         .toEqual({ reviewers: ['codex', 'antigravity', 'copilot'] });

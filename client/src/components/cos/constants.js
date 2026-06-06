@@ -86,6 +86,14 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
   { value: 'others', label: 'Opened by others', description: 'Only PRs opened by someone other than the gh-authenticated user' }
 ];
 
+// claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
+// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'owner' = only claim issues
+// the repo owner filed (matches /claim --issues); 'any' = claim any open issue.
+export const ISSUE_AUTHOR_FILTER_OPTIONS = [
+  { value: 'owner', label: 'Owner-filed only', description: 'Only claim open issues filed by the repository owner/creator' },
+  { value: 'any', label: 'Any author', description: 'Claim the next eligible open issue regardless of who filed it' }
+];
+
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 

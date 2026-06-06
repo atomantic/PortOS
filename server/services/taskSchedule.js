@@ -136,7 +136,7 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
-  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'error-handling',
+  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
   // Polls the app's GitHub repo for pull requests newly opened against the
@@ -180,6 +180,16 @@ export const DEFAULT_TASK_INTERVALS = {
   //     and merges via `gh pr merge`, so CoS doesn't need to.
   // The agent runs in the source repo's working directory; `git worktree add` doesn't touch that working tree, so it's safe even with uncommitted user changes.
   'plan-task':           { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true } },
+  // claim-issue drives the /claim --issues flow — the agent creates its OWN
+  // claim/issue-<num> worktree, opens the PR (Closes #<num>), merges via
+  // `gh pr merge`, and cleans up. Both `useWorktree` and `openPR` are OFF on the
+  // CoS side for the SAME reasons as plan-task (a CoS-managed worktree under
+  // cos/<task>/<agent> would hide the issue-<num> slug from the in-flight scan
+  // and trigger cleanupAgentWorktree's auto-merge into the source repo's HEAD).
+  // `issueAuthorFilter` gates which issues are claimable: 'owner' (default,
+  // matching /claim --issues) only claims issues the repo owner filed; 'any'
+  // claims any open issue. Per-app override supported via taskTypeOverrides.
+  'claim-issue':         { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'owner' } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
@@ -220,7 +230,10 @@ export const DEFAULT_TASK_INTERVALS = {
 // (e.g., plan-task's prompt creates its own claim/<slug> worktree, so a
 // CoS-managed worktree would clobber it).
 export const MANAGED_AGENT_OPTIONS = {
-  'plan-task': ['useWorktree', 'openPR']
+  'plan-task': ['useWorktree', 'openPR'],
+  // claim-issue's prompt creates its own claim/issue-<num> worktree (same
+  // rationale as plan-task), so CoS must not pre-create one or open the PR.
+  'claim-issue': ['useWorktree', 'openPR']
 };
 
 // Strip managed-agent fields from a per-app override map before merging on top
@@ -1186,6 +1199,7 @@ function getTaskTypeDescription(taskType) {
     'documentation': 'Update documentation',
     'feature-ideas': 'Implement next planned feature or brainstorm new one',
     'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
+    'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
     'accessibility': 'Accessibility audit',
     'branch-cleanup': 'Clean up merged branches',
     'dependency-updates': 'Update dependencies',
