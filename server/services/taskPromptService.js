@@ -510,11 +510,11 @@ Pick the next available unclaimed open GitHub issue, **create your own worktree 
 Run steps 1–5 in order.
 
 1. cd into the repo root ({repoPath}) and confirm GitHub is the forge: \`gh repo view --json nameWithOwner -q .nameWithOwner\`. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly — this task only works against GitHub issue trackers.
-2. List candidate open issues **oldest-first**, honoring the author filter described above. \`gh issue list\` returns newest-first by default, so sort by \`createdAt\` with \`-q\` (and raise \`--limit\`) — otherwise the newest 50 crowd out older eligible issues and the oldest-first walk in step 4 never sees them:
+2. List candidate open issues **oldest-first**, honoring the author filter described above. \`gh issue list\` defaults to newest-first, so order on the SERVER with \`--search "sort:created-asc"\` — a client-side \`jq\` sort would only reorder the already-truncated newest page, dropping the true oldest issues on repos with more than \`--limit\` open issues:
    \`\`\`bash
    git fetch --prune 2>/dev/null
    # OWNER_FLAG is "--author <owner>" for owner-only mode, or empty for any-author mode (see the author-filter block above)
-   gh issue list --state open $OWNER_FLAG --json number,title,author,assignees,labels,createdAt --limit 100 -q 'sort_by(.createdAt)'
+   gh issue list --state open $OWNER_FLAG --search "sort:created-asc" --json number,title,author,assignees,labels,createdAt --limit 100
    \`\`\`
 3. Build the in-flight set. Collect every branch/PR ref:
    \`\`\`bash
