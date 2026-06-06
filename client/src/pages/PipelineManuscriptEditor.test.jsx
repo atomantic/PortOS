@@ -172,6 +172,24 @@ describe('PipelineManuscriptEditor', () => {
     expect(await screen.findByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
   });
 
+  it('Review mode: revealing an anchored comment from the sidebar opens it in-context (no "not anchored")', async () => {
+    const toast = (await import('../components/ui/Toast')).default;
+    renderEditor();
+    await screen.findByText('My Series');
+    fireEvent.click(screen.getByRole('button', { name: /Review/ }));
+    await waitFor(() => expect(screen.queryByDisplayValue('The hero walked in. She left.')).not.toBeInTheDocument());
+
+    revealFromIndex('The ending is abrupt');
+    // The inline card appears (problem now shown in both the index row and card)…
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(2));
+    // …and the bogus "not anchored" toast is NOT fired for an anchored comment.
+    expect(toast).not.toHaveBeenCalledWith('This comment is not anchored to a specific issue');
+
+    // The card's close control collapses it back to index-only.
+    fireEvent.click(screen.getByLabelText('Close note'));
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(1));
+  });
+
   it('opens the whole-manuscript impact preview modal', async () => {
     renderEditor();
     await screen.findByText('My Series');

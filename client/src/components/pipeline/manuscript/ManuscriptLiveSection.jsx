@@ -70,7 +70,7 @@ export default function ManuscriptLiveSection({
   }, [openComment, onCloseComment]);
 
   return (
-    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert}>
+    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} registerRef={registerRef}>
       {/* Pin chips: a touch-friendly, count-bearing way into each anchored note. */}
       {anchoredComments.length > 0 || unlocatedCount > 0 ? (
         <div className="flex flex-wrap items-center gap-1">
@@ -123,7 +123,7 @@ export default function ManuscriptLiveSection({
         </div>
 
         <textarea
-          ref={(el) => { taRef.current = el; registerRef(el); }}
+          ref={(el) => { taRef.current = el; }}
           value={content}
           onChange={(e) => onContentChange(e.target.value)}
           onBlur={onBlurSave}

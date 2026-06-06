@@ -17,7 +17,7 @@ function SaveBadge({ state }) {
   return null;
 }
 
-export default function ManuscriptSectionFrame({ section, saveState, onRevert, headerExtra, children }) {
+export default function ManuscriptSectionFrame({ section, saveState, onRevert, headerExtra, registerRef, children }) {
   const [showVersions, setShowVersions] = useState(false);
   const [revertingId, setRevertingId] = useState(null);
   const versions = section.versions || [];
@@ -29,7 +29,7 @@ export default function ManuscriptSectionFrame({ section, saveState, onRevert, h
   };
 
   return (
-    <article className="space-y-1.5">
+    <article ref={registerRef} className="space-y-1.5">
       <div className="flex items-center justify-between gap-2 sticky top-0 bg-port-bg/95 backdrop-blur py-1 z-10">
         <h2 className="text-sm font-semibold text-gray-200">
           Issue {section.number}{section.title ? ` — ${section.title}` : ''}

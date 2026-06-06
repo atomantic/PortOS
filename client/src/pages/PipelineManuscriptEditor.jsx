@@ -246,20 +246,20 @@ export default function PipelineManuscriptEditor() {
     return result;
   };
 
-  // Reveal a comment in context: open its card and scroll its section into view
-  // (focusing the textarea if that section is being edited).
+  // Reveal a comment in context: open its card and scroll its section into view.
+  // The section element is registered in every mode (Live + Review, editing or
+  // not), so this works regardless of which surface is showing. A comment with
+  // no issueNumber is genuinely unanchored — say so rather than scroll nowhere.
   const revealComment = (comment) => {
     setOpenCommentId(comment.id);
-    const ta = comment.issueNumber != null ? sectionRefs.current.get(comment.issueNumber) : null;
-    if (!ta) {
+    if (comment.issueNumber == null) {
       toast('This comment is not anchored to a specific issue');
       return;
     }
-    ta.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-    if (document.activeElement === ta || editingIssueId) {
-      const quote = comment.anchorQuote || '';
-      const idx = quote ? ta.value.indexOf(quote) : -1;
-      if (idx !== -1) { ta.focus(); ta.setSelectionRange(idx, idx + quote.length); }
+    const el = sectionRefs.current.get(comment.issueNumber);
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    if (comment.stageId && viewType && comment.stageId !== viewType) {
+      toast(`This note is on the ${STAGE_LABEL[comment.stageId] || comment.stageId} — switch formats to edit it in context`);
     }
   };
 

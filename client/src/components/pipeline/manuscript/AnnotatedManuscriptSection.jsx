@@ -6,8 +6,8 @@
  * the new text. The open comment's card expands inline beneath the prose.
  */
 
-import { useMemo } from 'react';
-import { Pencil, Check } from 'lucide-react';
+import { useEffect, useMemo, useRef } from 'react';
+import { Pencil, Check, X } from 'lucide-react';
 import ManuscriptHighlightedProse from './ManuscriptHighlightedProse';
 import ManuscriptCommentCard from './ManuscriptCommentCard';
 import ManuscriptSectionFrame from './ManuscriptSectionFrame';
@@ -15,12 +15,20 @@ import { rowsFor } from './constants';
 
 export default function AnnotatedManuscriptSection({
   section, comments, spans, saveState, editing, onToggleEdit,
-  openCommentId, onOpenComment,
+  openCommentId, onOpenComment, onCloseComment,
   onContentChange, onBlurSave, onRevert, registerRef, commentCardProps,
 }) {
   const content = section.content || '';
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
   const openComment = openCommentId && byId.get(openCommentId)?.status === 'open' ? byId.get(openCommentId) : null;
+  const cardRef = useRef(null);
+
+  // The card expands beneath the (often long) prose, so bring it into view when
+  // it opens — otherwise clicking a highlight mid-section looks like nothing
+  // happened. Only the section that actually owns the open comment scrolls.
+  useEffect(() => {
+    if (openComment) cardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+  }, [openComment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const editToggle = (
     <button
@@ -34,10 +42,9 @@ export default function AnnotatedManuscriptSection({
   );
 
   return (
-    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} headerExtra={editToggle}>
+    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} headerExtra={editToggle} registerRef={registerRef}>
       {editing ? (
         <textarea
-          ref={registerRef}
           value={content}
           onChange={(e) => onContentChange(e.target.value)}
           onBlur={onBlurSave}
@@ -56,7 +63,16 @@ export default function AnnotatedManuscriptSection({
       )}
 
       {!editing && openComment ? (
-        <div className="border-l-2 border-port-accent/50 pl-2">
+        <div ref={cardRef} className="relative border-l-2 border-port-accent/50 pl-2">
+          <button
+            type="button"
+            onClick={onCloseComment}
+            className="absolute right-1 top-1 z-10 text-gray-500 hover:text-white"
+            aria-label="Close note"
+            title="Close note"
+          >
+            <X size={14} />
+          </button>
           <ManuscriptCommentCard
             comment={openComment}
             idScope={`review-${openComment.id}`}
