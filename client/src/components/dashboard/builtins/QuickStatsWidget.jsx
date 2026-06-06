@@ -8,6 +8,10 @@ export default function QuickStatsWidget({ dashboardState }) {
         <StatCard label="Online" value={appStats.online} icon="🟢" />
         <StatCard label="Stopped" value={appStats.stopped} icon="🟡" />
         <StatCard label="Offline" value={appStats.notStarted} icon="⚪" />
+        {/* Only when a PM2 read failed — status unavailable, not confidently offline. */}
+        {appStats.unknown > 0 && (
+          <StatCard label="Status N/A" value={appStats.unknown} icon="⚠️" />
+        )}
       </div>
     </div>
   );

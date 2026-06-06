@@ -61,7 +61,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // Gather data in parallel
   const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds] = await Promise.all([
     listProcesses().catch(() => []),
-    apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unmanaged: 0 })),
+    apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
@@ -153,6 +153,15 @@ router.get('/health/details', asyncHandler(async (req, res) => {
       type: 'restarts',
       message: `${processStats.unstableRestarts} crash-loop restart${plural} (${crashing.join(', ')})`
     });
+  }
+
+  // A degraded app summary means PM2 couldn't be read for one or more homes, so
+  // those apps' online/stopped status is unknown — surface it rather than letting
+  // the counts silently read as "everything not started."
+  if (appStats.degraded) {
+    if (overallHealth !== 'critical') overallHealth = 'warning';
+    const unknown = appStats.unknown || 0;
+    warnings.push({ type: 'apps', message: `App status unavailable for ${unknown} app(s) — PM2 read failed` });
   }
 
   if (!dbHealth.connected) {

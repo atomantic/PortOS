@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { NON_PM2_TYPES, usesPm2 } from './streamingDetect.js';
-import { listProcesses } from './pm2.js';
+import { listProcessesStrict } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { PORTS } from '../lib/ports.js';
@@ -187,13 +187,22 @@ export async function getActiveApps() {
  * Resolve each active app's overall PM2 status in one pass.
  *
  * Returns one entry per active app — PM2-runnable apps carry a derived
- * `overallStatus` of `online` / `stopped` / `not_started`; native projects
- * (Xcode, iOS, macOS) report `n/a` since they have no detectable runtime.
- * Each unique PM2_HOME is queried at most once. This is the shared primitive
- * behind both `getAppStatusSummary()` (counts) and the CyberCity snapshot
- * pipeline (per-building status), so the two never drift.
+ * `overallStatus` of `online` / `stopped` / `not_started` / `unknown`; native
+ * projects (Xcode, iOS, macOS) report `n/a` since they have no detectable
+ * runtime. Each unique PM2_HOME is queried at most once. This is the shared
+ * primitive behind both `getAppStatusSummary()` (counts) and the CyberCity
+ * snapshot pipeline (per-building status), so the two never drift.
  *
- * @returns {Promise<Array<{ id, name, type, repoPath, overallStatus, managed: boolean }>>}
+ * Absent-vs-empty rule (CLAUDE.md): `listProcessesStrict(home)` returns `null`
+ * when the PM2 read FAILED (vs `[]` for a successful read with no processes).
+ * The generic `listProcesses` flattens a failed read into `[]`, which would
+ * record every app in that home as `not_started` (status known: never launched)
+ * when the truth is `unknown` (status unavailable: PM2 unreachable). We track
+ * failed homes explicitly and mark their apps `overallStatus: 'unknown'` +
+ * `degraded: true`, so a transient PM2 blip can't masquerade as "all apps
+ * offline." Homes that read fine still report accurate status alongside.
+ *
+ * @returns {Promise<Array<{ id, name, type, repoPath, overallStatus, managed: boolean, degraded?: boolean }>>}
  */
 export async function getAppStatuses() {
   const apps = await getAllApps({ includeArchived: false });
@@ -207,9 +216,16 @@ export async function getAppStatuses() {
   }
 
   const procMaps = new Map();
+  const failedHomes = new Set();
   for (const home of homeGroups.keys()) {
-    const procs = await listProcesses(home).catch(() => []);
-    procMaps.set(home, new Map(procs.map(p => [p.name, p])));
+    // `null` = PM2 read failed (vs `[]` = read OK, no processes).
+    const procs = await listProcessesStrict(home);
+    if (procs === null) {
+      failedHomes.add(home);
+      procMaps.set(home, new Map());
+    } else {
+      procMaps.set(home, new Map(procs.map(p => [p.name, p])));
+    }
   }
 
   return apps.map(app => {
@@ -221,7 +237,13 @@ export async function getAppStatuses() {
     if (!managed) {
       return { ...base, overallStatus: 'n/a', managed: false };
     }
-    const procMap = procMaps.get(app.pm2Home || null) || new Map();
+    const home = app.pm2Home || null;
+    if (failedHomes.has(home)) {
+      // PM2 read for this home failed — runtime status is genuinely unknown,
+      // NOT a confident `not_started`. `degraded` lets callers surface the gap.
+      return { ...base, overallStatus: 'unknown', managed: true, degraded: true };
+    }
+    const procMap = procMaps.get(home) || new Map();
     const names = app.pm2ProcessNames || [];
     let overallStatus = 'not_started';
     if (names.length > 0) {
@@ -237,12 +259,19 @@ export async function getAppStatuses() {
 export async function getAppStatusSummary() {
   const statuses = await getAppStatuses();
   const managed = statuses.filter(s => s.managed);
+  // `unknown` = PM2 home read failed (status unavailable), distinct from
+  // `notStarted` (read succeeded, app simply isn't running). `degraded` flags
+  // that at least one managed app's runtime status couldn't be determined, so
+  // consumers don't report a PM2 blip as a confident "everything offline."
+  const unknown = managed.filter(s => s.overallStatus === 'unknown').length;
 
   return {
     total: managed.length,
     online: managed.filter(s => s.overallStatus === 'online').length,
     stopped: managed.filter(s => s.overallStatus === 'stopped').length,
     notStarted: managed.filter(s => s.overallStatus === 'not_started').length,
+    unknown,
+    degraded: unknown > 0,
     unmanaged: statuses.length - managed.length
   };
 }

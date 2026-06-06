@@ -156,6 +156,9 @@ export default function Dashboard() {
     online: activeApps.filter((a) => a.overallStatus === 'online').length,
     stopped: activeApps.filter((a) => a.overallStatus === 'stopped').length,
     notStarted: activeApps.filter((a) => a.overallStatus === 'not_started' || a.overallStatus === 'not_found').length,
+    // PM2 read failed for these — status unavailable, NOT confidently stopped.
+    // Counted so the buckets sum to `total` instead of silently dropping them.
+    unknown: activeApps.filter((a) => a.degraded || a.overallStatus === 'unknown').length,
   }), [activeApps]);
 
   const dashboardState = useMemo(

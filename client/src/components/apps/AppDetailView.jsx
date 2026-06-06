@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer } from 'lucide-react';
+import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer, RefreshCw } from 'lucide-react';
 import DeployPanel from './DeployPanel';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -203,6 +203,18 @@ export default function AppDetailView() {
                     <span className="text-xs">{actionLoading === 'restart' ? 'Restarting...' : 'Restart'}</span>
                   </button>
                 </>
+              ) : (app.degraded || app.overallStatus === 'unknown') ? (
+                // PM2 read failed — don't offer a misleading Start; surface the
+                // gap and let the user re-check. Mirrors the Apps list page.
+                <button
+                  onClick={fetchApp}
+                  disabled={actionLoading}
+                  className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  title="PM2 status could not be read — refresh to retry"
+                >
+                  <RefreshCw size={14} />
+                  <span className="text-xs">Status unavailable</span>
+                </button>
               ) : (
                 <button
                   onClick={handleStart}

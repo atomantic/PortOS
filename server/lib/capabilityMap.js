@@ -234,13 +234,18 @@ export function appsRow(summary = {}) {
   // setup gap this page exists to surface, so it degrades the row too. unmanaged
   // (Xcode/native projects with no runtime state) is intentionally NOT counted.
   const notStarted = Number(summary?.notStarted) || 0;
+  // unknown = PM2 home read failed — runtime status unavailable, NOT a confident
+  // "not running." Surfaced separately so a transient PM2 blip reads as
+  // "status unavailable" rather than inflating the not-started/stopped count.
+  const unknown = Number(summary?.unknown) || 0;
   return row('apps', 'Apps & Processes', '/apps', {
-    status: stopped > 0 || notStarted > 0 ? WARN : OK,
+    status: stopped > 0 || notStarted > 0 || unknown > 0 ? WARN : OK,
     configured: true,
     summary: `${total} ${plural(total, 'app')} · ${online} online`
       + (stopped > 0 ? ` · ${stopped} stopped` : '')
-      + (notStarted > 0 ? ` · ${notStarted} not started` : ''),
-    detail: { total, online, stopped, notStarted, unmanaged },
+      + (notStarted > 0 ? ` · ${notStarted} not started` : '')
+      + (unknown > 0 ? ` · ${unknown} status unavailable` : ''),
+    detail: { total, online, stopped, notStarted, unknown, degraded: unknown > 0, unmanaged },
   });
 }
 
