@@ -648,8 +648,14 @@ const arcDeriveCommitSchema = z.object({
   })).max(200).optional(),
 });
 
-// Manuscript-completeness ("finish the draft") editor pass — override shape only.
-const manuscriptCompletenessSchema = z.object(providerOverrideShape);
+// Manuscript-completeness ("finish the draft") editor pass — override shape plus
+// the re-run mode: 'merge' (default) leaves prior comments as-is and appends new
+// findings; 'fresh' also auto-dismisses open comments this pass no longer finds
+// (accepted/dismissed untouched). See seedReviewFromFindings.
+const manuscriptCompletenessSchema = z.object({
+  ...providerOverrideShape,
+  mode: z.enum(manuscriptReview.REVIEW_RUN_MODES).optional(),
+});
 
 // Manuscript editor — review comment operations.
 const manuscriptFixGenerateSchema = z.object(providerOverrideShape);
@@ -1633,7 +1639,7 @@ router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res)
   // Persist findings as a Word-style comment set so the manuscript editor can
   // work through them across reloads. `issues` stays in the response for the
   // existing ArcHeader caller — the editor reads the merged `review`.
-  const review = await manuscriptReview.seedReviewFromFindings(req.params.id, result.issues, { runId: result.runId })
+  const review = await manuscriptReview.seedReviewFromFindings(req.params.id, result.issues, { runId: result.runId, mode: body.mode })
     .catch((err) => { throw mapServiceError(err); });
   res.json({ ...result, review });
 }));

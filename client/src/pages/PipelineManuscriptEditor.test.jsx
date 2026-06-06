@@ -252,9 +252,24 @@ describe('PipelineManuscriptEditor', () => {
 
     expect(await screen.findByText('New pacing note')).toBeInTheDocument();
     expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalledWith(
-      'ser-1', { providerOverride: 'openai', modelOverride: 'gpt-5' },
+      'ser-1', { providerOverride: 'openai', modelOverride: 'gpt-5', mode: 'merge' },
     );
     await waitFor(() => expect(screen.getByText(/2 open/)).toBeInTheDocument());
+  });
+
+  it('sends mode "fresh" when the Start fresh checkbox is checked', async () => {
+    api.analyzePipelineManuscriptCompleteness.mockResolvedValue({
+      review: { schemaVersion: 1, comments: [comment] },
+    });
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByLabelText(/Start fresh/i));
+    fireEvent.click(screen.getByText('Run editorial review'));
+
+    await waitFor(() => expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalledWith(
+      'ser-1', expect.objectContaining({ mode: 'fresh' }),
+    ));
   });
 
   it('shows a chunk-count badge when the review ran in chunks (small context window)', async () => {

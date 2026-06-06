@@ -75,6 +75,10 @@ export default function PipelineManuscriptEditor() {
   // chunked run means the model couldn't hold the whole manuscript at once
   // (small context window) — surfaced so the review's coverage isn't ambiguous.
   const [reviewMeta, setReviewMeta] = useState(null);
+  // Re-run mode for the editorial pass: false = merge (leave prior notes as-is),
+  // true = fresh (reconcile: auto-dismiss open notes this pass no longer finds;
+  // accepted/dismissed left untouched). See the route's seedReviewFromFindings.
+  const [freshReview, setFreshReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
   const [pinning, setPinning] = useState(false);
@@ -162,10 +166,12 @@ export default function PipelineManuscriptEditor() {
 
   // Re-run the editorial completeness pass over the manuscript with the chosen
   // provider. The route persists findings as the review comment set, so we just
-  // swap in the returned comments.
+  // swap in the returned comments. `mode`: 'merge' (default) leaves prior notes
+  // as-is and appends new findings; 'fresh' also auto-dismisses open notes this
+  // pass no longer finds (accepted/dismissed untouched).
   const [runEditorialReview, reviewing] = useAsyncAction(
-    async () => {
-      const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride });
+    async (mode = 'merge') => {
+      const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride, mode });
       const next = Array.isArray(result?.review?.comments) ? result.review.comments : [];
       setComments(next);
       setReviewMeta({ chunked: !!result?.chunked, chunkCount: result?.chunkCount || 1 });
@@ -419,7 +425,7 @@ export default function PipelineManuscriptEditor() {
             </div>
             <button
               type="button"
-              onClick={runEditorialReview}
+              onClick={() => runEditorialReview(freshReview ? 'fresh' : 'merge')}
               disabled={reviewing || sections.length === 0}
               title={sections.length === 0
                 ? 'Draft at least one issue before running an editorial review'
@@ -429,6 +435,26 @@ export default function PipelineManuscriptEditor() {
               {reviewing ? <Loader2 size={12} className="animate-spin" /> : <ClipboardCheck size={12} />}
               {reviewing ? 'Running editorial review…' : 'Run editorial review'}
             </button>
+            {/* Re-run mode. Merge keeps every prior note as-is; fresh reconciles
+                the open list against this run — open notes it no longer finds
+                are auto-dismissed (accepted & dismissed are left untouched). */}
+            <label htmlFor="ms-fresh-review" className="flex items-start gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+              <input
+                id="ms-fresh-review"
+                type="checkbox"
+                checked={freshReview}
+                onChange={(e) => setFreshReview(e.target.checked)}
+                disabled={reviewing}
+                className="mt-0.5 accent-port-accent"
+              />
+              <span>
+                Start fresh
+                <span className="text-gray-600">
+                  {' '}— auto-dismiss open notes this pass no longer finds; still-valid,
+                  accepted &amp; dismissed notes are kept.
+                </span>
+              </span>
+            </label>
           </div>
 
           <h2 className="text-xs uppercase tracking-wider text-gray-500 flex items-center justify-between">
