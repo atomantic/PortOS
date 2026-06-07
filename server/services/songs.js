@@ -147,16 +147,38 @@ export const SEED_SONGS = [
 // is re-entrancy hygiene, not a multi-actor lock (see CLAUDE.md Security Model).
 const enqueue = createFileWriteQueue();
 
-// Read + sanitize every song. Seeds on first read (file absent) and persists
-// the seed so subsequent reads are stable and the user can edit the example.
-export async function listSongs() {
+// Pure read + sanitize — NO write side effect. When the file is absent or
+// malformed, returns the seed in-memory without persisting it. Mutations call
+// this inside their enqueue() so the read-modify-write cycle never re-enters
+// the queue (which would deadlock).
+async function readSongs() {
   const state = await readJSONFile(STATE_PATH, null, { allowArray: false });
   if (!state || !Array.isArray(state.songs)) {
+    return SEED_SONGS.map(sanitizeSong).filter(Boolean);
+  }
+  return state.songs.map(sanitizeSong).filter(Boolean);
+}
+
+// Public read. On first read (file absent) it persists the seed so the example
+// is stable and editable — but the seed write is routed through the SAME queue
+// as mutations and re-checks inside the queue, so a create that landed first
+// can't be clobbered by a late seed write (read-path lazy-init race).
+export async function listSongs() {
+  const state = await readJSONFile(STATE_PATH, null, { allowArray: false });
+  if (state && Array.isArray(state.songs)) {
+    return state.songs.map(sanitizeSong).filter(Boolean);
+  }
+  return enqueue(async () => {
+    // Re-check inside the queue: a queued create may have already written the
+    // file (with seed + new song). If so, don't overwrite it with bare seed.
+    const fresh = await readJSONFile(STATE_PATH, null, { allowArray: false });
+    if (fresh && Array.isArray(fresh.songs)) {
+      return fresh.songs.map(sanitizeSong).filter(Boolean);
+    }
     const seeded = SEED_SONGS.map(sanitizeSong).filter(Boolean);
     await atomicWrite(STATE_PATH, { songs: seeded });
     return seeded;
-  }
-  return state.songs.map(sanitizeSong).filter(Boolean);
+  });
 }
 
 export async function getSong(id) {
@@ -166,7 +188,7 @@ export async function getSong(id) {
 
 export async function createSong(input) {
   return enqueue(async () => {
-    const songs = await listSongs();
+    const songs = await readSongs();
     const now = new Date().toISOString();
     const song = sanitizeSong({ ...input, id: `song-${randomUUID()}`, createdAt: now, updatedAt: now });
     songs.unshift(song);
@@ -178,7 +200,7 @@ export async function createSong(input) {
 
 export async function updateSong(id, patch) {
   return enqueue(async () => {
-    const songs = await listSongs();
+    const songs = await readSongs();
     const idx = songs.findIndex((s) => s.id === id);
     if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
     // Merge field-by-field so an absent key preserves the stored value while a
@@ -200,7 +222,7 @@ export async function updateSong(id, patch) {
 
 export async function deleteSong(id) {
   return enqueue(async () => {
-    const songs = await listSongs();
+    const songs = await readSongs();
     const idx = songs.findIndex((s) => s.id === id);
     if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
     const [removed] = songs.splice(idx, 1);

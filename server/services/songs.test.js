@@ -57,6 +57,21 @@ describe('songs service', () => {
     expect(noTempo.tempo).toBeNull();
   });
 
+  it('does not lose a song when a create races the first-read seed write', async () => {
+    // Regression guard: on a fresh (unseeded) store, listSongs() previously
+    // wrote the seed from the read path OUTSIDE the write queue, so a late
+    // seed write could clobber a just-created song. Fire both without awaiting
+    // the list first; the created song must survive.
+    expect(existsSync(STATE_FILE)).toBe(false);
+    const [, created] = await Promise.all([
+      svc.listSongs(),
+      svc.createSong({ title: 'Race winner' }),
+    ]);
+    const songs = await svc.listSongs();
+    expect(songs.find((s) => s.id === created.id)).toBeTruthy();
+    expect(songs.find((s) => s.title === '500 Miles')).toBeTruthy(); // seed also present
+  });
+
   it('clamps an out-of-band tempo on the sanitize/read path', () => {
     // The route 400s an out-of-band tempo before createSong runs, so this
     // clamp only ever fires when reading hand-edited JSON — exercise it there.

@@ -31,15 +31,23 @@ import { RHYTHM_SHAPES, VOICE_LAYERS } from '../lib/songCraft';
 let localSeq = 0;
 const localId = (prefix) => `${prefix}-new-${localSeq++}`;
 
-// Mirror the server tempo band (services/songs.js TEMPO_MIN/MAX) so the input
-// clamps locally — otherwise an out-of-band value only surfaces as an opaque
-// "Failed to save" toast after the server 400s. Empty input clears (null).
+// Mirror the server tempo band (services/songs.js TEMPO_MIN/MAX). We clamp on
+// BLUR, not on every keystroke — clamping each keystroke would turn typing
+// "68" into "208" (the lone "6" clamps up to 20 first). While editing we keep
+// the raw parsed number; clampTempo runs on blur so the saved value lands in
+// band without an opaque server 400. Empty input clears (null).
 const TEMPO_MIN = 20;
 const TEMPO_MAX = 320;
-const clampTempo = (raw) => {
+// Parse a number input's value to a number or null, without clamping (used
+// on change so intermediate digits aren't mangled).
+const parseTempo = (raw) => {
   if (raw === '' || raw == null) return null;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return null;
+  return Number.isFinite(n) ? n : null;
+};
+// Clamp a tempo into the supported band (used on blur).
+const clampTempo = (n) => {
+  if (n == null) return null;
   return Math.max(TEMPO_MIN, Math.min(TEMPO_MAX, Math.round(n)));
 };
 
@@ -187,7 +195,8 @@ export default function SongEditor() {
                   min={TEMPO_MIN}
                   max={TEMPO_MAX}
                   value={song.tempo ?? ''}
-                  onChange={(e) => setField('tempo', clampTempo(e.target.value))}
+                  onChange={(e) => setField('tempo', parseTempo(e.target.value))}
+                  onBlur={() => setField('tempo', clampTempo(song.tempo))}
                   placeholder="e.g. 68"
                   className={inputCls}
                 />
