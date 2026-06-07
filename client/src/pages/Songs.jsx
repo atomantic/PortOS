@@ -10,11 +10,11 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle } from 'lucide-react';
+import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { listSongs, createSong, deleteSong } from '../services/api';
+import { listSongs, createSong, deleteSong, generateSong } from '../services/api';
 import { RHYTHM_SHAPES } from '../lib/songCraft';
 
 const shapeLabel = (id) => RHYTHM_SHAPES.find((s) => s.id === id)?.label || null;
@@ -43,6 +43,24 @@ export default function Songs() {
     if (song) navigate(`/songs/${song.id}`);
     return song;
   }, { errorMessage: 'Failed to create song' });
+
+  // Generate a full draft from the title/artist as a brief, persist it, then
+  // open the editor on the new song. Two server calls (generate → create) keep
+  // the AI service stateless about storage; the editor's own Generate/Expand
+  // buttons drive subsequent rounds.
+  const [generate, generating] = useAsyncAction(async () => {
+    const name = title.trim();
+    const data = await generateSong(
+      { title: name || undefined, artist: artist.trim() || undefined },
+      { silent: true },
+    );
+    const fields = data?.song;
+    if (!fields) { toast.error('Generation produced nothing — try again'); return null; }
+    const created = await createSong(fields, { silent: true });
+    const song = created?.song;
+    if (song) navigate(`/songs/${song.id}`);
+    return song;
+  }, { errorMessage: 'Failed to generate song' });
 
   const onDelete = useCallback(async (song) => {
     if (armed !== song.id) { setArmed(song.id); return; }
@@ -99,14 +117,26 @@ export default function Songs() {
             className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent focus:outline-none"
           />
         </div>
-        <button
-          type="submit"
-          disabled={creating}
-          className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
-        >
-          <Plus size={16} />
-          New Song
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={creating || generating}
+            className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
+          >
+            <Plus size={16} />
+            New Song
+          </button>
+          <button
+            type="button"
+            onClick={() => generate()}
+            disabled={creating || generating}
+            title="Draft a full arrangement with AI from the title/artist above"
+            className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+          >
+            <Wand2 size={16} />
+            {generating ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
       </form>
 
       {/* List */}

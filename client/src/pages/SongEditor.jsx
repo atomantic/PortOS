@@ -23,6 +23,8 @@ import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { getSong, updateSong } from '../services/api';
 import { RHYTHM_SHAPES, VOICE_LAYERS } from '../lib/songCraft';
+import SongAiPanel from '../components/songs/SongAiPanel';
+import SongRecordings from '../components/songs/SongRecordings';
 
 // In-session-only id for a freshly-added section/layer, used purely as a React
 // key until the row is saved. Counter-based (not Math.random, which is
@@ -87,12 +89,35 @@ export default function SongEditor() {
       // them from being persisted and later colliding after a reload.
       sections: (song.sections || []).map(stripTempId),
       layers: (song.layers || []).map(stripTempId),
+      recordings: (song.recordings || []).map(stripTempId),
     };
     const data = await updateSong(id, patch, { silent: true });
     if (data?.song) setSong(data.song);
     toast.success('Song saved');
     return data?.song;
   }, { errorMessage: 'Failed to save song' });
+
+  // Merge an AI-generated draft into the editor. The server returns canonical
+  // fields with server-assigned ids; we replace the editable content (metadata,
+  // sections, layers, notation, notes) but PRESERVE the user's recordings and
+  // `learned` flag — those aren't the model's to overwrite. Nothing persists
+  // until the user hits Save (matches the universe-builder review-then-commit
+  // flow). The server already folded any prior draft in when expanding, so we
+  // simply apply the returned fields.
+  const applyGenerated = useCallback((generated) => {
+    setSong((prev) => ({
+      ...prev,
+      title: generated.title || prev.title,
+      artist: generated.artist ?? prev.artist,
+      key: generated.key ?? prev.key,
+      tempo: generated.tempo ?? prev.tempo,
+      rhythmShapeId: generated.rhythmShapeId ?? prev.rhythmShapeId,
+      notation: generated.notation ?? prev.notation,
+      notes: generated.notes ?? prev.notes,
+      sections: Array.isArray(generated.sections) ? generated.sections : prev.sections,
+      layers: Array.isArray(generated.layers) ? generated.layers : prev.layers,
+    }));
+  }, []);
 
   // --- Section helpers ----------------------------------------------------
   const addSection = () => setSong((prev) => ({
@@ -232,6 +257,9 @@ export default function SongEditor() {
             </label>
           </section>
 
+          {/* AI assist — generate / expand / evaluate */}
+          <SongAiPanel songId={id} onApplyGenerated={applyGenerated} />
+
           {/* Lyric sections */}
           <section>
             <div className="flex items-center justify-between mb-2">
@@ -342,6 +370,13 @@ export default function SongEditor() {
               </div>
             )}
           </section>
+
+          {/* Vocal takes — record & layered playback */}
+          <SongRecordings
+            recordings={song.recordings || []}
+            layers={song.layers || []}
+            onChange={(recordings) => setField('recordings', recordings)}
+          />
 
           {/* Notation + notes */}
           <section className="grid grid-cols-1 gap-4">

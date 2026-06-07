@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/songs.js';
+import { generateSong, evaluateSong } from '../services/songsAI.js';
 
 const router = Router();
 
@@ -37,6 +38,20 @@ const layerSchema = z.object({
   notes: str(svc.FIELD_MAX_LENGTH).optional().default(''),
 });
 
+// A saved vocal take. `filename` is the /api/uploads file the audio is served
+// from (the client uploads the WAV first, then PUTs the song with the returned
+// filename). Numbers are accepted for the mixer; the service clamps them.
+const recordingSchema = z.object({
+  id: str(svc.ID_MAX_LENGTH).optional(),
+  layerId: str(svc.ID_MAX_LENGTH).optional().default(''),
+  label: str(svc.LABEL_MAX_LENGTH).optional().default(''),
+  filename: str(svc.URL_MAX_LENGTH),
+  durationMs: z.number().nonnegative().optional(),
+  peak: z.number().min(0).max(1).optional(),
+  muted: z.boolean().optional(),
+  createdAt: z.string().optional(),
+});
+
 // No `.default('')` on these fields: `.partial()` (used for PUT) materializes a
 // default for an *omitted* key, which would turn a single-field PUT into a
 // wipe of every other field via updateSong's `'key' in patch` merge. Leaving
@@ -54,6 +69,27 @@ const songInputSchema = z.object({
   learned: z.boolean().optional(),
   sections: z.array(sectionSchema).max(svc.SECTIONS_MAX).optional(),
   layers: z.array(layerSchema).max(svc.LAYERS_MAX).optional(),
+  recordings: z.array(recordingSchema).max(svc.RECORDINGS_MAX).optional(),
+});
+
+// AI generate/evaluate inputs. providerId/model are optional overrides; the
+// service falls back to the active provider. Empty-string providerId (a UI
+// "use default" sentinel) is coerced to undefined so it doesn't pin a bogus id.
+const optProvider = z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
+const generateSchema = z.object({
+  title: str(svc.TITLE_MAX_LENGTH).optional(),
+  artist: str(svc.ARTIST_MAX_LENGTH).optional(),
+  brief: str(svc.FIELD_MAX_LENGTH).optional(),
+  mood: str(svc.FIELD_MAX_LENGTH).optional(),
+  // When true, the target song (route :id) is folded into the prompt so
+  // "generate" expands the existing draft instead of starting blank.
+  expandExisting: z.boolean().optional(),
+  providerId: optProvider,
+  model: optProvider,
+});
+const evaluateSchema = z.object({
+  providerId: optProvider,
+  model: optProvider,
 });
 
 // Map a service error (carries a `code`) to the right HTTP status. Without
@@ -89,6 +125,45 @@ router.put('/:id', asyncHandler(async (req, res) => {
 
 router.delete('/:id', asyncHandler(async (req, res) => {
   const result = await svc.deleteSong(req.params.id).catch(rethrowSongError);
+  res.json(result);
+}));
+
+// --- AI generate / evaluate -------------------------------------------------
+// POST /api/songs/generate → draft a brand-new arrangement from a brief. Does
+// NOT persist — returns { song: <fields>, llm } the client merges/creates from.
+// (Routed before /:id/* so a literal `/generate` can't be read as an id.)
+router.post('/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(generateSchema, req.body || {});
+  const result = await generateSong(body);
+  res.json(result);
+}));
+
+// POST /api/songs/:id/generate → expand the stored song (when expandExisting)
+// or draft fresh using its title/artist as the brief. Returns { song, llm };
+// the client merges into the editor draft (does not auto-save).
+router.post('/:id/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(generateSchema, req.body || {});
+  const existing = await svc.getSong(req.params.id);
+  if (!existing) throw new ServerError('Song not found', { status: 404, code: svc.ERR_NOT_FOUND });
+  const result = await generateSong({
+    title: body.title ?? existing.title,
+    artist: body.artist ?? existing.artist,
+    brief: body.brief,
+    mood: body.mood,
+    existingSong: body.expandExisting ? existing : undefined,
+    providerId: body.providerId,
+    model: body.model,
+  });
+  res.json(result);
+}));
+
+// POST /api/songs/:id/evaluate → critique the stored arrangement. Read-only:
+// returns { evaluation, llm } without mutating the song.
+router.post('/:id/evaluate', asyncHandler(async (req, res) => {
+  const body = validateRequest(evaluateSchema, req.body || {});
+  const song = await svc.getSong(req.params.id);
+  if (!song) throw new ServerError('Song not found', { status: 404, code: svc.ERR_NOT_FOUND });
+  const result = await evaluateSong({ song, providerId: body.providerId, model: body.model });
   res.json(result);
 }));
 

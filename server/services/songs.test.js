@@ -135,4 +135,26 @@ describe('songs service', () => {
     expect(svc.sanitizeSong({})).toBeNull(); // no id
     expect(svc.sanitizeSong({ id: 'x' }).title).toBe('Untitled song');
   });
+
+  it('sanitizes recordings — drops fileless takes, clamps peak, mints ids', () => {
+    const song = svc.sanitizeSong({
+      id: 'x',
+      recordings: [
+        { layerId: 'lead', filename: 'a-vocal.wav', durationMs: 1200.7, peak: 0.4 },
+        { layerId: 'bass', label: 'no file' },           // no filename → dropped
+        { filename: 'b.wav', peak: 5, durationMs: -3 },  // peak clamped, duration floored
+      ],
+    });
+    expect(song.recordings).toHaveLength(2);
+    expect(song.recordings[0].filename).toBe('a-vocal.wav');
+    expect(song.recordings[0].durationMs).toBe(1201);
+    expect(song.recordings[0].id).toMatch(/^rec-/);
+    expect(song.recordings[1].peak).toBe(1);   // clamped to max
+    expect(song.recordings[1].durationMs).toBe(0); // negative floored
+  });
+
+  it('preserves a stable recording id submitted with the take', () => {
+    const song = svc.sanitizeSong({ id: 'x', recordings: [{ id: 'rec-keep', filename: 'k.wav' }] });
+    expect(song.recordings[0].id).toBe('rec-keep');
+  });
 });

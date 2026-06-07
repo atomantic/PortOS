@@ -137,6 +137,7 @@ export * from './taskParser.js';
 
 // === Curated static data ===
 export * from './curatedGenomeMarkers.js';
+export * from './songCraftRef.js';
 
 // === Domain utilities ===
 export * from './appResolver.js';

@@ -18,6 +18,14 @@ vi.mock('../services/songs.js', async () => {
   return { ...actual, ...mocks };
 });
 
+// Mock the AI layer so route tests don't spawn a provider — assert the route's
+// validation + service wiring, not the LLM call.
+const aiMocks = vi.hoisted(() => ({
+  generateSong: vi.fn(),
+  evaluateSong: vi.fn(),
+}));
+vi.mock('../services/songsAI.js', () => aiMocks);
+
 import songsRoutes from './songs.js';
 
 const makeApp = () => {
@@ -31,6 +39,7 @@ const makeApp = () => {
 describe('songs route', () => {
   beforeEach(() => {
     for (const fn of Object.values(mocks)) fn.mockReset();
+    for (const fn of Object.values(aiMocks)) fn.mockReset();
   });
 
   it('GET / returns the song list', async () => {
@@ -98,5 +107,70 @@ describe('songs route', () => {
     const res = await request(makeApp()).delete('/api/songs/song-1');
     expect(res.status).toBe(200);
     expect(res.body.id).toBe('song-1');
+  });
+
+  it('PUT /:id accepts a recordings array', async () => {
+    mocks.updateSong.mockResolvedValue({ id: 'song-1' });
+    const res = await request(makeApp()).put('/api/songs/song-1').send({
+      recordings: [{ layerId: 'lead', filename: 'abc-vocal.wav', durationMs: 1200, peak: 0.4 }],
+    });
+    expect(res.status).toBe(200);
+    const [, patch] = mocks.updateSong.mock.calls[0];
+    expect(patch.recordings[0].filename).toBe('abc-vocal.wav');
+  });
+
+  it('PUT /:id rejects a recording with a peak outside 0–1', async () => {
+    const res = await request(makeApp()).put('/api/songs/song-1').send({
+      recordings: [{ filename: 'x.wav', peak: 5 }],
+    });
+    expect(res.status).toBe(400);
+    expect(mocks.updateSong).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate returns the generated fields (no id needed)', async () => {
+    aiMocks.generateSong.mockResolvedValue({ song: { title: 'New', sections: [] }, llm: { provider: 'p' } });
+    const res = await request(makeApp()).post('/api/songs/generate').send({ brief: 'a lament' });
+    expect(res.status).toBe(200);
+    expect(res.body.song.title).toBe('New');
+    expect(aiMocks.generateSong).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /generate coerces an empty providerId to undefined (use default)', async () => {
+    aiMocks.generateSong.mockResolvedValue({ song: { title: 'X' }, llm: {} });
+    await request(makeApp()).post('/api/songs/generate').send({ providerId: '' });
+    const [arg] = aiMocks.generateSong.mock.calls[0];
+    expect(arg.providerId).toBeUndefined();
+  });
+
+  it('POST /:id/generate 404s when the song is missing', async () => {
+    mocks.getSong.mockResolvedValue(null);
+    const res = await request(makeApp()).post('/api/songs/song-nope/generate').send({});
+    expect(res.status).toBe(404);
+    expect(aiMocks.generateSong).not.toHaveBeenCalled();
+  });
+
+  it('POST /:id/generate passes the stored song when expandExisting is set', async () => {
+    mocks.getSong.mockResolvedValue({ id: 'song-1', title: 'Stored', artist: 'PPM' });
+    aiMocks.generateSong.mockResolvedValue({ song: { title: 'Bigger' }, llm: {} });
+    const res = await request(makeApp()).post('/api/songs/song-1/generate').send({ expandExisting: true });
+    expect(res.status).toBe(200);
+    const [arg] = aiMocks.generateSong.mock.calls[0];
+    expect(arg.existingSong).toEqual({ id: 'song-1', title: 'Stored', artist: 'PPM' });
+    expect(arg.title).toBe('Stored'); // falls back to the stored title
+  });
+
+  it('POST /:id/evaluate returns the verdict', async () => {
+    mocks.getSong.mockResolvedValue({ id: 'song-1', title: 'A' });
+    aiMocks.evaluateSong.mockResolvedValue({ evaluation: { score: 72, strengths: [] }, llm: {} });
+    const res = await request(makeApp()).post('/api/songs/song-1/evaluate').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.evaluation.score).toBe(72);
+  });
+
+  it('POST /:id/evaluate 404s when the song is missing', async () => {
+    mocks.getSong.mockResolvedValue(null);
+    const res = await request(makeApp()).post('/api/songs/song-x/evaluate').send({});
+    expect(res.status).toBe(404);
+    expect(aiMocks.evaluateSong).not.toHaveBeenCalled();
   });
 });

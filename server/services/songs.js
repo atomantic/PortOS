@@ -41,6 +41,8 @@ export const TEMPO_MIN = 20;
 export const TEMPO_MAX = 320;
 export const SECTIONS_MAX = 60;
 export const LAYERS_MAX = 24;
+export const RECORDINGS_MAX = 64;      // saved vocal takes for layered playback
+export const URL_MAX_LENGTH = 512;     // uploaded-file path/url
 
 // Trim a string field, returning '' for non-strings. Mirrors the
 // absent-vs-empty rule in CLAUDE.md: callers decide whether '' clears.
@@ -83,6 +85,32 @@ const sanitizeLayer = (l) => {
   };
 };
 
+// One saved vocal take ({ id, layerId, filename, label, durationMs, peak,
+// mutedByDefault }). `filename` is the /api/uploads file name the audio is
+// served from; a recording without one is meaningless, so it's dropped.
+// `layerId` ties a take to a voice layer for the layered-playback mixer (free
+// text — empty means "unassigned"). Numbers are coerced/clamped; bad values
+// fall to sensible defaults rather than throwing.
+const sanitizeRecording = (r) => {
+  if (!r || typeof r !== 'object') return null;
+  const filename = trimField(r.filename, URL_MAX_LENGTH);
+  if (!filename) return null;
+  const durationMs = typeof r.durationMs === 'number' && Number.isFinite(r.durationMs)
+    ? Math.max(0, Math.round(r.durationMs)) : 0;
+  const peak = typeof r.peak === 'number' && Number.isFinite(r.peak)
+    ? Math.max(0, Math.min(1, r.peak)) : 0;
+  return {
+    id: trimField(r.id, ID_MAX_LENGTH) || `rec-${randomUUID().slice(0, 8)}`,
+    layerId: trimField(r.layerId, ID_MAX_LENGTH),
+    label: trimField(r.label, LABEL_MAX_LENGTH),
+    filename,
+    durationMs,
+    peak,
+    muted: r.muted === true,
+    createdAt: typeof r.createdAt === 'string' ? r.createdAt : new Date().toISOString(),
+  };
+};
+
 const sanitizeList = (arr, fn, max) =>
   (Array.isArray(arr) ? arr : [])
     .map(fn)
@@ -107,6 +135,7 @@ export const sanitizeSong = (raw) => {
     learned: raw.learned === true,
     sections: sanitizeList(raw.sections, sanitizeSection, SECTIONS_MAX),
     layers: sanitizeList(raw.layers, sanitizeLayer, LAYERS_MAX),
+    recordings: sanitizeList(raw.recordings, sanitizeRecording, RECORDINGS_MAX),
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
   };
@@ -206,7 +235,7 @@ export async function updateSong(id, patch) {
     // Merge field-by-field so an absent key preserves the stored value while a
     // present key (including empty string / empty array) applies the change.
     const merged = { ...songs[idx] };
-    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'notes', 'learned', 'sections', 'layers']) {
+    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'notes', 'learned', 'sections', 'layers', 'recordings']) {
       if (key in patch) merged[key] = patch[key];
     }
     merged.id = id;
