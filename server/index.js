@@ -771,7 +771,24 @@ ensureSelf()
     const dbEscapeHatch =
       process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
     const { checkHealth, ensureSchema } = await import('./lib/db.js');
-    const health = await checkHealth();
+    let health = await checkHealth();
+    // An EXISTING install can be reachable but lag the current schema — e.g.
+    // `memories` exists but a newer column (`sync_sequence`) is missing, which
+    // is exactly what checkHealth() requires for hasSchema. ensureSchema() is
+    // idempotent and exists to bring such installs up to date, so when the DB
+    // is connected but reports incomplete schema, run the upgrade and re-probe
+    // BEFORE declaring the install unbootable. A truly uninitialized DB (base
+    // tables absent) makes ensureSchema() throw — we catch, log, and fall
+    // through to the fail-fast below. (try/catch is appropriate here: this runs
+    // outside the request lifecycle, so an uncaught throw would crash boot.)
+    if (health.connected && !health.hasSchema) {
+      try {
+        await ensureSchema();
+        health = await checkHealth();
+      } catch (err) {
+        console.error(`🗄️  Schema upgrade on boot failed: ${err.message}`);
+      }
+    }
     const dbReady = health.connected && health.hasSchema;
     if (!dbEscapeHatch && !dbReady) {
       const reason = health.connected ? 'required schema missing' : `unreachable (${health.error || 'connection failed'})`;
