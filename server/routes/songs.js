@@ -74,6 +74,9 @@ const songInputSchema = z.object({
   tempo: z.number().int().min(svc.TEMPO_MIN).max(svc.TEMPO_MAX).nullable().optional(),
   rhythmShapeId: str(svc.ID_MAX_LENGTH).optional(),
   notation: str(svc.FIELD_MAX_LENGTH).optional(),
+  // Sheet-music notation (PortOS lead-sheet DSL) — bounded free text; the client
+  // parses/renders it. Longer cap than `notation` since a full score is verbose.
+  score: str(svc.SCORE_MAX_LENGTH).optional(),
   notes: str(svc.FIELD_MAX_LENGTH).optional(),
   learned: z.boolean().optional(),
   sections: z.array(sectionSchema).max(svc.SECTIONS_MAX).optional(),

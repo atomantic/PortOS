@@ -173,6 +173,20 @@ describe('songs service', () => {
     expect(seed.references.every((r) => r.url.includes('tiktok.com'))).toBe(true);
   });
 
+  it('ships a sheet-music score on the 500 Miles default', async () => {
+    const songs = await svc.listSongs();
+    const seed = songs.find((s) => s.title === '500 Miles');
+    expect(seed.score).toContain('clef: treble');
+    expect(seed.score).toContain('(train)');
+  });
+
+  it('sanitizes the score field — trims and caps to SCORE_MAX_LENGTH', () => {
+    expect(svc.sanitizeSong({ id: 'x', score: '  | C4q |  ' }).score).toBe('| C4q |');
+    expect(svc.sanitizeSong({ id: 'x', score: 123 }).score).toBe(''); // non-string → ''
+    const long = 'C'.repeat(svc.SCORE_MAX_LENGTH + 50);
+    expect(svc.sanitizeSong({ id: 'x', score: long }).score.length).toBe(svc.SCORE_MAX_LENGTH);
+  });
+
   it('sanitizes references — drops urlless entries, mints ids', () => {
     const song = svc.sanitizeSong({
       id: 'x',
@@ -194,17 +208,20 @@ describe('songs service', () => {
     const edited = await svc.updateSong(seedId, {
       title: 'My edited title',
       sections: [{ label: 'Custom', lyrics: 'changed' }],
+      score: '', // user cleared the sheet music
       learned: true,
       recordings: [{ filename: 'my-take.wav', durationMs: 1000 }],
       references: [{ url: 'https://example.com/mine' }],
     });
     expect(edited.title).toBe('My edited title');
+    expect(edited.score).toBe('');
 
     const refreshed = await svc.refreshSongFromTemplate(seedId);
     // Shipped content restored…
     expect(refreshed.title).toBe('500 Miles');
     expect(refreshed.references.every((r) => r.url.includes('tiktok.com'))).toBe(true);
     expect(refreshed.sections.some((s) => s.lyrics.includes('miss the train'))).toBe(true);
+    expect(refreshed.score).toContain('clef: treble'); // sheet music restored too
     // …user-owned state preserved.
     expect(refreshed.learned).toBe(true);
     expect(refreshed.recordings).toHaveLength(1);

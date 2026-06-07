@@ -37,6 +37,7 @@ export const TITLE_MAX_LENGTH = 200;
 export const ARTIST_MAX_LENGTH = 200;
 export const KEY_MAX_LENGTH = 24;
 export const FIELD_MAX_LENGTH = 4000;      // lyrics body / general notes
+export const SCORE_MAX_LENGTH = 8000;      // sheet-music notation (lead-sheet DSL)
 export const LABEL_MAX_LENGTH = 120;       // section + layer labels
 export const PART_MAX_LENGTH = 60;         // layer voice (e.g. "Bass")
 export const ID_MAX_LENGTH = 60;           // rhythm-shape / layer ids
@@ -155,6 +156,10 @@ export const sanitizeSong = (raw) => {
     tempo: sanitizeTempo(raw.tempo),
     rhythmShapeId: trimField(raw.rhythmShapeId, ID_MAX_LENGTH),
     notation: trimField(raw.notation, FIELD_MAX_LENGTH),
+    // Sheet-music notation in the PortOS lead-sheet DSL (client/src/lib/
+    // scoreNotation.js). A bounded free-text string — the client parses + renders
+    // it; the server only length-caps it, so a newer/older DSL revision can't 400.
+    score: trimField(raw.score, SCORE_MAX_LENGTH),
     notes: trimField(raw.notes, FIELD_MAX_LENGTH),
     learned: raw.learned === true,
     sections: sanitizeList(raw.sections, sanitizeSection, SECTIONS_MAX),
@@ -182,6 +187,20 @@ export const SEED_SONGS = [
     tempo: 68,
     rhythmShapeId: 'slow-4-4',
     notation: 'Verse chords (key of C): C — Am — F — G, four slow bars per line. A gentle 4/4 ballad; let each line breathe across the bar rather than chopping it.',
+    // Sheet music in the PortOS lead-sheet DSL — the verse melody with chords and
+    // lyrics. A singable arrangement in C (edit it in the Sheet music tab); see
+    // client/src/lib/scoreNotation.js for the format.
+    score: [
+      'clef: treble',
+      'key: C',
+      'time: 4/4',
+      'tempo: 68',
+      '',
+      '| [C] E4q(If) G4q(you) G4q(miss) G4q(the) | [Am] A4h(train) G4q(I\'m) E4q(on) |',
+      '| [F] F4q(You) A4q(will) A4q(know) A4q(that) | [C] G4h(I) E4q(am) C4q(gone) |',
+      '| [F] F4q(You) A4q(can) A4q(hear) A4q(the) | [C] G4q(whis-) E4q(tle) C4h(blow) |',
+      '| [G] D4q(A) F4q(hun-) G4q(dred) rq | [C] C4w(miles) |',
+    ].join('\n'),
     notes: 'A travelling lament — keep it spacious and mournful. Sustain the vowels on the downbeats. Works beautifully with a soft hummed drone under the verses.',
     learned: false,
     sections: [
@@ -281,7 +300,7 @@ export async function updateSong(id, patch) {
     // Merge field-by-field so an absent key preserves the stored value while a
     // present key (including empty string / empty array) applies the change.
     const merged = { ...songs[idx] };
-    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'notes', 'learned', 'sections', 'layers', 'recordings', 'references']) {
+    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'score', 'notes', 'learned', 'sections', 'layers', 'recordings', 'references']) {
       if (key in patch) merged[key] = patch[key];
     }
     merged.id = id;

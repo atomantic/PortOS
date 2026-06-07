@@ -35,6 +35,9 @@ import { RHYTHM_SHAPES, VOICE_LAYERS, rhythmShapeLabel } from '../lib/songCraft'
 import Pill from '../components/ui/Pill';
 import SongAiPanel from '../components/songs/SongAiPanel';
 import SongRecordings from '../components/songs/SongRecordings';
+import SongScoreEditor from '../components/songs/SongScoreEditor';
+import ScoreSheet from '../components/songs/ScoreSheet';
+import { scoreHasMusic } from '../lib/scoreNotation';
 
 // Extract a TikTok video id from a share/watch URL so we can render TikTok's
 // documented iframe Embed Player (https://www.tiktok.com/player/v1/<id>)
@@ -120,7 +123,7 @@ export default function SongEditor() {
     const patch = {
       title: song.title, artist: song.artist, key: song.key,
       tempo: song.tempo ?? null, rhythmShapeId: song.rhythmShapeId,
-      notation: song.notation, notes: song.notes, learned: song.learned,
+      notation: song.notation, score: song.score, notes: song.notes, learned: song.learned,
       // Strip in-session temp ids so the server assigns stable uuids — keeps
       // them from being persisted and later colliding after a reload.
       sections: (song.sections || []).map(stripTempId),
@@ -526,10 +529,13 @@ export default function SongEditor() {
             )}
           </section>
 
+          {/* Sheet music — live-rendered staff from the lead-sheet notation. */}
+          <SongScoreEditor value={song.score} onChange={(v) => setField('score', v)} />
+
           {/* Notation + notes */}
           <section className="grid grid-cols-1 gap-4">
             <div>
-              <label htmlFor="notation" className={labelCls}>Notation / chords</label>
+              <label htmlFor="notation" className={labelCls}>Notation / chords (free text)</label>
               <textarea
                 id="notation"
                 value={song.notation}
@@ -569,6 +575,10 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing }) {
   const references = song.references || [];
   const hasText = (v) => typeof v === 'string' && v.trim().length > 0;
   const feel = song.rhythmShapeId ? rhythmShapeLabel(song.rhythmShapeId) : '';
+  // Gate the whole sheet-music section on whether the score has notes. Memoized
+  // so a recording-driven re-render doesn't re-parse the score each time
+  // (ScoreSheet parses it again internally only when it actually renders).
+  const hasScore = useMemo(() => scoreHasMusic(song.score), [song.score]);
 
   // Label + value badge, two-toned, built on the shared Pill primitive.
   const metaBadge = (label, value) => (
@@ -591,6 +601,16 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing }) {
           {song.learned ? 'Learned' : 'Learning'}
         </Pill>
       </div>
+
+      {/* Sheet music — the rendered staff, full-width so a row of bars fits. */}
+      {hasScore && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold text-white">Sheet music</h2>
+          <div className="bg-port-card border border-port-border rounded-lg p-4 overflow-x-auto">
+            <ScoreSheet text={song.score} />
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Lyrics — the main reading surface, given the most width. */}
