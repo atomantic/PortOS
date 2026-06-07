@@ -837,6 +837,12 @@ ensureSelf()
       // version; marker-gated in data/catalog-canon-reconcile.applied.json.
       const { reconcileCanonCatalog } = await import('./scripts/reconcileCanonCatalog.js');
       await reconcileCanonCatalog();
+      // Media asset index (#1000): subscribe the generation-completed hooks +
+      // reconcile the derived media_assets table against on-disk images/videos.
+      // Bytes + sidecars + video-history.json stay authoritative; this builds a
+      // queryable index over them. Idempotent, safe to run every boot.
+      const { initMediaAssetIndex } = await import('./services/mediaAssetIndex/index.js');
+      await initMediaAssetIndex();
     } catch (err) {
       console.error(`🪄 catalog migrations failed at boot: ${err.message}`);
     }

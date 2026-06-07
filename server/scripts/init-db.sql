@@ -592,3 +592,26 @@ CREATE TABLE IF NOT EXISTS creative_director_projects (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Media asset index (Phase 3.2, issue #1000). One row per generated image or
+-- video. The bytes stay on disk (data/images, data/videos) and the image
+-- sidecars + data/video-history.json remain authoritative — this table is a
+-- DERIVED, queryable index, reconciled from disk at boot and kept warm by a
+-- generation-completed hook. `media_key` is the shared `<kind>:<ref>` key
+-- (mediaItemKey.js); `kind`/`ref` mirror into columns for queries while the
+-- full metadata record lives in `data` JSONB. created_at is the asset's own
+-- timestamp; indexed_at is when this index row was written. No
+-- sync_sequence/tombstone: the index is local-only (rebuilt from disk), not
+-- federated — a row vanishes when its file does (prune on reconcile). Mirrors
+-- the media_assets block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS media_assets (
+  media_key TEXT PRIMARY KEY,
+  kind VARCHAR(16) NOT NULL,
+  ref TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  indexed_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- created_at DESC is the gallery/history sort order; kind narrows
+-- images-vs-videos. A composite (kind, created_at DESC) serves both.
+CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC);
