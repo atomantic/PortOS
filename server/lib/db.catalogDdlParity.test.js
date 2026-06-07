@@ -202,6 +202,36 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
       .toEqual([...new Set(extractColumnNames(jsBody))].sort());
   });
 
+  // Universe Builder records (#1014) — non-`catalog_`-prefixed table in BOTH
+  // DDL sources, with non-`idx_catalog_`-prefixed indexes, so it gets its own
+  // column + index parity assertion.
+  it('universes has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'universes');
+    const jsBody = extractCreateTable(DB_JS, 'universes');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE universes').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE universes').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_universes_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_universes_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Universe render-history log (#1014) — same drift risk; its own table + index.
+  it('universe_runs has the same columns and index in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'universe_runs');
+    const jsBody = extractCreateTable(DB_JS, 'universe_runs');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE universe_runs').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE universe_runs').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_universe_runs_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_universe_runs_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
   it('search_tsv payload field set matches', () => {
     // Both files re-declare the GENERATED ALWAYS expression character-for-
     // character today. If one side adds a payload key (e.g. voiceNotes) and

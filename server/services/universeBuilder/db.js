@@ -1,0 +1,139 @@
+/**
+ * Universe Builder — PostgreSQL leaf I/O (#1014).
+ *
+ * One row per universe in `universes`: the full sanitized record (canon bibles,
+ * categories, compositeSheets, locks, influences) in `data` JSONB, with
+ * name / schema_version / ephemeral / updated_at / deleted / deleted_at mirrored
+ * into columns for the queries the service + federation actually run (rename
+ * cascade, delete-guard, list sort, snapshot ephemeral-filter, LWW staleness).
+ * Render-history runs live one-row-per-run in `universe_runs` (local-only,
+ * capped at 200, never federated).
+ *
+ * This module is PURE leaf I/O — no in-process serialization, no sanitizing.
+ * The store facade (store.js) owns the per-id write queue + the mutation epoch
+ * and applies `sanitizeTemplate` on read, so reads here return `data` verbatim
+ * (the columns are a queryable mirror, never read back). The facade serializes
+ * the run RMWs, so the run ops here are single atomic statements/transactions.
+ */
+
+import { query, withTransaction } from '../../lib/db.js';
+import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+
+// Keep the runs[] log bounded to the most-recent 200 — matches the file
+// backend's cap (universeBuilder.recordRun) so behavior is identical.
+const RUN_CAP = 200;
+
+// --- Universe records ---
+
+/** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
+export async function readRaw(id) {
+  const { rows } = await query(`SELECT data FROM universes WHERE id = $1`, [id]);
+  return rows[0]?.data ?? null;
+}
+
+/** Every universe id (live, ephemeral, AND tombstones) — the service filters. */
+export async function listIds() {
+  const { rows } = await query(`SELECT id FROM universes`);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Every record's raw `data` JSONB in one query (live/ephemeral/tombstones).
+ * The bulk read behind listUniverses — one SELECT instead of N per-id reads.
+ */
+export async function listRaw() {
+  const { rows } = await query(`SELECT data FROM universes`);
+  return rows.map((r) => r.data);
+}
+
+/**
+ * Upsert one record. `data` is written verbatim (lossless); the typed mirror
+ * columns are bind-sanitized so a hand-edited/legacy record with a malformed
+ * timestamp or missing field can't make the write throw (which, during the boot
+ * warm/import, would block the whole backend). `created_at` is preserved on
+ * conflict — only the first INSERT sets it.
+ */
+export async function writeRaw(id, record) {
+  const now = new Date().toISOString();
+  const createdAt = mirrorTimestamp(record?.createdAt, now);
+  const schemaVersion = Number.isInteger(record?.schemaVersion) ? record.schemaVersion : 4;
+  await query(
+    `INSERT INTO universes (id, name, data, schema_version, ephemeral, created_at, updated_at, deleted, deleted_at)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       data = EXCLUDED.data,
+       schema_version = EXCLUDED.schema_version,
+       ephemeral = EXCLUDED.ephemeral,
+       updated_at = EXCLUDED.updated_at,
+       deleted = EXCLUDED.deleted,
+       deleted_at = EXCLUDED.deleted_at`,
+    [
+      id,
+      typeof record?.name === 'string' ? record.name : '',
+      JSON.stringify(record),
+      schemaVersion,
+      record?.ephemeral === true,
+      createdAt,
+      mirrorTimestamp(record?.updatedAt, createdAt),
+      record?.deleted === true,
+      mirrorTimestamp(record?.deletedAt, null),
+    ],
+  );
+  return record;
+}
+
+/** Hard-delete a record (tombstone GC). Idempotent — missing row is a no-op. */
+export async function deleteRaw(id) {
+  await query(`DELETE FROM universes WHERE id = $1`, [id]);
+}
+
+// --- Render-history runs (local-only) ---
+
+/** Runs (newest first), optionally scoped to one universe. Returns `data` verbatim. */
+export async function loadRuns(universeId = null) {
+  const { rows } = universeId
+    ? await query(
+        `SELECT data FROM universe_runs WHERE universe_id = $1 ORDER BY created_at DESC, id DESC`,
+        [universeId],
+      )
+    : await query(`SELECT data FROM universe_runs ORDER BY created_at DESC, id DESC`);
+  return rows.map((r) => r.data);
+}
+
+/**
+ * Append one run + trim the global log back to the most-recent RUN_CAP. Runs
+ * in a transaction so a concurrent read never sees the over-cap intermediate.
+ */
+export async function appendRun(run) {
+  await withTransaction(async (client) => {
+    const exec = client.query.bind(client);
+    await exec(
+      `INSERT INTO universe_runs (id, universe_id, collection_id, data, created_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        run.id,
+        run.universeId,
+        typeof run.collectionId === 'string' ? run.collectionId : null,
+        JSON.stringify(run),
+        mirrorTimestamp(run.createdAt, new Date().toISOString()),
+      ],
+    );
+    // Trim to the newest RUN_CAP across ALL universes (matches the file
+    // backend's whole-array cap, not a per-universe cap).
+    await exec(
+      `DELETE FROM universe_runs WHERE id IN (
+         SELECT id FROM universe_runs ORDER BY created_at DESC, id DESC OFFSET $1
+       )`,
+      [RUN_CAP],
+    );
+  });
+}
+
+/** Drop every run referencing any of `universeIds` (cascade on universe delete). */
+export async function removeRunsForUniverses(universeIds) {
+  const ids = Array.isArray(universeIds) ? universeIds.filter((x) => typeof x === 'string' && x) : [];
+  if (ids.length === 0) return;
+  await query(`DELETE FROM universe_runs WHERE universe_id = ANY($1::text[])`, [ids]);
+}

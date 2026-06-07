@@ -844,6 +844,13 @@ ensureSelf()
       // queryable index over them. Idempotent, safe to run every boot.
       const { initMediaAssetIndex } = await import('./services/mediaAssetIndex/index.js');
       await initMediaAssetIndex();
+      // Universe Builder PG warm (#1014): with the DB confirmed + schema ensured,
+      // touch the universe store so it selects the Postgres backend and runs the
+      // one-time data/universes file→DB import (migrateUniversesToDB) BEFORE
+      // httpServer.listen — so the first request/sync sees migrated records, not
+      // a half-applied import racing a request. listIds() is the cheapest call
+      // that forces backend selection. Idempotent (marker-gated import).
+      await universeStore().listIds();
       // Authoritative catalog user-type warm (#1001): with the DB confirmed +
       // schema ensured, load the registry from the catalog_user_types store
       // (running the one-time settings→DB import on first access). This runs
