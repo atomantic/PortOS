@@ -165,6 +165,22 @@ describe('mlArrayIfEnabled', () => {
 });
 
 describe('updateStore', () => {
+  // updateStore now force-materializes an evicted iCloud file (brctl download)
+  // before refusing to overwrite. These baseline tests assert the refuse/seed
+  // semantics WITHOUT the materialize path interfering, so pin the platform to
+  // linux — materializeNow() short-circuits to `false` off darwin, leaving the
+  // pre-existing guard behavior exactly as it was. The darwin materialize
+  // behavior gets its own describe block below. (process.platform overrides
+  // aren't restored by vi.restoreAllMocks(), so capture+restore explicitly.)
+  let originalPlatformDescriptor;
+  beforeEach(() => {
+    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+  });
+  afterEach(() => {
+    if (originalPlatformDescriptor) Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+  });
+
   it('seeds a fresh store when the file does not exist', async () => {
     existsResult = false;
     writeFileMock.mockResolvedValue(undefined);
@@ -225,10 +241,11 @@ describe('updateStore', () => {
 
   it('seeds a fresh store when the file disappears between existsSync and read (ENOENT race)', async () => {
     // existsSync sequence: (1) inside readStoreAtPath → true (read attempted),
-    // (2) post-read check in updateStore's guard → false (file vanished).
+    // (2) post-read check in updateStore's guard → false (file vanished),
+    // (3) `.icloud` placeholder probe → false (no shadowing placeholder).
     // The post-read recheck must discriminate this from a transient/corrupt
     // case so we don't reject a legitimate seed.
-    existsQueue.push(true, false);
+    existsQueue.push(true, false, false);
     readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     writeFileMock.mockResolvedValue(undefined);
     const result = await store.updateStore((s) => {
@@ -251,6 +268,134 @@ describe('updateStore', () => {
       store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
     ).rejects.toThrow(/unreadable; refusing to overwrite/);
     expect(writeFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateStore — iCloud on-demand materialize (darwin)', () => {
+  // A fake brctl child shaped for the shared bufferedSpawn helper, which reads
+  // child.stdout/stderr and resolves on the `close` event. Its handler fires
+  // asynchronously with the given exit code; the optional onClose hook lets a
+  // test flip a flag (e.g. "now the file is materialized") atomically with the
+  // close so the post-materialize re-read sees fresh state.
+  const makeMaterializeChild = (exitCode, onClose) => {
+    const noopStream = { on: vi.fn() };
+    const child = {
+      stdout: noopStream,
+      stderr: noopStream,
+      pid: 4242,
+      on: vi.fn(function (evt, cb) {
+        if (evt === 'close') setTimeout(() => { onClose?.(); cb(exitCode, null); }, 0);
+        return child;
+      }),
+      kill: vi.fn(),
+      unref: vi.fn(),
+    };
+    return child;
+  };
+
+  let originalPlatformDescriptor;
+  let originalTimeout;
+  beforeEach(() => {
+    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    originalTimeout = store.MATERIALIZE_TIMEOUT_MS;
+    store._setMaterializeTimeoutForTest(50);
+    store._resetMortalLoomInitForTest(); // clears brctlMissingWarned dedupe
+    writeFileMock.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    if (originalPlatformDescriptor) Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    store._setMaterializeTimeoutForTest(originalTimeout);
+  });
+
+  it('materializes an evicted dataless file then writes (the reported bug)', async () => {
+    // File exists (dataless placeholder) but reads EAGAIN until brctl download
+    // materializes it. updateStore must recover and write instead of refusing.
+    existsResult = true;
+    const eagain = Object.assign(new Error('EAGAIN'), { code: 'EAGAIN', errno: -11 });
+    let materialized = false;
+    readFileMock.mockImplementation(async () => {
+      if (!materialized) throw eagain;
+      return JSON.stringify({ goals: [{ id: 'existing' }] });
+    });
+    spawnMock.mockReturnValue(makeMaterializeChild(0, () => { materialized = true; }));
+
+    const result = await store.updateStore((s) => {
+      s.goals.push({ id: 'added-after-materialize' });
+      return s.goals.length;
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.objectContaining({ shell: false }));
+    expect(result).toBe(2);
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(writeFileMock.mock.calls[0][1]);
+    expect(written.goals).toEqual([{ id: 'existing' }, { id: 'added-after-materialize' }]);
+  });
+
+  it('still refuses when brctl exits non-zero (offline/evicted, materialize failed)', async () => {
+    existsResult = true;
+    readFileMock.mockRejectedValue(Object.assign(new Error('EAGAIN'), { code: 'EAGAIN', errno: -11 }));
+    spawnMock.mockReturnValue(makeMaterializeChild(1));
+
+    await expect(
+      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
+    ).rejects.toThrow(/unreadable; refusing to overwrite/);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses with an "even after materialize" diagnostic when JSON is still corrupt post-download', async () => {
+    // brctl succeeds (file materialized) but the bytes are genuinely corrupt —
+    // not an eviction problem. Refuse, and make the log distinguish this from
+    // the never-materialized case.
+    existsResult = true;
+    readFileMock.mockResolvedValue('{ truncated json');
+    spawnMock.mockReturnValue(makeMaterializeChild(0));
+
+    await expect(
+      store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
+    ).rejects.toThrow(/unreadable; refusing to overwrite/);
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('even after iCloud materialize')
+    );
+  });
+
+  it('materializes an `.icloud` placeholder shadowing the real path instead of seeding fresh', async () => {
+    // Legacy eviction renamed MortalLoom.json → .MortalLoom.json.icloud, so the
+    // real path reads absent. Seeding a fresh store would bury real data — we
+    // must download the placeholder and write the recovered store instead.
+    // existsSync order: (1) readStoreAtPath path=false, (2) ternary path=false,
+    // (3) placeholder=true, (4) post-materialize re-read path=true.
+    existsQueue.push(false, false, true, true);
+    let materialized = false;
+    readFileMock.mockImplementation(async () => {
+      if (!materialized) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return JSON.stringify({ goals: [{ id: 'recovered' }] });
+    });
+    spawnMock.mockReturnValue(makeMaterializeChild(0, () => { materialized = true; }));
+
+    const result = await store.updateStore((s) => {
+      s.goals.push({ id: 'added' });
+      return s.goals.length;
+    });
+
+    // brctl is asked to download the REAL path, not the placeholder.
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.objectContaining({ shell: false }));
+    expect(result).toBe(2);
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(writeFileMock.mock.calls[0][1]);
+    expect(written.goals).toEqual([{ id: 'recovered' }, { id: 'added' }]);
+  });
+
+  it('does not materialize (no spawn) when seeding a genuinely new file', async () => {
+    // No real file and no placeholder — a first-ever write. Must seed without
+    // paying a brctl download.
+    existsResult = false;
+    const result = await store.updateStore((s) => { s.goals.push({ id: 'first' }); return 'ok'; });
+    expect(result).toBe('ok');
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
   });
 });
 
