@@ -169,5 +169,5 @@ Start with the highest-value relational surfaces:
 1. [#998](https://github.com/atomantic/PortOS/issues/998) Make PostgreSQL mandatory for PortOS installs and remove normal file-backend fallback.
 2. [#1000](https://github.com/atomantic/PortOS/issues/1000) Add DB-backed media asset and collection metadata while keeping bytes on disk.
 3. [#997](https://github.com/atomantic/PortOS/issues/997) Migrate Creative Director project/treatment/run state from monolithic JSON to PostgreSQL.
-4. [#999](https://github.com/atomantic/PortOS/issues/999) Design the Create relational schema for universes, series, issues, Story Builder sessions, Writers Room metadata, and catalog refs.
+4. [#999](https://github.com/atomantic/PortOS/issues/999) Design the Create relational schema for universes, series, issues, Story Builder sessions, Writers Room metadata, and catalog refs. — **Design complete:** [`2026-06-07-create-relational-schema-design.md`](./2026-06-07-create-relational-schema-design.md); implementation tracked as #1014–#1018.
 5. [#1001](https://github.com/atomantic/PortOS/issues/1001) Move catalog user-defined types from settings into PostgreSQL.
