@@ -83,7 +83,9 @@ export const buildSchedule = (score, bpmOverride) => {
 let sharedCtx = null;
 const ctx = () => {
   if (!sharedCtx) {
-    const Ctor = window.AudioContext || window.webkitAudioContext;
+    const Ctor = typeof window !== 'undefined'
+      ? (window.AudioContext || window.webkitAudioContext)
+      : (globalThis.AudioContext || globalThis.webkitAudioContext);
     sharedCtx = new Ctor();
   }
   return sharedCtx;

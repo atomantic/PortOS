@@ -116,10 +116,10 @@ describe('createScorePlayer', () => {
   beforeEach(() => {
     audio.now = 0;
     audio.oscillators = [];
-    window.AudioContext = FakeAudioContext;
+    vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.useFakeTimers();
   });
-  afterEach(() => { vi.useRealTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   const SCORE = parseScore('time: 4/4\ntempo: 120\n| C4q D4q E4q rq |');
 
