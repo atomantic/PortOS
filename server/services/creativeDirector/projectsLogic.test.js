@@ -135,6 +135,11 @@ describe('mirrorStatus / mirrorTimestamp (typed-column safety)', () => {
     // TIMESTAMPTZ range → must fall back, not bind a ±YYYYYY string that throws.
     expect(mirrorTimestamp('-100000-01-01T00:00:00.000Z', 'fb')).toBe('fb');
     expect(mirrorTimestamp('+275760-09-13T00:00:00.000Z', 'fb')).toBe('fb');
+    // Year 0000: Date.parse accepts it and toISOString emits a 4-digit
+    // '0000-…', but Postgres has no Gregorian year zero → must fall back.
+    expect(mirrorTimestamp('0000-01-01T00:00:00.000Z', 'fb')).toBe('fb');
+    // A normal in-range year still passes.
+    expect(mirrorTimestamp('0001-01-01T00:00:00.000Z', 'fb')).toBe('0001-01-01T00:00:00.000Z');
   });
 });
 
