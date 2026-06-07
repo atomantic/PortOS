@@ -31,8 +31,9 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - `catalog_ingredients` — typed creative records with JSONB payload, tags, embeddings, generated `search_tsv`, soft delete, sync sequence.
 - `catalog_ingredient_relations` — directed ingredient→ingredient graph edges (the strongest argument for Postgres as the catalog graph store).
 - `memories` / `memory_links` — long-term memory + pgvector similarity.
+- `creative_director_projects` — Creative Director project/treatment/scene/run state, one row per project (`id`/`status`/timestamps as columns, the full record in `data` JSONB). Migrated from the monolithic `data/creative-director-projects.json` in Phase 3 (#997); CD is local-only, so the row carries no sync cursor/tombstone. Adapter: `server/services/creativeDirector/projectsDB.js`.
 
-**Postgres-First target.** Universes, pipeline series/issues, Story Builder sessions, Creative Director project/scene/run state, and searchable media metadata are all `db-primary` targets — they currently live in `data/` JSON but carry relationships and status that belong in the DB. Catalog user-defined types should also move from `settings.json` into catalog DB tables.
+**Postgres-First target.** Universes, pipeline series/issues, Story Builder sessions, and searchable media metadata are still `db-primary` targets — they currently live in `data/` JSON but carry relationships and status that belong in the DB. Catalog user-defined types should also move from `settings.json` into catalog DB tables. (Creative Director project/scene/run state moved to Postgres in Phase 3 / #997.)
 
 ---
 
@@ -91,7 +92,7 @@ The contract draws a single line:
 - **Files own** large binary payloads, long externally-editable prose bodies, model weights, temporary uploads, and iCloud-backed health/life stores.
 - **File assets referenced from the DB** get a stable `asset_key` / `media_key` row plus integrity metadata. The DB points to files; it does not absorb the bytes.
 
-Defaulting a new Create feature to a fresh `data/*.json` file is the anti-pattern this contract exists to stop. Monolithic JSON in hot paths (`creative-director-projects.json`, `media-jobs.json`, `video-history.json`) already causes write contention and growth risk; string-id cross-references across separate JSON stores drift with no integrity check. New relational surfaces should be `db-primary` from the start.
+Defaulting a new Create feature to a fresh `data/*.json` file is the anti-pattern this contract exists to stop. Monolithic JSON in hot paths (`media-jobs.json`, `video-history.json` — and `creative-director-projects.json` before #997 moved it to Postgres) causes write contention and growth risk; string-id cross-references across separate JSON stores drift with no integrity check. New relational surfaces should be `db-primary` from the start.
 
 ---
 

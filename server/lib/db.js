@@ -87,12 +87,30 @@ export async function checkHealth() {
   }
 }
 
+// In-flight dedup for ensureSchema(). At boot, two independent fire-and-forget
+// callers can race: the Creative Director recovery scan (which lazily selects
+// the PG backend and calls ensureSchema) and the boot DB gate. Running the
+// idempotent DDL list concurrently can intermittently error or deadlock on
+// Postgres system catalogs (concurrent CREATE TABLE/INDEX IF NOT EXISTS contend
+// on pg_type / pg_class). Sharing one in-flight promise serializes them; it's
+// cleared on settle so a deliberate later call (the gate runs it twice) still
+// re-applies (cheap — ~30 no-op parses on an up-to-date DB).
+let ensureSchemaInFlight = null;
+
 /**
  * Apply idempotent schema upgrades to an existing database.
  * Each statement uses IF NOT EXISTS so it's safe to run on every startup.
  * Add new ALTER TABLE statements here when the schema evolves.
+ *
+ * Concurrent calls share a single in-flight execution (see ensureSchemaInFlight).
  */
 export async function ensureSchema() {
+  if (ensureSchemaInFlight) return ensureSchemaInFlight;
+  ensureSchemaInFlight = ensureSchemaImpl().finally(() => { ensureSchemaInFlight = null; });
+  return ensureSchemaInFlight;
+}
+
+async function ensureSchemaImpl() {
   const upgrades = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
@@ -508,6 +526,23 @@ export async function ensureSchema() {
        BEFORE UPDATE ON catalog_tags
        FOR EACH ROW
        EXECUTE FUNCTION update_catalog_tag_timestamp()`,
+
+    // Creative Director projects (Phase 3, issue #997). One row per project;
+    // the full record lives in `data` JSONB, with status/created_at/updated_at
+    // mirrored into columns (kept in lockstep on every write) for future
+    // queries. `listProjects` sorts by created_at; nothing filters status yet
+    // (the recovery scan filters in JS), so no status/updated_at index — an
+    // unused index is just write amplification. CD is local-only (not
+    // federated) so no sync_sequence/tombstone. `status` is app-layer gated
+    // (PROJECT_STATUSES), no DB CHECK. Mirrors the creative_director_projects
+    // block in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS creative_director_projects (
+      id TEXT PRIMARY KEY,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
   ];
   for (const sql of catalogDDL) {
     await pool.query(sql);

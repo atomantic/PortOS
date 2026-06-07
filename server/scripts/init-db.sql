@@ -558,3 +558,37 @@ CREATE TRIGGER trg_catalog_tag_updated_at
   BEFORE UPDATE ON catalog_tags
   FOR EACH ROW
   EXECUTE FUNCTION update_catalog_tag_timestamp();
+
+-- ===========================================================================
+-- Creative Director projects (Phase 3, issue #997)
+-- ===========================================================================
+-- One row per project. The full project record — treatment, scenes, runs[],
+-- and the misc back-pointers (collectionId / timelineProjectId / finalVideoId
+-- / sourceIssueId) — lives in `data` JSONB. `status` / `created_at` /
+-- `updated_at` are mirrored into columns (kept in lockstep with the JSONB on
+-- every write) so future queries CAN filter/sort on them without a JSONB
+-- expression; `listProjects` sorts by `created_at`. No index on status/
+-- updated_at yet — nothing queries them today (the recovery scan filters
+-- p.status in JS over the loaded record), and an unused index is just write
+-- amplification. Add one alongside the query that needs it.
+--
+-- Why JSONB and not normalized scene/run tables: no code queries INTO scenes
+-- or runs relationally (the orchestrator loads the whole project, mutates a
+-- scene or appends a run, writes it back), and scenes carry ad-hoc fields
+-- outside the Zod schema (evaluationFrames). Per-PROJECT rows already remove
+-- the monolithic-file write contention + O(N²) reserialize the old single
+-- creative-director-projects.json caused. Normalizing scenes/runs is deferred
+-- to a later phase if a cross-project scene/run query ever materializes.
+--
+-- CD is local-only (NOT federated — see plan §"Peer sync"), so there is no
+-- sync_sequence / soft-delete-tombstone column: a delete is a hard DELETE.
+-- `status` has no DB CHECK; valid values are gated at the app layer via
+-- PROJECT_STATUSES (creativeDirectorPresets.js), matching the catalog
+-- ingredients convention so a new status needs no constraint migration.
+CREATE TABLE IF NOT EXISTS creative_director_projects (
+  id TEXT PRIMARY KEY,
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);

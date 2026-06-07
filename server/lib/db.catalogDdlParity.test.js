@@ -163,6 +163,17 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     expect(/type VARCHAR\(32\)/i.test(extractCreateTable(DB_JS, 'catalog_ingredients'))).toBe(true);
   });
 
+  // Non-catalog table that nonetheless lives in BOTH DDL sources (fresh-install
+  // init-db.sql + upgrade-path ensureSchema) and so has the same drift risk.
+  it('creative_director_projects has the same columns in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'creative_director_projects');
+    const jsBody = extractCreateTable(DB_JS, 'creative_director_projects');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE creative_director_projects').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE creative_director_projects').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+  });
+
   it('search_tsv payload field set matches', () => {
     // Both files re-declare the GENERATED ALWAYS expression character-for-
     // character today. If one side adds a payload key (e.g. voiceNotes) and
