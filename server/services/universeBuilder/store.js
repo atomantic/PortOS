@@ -79,7 +79,14 @@ function makeFileBackend(dir) {
     loadRuns: async (universeId = null) => {
       const ti = await cs.loadTypeIndex();
       const runs = runsOf(ti);
-      return universeId ? runs.filter((r) => r?.universeId === universeId) : runs;
+      const scoped = universeId ? runs.filter((r) => r?.universeId === universeId) : runs;
+      // Match the PG backend's `created_at DESC, id DESC` order so the two
+      // backends return runs identically (the service's listRuns re-sorts by
+      // createdAt anyway, but a direct facade consumer shouldn't see backend-
+      // dependent order). Copy before sort — runsOf returns the live array.
+      return [...scoped].sort((a, b) =>
+        (b?.createdAt || '').localeCompare(a?.createdAt || '')
+        || (b?.id || '').localeCompare(a?.id || ''));
     },
     appendRun: async (run) => {
       const ti = await cs.loadTypeIndex();

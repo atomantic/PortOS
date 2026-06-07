@@ -100,6 +100,13 @@ describe('universe store facade — file backend', () => {
     expect((await s.loadRuns()).map((r) => r.universeId)).toEqual(['u-B']);
   });
 
+  it('loadRuns returns newest-first (created_at DESC, id DESC) to match the PG backend', async () => {
+    const s = getUniverseStore(passthroughSanitize);
+    await s.appendRun({ id: 'r-old', universeId: 'u-1', jobIds: [], promptCount: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+    await s.appendRun({ id: 'r-new', universeId: 'u-1', jobIds: [], promptCount: 1, createdAt: '2026-01-02T00:00:00.000Z' });
+    expect((await s.loadRuns()).map((r) => r.id)).toEqual(['r-new', 'r-old']);
+  });
+
   it('verifySchemaVersion reports the file collection version', async () => {
     const s = getUniverseStore(passthroughSanitize);
     await s.writeRecord('u-1', { id: 'u-1', name: 'X' });

@@ -97,10 +97,12 @@ export async function migrateUniversesToDB() {
   const legacyDir = join(PATHS.data, LEGACY_DIRNAME);
   const dirStat = await stat(legacyDir).catch(() => null);
 
-  // Fresh install (no legacy dir): stamp the marker so we don't re-probe every
-  // boot, and return.
+  // Fresh install (no legacy dir): no-op WITHOUT stamping the marker. The probe
+  // is a single stat per boot — cheap — and NOT stamping keeps the recovery
+  // escape hatch open: a user who later restores data/universes.imported back to
+  // data/universes (to re-import after a rollback) gets a real import on the next
+  // boot. Stamping here would silently suppress that forever.
   if (!dirStat || !dirStat.isDirectory()) {
-    await writeMarker({ migratedAt: new Date().toISOString(), imported: 0, runs: 0, reason: 'fresh-install' });
     return { ok: true, reason: 'fresh-install', imported: 0, runs: 0 };
   }
 

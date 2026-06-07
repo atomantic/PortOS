@@ -87,10 +87,12 @@ beforeEach(() => {
 });
 
 describe('migrateUniversesToDB', () => {
-  it('fresh install (no legacy dir): stamps marker, imports nothing', async () => {
+  it('fresh install (no legacy dir): no-op WITHOUT a marker (keeps the recovery re-import hatch open)', async () => {
     const result = await importer();
     expect(result).toMatchObject({ ok: true, reason: 'fresh-install', imported: 0 });
-    expect(MARKER in files).toBe(true);
+    // No marker stamped — a later restore of data/universes.imported → data/universes
+    // must re-import on the next boot rather than being silently suppressed.
+    expect(MARKER in files).toBe(false);
     expect(uTable.size).toBe(0);
   });
 
