@@ -14,10 +14,17 @@ import { Music, ArrowLeft, Drum, Layers, GraduationCap, FileMusic } from 'lucide
 import Pill from '../components/ui/Pill';
 import {
   RHYTHM_SHAPES,
+  DIRGE_RHYTHM_SHAPES,
   VOICE_LAYERS,
   LEARNING_STEPS,
   NOTATION_HELP,
+  SOLFEGE_DEGREES,
+  solfegeForDegree,
 } from '../lib/songCraft';
+
+// Dirges lead the rhythm list (the workbench's home turf), then the rest.
+const NON_DIRGE_SHAPES = RHYTHM_SHAPES.filter((s) => !s.dirge);
+const ORDERED_RHYTHM_SHAPES = [...DIRGE_RHYTHM_SHAPES, ...NON_DIRGE_SHAPES];
 
 function RhythmCard({ shape }) {
   return (
@@ -96,7 +103,7 @@ export default function SongsGuide() {
               subtitle="The felt pulse a song leans on. Dirges — slow, solemn laments — lead the list, since that's the workbench's home turf."
             />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {RHYTHM_SHAPES.map((s) => <RhythmCard key={s.id} shape={s} />)}
+              {ORDERED_RHYTHM_SHAPES.map((s) => <RhythmCard key={s.id} shape={s} />)}
             </div>
           </section>
 
@@ -156,6 +163,25 @@ export default function SongsGuide() {
                   </ul>
                 </div>
               ))}
+            </div>
+
+            {/* Movable-do solfège ladder — how harmony parts name their home
+                degree relative to the tonic (Do). The octave repeats Do. */}
+            <div className="bg-port-card border border-port-border rounded-lg p-4 mt-3">
+              <h3 className="text-sm font-semibold text-white">Solfège — naming the scale</h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Movable-do: sing degrees relative to the key's tonic (Do). Find a harmony part by
+                its degree above the lead — a third is Mi, a fifth is Sol.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {SOLFEGE_DEGREES.map((d) => (
+                  <Pill key={d.degree} tone={d.degree === 1 ? 'accent' : 'muted'}>
+                    {d.degree}. {d.solfege}
+                  </Pill>
+                ))}
+                {/* The octave folds back to the tonic — solfegeForDegree wraps. */}
+                <Pill tone="note">8. {solfegeForDegree(8)} (octave)</Pill>
+              </div>
             </div>
           </section>
         </div>

@@ -1,10 +1,10 @@
 // Canonical a cappella song-craft reference data: dirge rhythm shapes, the
 // layer-building ladder, a learning sequence, musical-notation help, and the
-// solfège scale used by the editor's harmony helpers. The Songs Guide page
-// renders directly from these arrays; the Song editor reuses RHYTHM_SHAPES,
-// VOICE_LAYERS, and SOLFEGE_DEGREES so the picker options and the docs never
-// drift. Keep this module pure (no React, no imports) — it is mirrored into
-// the client lib barrel and unit-tested for shape.
+// movable-do solfège scale. The Songs Guide page renders directly from these
+// arrays (rhythm shapes, layer ladder, learning steps, notation, solfège), and
+// the Song editor reuses RHYTHM_SHAPES and VOICE_LAYERS for its picker options
+// so the editor and the docs never drift. Keep this module pure (no React, no
+// imports) — it is mirrored into the client lib barrel and unit-tested.
 
 // --- Rhythm shapes ---------------------------------------------------------
 // A "rhythm shape" is the felt pulse + note-length feel a song leans on. A

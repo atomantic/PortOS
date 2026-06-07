@@ -52,11 +52,17 @@ describe('songs service', () => {
     expect(songs[0].id).toBe(song.id); // unshifted to front
   });
 
-  it('clamps tempo into the supported band and nulls unparseable values', async () => {
-    const fast = await svc.createSong({ title: 'Too fast', tempo: 9000 });
-    expect(fast.tempo).toBe(svc.TEMPO_MAX);
+  it('nulls a missing tempo on create', async () => {
     const noTempo = await svc.createSong({ title: 'No tempo' });
     expect(noTempo.tempo).toBeNull();
+  });
+
+  it('clamps an out-of-band tempo on the sanitize/read path', () => {
+    // The route 400s an out-of-band tempo before createSong runs, so this
+    // clamp only ever fires when reading hand-edited JSON — exercise it there.
+    expect(svc.sanitizeSong({ id: 'x', tempo: 9000 }).tempo).toBe(svc.TEMPO_MAX);
+    expect(svc.sanitizeSong({ id: 'x', tempo: 1 }).tempo).toBe(svc.TEMPO_MIN);
+    expect(svc.sanitizeSong({ id: 'x', tempo: 'fast' }).tempo).toBeNull();
   });
 
   it('drops empty sections/layers and labels the survivors', async () => {

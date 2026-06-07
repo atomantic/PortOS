@@ -31,6 +31,18 @@ import { RHYTHM_SHAPES, VOICE_LAYERS } from '../lib/songCraft';
 let localSeq = 0;
 const localId = (prefix) => `${prefix}-new-${localSeq++}`;
 
+// Mirror the server tempo band (services/songs.js TEMPO_MIN/MAX) so the input
+// clamps locally — otherwise an out-of-band value only surfaces as an opaque
+// "Failed to save" toast after the server 400s. Empty input clears (null).
+const TEMPO_MIN = 20;
+const TEMPO_MAX = 320;
+const clampTempo = (raw) => {
+  if (raw === '' || raw == null) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(TEMPO_MIN, Math.min(TEMPO_MAX, Math.round(n)));
+};
+
 export default function SongEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -92,10 +104,13 @@ export default function SongEditor() {
     ...prev, layers: prev.layers.filter((l) => l.id !== lid),
   }));
 
-  // Layer presets the user hasn't added yet, in foundation-first order.
+  // Layer presets the user hasn't added yet, in foundation-first order. Match
+  // on the preset id (seed layers carry the bare id like `lead`; ladder-added
+  // layers carry `${id}-new-N`), so renaming a layer's label doesn't make its
+  // preset reappear and two presets sharing a label can't collide.
   const remainingPresets = useMemo(() => {
-    const have = new Set((song?.layers || []).map((l) => l.label));
-    return VOICE_LAYERS.filter((p) => !have.has(p.label));
+    const have = new Set((song?.layers || []).map((l) => l.id.replace(/-new-\d+$/, '')));
+    return VOICE_LAYERS.filter((p) => !have.has(p.id));
   }, [song?.layers]);
 
   if (loading) {
@@ -169,10 +184,10 @@ export default function SongEditor() {
                 <input
                   id="tempo"
                   type="number"
-                  min="20"
-                  max="320"
+                  min={TEMPO_MIN}
+                  max={TEMPO_MAX}
                   value={song.tempo ?? ''}
-                  onChange={(e) => setField('tempo', e.target.value === '' ? null : Number(e.target.value))}
+                  onChange={(e) => setField('tempo', clampTempo(e.target.value))}
                   placeholder="e.g. 68"
                   className={inputCls}
                 />
