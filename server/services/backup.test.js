@@ -161,15 +161,31 @@ describe('dumpPostgres status classification', () => {
     ({ dumpPostgres } = await import('./backup.js'));
   });
 
-  it('returns skipped/not_configured when PG is not connected and not the active backend', async () => {
+  it('returns skipped/not_configured when PG is down and the backend resolved to file (escape hatch)', async () => {
     const prev = process.env.MEMORY_BACKEND;
     delete process.env.MEMORY_BACKEND;
-    getBackendName.mockReturnValue('file'); // auto-detect resolved to file
+    getBackendName.mockReturnValue('file'); // dev/test escape hatch resolved to file
     checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
     const result = await dumpPostgres('/tmp/x.sql');
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
     expect(spawn).not.toHaveBeenCalled();
     getBackendName.mockReturnValue(null);
+    if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
+  });
+
+  it('returns failed/pg_unreachable when PG is down, env unset, and backend not yet initialized (null)', async () => {
+    // Post-mandatory-Postgres contract: a default install whose memory backend
+    // hasn't initialized yet (getBackendName() === null) still REQUIRES Postgres.
+    // A DB outage before the first memory access must degrade the backup, not
+    // read as a benign "not configured" skip.
+    const prev = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    getBackendName.mockReturnValue(null);
+    checkHealth.mockResolvedValue({ connected: false, hasSchema: false, error: 'ECONNREFUSED' });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('pg_unreachable');
+    expect(spawn).not.toHaveBeenCalled();
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
@@ -213,10 +229,25 @@ describe('dumpPostgres status classification', () => {
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
-  it('returns skipped/not_configured when connected but no schema', async () => {
+  it('returns failed/pg_unreachable when connected but schema missing and PG required', async () => {
+    // Post-mandatory-Postgres: a reachable-but-uninitialized DB on a non-file
+    // install is a real backup failure (required schema/data not capturable),
+    // not a benign skip.
+    getBackendName.mockReturnValue(null);
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: false });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('pg_unreachable');
+  });
+
+  it('returns skipped/not_configured when connected but no schema in file escape-hatch mode', async () => {
+    const prev = process.env.MEMORY_BACKEND;
+    process.env.MEMORY_BACKEND = 'file';
     checkHealth.mockResolvedValue({ connected: true, hasSchema: false });
     const result = await dumpPostgres('/tmp/x.sql');
     expect(result.status).toBe('skipped');
+    expect(result.reason).toBe('not_configured');
+    if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
   it('returns failed/pg_dump_missing when spawn errors', async () => {

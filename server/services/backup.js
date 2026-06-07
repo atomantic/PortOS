@@ -230,31 +230,32 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
 /**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
- * Returns an explicit status so the caller can distinguish "no PG configured"
- * (benign, file mode) from "PG configured but dump failed" (data at risk):
+ * Returns an explicit status so the caller can distinguish the benign file
+ * escape hatch from "PG required but dump failed" (data at risk):
  *   { status: 'ok', sizeBytes, tableCount }
- *   { status: 'skipped', reason: 'not_configured' }   (PG not the active backend)
+ *   { status: 'skipped', reason: 'not_configured' }   (explicit file escape hatch only)
  *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'dump_error'|'empty_dump', error }
- *     (pg_unreachable fires when Postgres is the active backend — explicit or
- *      auto-detected — but the DB is down at backup time)
+ *     (pg_unreachable fires whenever Postgres is required — i.e. not the file
+ *      escape hatch — but the DB is down at backup time)
  * @param {string} outputPath - Path to write the SQL dump file
  */
 export async function dumpPostgres(outputPath) {
   const health = await checkHealth();
   if (!health.connected || !health.hasSchema) {
-    // PG unreachable or uninitialized. When the install legitimately runs
-    // without Postgres this is the expected, benign case. But when Postgres is
-    // the ACTIVE memory backend, an unreachable DB is a real backup failure —
-    // data that lives only in PG won't be captured — so degrade the backup and
-    // alert rather than silently skip. Postgres is active when it's required
-    // explicitly (MEMORY_BACKEND=postgres) OR when it was auto-detected at
-    // startup (MEMORY_BACKEND unset and the resolved backend is 'postgres').
-    // The auto-detect case is the common default install, so gating only on the
-    // env var would let a real DB outage read as a green "not configured" run.
+    // PG unreachable or uninitialized. Since PostgreSQL is now a mandatory
+    // dependency, the ONLY benign "no PG to back up" case is the explicit file
+    // escape hatch (MEMORY_BACKEND=file, or the backend resolved to 'file' in
+    // test/dev mode). Every other state — including a default install whose
+    // memory backend simply hasn't initialized yet (getBackendName() === null)
+    // — means Postgres is required, so an unreachable DB is a real backup
+    // failure (data that lives only in PG won't be captured). Degrade and alert
+    // rather than silently skip; gating on getBackendName() === 'postgres'
+    // alone would let an outage-before-first-memory-access read as a green
+    // "not configured" run.
     const env = process.env.MEMORY_BACKEND;
-    const postgresIsActive = env === 'postgres' || (env !== 'file' && getBackendName() === 'postgres');
-    if (postgresIsActive) {
-      return { status: 'failed', reason: 'pg_unreachable', error: health.error || 'PostgreSQL is the active memory backend but is not reachable' };
+    const fileEscapeHatch = env === 'file' || getBackendName() === 'file';
+    if (!fileEscapeHatch) {
+      return { status: 'failed', reason: 'pg_unreachable', error: health.error || 'PostgreSQL is required but is unreachable or uninitialized' };
     }
     return { status: 'skipped', reason: 'not_configured' };
   }

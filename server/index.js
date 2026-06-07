@@ -781,7 +781,7 @@ ensureSelf()
     // tables absent) makes ensureSchema() throw — we catch, log, and fall
     // through to the fail-fast below. (try/catch is appropriate here: this runs
     // outside the request lifecycle, so an uncaught throw would crash boot.)
-    if (health.connected && !health.hasSchema) {
+    if (health.connected && (!health.hasSchema || !health.hasCatalogSchema)) {
       try {
         await ensureSchema();
         health = await checkHealth();
@@ -789,7 +789,12 @@ ensureSelf()
         console.error(`🗄️  Schema upgrade on boot failed: ${err.message}`);
       }
     }
-    const dbReady = health.connected && health.hasSchema;
+    // Both the memory schema AND the creative-catalog schema are required —
+    // the catalog has no file-backed equivalent. ensureSchema() creates the
+    // catalog tables idempotently, but if that DDL fails (e.g. the role can't
+    // CREATE) the swallowed error in the migration block below would otherwise
+    // let the server boot with the catalog missing. Gate boot on both.
+    const dbReady = health.connected && health.hasSchema && health.hasCatalogSchema;
     if (!dbEscapeHatch && !dbReady) {
       const reason = health.connected ? 'required schema missing' : `unreachable (${health.error || 'connection failed'})`;
       console.error(`❌ PostgreSQL is required but ${reason} — refusing to start.`);

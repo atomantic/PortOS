@@ -40,7 +40,7 @@ The effective exclude list is computed by the pure `computeEffectiveExcludes()` 
 |---|---|---|
 | `{ status: 'ok', sizeBytes, tableCount }` | Dump succeeded and is non-empty | Backup `ok` |
 | `{ status: 'failed', reason: 'pg_unreachable' \| 'pg_dump_missing' \| 'dump_error' \| 'empty_dump' }` | Postgres is the active backend but the dump failed | Backup **`degraded`** + warning toast |
-| `{ status: 'skipped', reason: 'not_configured' }` | Postgres is not the active backend — `MEMORY_BACKEND=file`, OR the memory backend hasn't initialized yet (`getBackendName()` is still `null`, so auto-detect hasn't resolved to `postgres`) | Backup stays `ok` (benign) |
+| `{ status: 'skipped', reason: 'not_configured' }` | The explicit file escape hatch is active — `MEMORY_BACKEND=file` or the backend resolved to `file` (dev/test, unsupported for production) | Backup stays `ok` (benign) |
 
 Key behaviors, accurate to the code:
 
