@@ -130,7 +130,30 @@ function isPortOSDbReady(port = PG_PORT_NATIVE) {
   }
 }
 
-// Wait for PostgreSQL to accept connections
+// Whether the Docker container has finished applying init-db.sql. pg_isready
+// only proves the server accepts connections — it can pass while the
+// docker-entrypoint-initdb.d schema load is still running, so the `memories`
+// table (and the rest of the required schema) may not exist yet. Probing the
+// schema inside the container avoids reporting "ready" to a server that would
+// then fail-fast on its own boot-time schema gate. `psql -tAc` exits 0 even on
+// an empty result, so we require the literal "1".
+function isDockerSchemaReady() {
+  try {
+    const output = execFileSync(
+      'docker',
+      ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', 'portos', '-d', 'portos', '-tAc',
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"],
+      { stdio: 'pipe', cwd: rootDir }
+    ).toString();
+    return output.trim() === '1';
+  } catch {
+    return false;
+  }
+}
+
+// Wait for PostgreSQL to accept connections AND for the required schema to be
+// in place. Both must hold before we report success, since PortOS now
+// fail-fasts at boot when the schema is missing.
 function waitForHealth(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
@@ -138,11 +161,12 @@ function waitForHealth(maxAttempts = 30) {
         stdio: 'pipe',
         cwd: rootDir
       });
-      return true;
+      if (isDockerSchemaReady()) return true;
     } catch {
-      if (i < maxAttempts - 1) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
-      }
+      // not accepting connections yet — fall through to the wait below
+    }
+    if (i < maxAttempts - 1) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
     }
   }
   return false;

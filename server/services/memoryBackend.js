@@ -76,7 +76,7 @@ async function getBackend() {
   // (server/index.js) fails fast on the same condition.
   console.error(`❌ Memory backend unavailable: PostgreSQL is required but ${health.connected ? 'the schema is missing' : `unreachable (${health.error || 'connection failed'})`}`);
   console.error('   PostgreSQL is a mandatory dependency for PortOS. Set it up with: npm run setup:db');
-  console.error('   Dev/test only: set MEMORY_BACKEND=file in .env to use the (unsupported) file backend.');
+  console.error('   Dev/test only: set PGMODE=file in .env (the launcher maps it to MEMORY_BACKEND=file) to use the (unsupported) file backend.');
   throw new Error('PostgreSQL is required for the memory backend — run `npm run setup:db`');
 }
 

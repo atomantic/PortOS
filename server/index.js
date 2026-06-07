@@ -799,7 +799,7 @@ ensureSelf()
       const reason = health.connected ? 'required schema missing' : `unreachable (${health.error || 'connection failed'})`;
       console.error(`❌ PostgreSQL is required but ${reason} — refusing to start.`);
       console.error('   Set up the database with: npm run setup:db');
-      console.error('   Dev/test only: set MEMORY_BACKEND=file in .env to boot without PostgreSQL (unsupported for production).');
+      console.error('   Dev/test only: set PGMODE=file in .env to boot without PostgreSQL (unsupported for production).');
       process.exit(1);
     }
     if (dbEscapeHatch && !dbReady) {
