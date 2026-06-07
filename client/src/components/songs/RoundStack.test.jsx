@@ -5,12 +5,17 @@ import toast from '../ui/Toast';
 
 // Mock the audio mixer — jsdom has no Web Audio. Track every created player so
 // tests can assert which takes were passed and that old players get stopped.
-const playerCalls = vi.hoisted(() => ({ takes: null, players: [], rejectPlay: false }));
+const playerCalls = vi.hoisted(() => ({ takes: null, players: [], rejectPlay: false, deferPlay: false, resolvePlay: null }));
 vi.mock('../../lib/songPlayback', () => ({
   createLayeredPlayer: (takes) => {
     playerCalls.takes = takes;
     const player = {
-      play: vi.fn(() => (playerCalls.rejectPlay ? Promise.reject(new Error('boom')) : Promise.resolve())),
+      play: vi.fn(() => {
+        if (playerCalls.rejectPlay) return Promise.reject(new Error('boom'));
+        // deferPlay simulates a still-decoding mix the test resolves on demand.
+        if (playerCalls.deferPlay) return new Promise((res) => { playerCalls.resolvePlay = res; });
+        return Promise.resolve();
+      }),
       stop: vi.fn(),
       onEnded: vi.fn(),
     };
@@ -49,6 +54,8 @@ describe('RoundStack', () => {
     playerCalls.takes = null;
     playerCalls.players = [];
     playerCalls.rejectPlay = false;
+    playerCalls.deferPlay = false;
+    playerCalls.resolvePlay = null;
     toast.error.mockClear();
   });
 
@@ -101,6 +108,18 @@ describe('RoundStack', () => {
     expect(playerCalls.players).toHaveLength(1);
     // Navigating to a different stack (songs prop changes) must silence the old mix.
     rerender(<MemoryRouter><RoundStack songs={[SONGS[0]]} /></MemoryRouter>);
+    expect(playerCalls.players[0].stop).toHaveBeenCalled();
+  });
+
+  it('does not start the mix if stopped while still decoding', async () => {
+    playerCalls.deferPlay = true; // play() stays pending until the test resolves it
+    renderStack(SONGS);
+    fireEvent.click(screen.getByRole('button', { name: /Play all parts/i }));
+    // User stops before decode finishes — the mixer's own stop() can't cancel a
+    // mid-decode play, so the generation guard must.
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    playerCalls.resolvePlay(); // decode "completes" after the stop
+    await waitFor(() => expect(screen.getByRole('button', { name: /Play all parts/i })).toBeTruthy());
     expect(playerCalls.players[0].stop).toHaveBeenCalled();
   });
 });

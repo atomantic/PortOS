@@ -133,16 +133,18 @@ export default function SongEditor() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Fetch once on mount — the all-songs list resolves partner titles + the
-  // editor pick list and doesn't depend on which song is open, so it must not
-  // re-fetch on every song navigation.
+  // Refresh the all-songs list whenever the open song changes — this component
+  // stays mounted across /songs/:id navigation, so a once-on-mount fetch would
+  // leave partner records (titles, saved takes) stale after editing a partner
+  // and navigating back. The list is small and single-user, so re-fetching on
+  // navigation is cheap and keeps the round stack honest.
   useEffect(() => {
     let cancelled = false;
     listSongs({ silent: true })
       .then((data) => { if (!cancelled) setAllSongs(data?.songs || []); })
       .catch(() => { /* the page degrades to no partner resolution */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [id]);
 
   // Resolve this song's partner ids to records (skip any that no longer exist).
   const partnerSongs = useMemo(() => {

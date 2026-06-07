@@ -27,6 +27,11 @@ const hasText = (v) => typeof v === 'string' && v.trim().length > 0;
 export default function RoundStack({ songs = [] }) {
   const [playing, setPlaying] = useState(false);
   const playerRef = useRef(null);
+  // Bumped on every stop / takes-change / unmount. createLayeredPlayer only
+  // marks itself "playing" AFTER decoding, so a stop() issued mid-decode no-ops
+  // and the awaited play() would start the mix anyway. We capture this token
+  // before awaiting and silence the player if it advanced while we were decoding.
+  const playGenRef = useRef(0);
 
   // Every saved take across all stacked songs, keyed by a song-namespaced id so
   // two songs' recordings can't collide in the mixer's id map.
@@ -41,25 +46,34 @@ export default function RoundStack({ songs = [] }) {
   // — otherwise navigating to another partner (or any songs-prop change) while
   // ?stack=1 is open would leave the previous mix audibly playing under the new
   // stack. Resetting `playing` keeps the button in sync with the silenced mix.
-  useEffect(() => () => { playerRef.current?.stop(); setPlaying(false); }, [takes]);
+  useEffect(() => () => { playGenRef.current += 1; playerRef.current?.stop(); setPlaying(false); }, [takes]);
 
   const stop = useCallback(() => {
+    playGenRef.current += 1; // invalidate any in-flight (still-decoding) play
     playerRef.current?.stop();
     setPlaying(false);
   }, []);
 
   const playAll = useCallback(async () => {
     playerRef.current?.stop();
+    const gen = (playGenRef.current += 1);
     const player = createLayeredPlayer(takes);
     player.onEnded(() => setPlaying(false));
     playerRef.current = player;
     setPlaying(true);
-    // A take URL that 404s or fails to decode rejects play() — without this the
-    // button would stay stuck on "Stop" with no mix running (mirrors SongRecordings).
-    await player.play().catch((err) => {
-      toast.error(err?.message || 'Playback failed');
-      setPlaying(false);
-    });
+    try {
+      await player.play();
+      // Stopped or navigated away while decoding? The player only just marked
+      // itself playable, so stop it now before the scheduled sources sound.
+      if (playGenRef.current !== gen) player.stop();
+    } catch (err) {
+      // A take URL that 404s or fails to decode rejects play() — reset the button
+      // (mirrors SongRecordings) unless a newer action already superseded us.
+      if (playGenRef.current === gen) {
+        toast.error(err?.message || 'Playback failed');
+        setPlaying(false);
+      }
+    }
   }, [takes]);
 
   if (songs.length === 0) return null;
