@@ -564,6 +564,8 @@ export default function SongEditor() {
           <SongRecordings
             recordings={song.recordings || []}
             layers={song.layers || []}
+            tempo={song.tempo ?? null}
+            score={song.score}
             onChange={(recordings) => setField('recordings', recordings)}
           />
 
@@ -812,6 +814,8 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
       <SongRecordings
         recordings={song.recordings || []}
         layers={song.layers || []}
+        tempo={song.tempo ?? null}
+        score={song.score}
         onChange={(recordings) => setField('recordings', recordings)}
       />
     </div>

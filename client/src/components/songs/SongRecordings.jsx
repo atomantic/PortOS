@@ -20,6 +20,7 @@ import { startMemoRecording } from '../../lib/audioRecorder';
 import { createLayeredPlayer } from '../../lib/songPlayback';
 import { uploadFile, getUploadUrl } from '../../services/api';
 import { formatDurationMs } from '../../utils/formatters';
+import Metronome from './Metronome';
 
 // Lower bound peak amplitude — below this the take is effectively silence
 // (dead mic / muted input), worth warning about before it joins the stack.
@@ -32,7 +33,7 @@ const SILENCE_PEAK = 0.01;
 let tempSeq = 0;
 const tempRecordingId = () => `rec-new-${tempSeq++}`;
 
-export default function SongRecordings({ recordings = [], layers = [], onChange }) {
+export default function SongRecordings({ recordings = [], layers = [], onChange, tempo = null, score = '' }) {
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -174,6 +175,11 @@ export default function SongRecordings({ recordings = [], layers = [], onChange 
         Record each part, then “Play layered” to stack them — sing along to build harmony against yourself.
         {recording && <span className="text-port-error"> ● Recording… sing now.</span>}
       </p>
+
+      {/* Tempo reference + count-in — the shared timing grid for recording. */}
+      <div className="mb-3">
+        <Metronome tempo={tempo} score={score} />
+      </div>
 
       {/* Layer the next take targets (optional) */}
       {layers.length > 0 && !recording && (
