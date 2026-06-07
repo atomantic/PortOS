@@ -41,7 +41,9 @@ import SongRecordings from '../components/songs/SongRecordings';
 // instead of loading their embed.js. Returns null for anything that isn't a
 // TikTok video URL — those references render as plain links.
 const tiktokVideoId = (url) => {
-  const m = /tiktok\.com\/(?:@[\w.-]+\/video|v|embed(?:\/v2)?|player\/v1)\/(\d+)/.exec(url || '');
+  // Anchor the host so look-alikes (nottiktok.com, evil.com/#tiktok.com/…)
+  // don't match — tiktok.com must be preceded by start, `//`, or a subdomain dot.
+  const m = /(?:^|\/\/|\.)tiktok\.com\/(?:@[\w.-]+\/video|v|embed(?:\/v2)?|player\/v1)\/(\d+)/.exec(url || '');
   return m ? m[1] : null;
 };
 const tiktokEmbedSrc = (id) => `https://www.tiktok.com/player/v1/${id}`;

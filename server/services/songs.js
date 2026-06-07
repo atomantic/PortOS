@@ -123,7 +123,10 @@ const sanitizeRecording = (r) => {
 const sanitizeReference = (r) => {
   if (!r || typeof r !== 'object') return null;
   const url = trimField(r.url, URL_MAX_LENGTH);
-  if (!url) return null;
+  // Require an http(s) scheme — defense-in-depth so a hand-edited file or a
+  // non-PortOS writer can't persist a javascript:/data: URL that a renderer
+  // might trust (mirrors the client's isHttpUrl guard).
+  if (!/^https?:\/\//i.test(url)) return null;
   return {
     id: trimField(r.id, ID_MAX_LENGTH) || `ref-${randomUUID().slice(0, 8)}`,
     url,
@@ -304,11 +307,18 @@ export async function refreshSongFromTemplate(id) {
     const template = seedTemplate(id);
     if (!template) throw makeErr(`Song ${id} is not a built-in default`, ERR_NOT_BUILTIN);
     const existing = songs[idx];
+    // Resetting layers to the template set can orphan a recording assigned to a
+    // user-added layer the template doesn't define — unassign those so the
+    // mixer doesn't reference a layer that no longer exists (the take still plays).
+    const templateLayerIds = new Set((template.layers || []).map((l) => l.id));
+    const recordings = (existing.recordings || []).map((r) => (
+      r.layerId && !templateLayerIds.has(r.layerId) ? { ...r, layerId: '' } : r
+    ));
     const song = sanitizeSong({
       ...template,
       id,
       learned: existing.learned,
-      recordings: existing.recordings,
+      recordings,
       createdAt: existing.createdAt,
       updatedAt: new Date().toISOString(),
     });

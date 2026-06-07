@@ -146,6 +146,17 @@ describe('songs route', () => {
     expect(mocks.updateSong).not.toHaveBeenCalled();
   });
 
+  it('PUT /:id accepts an empty-url reference (a blank row is dropped server-side, not rejected)', async () => {
+    // The editor seeds new reference rows as { url: '' }; saving must not 400 —
+    // the service drops the blank row. Guards against a future `.min(1)` that
+    // would reject in-progress rows on save.
+    mocks.updateSong.mockResolvedValue({ id: 'song-1' });
+    const res = await request(makeApp()).put('/api/songs/song-1').send({
+      references: [{ url: '' }],
+    });
+    expect(res.status).toBe(200);
+  });
+
   it('POST /:id/refresh-template returns the refreshed built-in song', async () => {
     mocks.refreshSongFromTemplate.mockResolvedValue({ id: 'seed-500-miles', title: '500 Miles', builtIn: true });
     const res = await request(makeApp()).post('/api/songs/seed-500-miles/refresh-template');

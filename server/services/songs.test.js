@@ -213,6 +213,33 @@ describe('songs service', () => {
     expect(refreshed.builtIn).toBe(true);
   });
 
+  it('unassigns a recording whose layer the template lacks when refreshing', async () => {
+    await svc.listSongs();
+    const seedId = [...svc.BUILTIN_SONG_IDS][0];
+    await svc.updateSong(seedId, {
+      layers: [{ id: 'custom-counter', label: 'Counter', part: 'Tenor' }],
+      recordings: [{ filename: 'take.wav', layerId: 'custom-counter' }],
+    });
+    const refreshed = await svc.refreshSongFromTemplate(seedId);
+    // Layers reset to the template set, so the custom layer is gone…
+    expect(refreshed.layers.some((l) => l.id === 'custom-counter')).toBe(false);
+    // …and the take that referenced it is unassigned rather than orphaned.
+    expect(refreshed.recordings).toHaveLength(1);
+    expect(refreshed.recordings[0].layerId).toBe('');
+  });
+
+  it('drops a non-http(s) reference url (defense-in-depth)', () => {
+    const song = svc.sanitizeSong({
+      id: 'x',
+      references: [
+        { url: 'javascript:alert(1)' },        // dangerous scheme → dropped
+        { url: 'https://www.tiktok.com/@u/video/1' },
+      ],
+    });
+    expect(song.references).toHaveLength(1);
+    expect(song.references[0].url).toBe('https://www.tiktok.com/@u/video/1');
+  });
+
   it('refresh throws NOT_BUILTIN for a custom song and NOT_FOUND for a missing one', async () => {
     const custom = await svc.createSong({ title: 'Mine' });
     await expect(svc.refreshSongFromTemplate(custom.id)).rejects.toMatchObject({ code: svc.ERR_NOT_BUILTIN });
