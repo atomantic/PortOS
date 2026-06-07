@@ -126,6 +126,13 @@ export default function SongEditor() {
 
   useEffect(() => {
     let cancelled = false;
+    // Reset to the loading state on every id change — partner links navigate
+    // song→song without unmounting this component, so without this the previous
+    // draft would render under the new id and a Save during the load window would
+    // write the old draft into the new song's record. The loading guard below
+    // hides the editor (and its Save button) until the new song arrives.
+    setLoading(true);
+    setSong(null);
     getSong(id, { silent: true })
       .then((data) => { if (!cancelled) setSong(data?.song || null); })
       .catch((err) => { if (!cancelled) toast.error(err?.message || 'Failed to load song'); })
