@@ -188,6 +188,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `browserConfig.js` | Shared custom browser path helpers for deriving macOS app bundles, detecting configured browser choices, normalizing browser config, and validating Chrome-compatible binary paths. |
 | `db.js` | PostgreSQL connection pool. |
+| `pgTimestamp.js` | `mirrorTimestamp(value, fallback)` — coerce a hand-editable timestamp into a value Postgres TIMESTAMPTZ always accepts (or fall back), guarding boot-time binds against `Date.parse` rollover + out-of-range years. |
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
 | `platform.js` | Platform/OS detection helpers. |
 | `timezone.js` | Timezone utilities for scheduling. |

@@ -61,11 +61,13 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 **Where it lives.** Bytes under `./data/` (`data/images/*`, `data/videos/*`, `data/audio/*`, `data/music/*`, thumbnails). Metadata in DB asset rows keyed by `asset_key` / `media_key`, with integrity metadata (SHA-256 — see `server/lib/assetHash.js`). The DB row references the file; it never embeds the bytes.
 
 **Examples.**
-- Generated images — `data/images/*` bytes + `.metadata.json` sidecars today; **target:** searchable metadata, provenance, favorites, notes move to DB asset rows; bytes stay on disk.
-- Generated videos — `data/videos/*`, `data/video-thumbnails/*` bytes; metadata/history/lineage move to DB.
-- Media collections — many-to-many links over assets/universes/series/catalog media pointers (`db-primary` link tables) pointing at `asset-file-db-indexed` bytes.
+- Generated images — `data/images/*` bytes + `.metadata.json` sidecars; indexed into the `media_assets` table (#1000) keyed `image:<filename>`. Sidecars remain authoritative; the DB row is a derived, queryable mirror. Adapter: `server/services/mediaAssetIndex/`.
+- Generated videos — `data/videos/*`, `data/video-thumbnails/*` bytes, tracked in `data/video-history.json`; indexed into `media_assets` keyed `video:<jobId>`. History file remains authoritative.
+- Media collections — many-to-many links over assets/universes/series/catalog media pointers (`db-primary` link tables) pointing at `asset-file-db-indexed` bytes. **Still `data/media-collections/*` JSON today** — a follow-up slice of #1000.
 
-**Postgres-First target.** Image/video history (`data/history.jsonl`, `data/video-history.json`) is strong for metadata-in-DB; the bytes remain files. Do **not** move generated image/video/audio bytes into PostgreSQL.
+**Media asset index (`media_assets`, #1000).** One row per generated image/video: `media_key` (`<kind>:<ref>`) PK, `kind`/`ref`/`created_at` mirror columns for queries, the full metadata record in `data` JSONB. It is a **derived index** — the on-disk sidecars + `video-history.json` stay authoritative — reconciled from disk at boot (upsert every asset, prune rows whose file is gone) and kept warm by a generation-`completed` hook. Local-only (rebuilt from disk), so no sync cursor/tombstone. Adapter: `server/services/mediaAssetIndex/{logic,db,index}.js`.
+
+**Postgres-First target (remaining).** `data/history.jsonl` (action log) and the durable portions of `data/media-jobs.json` (job history / lineage) are still file-backed — follow-up slices. Do **not** move generated image/video/audio bytes into PostgreSQL.
 
 ---
 

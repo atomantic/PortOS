@@ -15,6 +15,12 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { creativeDirectorTreatmentSchema } from '../../lib/validation.js';
 import { PROJECT_STATUSES } from '../../lib/creativeDirectorPresets.js';
 
+// TIMESTAMPTZ bind-safety helper, shared with the media asset index (#1000) and
+// any other store that mirrors a hand-editable timestamp into a typed column.
+// Re-exported here so the historical `import { mirrorTimestamp } from
+// './projectsLogic.js'` call sites (projectsDB.js, the migration) keep working.
+export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+
 // Without a cap, runs[] grows unbounded and every load/save (≈10 per scene
 // render) parses + serializes a payload whose size scales with cumulative
 // renders — O(N²) wall-clock. In-flight runs are load-bearing for orphan/dedup
@@ -63,36 +69,6 @@ const STATUS_COLUMN_MAX = 32;
 /** Safe value for the `status` mirror column — bounded, never null. */
 export function mirrorStatus(status) {
   return (typeof status === 'string' && status ? status : 'draft').slice(0, STATUS_COLUMN_MAX);
-}
-
-/**
- * Safe ISO timestamp for a TIMESTAMPTZ mirror column, falling back to `fallback`.
- *
- * Returns the NORMALIZED canonical ISO string (`Date#toISOString`), not the raw
- * input — because `Date.parse` accepts out-of-range calendar dates by rolling
- * them over (`2026-02-31` → Mar 3), and echoing that raw string would still
- * make Postgres reject the TIMESTAMPTZ bind and throw. Normalizing guarantees a
- * value PG always accepts. The raw original is still preserved verbatim in the
- * JSONB `data` (callers stringify the full record separately), so this only
- * affects the queryable mirror column.
- *
- * Year-range guard: `toISOString()` emits a plain 4-digit year (`YYYY-…`) only
- * for years 0000–9999, and a SIGNED expanded form (`±YYYYYY-…`) otherwise. We
- * accept ONLY a 4-digit year 0001–9999 — those are all well inside Postgres
- * TIMESTAMPTZ range. Rejected (→ fallback): the signed expanded forms
- * (`-100000-…`, `+275760-…`, which `Date.parse` accepts but PG can't bind) AND
- * year `0000` (Postgres has no Gregorian year zero — AD 1–99 are `0001`–`0099`,
- * so a normalized `0000-…` would still be bind-rejected).
- */
-export function mirrorTimestamp(value, fallback) {
-  if (typeof value === 'string') {
-    const ms = Date.parse(value);
-    if (!Number.isNaN(ms)) {
-      const iso = new Date(ms).toISOString();
-      if (/^\d{4}-/.test(iso) && !iso.startsWith('0000-')) return iso;
-    }
-  }
-  return fallback;
 }
 
 /**
