@@ -729,7 +729,9 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
         <RoundStack songs={[song, ...partnerSongs]} />
       )}
 
-      {/* Sheet music — the rendered staff, full-width so a row of bars fits. */}
+      {/* Sheet music — the rendered staff, full-width so a row of bars fits.
+          Kept at the top with the metronome + recorder so the practice tools
+          (read the chart, set the tempo, record against it) lead the view. */}
       {!showingStack && hasScore && (
         <section className="space-y-2">
           <h2 className="text-sm font-semibold text-white">Sheet music</h2>
@@ -738,6 +740,17 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
           </div>
         </section>
       )}
+
+      {/* Vocal takes — metronome + recording/playback, front-and-centre with the
+          sheet music. Recording stays available in read mode (it mutates the
+          draft; the header Save persists it). */}
+      <SongRecordings
+        recordings={song.recordings || []}
+        layers={song.layers || []}
+        tempo={song.tempo ?? null}
+        score={song.score}
+        onChange={(recordings) => setField('recordings', recordings)}
+      />
 
       {!showingStack && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -809,15 +822,6 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
           </div>
         </section>
       )}
-
-      {/* Vocal takes — recording/playback stays available in read mode. */}
-      <SongRecordings
-        recordings={song.recordings || []}
-        layers={song.layers || []}
-        tempo={song.tempo ?? null}
-        score={song.score}
-        onChange={(recordings) => setField('recordings', recordings)}
-      />
     </div>
   );
 }
