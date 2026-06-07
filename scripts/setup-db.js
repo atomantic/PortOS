@@ -334,8 +334,17 @@ if (!hasCompose()) {
 }
 
 if (isContainerRunning()) {
-  console.log('✅ PostgreSQL already running');
-  process.exit(0);
+  // "running" is the container state, not DB readiness — Postgres inside it may
+  // still be initializing. Now that PG is mandatory and boot fail-fasts, confirm
+  // it actually accepts connections before reporting success, or `npm start`
+  // proceeds into PM2 against a not-yet-ready DB and crash-loops.
+  if (waitForHealth()) {
+    console.log('✅ PostgreSQL already running');
+    process.exit(0);
+  }
+  console.error('❌ PostgreSQL container is running but not accepting connections');
+  console.error('   Check status: docker compose logs db');
+  process.exit(1);
 }
 
 // Start the container
@@ -357,6 +366,10 @@ console.log('⏳ Waiting for PostgreSQL to be ready...');
 if (waitForHealth()) {
   console.log('✅ PostgreSQL ready on port 5561');
 } else {
-  console.warn('⚠️  PostgreSQL started but not responding yet — it may still be initializing');
-  console.log('   Check status: docker compose logs db');
+  // PG is mandatory and boot fail-fasts — a started-but-unresponsive container
+  // must fail setup, not warn-and-continue, so the &&-chained `npm start` halts
+  // here instead of crash-looping under PM2 against an unready DB.
+  console.error('❌ PostgreSQL started but never became ready');
+  console.error('   Check status: docker compose logs db');
+  process.exit(1);
 }
