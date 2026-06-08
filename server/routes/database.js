@@ -5,6 +5,7 @@ import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { resolvePgDumpBinary } from '../lib/pgTools.js';
 
 const rootDir = PATHS.root;
 const dbScript = join(rootDir, 'scripts', 'db.sh');
@@ -289,6 +290,23 @@ const pgEnv = (port) => ({
   PGDATABASE: pgDb
 });
 
+/**
+ * Read a specific backend's PostgreSQL major version by probing it on its own
+ * port (native 5432 / Docker 5561 can run different majors, so the connection
+ * pool's version isn't authoritative for the export target). `server_version_num`
+ * is an integer like 170010 → major = floor(n / 10000). Returns null when the
+ * probe fails — the shared resolver then falls back to bare `pg_dump`.
+ */
+async function probeServerMajor(port, env) {
+  const result = await runCmd('psql', [
+    '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
+    '-tAc', 'SHOW server_version_num'
+  ], 5_000, env);
+  const num = parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num / 10000);
+}
+
 // POST /api/database/sync — copy data from active to non-active backend
 // Since native (5432) and Docker (5561) use different ports, both can be
 // running simultaneously. No need to stop the active backend.
@@ -468,8 +486,16 @@ router.post('/export', asyncHandler(async (req, res) => {
     const dumpDir = join(rootDir, 'data', 'db-dumps');
     await runCmd('mkdir', ['-p', dumpDir], 5_000);
     const dumpFile = join(dumpDir, `portos-${backend}-${label}.sql`);
-    // Use -f flag to write output directly — no shell redirect needed, avoids shell injection
-    const pgDumpBin = pg17Bin ? `${pg17Bin}/pg_dump` : 'pg_dump';
+    // Use -f flag to write output directly — no shell redirect needed, avoids shell injection.
+    // Resolve a pg_dump whose major is >= the TARGET backend's server (probed
+    // against this port, not the pool's 5432) via the shared resolver, which
+    // also honors PORTOS_PGDUMP. Falls back to bare `pg_dump` when the probe
+    // can't determine the version. (Shared with backup.js — server/lib/pgTools.js.)
+    const targetMajor = await probeServerMajor(port, env);
+    const { binary: pgDumpBin, satisfies } = await resolvePgDumpBinary(targetMajor);
+    if (!satisfies) {
+      console.warn(`🗄️ No installed pg_dump satisfies ${backend} server major ${targetMajor} (using ${pgDumpBin})`);
+    }
     const result = await runCmd(pgDumpBin, [
       '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
       '--no-owner', '--no-privileges', '--if-exists', '--clean', '-f', dumpFile
