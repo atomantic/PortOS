@@ -1,49 +1,27 @@
 /**
- * Writers Room — file-backed storage for folders, works, drafts, and exercises.
+ * Writers Room — storage orchestration for folders, works, drafts, and exercises.
  *
- * Layout under data/writers-room/:
- *   folders.json
- *   exercises.json
- *   works/<workId>/manifest.json
+ * Metadata (folders, work manifests, decomposed draft versions, exercises) is
+ * persisted via the storage dispatcher (./store.js): PostgreSQL on a normal
+ * install (#1017), or the legacy on-disk JSON layout under data/writers-room/
+ * on the dev/test file escape hatch. The draft PROSE BODIES always stay on disk
+ * as .md files (file-primary) regardless of backend — this module owns those:
  *   works/<workId>/drafts/<draftVersionId>.md
  *
- * Manifest holds work metadata + the active draft's metadata + the version
- * history; draft bodies live as .md files so long prose stays out of the JSON.
- *
- * This module is the only writer for data/writers-room/. See
- * docs/features/writers-room.md for the full data model.
+ * A work manifest holds work metadata + the active-draft pointer + the version
+ * history (drafts[]); store.js decomposes drafts[] into draft-version rows on
+ * the PG backend and reassembles them on read, so this module's public API and
+ * the manifest shape are unchanged. See docs/features/writers-room.md.
  */
 
-import { join } from 'path';
 import { randomUUID, createHash } from 'crypto';
-import { readFile, rm, readdir } from 'fs/promises';
-import { PATHS, atomicWrite, ensureDir, readJSONFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { ServerError } from '../../lib/errorHandler.js';
+import { readFile, rm } from 'fs/promises';
+import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
-import { nowIso, badRequest, notFound, WORK_ID_RE, assertValidWorkId } from './_shared.js';
+import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
+import { writersRoomStore } from './store.js';
 
-// Paths are resolved lazily so tests can swap PATHS.data via vi.mock without
-// the module-load snapshot freezing them at import time.
-const root = () => join(PATHS.data, 'writers-room');
-const foldersFile = () => join(root(), 'folders.json');
-const exercisesFile = () => join(root(), 'exercises.json');
-const worksDir = () => join(root(), 'works');
-
-const DRAFT_ID_RE = /^wr-draft-[0-9a-f-]+$/i;
-
-function workDir(workId) {
-  assertValidWorkId(workId);
-  return join(worksDir(), workId);
-}
-
-function draftPath(workId, draftId) {
-  if (!DRAFT_ID_RE.test(draftId)) throw badRequest('Invalid draft id');
-  return join(workDir(workId), 'drafts', `${draftId}.md`);
-}
-
-function manifestPath(workId) {
-  return join(workDir(workId), 'manifest.json');
-}
+const store = () => writersRoomStore();
 
 // ---------- text analysis ----------
 
@@ -111,24 +89,13 @@ export function buildSegmentIndex(text) {
 
 // ---------- folder CRUD ----------
 
-async function loadFolders() {
-  await ensureDir(root());
-  const raw = await readJSONFile(foldersFile(), []);
-  return Array.isArray(raw) ? raw : [];
-}
-
-async function saveFolders(folders) {
-  await ensureDir(root());
-  await atomicWrite(foldersFile(), folders);
-}
-
 export async function listFolders() {
-  return loadFolders();
+  return store().listFolders();
 }
 
 export async function createFolder({ name, parentId = null, sortOrder = 0 }) {
   if (!name || !name.trim()) throw badRequest('Folder name required');
-  const folders = await loadFolders();
+  const folders = await store().listFolders();
   if (parentId && !folders.find((f) => f.id === parentId)) throw notFound('Parent folder');
   const folder = {
     id: `wr-folder-${randomUUID()}`,
@@ -138,13 +105,12 @@ export async function createFolder({ name, parentId = null, sortOrder = 0 }) {
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
-  folders.push(folder);
-  await saveFolders(folders);
+  await store().writeFolder(folder);
   return folder;
 }
 
 export async function deleteFolder(id) {
-  const folders = await loadFolders();
+  const folders = await store().listFolders();
   if (!folders.find((f) => f.id === id)) throw notFound('Folder');
   const works = await listWorks();
   if (works.some((w) => w.folderId === id)) {
@@ -153,41 +119,26 @@ export async function deleteFolder(id) {
   if (folders.some((f) => f.parentId === id)) {
     throw badRequest('Folder has subfolders — delete or reparent them first');
   }
-  await saveFolders(folders.filter((f) => f.id !== id));
+  await store().deleteFolder(id);
   return { ok: true };
 }
 
 // ---------- work CRUD ----------
 
+// Manifest read/write go through the storage dispatcher (PG metadata, or the
+// legacy on-disk JSON on the file escape hatch). The drafts dir is ensured on
+// every save because the draft .md bodies are written there independently (the
+// file backend also persists manifest.json into the work dir, and ensureDir is
+// idempotent + cheap).
 async function loadManifest(workId) {
-  const path = manifestPath(workId);
-  const content = await readFile(path, 'utf-8').catch((err) => {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  });
-  if (content === null) return null;
-  // Surface corrupted manifests as a deterministic 500 with a clear code so
-  // listWorks can drop the work without masking the underlying issue, and
-  // direct callers (getWork) get an actionable error instead of a raw
-  // SyntaxError bubbling out of JSON.parse.
-  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
-  if (parsed === null) {
-    // Log the absolute path server-side for debugging, but keep it OUT of
-    // the ServerError — errorHandler ships both message AND context to the
-    // client response body, so anything in context leaks to the UI.
-    console.warn(`⚠️ wr: corrupted manifest at ${path} (work ${workId})`);
-    throw new ServerError(`Corrupted writers-room manifest for ${workId}`, {
-      status: 500,
-      code: 'CORRUPTED_MANIFEST',
-      context: { workId },
-    });
-  }
-  return parsed;
+  // Validate the work id (path-traversal guard) before it reaches the backend.
+  wrWorkDir(workId);
+  return store().readWork(workId);
 }
 
 async function saveManifest(workId, manifest) {
-  await ensureDir(join(workDir(workId), 'drafts'));
-  await atomicWrite(manifestPath(workId), manifest);
+  await ensureDir(`${wrWorkDir(workId)}/drafts`);
+  await store().writeWork(manifest);
 }
 
 // Lazy-import to break a circular dep (mediaCollections doesn't import us, but
@@ -212,26 +163,11 @@ export async function ensureWorkMediaCollection(workId) {
   return collection;
 }
 
-async function listWorkIds() {
-  await ensureDir(worksDir());
-  const entries = await readdir(worksDir(), { withFileTypes: true });
-  return entries.filter((e) => e.isDirectory() && WORK_ID_RE.test(e.name)).map((e) => e.name);
-}
-
 export async function listWorks() {
-  const ids = await listWorkIds();
-  // Tolerate KNOWN failure modes per work (corrupted JSON, missing file) so
-  // one bad work doesn't 500 the whole library. Re-throw anything else
-  // (permission errors, EIO, programming bugs) — silently swallowing those
-  // would mask real outages. ENOENT bubbles as null from loadManifest itself,
-  // not as a thrown error, so we only need to special-case CORRUPTED_MANIFEST.
-  const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch((err) => {
-    if (err?.code === 'CORRUPTED_MANIFEST') {
-      console.warn(`⚠️ wr: dropped work ${id} from listing — corrupted manifest`);
-      return null;
-    }
-    throw err;
-  })));
+  // The store returns full manifests (rebuilt with drafts[] on the PG backend),
+  // dropping any work with a corrupted manifest on the file backend so one bad
+  // work doesn't 500 the whole library.
+  const manifests = await store().listWorks();
   return manifests
     .filter(Boolean)
     .map((manifest) => {
@@ -261,7 +197,7 @@ export async function getWork(id) {
 }
 
 async function readDraftFile(workId, draftId) {
-  return readFile(draftPath(workId, draftId), 'utf-8').catch((err) => {
+  return readFile(wrDraftPath(workId, draftId), 'utf-8').catch((err) => {
     if (err.code === 'ENOENT') return '';
     throw err;
   });
@@ -278,14 +214,14 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
   if (!title || !title.trim()) throw badRequest('Work title required');
   if (!WORK_KINDS.includes(kind)) throw badRequest(`Invalid kind: ${kind}`);
   if (folderId) {
-    const folders = await loadFolders();
+    const folders = await store().listFolders();
     if (!folders.find((f) => f.id === folderId)) throw notFound('Folder');
   }
   const id = `wr-work-${randomUUID()}`;
   const draftId = `wr-draft-${randomUUID()}`;
   const now = nowIso();
-  await ensureDir(join(workDir(id), 'drafts'));
-  await atomicWrite(draftPath(id, draftId), '');
+  await ensureDir(`${wrWorkDir(id)}/drafts`);
+  await atomicWrite(wrDraftPath(id, draftId), '');
   const manifest = {
     id,
     folderId,
@@ -383,7 +319,7 @@ export async function updateWork(id, patch) {
   // folderId can be set to a real folder id or to null (unfile the work).
   // Anything else would orphan it from the library tree.
   if (patch.folderId !== undefined && patch.folderId !== null) {
-    const folders = await loadFolders();
+    const folders = await store().listFolders();
     if (!folders.find((f) => f.id === patch.folderId)) throw notFound('Folder');
   }
   await saveManifest(id, next);
@@ -482,7 +418,11 @@ export async function deleteWork(id) {
     }
     throw err;
   });
-  await rm(workDir(id), { recursive: true, force: true });
+  // Drop the metadata rows (no-op on the file backend, where the manifest lives
+  // in the work dir the rm below removes) AND rm the on-disk dir holding the
+  // file-primary draft .md bodies.
+  await store().deleteWork(id);
+  await rm(wrWorkDir(id), { recursive: true, force: true });
   return { ok: true };
 }
 
@@ -502,7 +442,7 @@ export async function saveDraftBody(workId, body, { referencedIngredientIds } = 
   const activeId = manifest.activeDraftVersionId;
   if (!activeId) throw badRequest('Work has no active draft');
   const text = String(body ?? '');
-  await atomicWrite(draftPath(workId, activeId), text);
+  await atomicWrite(wrDraftPath(workId, activeId), text);
   const draftIdx = manifest.drafts.findIndex((d) => d.id === activeId);
   if (draftIdx < 0) throw notFound('Active draft');
   const meta = buildDraftMeta(text, manifest.drafts[draftIdx]);
@@ -526,7 +466,7 @@ export async function snapshotDraft(workId, { label } = {}) {
   const fromId = manifest.activeDraftVersionId;
   const fromDraft = manifest.drafts.find((d) => d.id === fromId);
   const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
-  await atomicWrite(draftPath(workId, newDraftId), body);
+  await atomicWrite(wrDraftPath(workId, newDraftId), body);
   // The new draft copies the source's body verbatim, so carry its referenced
   // ingredient ids forward — otherwise the freshly-snapshotted version would
   // render no chips (despite identical prose) until the next save re-scans.
@@ -564,19 +504,8 @@ export async function getDraftBody(workId, draftId) {
 
 // ---------- exercise sessions ----------
 
-async function loadExercises() {
-  await ensureDir(root());
-  const raw = await readJSONFile(exercisesFile(), []);
-  return Array.isArray(raw) ? raw : [];
-}
-
-async function saveExercises(exercises) {
-  await ensureDir(root());
-  await atomicWrite(exercisesFile(), exercises);
-}
-
 export async function listExercises({ workId } = {}) {
-  const all = await loadExercises();
+  const all = await store().listExercises();
   const filtered = workId ? all.filter((e) => e.workId === workId) : all;
   return filtered.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
 }
@@ -600,42 +529,39 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
     startedAt: nowIso(),
     finishedAt: null,
   };
-  const all = await loadExercises();
-  all.push(exercise);
-  await saveExercises(all);
+  await store().writeExercise(exercise);
   return exercise;
 }
 
 export async function finishExercise(id, { endingWords, appendedText = null } = {}) {
-  const all = await loadExercises();
-  const idx = all.findIndex((e) => e.id === id);
-  if (idx < 0) throw notFound('Exercise');
-  if (settled(all[idx])) throw badRequest('Exercise is already settled');
+  const all = await store().listExercises();
+  const existing = all.find((e) => e.id === id);
+  if (!existing) throw notFound('Exercise');
+  if (settled(existing)) throw badRequest('Exercise is already settled');
   // Default missing endingWords to startingWords so wordsAdded never goes
   // negative when the caller forgets to send it; clamp the delta as a final
   // backstop for the case where the user backspaces past their starting count.
-  const startingWords = all[idx].startingWords || 0;
+  const startingWords = existing.startingWords || 0;
   const resolvedEnding = endingWords ?? startingWords;
   const wordsAdded = Math.max(0, resolvedEnding - startingWords);
   const finished = {
-    ...all[idx],
+    ...existing,
     endingWords: resolvedEnding,
     wordsAdded,
     appendedText: appendedText ?? null,
     status: 'finished',
     finishedAt: nowIso(),
   };
-  all[idx] = finished;
-  await saveExercises(all);
+  await store().writeExercise(finished);
   return finished;
 }
 
 export async function discardExercise(id) {
-  const all = await loadExercises();
-  const idx = all.findIndex((e) => e.id === id);
-  if (idx < 0) throw notFound('Exercise');
-  if (settled(all[idx])) throw badRequest('Exercise is already settled');
-  all[idx] = { ...all[idx], status: 'discarded', finishedAt: nowIso() };
-  await saveExercises(all);
-  return all[idx];
+  const all = await store().listExercises();
+  const existing = all.find((e) => e.id === id);
+  if (!existing) throw notFound('Exercise');
+  if (settled(existing)) throw badRequest('Exercise is already settled');
+  const discarded = { ...existing, status: 'discarded', finishedAt: nowIso() };
+  await store().writeExercise(discarded);
+  return discarded;
 }

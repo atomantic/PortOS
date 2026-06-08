@@ -762,3 +762,66 @@ CREATE TABLE IF NOT EXISTS story_builder_sessions (
 CREATE INDEX IF NOT EXISTS idx_stb_universe ON story_builder_sessions (universe_id);
 CREATE INDEX IF NOT EXISTS idx_stb_series ON story_builder_sessions (series_id);
 CREATE INDEX IF NOT EXISTS idx_stb_updated ON story_builder_sessions (updated_at);
+
+-- Writers Room (Phase 3 Create migration, issue #1017). FOUR tables replace the
+-- bespoke file layout (folders.json, exercises.json, per-work manifest.json).
+-- Writers Room is NOT federated (no dataSync category, no schema-version gate),
+-- so unlike the universe/pipeline/story-builder tables these carry NO
+-- `ephemeral`/`sync`/sync_sequence columns. The only thing that stays on disk is
+-- the draft prose body (drafts/<draftId>.md, file-primary); its metadata is the
+-- draft_versions row.
+-- Mirrors the writers_room_* blocks in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS writers_room_folders (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wr_folders_parent ON writers_room_folders (parent_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS writers_room_works (
+  id TEXT PRIMARY KEY,
+  folder_id TEXT,
+  title TEXT NOT NULL,
+  kind VARCHAR(32),
+  status VARCHAR(32),
+  active_draft_version_id TEXT,
+  pipeline_series_id TEXT,
+  pipeline_issue_id TEXT,
+  cd_project_id TEXT,
+  media_collection_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_wr_works_folder ON writers_room_works (folder_id) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_wr_works_series ON writers_room_works (pipeline_series_id) WHERE pipeline_series_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS writers_room_draft_versions (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  label TEXT,
+  content_file TEXT NOT NULL,
+  content_hash TEXT,
+  word_count INTEGER DEFAULT 0,
+  segment_index JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_from_version_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wr_drafts_work ON writers_room_draft_versions (work_id, created_at);
+
+CREATE TABLE IF NOT EXISTS writers_room_exercises (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  status VARCHAR(16),
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_wr_exercises_work ON writers_room_exercises (work_id, started_at DESC);

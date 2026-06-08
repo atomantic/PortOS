@@ -163,6 +163,7 @@ import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
+import { writersRoomStore } from './services/writersRoom/store.js';
 import { mediaCollectionStore } from './services/mediaCollections.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -864,6 +865,12 @@ ensureSelf()
       // request/sync sees migrated sessions. Universe + series warmed first
       // (sessions soft-ref both for the staleness recompute / linked-record view).
       await storyBuilderStore().listIds();
+      // Writers Room PG warm (#1017): same contract — touch the store so it
+      // selects Postgres and runs its one-time file→DB import
+      // (migrateWritersRoomToDB) BEFORE httpServer.listen. listWorkIds() is the
+      // cheapest call that forces backend selection. The draft .md bodies stay on
+      // disk (file-primary); only the metadata migrates. Idempotent (marker-gated).
+      await writersRoomStore().listWorkIds();
       // Authoritative catalog user-type warm (#1001): with the DB confirmed +
       // schema ensured, load the registry from the catalog_user_types store
       // (running the one-time settings→DB import on first access). This runs
