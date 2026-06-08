@@ -94,6 +94,9 @@ export function arrayBufferToBase64(buffer) {
  */
 export function createStreamAnalyser(stream, { fftSize = 2048 } = {}) {
   const context = new (window.AudioContext || window.webkitAudioContext)();
+  // A context created outside a user gesture (e.g. in a render-driven effect)
+  // can start `suspended`; resume so frame reads aren't browser-dependent.
+  if (context.state === 'suspended') context.resume().catch(() => {});
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
   analyser.fftSize = fftSize;

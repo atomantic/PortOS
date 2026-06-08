@@ -71,6 +71,22 @@ describe('PitchTuner', () => {
     expect(analyserClose).toHaveBeenCalled();
   });
 
+  it('releases the standalone mic and switches when a recording stream arrives', async () => {
+    const ownTracks = [{ stop: vi.fn() }];
+    global.navigator.mediaDevices = { getUserMedia: vi.fn(() => Promise.resolve({ getTracks: () => ownTracks })) };
+
+    const { rerender } = render(<PitchTuner />); // standalone
+    fireEvent.click(screen.getByText('Tune'));
+    await waitFor(() => expect(createStreamAnalyser).toHaveBeenCalledTimes(1));
+
+    const recStream = fakeStream();
+    rerender(<PitchTuner stream={recStream} />); // a take starts recording
+    // The self-opened mic is released and the tuner re-attaches to the take's stream.
+    expect(ownTracks[0].stop).toHaveBeenCalled();
+    expect(createStreamAnalyser).toHaveBeenLastCalledWith(recStream);
+    expect(screen.queryByText('Tune')).toBeNull();
+  });
+
   it('standalone mode opens its own mic on Tune and closes it on Stop', async () => {
     const ownTracks = [{ stop: vi.fn() }];
     const getUserMedia = vi.fn(() => Promise.resolve({ getTracks: () => ownTracks }));

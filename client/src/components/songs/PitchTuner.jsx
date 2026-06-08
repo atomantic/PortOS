@@ -103,7 +103,11 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
       teardownTracker();
     }
     return () => { if (stream) teardownTracker(); };
-    // standaloneOn intentionally omitted: toggling it is handled in its own paths.
+    // standaloneOn intentionally omitted. `attach`/`teardownTracker` are
+    // referentially stable (their deps bottom out at the empty-dep
+    // teardownTracker and the constant a4), so the only live trigger here is
+    // `stream` changing — and every branch reads the current standaloneOn. The
+    // standalone start/stop paths own their own attach/teardown directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream, attach, teardownTracker]);
 
