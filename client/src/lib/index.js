@@ -59,6 +59,7 @@ export * from './metronome.js';
 export * from './pitchDetect.js';
 export * from './scoreNotation.js';
 export * from './scorePlayback.js';
+export * from './singToScore.js';
 export * from './songCraft.js';
 export * from './songPlayback.js';
 export * from './universeBuilderExpand.js';
