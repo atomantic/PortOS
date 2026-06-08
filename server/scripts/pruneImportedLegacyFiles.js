@@ -8,9 +8,11 @@
  * `index.json.imported` / `manifest.imported.json` — and the split migrations
  * (034–036) left `…​.bak-NNN` copies, "a recovery source for at least one
  * release." Nothing ever removed them, so on a long-lived install they linger in
- * `./data` indefinitely (multiple MB) and ride along into every rsync snapshot
- * even though the authoritative copy is now in Postgres + the pg_dump. This
- * removes them once the DB is provably authoritative.
+ * `./data` indefinitely (multiple MB). This removes them once the DB is provably
+ * authoritative. (They are deliberately NOT excluded from rsync backups: while a
+ * prune is blocked they are the only recovery source, so a snapshot must keep
+ * them — see the NOTE in server/services/backup.js. Once pruned from disk they
+ * leave subsequent snapshots naturally.)
  *
  * WHY THIS RUNS AT BOOT (not in scripts/migrations/): the prune reads Postgres
  * row counts, but the `scripts/migrations/` runner executes BEFORE the DB pool
@@ -63,7 +65,14 @@ const DB_DOMAINS = [
   {
     label: 'universes',
     markerFile: 'universes.migrated.json',
-    guards: [{ table: 'universes', expected: (m) => num(m?.imported) }],
+    // universes.imported / .bak-034 hold BOTH the universe rows AND the
+    // cross-record config.runs[] log that migrateUniversesToDB decomposes into
+    // universe_runs (recorded as marker.runs). Guard both, so a restore that
+    // kept universes but lost the run history withholds the prune.
+    guards: [
+      { table: 'universes', expected: (m) => num(m?.imported) },
+      { table: 'universe_runs', expected: (m) => num(m?.runs) },
+    ],
     artifacts: ['universes.imported', 'universe-builder.json.bak-034'],
   },
   {
@@ -103,6 +112,17 @@ const DB_DOMAINS = [
       { table: 'writers_room_works', expected: (m) => num(m?.works) },
       { table: 'writers_room_exercises', expected: (m) => num(m?.exercises) },
     ],
+    // The per-work manifest.imported.json files carry the `drafts[]` metadata
+    // that migrateWritersRoomToDB decomposes into writers_room_draft_versions
+    // rows (the marker records no draft-version count, so it can't be a normal
+    // marker guard). Before deleting the manifests, count the drafts they hold
+    // and require at least that many version rows — else a restore that kept
+    // works but lost draft-version rows would delete the only recovery source
+    // for that version metadata. The .md bodies stay on disk regardless.
+    manifestDraftGuard: {
+      table: 'writers_room_draft_versions',
+      manifestGlob: { baseDir: 'writers-room/works', leaf: 'manifest.imported.json' },
+    },
     artifacts: ['writers-room/folders.imported.json', 'writers-room/exercises.imported.json'],
     nestedGlobs: [{ baseDir: 'writers-room/works', leaf: 'manifest.imported.json' }],
   },
@@ -169,6 +189,21 @@ async function removeByPrefix(base, prefix) {
   return removed;
 }
 
+// Sum the `drafts[]` lengths across every `<baseDir>/<sub>/<leaf>` manifest —
+// the number of draft-version rows those manifests were decomposed into. Used
+// to verify writers_room_draft_versions wasn't lost before deleting the
+// manifests (the only on-disk recovery source for that version metadata).
+async function countManifestDrafts(base, baseDir, leaf) {
+  const entries = await readdir(join(base, baseDir), { withFileTypes: true }).catch(() => []);
+  let drafts = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const manifest = await readJsonMarker(base, join(baseDir, entry.name, leaf));
+    if (Array.isArray(manifest?.drafts)) drafts += manifest.drafts.length;
+  }
+  return drafts;
+}
+
 /**
  * @param {object} [opts]
  * @param {boolean} [opts.force] - re-run even if the marker is current (tests/admin).
@@ -205,6 +240,19 @@ export async function pruneImportedLegacyFiles({ force = false, db, dataDir } = 
         console.warn(`🧹 legacy-prune: ${domain.label} blocked — ${guard.table} has ${count} row(s) but marker recorded ${expected}; keeping recovery files`);
         blocked = true;
         break;
+      }
+    }
+    // Manifest-derived guard (writers-room draft versions): the expected count
+    // comes from the parked manifests on disk, not the marker. Only checked when
+    // not already blocked by a table guard.
+    if (!blocked && domain.manifestDraftGuard) {
+      const g = domain.manifestDraftGuard;
+      const expected = await countManifestDrafts(base, g.manifestGlob.baseDir, g.manifestGlob.leaf);
+      const { rows } = await query(`SELECT COUNT(*)::int AS n FROM ${g.table}`);
+      const count = num(rows?.[0]?.n);
+      if (count < expected) {
+        console.warn(`🧹 legacy-prune: ${domain.label} blocked — ${g.table} has ${count} row(s) but parked manifests hold ${expected} draft(s); keeping recovery files`);
+        blocked = true;
       }
     }
     if (blocked) {

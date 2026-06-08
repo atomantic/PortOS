@@ -45,23 +45,17 @@ export const DEFAULT_EXCLUDES = [
   { path: '/loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
   { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
-  { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true },
-  // Legacy file→Postgres migration artifacts. Each migrator parks its source
-  // aside (`.imported` / `.bak-NNN`) as a one-release recovery copy rather than
-  // deleting it; the boot-time prune in pruneImportedLegacyFiles.js removes them
-  // once the DB row is authoritative. These excludes stop rsync from copying the
-  // now-redundant data to the backup target in the meantime (the authoritative
-  // copy ships in the pg_dump). Non-overridable: this is migrated state Postgres
-  // already owns, never irreplaceable user data. All anchored per the rule above;
-  // the two nested patterns target the only sub-dir artifacts (pipeline-series
-  // per-record index, writers-room per-work manifest) without catching the live
-  // `.md` bodies that must stay backed up.
-  { path: '/*.imported', reason: 'Legacy file→DB migration sources (universes/pipeline-issues/story-builder dirs, creative-director-projects.json) — data now in Postgres', overridable: false },
-  { path: '/*.migrated.json', reason: 'Per-domain file→DB migration markers — runtime state, redundant in a snapshot', overridable: false },
-  { path: '/*.bak-*', reason: 'Split-migration backups (.bak-034…059) — superseded by per-record stores / Postgres', overridable: false },
-  { path: '/pipeline-series/*/index.json.imported', reason: 'Per-series legacy index parked by the series→DB migration — data now in Postgres', overridable: false },
-  { path: '/writers-room/*.imported.json', reason: 'Writers Room folders/exercises metadata parked by the writers-room→DB migration — data now in Postgres', overridable: false },
-  { path: '/writers-room/works/*/manifest.imported.json', reason: 'Per-work manifest parked by the writers-room→DB migration — data now in Postgres (the .md bodies stay backed up)', overridable: false }
+  { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
+  // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)
+  // are intentionally NOT excluded here. They are deleted on disk by the
+  // boot-time prune (pruneImportedLegacyFiles.js) the same boot the migration
+  // runs — but ONLY once the DB is provably authoritative. While the prune is
+  // *blocked* (a wiped/partial-restore DB short of the migration markers) those
+  // parked files are the only recovery source, and `pg_dump` is capturing the
+  // incomplete DB — so excluding them from snapshots would mean a backup taken
+  // in that window restores neither the missing rows nor the source to rebuild
+  // them. Letting rsync copy them is the safe default; once the prune removes
+  // them from disk they leave subsequent snapshots naturally.
 ];
 
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared

@@ -154,34 +154,16 @@ describe('computeEffectiveExcludes', () => {
     expect(result).toEqual(DEFAULT_EXCLUDES.map(e => e.path));
   });
 
-  it('excludes legacy file→DB migration artifacts as non-overridable', () => {
-    // These are migrated state Postgres already owns — never irreplaceable user
-    // data — so they must always be excluded (can't be re-enabled from the UI)
-    // and they ride along with the dynamic includes-everything assertion above.
-    const legacy = [
-      '/*.imported',
-      '/*.migrated.json',
-      '/*.bak-*',
-      '/pipeline-series/*/index.json.imported',
-      '/writers-room/*.imported.json',
-      '/writers-room/works/*/manifest.imported.json',
-    ];
-    for (const path of legacy) {
-      const entry = DEFAULT_EXCLUDES.find(e => e.path === path);
-      expect(entry, `expected DEFAULT_EXCLUDES to contain ${path}`).toBeDefined();
-      expect(entry.overridable, `${path} must be non-overridable`).toBe(false);
-      // Even when a hand-edited settings.json tries to disable it, it stays.
-      const result = computeEffectiveExcludes({ excludePaths: [], disabledDefaultExcludes: [path] });
-      expect(result).toContain(path);
+  it('does NOT exclude legacy file→DB migration artifacts (they are the recovery source while a prune is blocked)', () => {
+    // The boot-time prune deletes these on disk once the DB is authoritative;
+    // excluding them from snapshots would strip the only recovery source during
+    // a blocked (wiped/partial-restore) prune, while pg_dump captures the
+    // incomplete DB. So none of these patterns may appear in the default set.
+    const mustNotExclude = ['/*.imported', '/*.bak-034', '/*.migrated.json', '/writers-room/works/*/manifest.imported.json'];
+    const paths = DEFAULT_EXCLUDES.map(e => e.path);
+    for (const p of mustNotExclude) {
+      expect(paths, `${p} must NOT be a default exclude`).not.toContain(p);
     }
-  });
-
-  it('keeps the writers-room .md draft bodies backed up (not caught by the artifact excludes)', () => {
-    // Regression guard: the writers-room artifact patterns target `*.imported.json`
-    // metadata only — a draft body path must NOT match any default exclude.
-    const draftBody = '/writers-room/works/work-123/drafts/draft-1.md';
-    const result = computeEffectiveExcludes({ excludePaths: [], disabledDefaultExcludes: [] });
-    expect(result).not.toContain(draftBody);
   });
 });
 
