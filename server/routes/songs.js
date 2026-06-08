@@ -58,7 +58,7 @@ const accuracySchema = z.object({
     close: z.number().optional(),
     off: z.number().optional(),
     missed: z.number().optional(),
-  }).partial().optional(),
+  }).optional(),
   perNote: z.array(z.string()).max(svc.PER_NOTE_GRADES_MAX).optional(),
 });
 
