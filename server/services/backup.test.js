@@ -48,7 +48,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { getBackendName } from './memoryBackend.js';
 import * as fs from 'fs/promises';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, pickPgDump } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, pickPgDump, listSnapshots } from './backup.js';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
@@ -185,6 +185,37 @@ describe('pickPgDump', () => {
   it('trusts the first (PATH) candidate when the server version is unknown', () => {
     expect(pickPgDump(null, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
     expect(pickPgDump(NaN, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
+  });
+});
+
+describe('listSnapshots', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const dirent = (name, isDir) => ({ name, isDirectory: () => isDir });
+
+  it('skips non-directory entries like .DS_Store (iCloud/Finder droppings)', async () => {
+    // The backup target is commonly an iCloud folder; macOS drops a `.DS_Store`
+    // FILE into every dir. It must not be treated as a snapshot id (reading
+    // `<.DS_Store>/manifest.json` would throw ENOTDIR).
+    vi.spyOn(fs, 'readdir').mockResolvedValue([
+      dirent('.DS_Store', false),
+      dirent('2026-06-08T15-18-34', true),
+      dirent('2026-06-07T09-00-00', true),
+    ]);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
+      if (String(p).includes('.DS_Store')) throw new Error('ENOTDIR — .DS_Store should never be read');
+      return JSON.stringify({ generatedAt: '2026-06-08T00:00:00Z', fileCount: 10 });
+    });
+    const result = await listSnapshots('/dest');
+    const ids = result.map(s => s.id);
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain('2026-06-08T15-18-34');
+    expect(ids).not.toContain('.DS_Store');
+  });
+
+  it('returns [] for a falsy destPath without touching the filesystem', async () => {
+    const readdirSpy = vi.spyOn(fs, 'readdir');
+    expect(await listSnapshots('')).toEqual([]);
+    expect(readdirSpy).not.toHaveBeenCalled();
   });
 });
 

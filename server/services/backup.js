@@ -497,12 +497,20 @@ export async function listSnapshots(destPath) {
   if (!destPath) return [];
 
   const snapshotsDir = join(destPath, 'snapshots', MACHINE_HOST);
-  const entries = await readdir(snapshotsDir).catch(() => []);
+  // withFileTypes so we can skip non-directory entries: the backup target is
+  // commonly an iCloud/Finder folder, where macOS drops a `.DS_Store` FILE into
+  // every directory. Treating it as a snapshot id and reading
+  // `<.DS_Store>/manifest.json` throws ENOTDIR. Also skip dotfile-named dirs so
+  // nothing hidden can masquerade as a snapshot (real ids are timestamps).
+  const entries = await readdir(snapshotsDir, { withFileTypes: true }).catch(() => []);
+  const ids = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => e.name);
 
   const snapshots = await Promise.all(
-    entries.map(async (id) => {
+    ids.map(async (id) => {
       const manifestPath = join(snapshotsDir, id, 'manifest.json');
-      const manifest = await readJSONFile(manifestPath, null);
+      // logError:false — a snapshot taken before manifests existed legitimately
+      // has none; the null is handled below, so it isn't worth a warning per list.
+      const manifest = await readJSONFile(manifestPath, null, { logError: false });
       return {
         id,
         createdAt: manifest?.generatedAt ?? null,
