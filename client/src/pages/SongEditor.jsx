@@ -912,6 +912,10 @@ function LayeredSheetMusic({ tabs }) {
   const [activeByPart, setActiveByPart] = useState({}); // partKey → now-sounding note index
 
   const selectionKey = tabs.filter((t) => selected.has(t.key)).map((t) => t.key).join('|');
+  // Notation content of every tab — changes when a score's TEXT changes even if
+  // its id/tempo don't (e.g. "Refresh from template"), so the player is rebuilt
+  // against the freshly-parsed scores rather than playing the stale ones.
+  const scoresKey = tabs.map((t) => t.score).join('');
 
   const teardown = useCallback(() => {
     if (playerRef.current) { playerRef.current.stop(); playerRef.current = null; }
@@ -919,8 +923,8 @@ function LayeredSheetMusic({ tabs }) {
     setActiveByPart({});
   }, []);
 
-  // A changed selection / tab set / tempo invalidates the combined player.
-  useEffect(() => { teardown(); }, [selectionKey, tabsKey, tempo, teardown]);
+  // A changed selection / tab set / score content / tempo invalidates the player.
+  useEffect(() => { teardown(); }, [selectionKey, tabsKey, scoresKey, tempo, teardown]);
   // Tear down live audio on unmount.
   useEffect(() => () => teardown(), [teardown]);
 

@@ -314,12 +314,16 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   let bpm = Number.isFinite(options.bpm) && options.bpm > 0 ? options.bpm : null;
 
   // A voice carries its part id, its schedule, and per-voice scheduler cursors.
+  // `endNotified` tracks whether this voice's playhead has been cleared at its
+  // own end — voices have different lengths, so a short part must clear when IT
+  // finishes, not when the longest part does (else its last note stays lit).
   const buildVoices = () => (parts || []).map((p) => ({
     id: p.id,
     schedule: buildSchedule(p.score, bpm),
     nextScheduleIdx: 0,
     nextNotifyIdx: 0,
     lastNotified: -1,
+    endNotified: false,
   }));
 
   let voices = [];
@@ -365,6 +369,7 @@ export const createMultiScorePlayer = (parts, options = {}) => {
       v.nextScheduleIdx = idx;
       v.nextNotifyIdx = idx;
       v.lastNotified = -1;
+      v.endNotified = false;
     }
   };
 
@@ -394,6 +399,13 @@ export const createMultiScorePlayer = (parts, options = {}) => {
       if (newest >= 0 && newest !== v.lastNotified) {
         v.lastNotified = newest;
         safeCall(onNote, v.id, newest);
+      }
+
+      // Clear this voice's playhead the moment IT finishes (its last note's
+      // duration has elapsed), independent of longer voices still sounding.
+      if (!v.endNotified && now - startTime >= v.schedule.totalSec) {
+        v.endNotified = true;
+        safeCall(onNote, v.id, null);
       }
     }
 

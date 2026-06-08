@@ -207,6 +207,21 @@ describe('createMultiScorePlayer', () => {
     expect(ended).toHaveBeenCalledTimes(1);
   });
 
+  it('clears a short voice\'s playhead when IT ends, before a longer voice finishes', async () => {
+    const SHORT = parseScore('time: 4/4\ntempo: 120\n| C4q |');             // 1 note → 0.5 s
+    const LONG = parseScore('time: 4/4\ntempo: 120\n| C4q D4q E4q F4q |');  // 4 notes → 2 s
+    const seen = [];
+    const player = createMultiScorePlayer(
+      [{ id: 'short', score: SHORT }, { id: 'long', score: LONG }],
+      { bpm: 120, onNote: (id, i) => seen.push([id, i]) },
+    );
+    await player.play();
+    drive(1.0); // short (0.5 s) has ended; long (2 s) is still sounding
+    expect(seen).toContainEqual(['short', null]);                 // short cleared at its own end
+    expect(seen.some(([id, i]) => id === 'long' && i === null)).toBe(false); // long not cleared yet
+    player.stop();
+  });
+
   it('plays only the parts it is given (a deselected part contributes nothing)', async () => {
     const player = createMultiScorePlayer([{ id: 'bass', score: BASS }], { bpm: 120 });
     await player.play();
