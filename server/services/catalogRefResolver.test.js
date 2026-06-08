@@ -7,7 +7,9 @@
  *     kind can't be added without a resolver target.
  *  2. A live-PG round-trip (SKIPS when no DB): insert refs + targets across all
  *     kinds, assert resolveRefs / listDanglingRefs distinguish live from
- *     deleted/absent targets. Snapshots + restores every touched table.
+ *     deleted/absent targets. Synthetic rows use a `-rt-` id marker (and the
+ *     fixed ING ingredient) so beforeEach/afterAll can DELETE exactly what the
+ *     suite created without disturbing other rows.
  */
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
@@ -44,32 +46,29 @@ let skipReason = '';
 }
 if (!dbReady) console.log(`⏭️  catalogRefResolver.test.js (live) skipped: ${skipReason}`);
 
-// The catalog refs table FKs ingredient_id → catalog_ingredients(id), so we need
-// a real ingredient row to hang refs on. We snapshot/restore the touched tables.
-const TOUCHED = [
-  'catalog_ingredient_refs', 'catalog_ingredients',
-  'universes', 'pipeline_series', 'pipeline_issues', 'writers_room_works', 'creative_director_projects',
-];
+// The catalog refs table FKs ingredient_id → catalog_ingredients(id), so we
+// need a real ingredient row (ING) to hang refs on. Synthetic target rows use a
+// `-rt-` id marker so cleanup can DELETE exactly what this suite created. The
+// target tables (id-keyed) are cleaned by id pattern; catalog_ingredient_refs
+// (composite PK, no id column) is cleaned by ingredient_id.
+const TARGET_TABLES = ['universes', 'pipeline_series', 'pipeline_issues', 'writers_room_works', 'creative_director_projects'];
+const ING = 'cat-ing-resolvertest';
+
+async function cleanSynthetic() {
+  await query(`DELETE FROM catalog_ingredient_refs WHERE ingredient_id = $1`, [ING]).catch(() => {});
+  for (const t of TARGET_TABLES) {
+    await query(`DELETE FROM ${t} WHERE id LIKE '%-rt-%' OR id LIKE 'wr-work-rt%'`).catch(() => {});
+  }
+  await query(`DELETE FROM catalog_ingredients WHERE id = $1`, [ING]).catch(() => {});
+}
 
 describe.skipIf(!dbReady)('catalog ref resolver — live resolution + dangling report', () => {
   let resolver;
-  const snaps = {};
-  const ING = 'cat-ing-resolvertest';
 
-  beforeAll(async () => {
-    resolver = await import('./catalogRefResolver.js');
-    for (const t of TOUCHED) snaps[t] = (await query(`SELECT * FROM ${t}`)).rows;
-  });
+  beforeAll(async () => { resolver = await import('./catalogRefResolver.js'); });
 
   beforeEach(async () => {
-    await query(`DELETE FROM catalog_ingredient_refs WHERE ingredient_id = $1`, [ING]);
-    await query(`DELETE FROM catalog_ingredients WHERE id = $1`, [ING]);
-    // Clean the synthetic targets we create below.
-    await query(`DELETE FROM universes WHERE id LIKE 'u-rt-%'`);
-    await query(`DELETE FROM pipeline_series WHERE id LIKE 'ser-rt-%'`);
-    await query(`DELETE FROM pipeline_issues WHERE id LIKE 'iss-rt-%'`);
-    await query(`DELETE FROM writers_room_works WHERE id LIKE 'wr-work-rt%'`);
-    await query(`DELETE FROM creative_director_projects WHERE id LIKE 'cd-rt-%'`);
+    await cleanSynthetic();
     await query(
       `INSERT INTO catalog_ingredients (id, type, name, payload) VALUES ($1, 'character', 'Resolver Test', '{}'::jsonb)
        ON CONFLICT (id) DO NOTHING`,
@@ -78,11 +77,7 @@ describe.skipIf(!dbReady)('catalog ref resolver — live resolution + dangling r
   });
 
   afterAll(async () => {
-    for (const t of TOUCHED) {
-      await query(`DELETE FROM ${t} WHERE id LIKE '%-rt-%' OR id LIKE 'wr-work-rt%'`).catch(() => {});
-    }
-    await query(`DELETE FROM catalog_ingredient_refs WHERE ingredient_id = $1`, [ING]).catch(() => {});
-    await query(`DELETE FROM catalog_ingredients WHERE id = $1`, [ING]).catch(() => {});
+    await cleanSynthetic();
     await close();
   });
 
@@ -94,22 +89,28 @@ describe.skipIf(!dbReady)('catalog ref resolver — live resolution + dangling r
 
   it('resolveRefs marks a tuple resolved only when a live target row exists', async () => {
     await query(`INSERT INTO universes (id, name, data) VALUES ('u-rt-1', 'U', '{}'::jsonb)`);
+    // An issue requires a series_id (NOT NULL) — covers the pipeline_issues path.
+    await query(`INSERT INTO pipeline_series (id, name, data) VALUES ('ser-rt-1', 'S', '{}'::jsonb)`);
+    await query(`INSERT INTO pipeline_issues (id, series_id, data) VALUES ('iss-rt-1', 'ser-rt-1', '{}'::jsonb)`);
     const out = await resolver.resolveRefs([
-      { refKind: 'universe', refId: 'u-rt-1' },     // live
+      { refKind: 'universe', refId: 'u-rt-1' },      // live
+      { refKind: 'issue', refId: 'iss-rt-1' },       // live (issue kind)
       { refKind: 'universe', refId: 'u-rt-absent' }, // never existed
       { refKind: 'frobnicate', refId: 'x' },         // unknown kind
       { refKind: 'series', refId: '' },              // missing id
     ]);
     expect(out[0]).toMatchObject({ resolved: true });
-    expect(out[1].resolved).toBe(false); // absent target — no reason key, just unresolved
-    expect(out[2]).toMatchObject({ resolved: false, reason: 'unknown-kind' });
-    expect(out[3]).toMatchObject({ resolved: false, reason: 'missing-ref-id' });
+    expect(out[1]).toMatchObject({ resolved: true });
+    // Unresolved-but-known carries the same `missing-target` reason as the report.
+    expect(out[2]).toMatchObject({ resolved: false, reason: 'missing-target' });
+    expect(out[3]).toMatchObject({ resolved: false, reason: 'unknown-kind' });
+    expect(out[4]).toMatchObject({ resolved: false, reason: 'missing-ref-id' });
   });
 
   it('a soft-deleted target does NOT resolve', async () => {
     await query(`INSERT INTO writers_room_works (id, title, data, deleted) VALUES ('wr-work-rt1', 'W', '{}'::jsonb, TRUE)`);
     const [out] = await resolver.resolveRefs([{ refKind: 'work', refId: 'wr-work-rt1' }]);
-    expect(out.resolved).toBe(false);
+    expect(out).toMatchObject({ resolved: false, reason: 'missing-target' });
   });
 
   it('a creative-director target resolves by row existence (hard-delete kind)', async () => {
