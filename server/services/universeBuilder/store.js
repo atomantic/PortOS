@@ -32,6 +32,7 @@ import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 
 // TYPE-level (storage layout) schema version stamped on the file backend's
 // data/universes/index.json — preserved so an install on the file escape hatch
@@ -60,14 +61,14 @@ function assertValidId(id) {
   }
 }
 
-// --- Mutation epoch (the dataSync federation-invisibility fix) ---
-// Module-level so dataSync reads ONE monotonic counter regardless of how many
-// times the facade is rebuilt (test PATHS.data swaps). Bumped on every record
-// write/delete (NOT run writes — those are local-only).
-let mutationEpoch = 0;
+// --- Mutation epoch (the dataSync federation-invisibility fix, #1031) ---
+// Backed by the shared change-token registry (../changeToken.js) — a single
+// domain-keyed monotonic counter that survives facade rebuilds (test PATHS.data
+// swaps). Bumped on every record write/delete (NOT run writes — those are
+// local-only). Thin wrapper kept so call sites / tests don't all rewire.
 /** Current universe mutation epoch — folded into dataSync's fingerprint. */
 export function getUniverseMutationEpoch() {
-  return mutationEpoch;
+  return getChangeToken('universe');
 }
 
 // --- File backend (escape hatch / tests): wraps collectionStore ---
@@ -225,13 +226,13 @@ function createFacade({ dir, sanitizeRecord }) {
     writeRecord: async (id, record) => {
       assertValidId(id); // parity with collectionStore.saveOneNow — reject bad ids on BOTH backends
       const out = await (await getBackend()).writeRaw(id, record);
-      mutationEpoch += 1;
+      bumpChangeToken('universe');
       return out ?? record;
     },
     deleteRecord: async (id) => {
       assertValidId(id); // parity with collectionStore.deleteOneNow
       await (await getBackend()).deleteRaw(id);
-      mutationEpoch += 1;
+      bumpChangeToken('universe');
     },
 
     // Render-history runs (local-only — no epoch bump)

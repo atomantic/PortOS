@@ -31,6 +31,7 @@ import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 
 // TYPE-level (storage layout) schema version stamped on the file backend's
 // data/story-builder/index.json — preserved so an install on the file escape
@@ -48,14 +49,14 @@ function assertValidId(id) {
   }
 }
 
-// --- Mutation epoch (the dataSync federation-invisibility fix) ---
-// Module-level so dataSync reads ONE monotonic counter regardless of how many
-// times the facade is rebuilt (test PATHS.data swaps). Bumped on every record
-// write/delete.
-let mutationEpoch = 0;
+// --- Mutation epoch (the dataSync federation-invisibility fix, #1031) ---
+// Backed by the shared change-token registry (../changeToken.js) — a single
+// domain-keyed monotonic counter that survives facade rebuilds (test PATHS.data
+// swaps). Bumped on every record write/delete. Thin wrapper kept so call sites /
+// tests don't all rewire.
 /** Current Story Builder mutation epoch — folded into dataSync's fingerprint. */
 export function getStoryBuilderMutationEpoch() {
-  return mutationEpoch;
+  return getChangeToken('storyBuilder');
 }
 
 // --- File backend (escape hatch / tests): wraps collectionStore ---
@@ -152,14 +153,14 @@ function createFacade({ dir, sanitizeRecord }) {
   const saveOneNow = async (id, record) => {
     assertValidId(id);
     const out = await (await getBackend()).writeRaw(id, record);
-    mutationEpoch += 1;
+    bumpChangeToken('storyBuilder');
     return out ?? record;
   };
 
   const deleteOneNow = async (id) => {
     assertValidId(id);
     await (await getBackend()).deleteRaw(id);
-    mutationEpoch += 1;
+    bumpChangeToken('storyBuilder');
   };
 
   return {
