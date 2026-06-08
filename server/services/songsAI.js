@@ -88,7 +88,7 @@ ${want || 'Write a short, mournful a cappella ballad.'}${existingBlock}
 ${rhythmVocab()}
 Dirge/lament shapes: ${DIRGE_RHYTHM_SHAPES.map((s) => s.id).join(', ')}.
 
-# Voice layers — return these foundation-first (lead, then bass, then thirds/fifths, then drone/counter). Use the id when it matches.
+# Voice layers — return these foundation-first (melody, then bass, then the mid harmonies, then the high harmonies). Use the id when it matches.
 ${layerVocab()}
 
 # Output contract
@@ -174,9 +174,9 @@ ${songBlock}
 
 # What to assess
 - Singability: are the parts in comfortable ranges, do entrances/breaths work unaccompanied?
-- Harmony: do the layers build foundation-first (lead, bass, thirds, fifths) and stay in tune as a stack?
+- Harmony: do the layers build foundation-first (melody, bass, mid harmonies, high harmonies) and stay in tune as a stack?
 - Structure & lyrics: does the form serve the mood; do lyrics scan and breathe across the bar?
-- Layer balance: is anything missing (a drone, a counter-melody) or overcrowded?
+- Layer balance: is anything missing (the bass floor, a sustained high pad) or overcrowded?
 
 # Output contract
 Return ONLY a JSON object (no prose, no markdown fence):

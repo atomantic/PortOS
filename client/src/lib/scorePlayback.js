@@ -156,6 +156,10 @@ export const createScorePlayer = (score, options = {}) => {
   let nextNotifyIdx = 0;   // next event to fire onNote for
   let lastNotified = -1;
   let nodes = [];          // live { osc, gain } for teardown
+  // Bumped on every stop/pause; play() captures it before its `await ctx.resume()`
+  // and bails if a teardown landed during that await, so a stop/score-change/unmount
+  // mid–first-play can't re-arm an orphaned interval after the await resolves.
+  let playToken = 0;
 
   const stopNodes = () => {
     for (const n of nodes) {
@@ -231,7 +235,9 @@ export const createScorePlayer = (score, options = {}) => {
   const play = async () => {
     if (playing) return;
     const c = ctx();
+    const token = ++playToken;
     if (c.state === 'suspended' && c.resume) await c.resume();
+    if (token !== playToken) return; // a stop/pause landed during the resume await
     if (!schedule.events.length || schedule.totalSec <= 0) { safeCall(onEnded); return; }
 
     schedule = buildSchedule(score, bpm); // pick up a tempo change made while idle
@@ -245,6 +251,7 @@ export const createScorePlayer = (score, options = {}) => {
 
   // Pause — stop sounding, remember position, keep the cursor for resume.
   const pause = () => {
+    playToken++; // abort an in-flight play() still awaiting ctx.resume()
     if (!playing) return;
     offsetSec = Math.min(Math.max(0, ctx().currentTime - startTime), schedule.totalSec);
     clearTick();
@@ -254,6 +261,7 @@ export const createScorePlayer = (score, options = {}) => {
 
   // Stop — full teardown back to the top, clears the playhead.
   const stop = () => {
+    playToken++; // abort an in-flight play() still awaiting ctx.resume()
     clearTick();
     stopNodes();
     playing = false;
@@ -330,6 +338,11 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   let offsetSec = 0;       // resume position (seconds into the score)
   let master = null;       // shared bus GainNode (created per play)
   let nodes = [];          // live { osc, gain } across all voices, for teardown
+  // Bumped on every stop/pause; play() captures it before its `await ctx.resume()`
+  // and bails if a teardown landed during that await — otherwise a checkbox toggle
+  // (which tears the player down) mid–first-play re-arms an orphaned, un-stoppable
+  // interval after the await resolves.
+  let playToken = 0;
 
   const stopNodes = () => {
     for (const n of nodes) {
@@ -400,7 +413,9 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   const play = async () => {
     if (playing) return;
     const c = ctx();
+    const token = ++playToken;
     if (c.state === 'suspended' && c.resume) await c.resume();
+    if (token !== playToken) return; // a stop/pause landed during the resume await
     rebuild(); // pick up a tempo change made while idle
     if (!totalSec) { safeCall(onEnded); return; }
 
@@ -416,6 +431,7 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   };
 
   const pause = () => {
+    playToken++; // abort an in-flight play() still awaiting ctx.resume()
     if (!playing) return;
     offsetSec = Math.min(Math.max(0, ctx().currentTime - startTime), totalSec);
     clearTick();
@@ -424,6 +440,7 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   };
 
   const stop = () => {
+    playToken++; // abort an in-flight play() still awaiting ctx.resume()
     clearTick();
     stopNodes();
     playing = false;
