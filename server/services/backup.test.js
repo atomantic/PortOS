@@ -16,6 +16,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the DB health check and child_process.spawn before importing backup.js
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
+  // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
+  // path and the existing status tests don't trigger live binary discovery.
+  getServerMajorVersion: vi.fn(() => null),
 }));
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
@@ -45,7 +48,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 import { checkHealth } from '../lib/db.js';
 import { getBackendName } from './memoryBackend.js';
 import * as fs from 'fs/promises';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, pickPgDump } from './backup.js';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
@@ -152,6 +155,36 @@ describe('computeEffectiveExcludes', () => {
     expect(() => computeEffectiveExcludes()).not.toThrow();
     const result = computeEffectiveExcludes();
     expect(result).toEqual(DEFAULT_EXCLUDES.map(e => e.path));
+  });
+});
+
+describe('pickPgDump', () => {
+  const c = (major, binary = `pg_dump@${major}`) => ({ binary, major });
+
+  it('returns null when no candidates were discovered', () => {
+    expect(pickPgDump(17, [])).toBeNull();
+    expect(pickPgDump(17, undefined)).toBeNull();
+  });
+
+  it('picks the exact-major binary when one is installed', () => {
+    const chosen = pickPgDump(17, [c(15), c(17), c(16)]);
+    expect(chosen).toBe('pg_dump@17');
+  });
+
+  it('picks the closest binary that is >= the server (newer is fine, never older)', () => {
+    // server 16: 15 is too old, choose 17 (smallest qualifying), not 18.
+    expect(pickPgDump(16, [c(15), c(17), c(18)])).toBe('pg_dump@17');
+  });
+
+  it('falls back to the newest available when nothing is new enough (forces a clear mismatch error)', () => {
+    // This is the reported bug: server 17, only pg_dump 15 installed.
+    expect(pickPgDump(17, [c(15)])).toBe('pg_dump@15');
+    expect(pickPgDump(17, [c(14), c(15)])).toBe('pg_dump@15');
+  });
+
+  it('trusts the first (PATH) candidate when the server version is unknown', () => {
+    expect(pickPgDump(null, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
+    expect(pickPgDump(NaN, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
   });
 });
 
@@ -275,6 +308,26 @@ describe('dumpPostgres status classification', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('dump_error');
     expect(result.error).toContain('auth failed');
+  });
+
+  it('classifies a "server version mismatch" stderr as failed/version_mismatch, not dump_error', async () => {
+    // Even with the server version unknown (default mock → bare pg_dump), the
+    // stderr regex must reclassify pg_dump's own mismatch error so the UI can
+    // point at "install a newer pg_dump" instead of the generic hint.
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.stderr.emit('data', Buffer.from(
+      'pg_dump: error: aborting because of server version mismatch\n' +
+      'pg_dump: detail: server version: 17.10; pg_dump version: 15.18'
+    ));
+    proc.emit('close', 1);
+    const result = await p;
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('version_mismatch');
+    expect(result.error).toContain('server version mismatch');
   });
 
   it('unlinks the partial dump file on non-zero exit (no restorable artifact left behind)', async () => {

@@ -40,6 +40,24 @@ export async function query(text, params) {
 }
 
 /**
+ * Read the connected server's PostgreSQL major version (e.g. 17 for 17.10).
+ *
+ * `server_version_num` is an integer like 170010 → major = floor(n / 10000).
+ * Used by the backup service to select a `pg_dump` whose major version is
+ * >= the server's: pg_dump aborts with "server version mismatch" when it is
+ * older than the server it dumps, which is the common Homebrew footgun where
+ * an older `postgresql@NN` keg shadows the running server in PATH.
+ *
+ * @returns {Promise<number|null>} major version, or null if unreachable/unparseable
+ */
+export async function getServerMajorVersion() {
+  const result = await query('SHOW server_version_num').catch(() => null);
+  const num = parseInt(result?.rows?.[0]?.server_version_num, 10);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num / 10000);
+}
+
+/**
  * Run a function inside a database transaction.
  * Auto-commits on success, rolls back on error.
  * @param {function(pg.PoolClient): Promise<T>} fn

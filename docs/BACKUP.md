@@ -39,7 +39,7 @@ The effective exclude list is computed by the pure `computeEffectiveExcludes()` 
 | Result | Meaning | Effect on backup |
 |---|---|---|
 | `{ status: 'ok', sizeBytes, tableCount }` | Dump succeeded and is non-empty | Backup `ok` |
-| `{ status: 'failed', reason: 'pg_unreachable' \| 'pg_dump_missing' \| 'dump_error' \| 'empty_dump' }` | Postgres is the active backend but the dump failed | Backup **`degraded`** + warning toast |
+| `{ status: 'failed', reason: 'pg_unreachable' \| 'pg_dump_missing' \| 'version_mismatch' \| 'dump_error' \| 'empty_dump' }` | Postgres is the active backend but the dump failed | Backup **`degraded`** + warning toast |
 | `{ status: 'skipped', reason: 'not_configured' }` | The explicit file escape hatch is active — `MEMORY_BACKEND=file` or the backend resolved to `file` (dev/test, unsupported for production) | Backup stays `ok` (benign) |
 
 Key behaviors, accurate to the code:
@@ -48,6 +48,7 @@ Key behaviors, accurate to the code:
 - **A skipped dump is still benign** only for the temporary `MEMORY_BACKEND=file` escape hatch (documented as unsupported for production installs). On a normal install where Postgres is active or auto-detected, an unreachable DB returns `failed/pg_unreachable`, not a green "not configured" run.
 - **`--clean --if-exists`** makes the dump replay cleanly into a live, already-initialized PortOS database — the common restore target — instead of erroring on `relation already exists`.
 - A `pg_dump` that exits 0 but produces a 0-byte file is treated as `failed/empty_dump`; a non-zero exit deletes the partial file so a later restore can't trust a truncated dump.
+- **`version_mismatch`** means no installed `pg_dump` is new enough for the running server (`pg_dump` aborts when older than the server it dumps — the common Homebrew case where an old `postgresql@NN` keg shadows a newer running server in `PATH`). `dumpPostgres()` reads the server's major version (`getServerMajorVersion()` in `lib/db.js`) and auto-selects the closest `pg_dump` whose major is `>=` the server from the installed Homebrew kegs / Postgres.app bundles. Set `PORTOS_PGDUMP=/path/to/pg_dump` to override the auto-discovered binary (e.g. on Linux/Windows where the keg locations don't apply).
 
 ## How restore works
 

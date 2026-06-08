@@ -10,9 +10,9 @@ import { spawn } from 'child_process';
 import { access, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, execFileAsync, readJSONFile, sha256File } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
-import { checkHealth } from '../lib/db.js';
+import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { getIo } from './socket.js';
@@ -229,14 +229,95 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 }
 
 /**
+ * Choose which discovered pg_dump binary to run, given the server's major
+ * version. pg_dump REFUSES to dump a server newer than itself ("server version
+ * mismatch"), but a newer pg_dump dumps an older server fine — so the rule is:
+ * pick the closest binary whose major is >= the server's.
+ *
+ * Pure + exported for unit testing (the IO-bound discovery lives in
+ * resolvePgDump, which feeds this the runnable candidates it found).
+ *
+ * @param {number|null} serverMajor - server's PG major version (null = unknown)
+ * @param {Array<{binary: string, major: number}>} candidates - runnable pg_dumps
+ * @returns {string|null} chosen binary path, or null if none discovered
+ */
+export function pickPgDump(serverMajor, candidates) {
+  if (!candidates?.length) return null;
+  // Unknown server version: keep prior behavior — trust the first (PATH) entry.
+  if (!Number.isFinite(serverMajor)) return candidates[0].binary;
+  // Prefer the smallest major that still satisfies >= server (closest match,
+  // avoids reaching for a wildly newer keg when an exact one is installed).
+  const viable = candidates.filter(c => c.major >= serverMajor).sort((a, b) => a.major - b.major);
+  if (viable.length) return viable[0].binary;
+  // Nothing is new enough. Return the newest we have so the resulting error is a
+  // clear "still too old" instead of an arbitrary pick — and so the version
+  // detection in dumpPostgres can flag it as version_mismatch.
+  return [...candidates].sort((a, b) => b.major - a.major)[0].binary;
+}
+
+/**
+ * Read a pg_dump binary's major version, or null if it isn't runnable.
+ * `pg_dump --version` prints e.g. "pg_dump (PostgreSQL) 17.10 (Homebrew)".
+ */
+async function pgDumpMajor(binary) {
+  const { stdout } = await execFileAsync(binary, ['--version']).catch(() => ({ stdout: '' }));
+  const m = stdout.match(/PostgreSQL\)\s+(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Enumerate candidate pg_dump locations: an explicit override, the bare PATH
+ * binary, then versioned Homebrew kegs and Postgres.app bundles (where multiple
+ * majors coexist and PATH order silently picks the wrong one).
+ */
+async function discoverPgDumpCandidates() {
+  const paths = [];
+  if (process.env.PORTOS_PGDUMP) paths.push(process.env.PORTOS_PGDUMP);
+  paths.push('pg_dump'); // whatever PATH resolves — preserves the old default
+  const kegDirs = ['/opt/homebrew/opt', '/usr/local/opt', '/Applications/Postgres.app/Contents/Versions'];
+  for (const dir of kegDirs) {
+    const entries = await readdir(dir).catch(() => []);
+    for (const entry of entries) {
+      if (dir.endsWith('Versions') || entry.startsWith('postgresql')) {
+        paths.push(join(dir, entry, 'bin', 'pg_dump'));
+      }
+    }
+  }
+  // Probe versions concurrently (each `pg_dump --version` is an independent
+  // spawn); [...new Set(paths)] de-dups while preserving priority order, which
+  // Promise.all keeps — so pickPgDump still sees env > PATH > kegs.
+  const probed = await Promise.all(
+    [...new Set(paths)].map(async (binary) => ({ binary, major: await pgDumpMajor(binary) }))
+  );
+  return probed.filter(c => c.major != null);
+}
+
+/**
+ * Resolve the pg_dump binary to use for a server at `serverMajor`. Returns the
+ * chosen path and whether it satisfies the server's version (false ⇒ the dump
+ * will fail with a version mismatch and there's nothing newer installed).
+ *
+ * @param {number|null} serverMajor
+ * @returns {Promise<{binary: string, satisfies: boolean}>}
+ */
+async function resolvePgDump(serverMajor) {
+  const candidates = await discoverPgDumpCandidates();
+  const binary = pickPgDump(serverMajor, candidates) || 'pg_dump';
+  const chosen = candidates.find(c => c.binary === binary);
+  const satisfies = !Number.isFinite(serverMajor) || !chosen || chosen.major >= serverMajor;
+  return { binary, satisfies };
+}
+
+/**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
  * Returns an explicit status so the caller can distinguish the benign file
  * escape hatch from "PG required but dump failed" (data at risk):
  *   { status: 'ok', sizeBytes, tableCount }
  *   { status: 'skipped', reason: 'not_configured' }   (explicit file escape hatch only)
- *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'dump_error'|'empty_dump', error }
+ *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump', error }
  *     (pg_unreachable fires whenever Postgres is required — i.e. not the file
- *      escape hatch — but the DB is down at backup time)
+ *      escape hatch — but the DB is down at backup time; version_mismatch means
+ *      no installed pg_dump is new enough for the running server)
  * @param {string} outputPath - Path to write the SQL dump file
  */
 export async function dumpPostgres(outputPath) {
@@ -269,12 +350,27 @@ export async function dumpPostgres(outputPath) {
     console.warn('⚠️ PGPASSWORD not set for pg_dump — using default');
   }
 
-  return new Promise((resolve) => {
+  // pg_dump must be >= the server's major version or it aborts on a "server
+  // version mismatch". On machines with multiple Postgres installs (the common
+  // Homebrew case: an old postgresql@NN keg shadowing a newer running server in
+  // PATH) the bare `pg_dump` is often the wrong one, so select a matching binary
+  // instead of trusting PATH order.
+  const serverMajor = await getServerMajorVersion();
+  // Only probe for a matching binary when we actually know the server version;
+  // if detection failed, keep the prior behavior (bare `pg_dump` off PATH).
+  const { binary: pgDumpBin, satisfies } = Number.isFinite(serverMajor)
+    ? await resolvePgDump(serverMajor)
+    : { binary: 'pg_dump', satisfies: true };
+  if (!satisfies) {
+    console.warn(`⚠️ No installed pg_dump satisfies server major ${serverMajor} (using ${pgDumpBin})`);
+  }
+
+  return new Promise((resolvePromise) => {
     // --clean --if-exists: the dump DROPs each object before recreating it, so it
     // replays cleanly into the live, already-initialized PortOS database (the
     // common Restore-DB target) instead of erroring "relation already exists" on
     // the first CREATE. Without it the dump is only restorable into an empty DB.
-    const proc = spawn('pg_dump', [
+    const proc = spawn(pgDumpBin, [
       '-h', pgHost,
       '-p', pgPort,
       '-U', pgUser,
@@ -299,14 +395,18 @@ export async function dumpPostgres(outputPath) {
         // connection loss). Remove it so a later restore can't trust a truncated
         // dump on size alone — a failed dump must leave no restorable artifact.
         await unlink(outputPath).catch(() => {});
-        resolve({ status: 'failed', reason: 'dump_error', error: stderr.trim() });
+        // A version mismatch is a distinct, actionable failure (install a newer
+        // pg_dump) — classify it so the UI can point at the fix instead of the
+        // generic "is pg_dump installed / is PG reachable" hint.
+        const isMismatch = !satisfies || /server version mismatch|aborting because of server version/i.test(stderr);
+        resolvePromise({ status: 'failed', reason: isMismatch ? 'version_mismatch' : 'dump_error', error: stderr.trim() });
         return;
       }
       // Verify: a dump that exits 0 but is empty/truncated is still a failure.
       const info = await stat(outputPath).catch(() => null);
       if (!info || info.size === 0) {
         console.warn('⚠️ pg_dump produced an empty dump file');
-        resolve({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
+        resolvePromise({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
         return;
       }
       const sql = await readFile(outputPath, 'utf-8').catch(() => '');
@@ -317,14 +417,14 @@ export async function dumpPostgres(outputPath) {
       // the backup:completed socket event, and the /run response. No client
       // reads it (restorePostgres recomputes its own sqlPath), so leaking an
       // internal FS path serves no purpose.
-      resolve({ status: 'ok', sizeBytes: info.size, tableCount });
+      resolvePromise({ status: 'ok', sizeBytes: info.size, tableCount });
     });
 
     proc.on('error', (err) => {
       // pg_dump not installed — a configured-but-unbacked-up DB is at risk,
       // so this is a failure, not a silent skip.
       console.warn(`⚠️ pg_dump not available: ${err.message}`);
-      resolve({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
+      resolvePromise({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
     });
   });
 }
