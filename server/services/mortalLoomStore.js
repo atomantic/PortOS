@@ -9,12 +9,13 @@
  */
 
 import { homedir } from 'os';
-import { join } from 'path';
+import { join, dirname, basename } from 'path';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import { safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, settingsEvents } from './settings.js';
 
@@ -152,6 +153,63 @@ function pinAgainstEviction(path) {
   });
 }
 
+// === On-demand (blocking) materialization for the write path ===
+
+// macOS' older eviction mechanism renames `Foo.json` to a hidden
+// `.Foo.json.icloud` placeholder, after which `existsSync(Foo.json)` reports
+// false even though real data is sitting there evicted. Detecting the
+// placeholder lets updateStore() refuse to seed a fresh store on top of it
+// (which would shadow the real data) and materialize it instead. Modern macOS
+// uses dataless files (path stays present) so this is belt-and-suspenders, but
+// the silent-data-loss cost if it ever fires is exactly what this module's
+// overwrite guard exists to prevent.
+function icloudPlaceholderPath(path) {
+  return join(dirname(path), `.${basename(path)}.icloud`);
+}
+
+// Unlike the fire-and-forget pinAgainstEviction() at boot, the write path needs
+// to KNOW an evicted file is materialized before deciding whether refusing to
+// overwrite is warranted. `brctl download <path>` materializes a dataless
+// (Optimize-Mac-Storage-evicted) file or an `.icloud` placeholder and exits 0
+// once the bytes are local; we await that exit (bounded by a timeout) and let
+// the caller re-read. Resolves `true` only on a clean exit-0 — non-darwin,
+// missing brctl, spawn error, timeout, and non-zero exit all resolve `false`,
+// every one of which falls through to the caller's existing refuse-to-overwrite
+// guard. So this can only ever recover the situation, never worsen it.
+//
+// Exposed (not const) so tests can drop the timeout without waiting on it.
+export let MATERIALIZE_TIMEOUT_MS = 20000;
+export function _setMaterializeTimeoutForTest(ms) { MATERIALIZE_TIMEOUT_MS = ms; }
+
+// Unlike pinAgainstEviction, this awaits brctl to completion via the shared
+// bufferedSpawn helper (timeout + kill-tree handled there). The timeout bounds a
+// hung download (file evicted AND device offline) so a single write can't block
+// forever. Resolves `true` only on a clean exit-0; every failure mode resolves
+// `false` and falls through to the caller's existing refuse-to-overwrite guard.
+async function materializeNow(path) {
+  if (process.platform !== 'darwin' || !path) return false;
+  const result = await bufferedSpawn('brctl', ['download', path], {
+    timeoutMs: MATERIALIZE_TIMEOUT_MS,
+    shell: false,
+  });
+  if (result.success) return true;
+  if (result.error?.code === 'ENOENT') {
+    // brctl missing — share the dedupe flag with pinAgainstEviction so we
+    // surface the missing-binary warning at most once per process.
+    if (!brctlMissingWarned) {
+      brctlMissingWarned = true;
+      console.warn('⚠️ brctl not found on PATH; MortalLoom on-demand materialize disabled (refuse-to-overwrite guard remains)');
+    }
+  } else if (result.timedOut) {
+    console.warn(`⚠️ brctl download timed out after ${MATERIALIZE_TIMEOUT_MS}ms for MortalLoom store: ${path}`);
+  } else if (result.error) {
+    console.warn(`⚠️ brctl download failed for MortalLoom store: ${result.error.message}`);
+  } else {
+    console.warn(`⚠️ brctl download exited ${result.code} for MortalLoom store: ${path}`);
+  }
+  return false;
+}
+
 // Two flags, not one: the listener is durable (sync, idempotent) but the
 // initial-pin step does awaits that can reject transiently (settings.json
 // read failure). Coupling them under a single `initialized = true` set
@@ -286,27 +344,46 @@ export async function updateStore(mutator) {
   // writing to another (or the overwrite-guard's existsSync looking at a
   // different file than the read).
   const path = await resolvePath();
-  const store = await readStoreAtPath(path);
+  let store = await readStoreAtPath(path);
   // The overwrite guard is based solely on post-read state, not a pre-read
   // snapshot. readStoreAtPath returns null for four reasons; we only care
   // about the *currently observable* state when deciding whether it's safe
   // to write:
-  //   (1) file does not exist now → safe to seed a fresh store (whether it
-  //       was absent the whole time, disappeared mid-call, or never appeared
-  //       in the first place).
+  //   (1) file does not exist now (and no `.icloud` placeholder shadows it) →
+  //       safe to seed a fresh store (whether it was absent the whole time,
+  //       disappeared mid-call, or never appeared in the first place).
   //   (2) file exists now but parsed to a non-plain-object value → unreadable
   //       (transient iCloud read failure, corrupt JSON, or unexpected shape
   //       like a top-level array which JSON.stringify would silently drop).
-  //       Refuse to overwrite the user's iCloud data.
-  // Without this guard, the iCloud transient-failure tolerance in
-  // readStoreAtPath would let updateStore silently truncate a momentarily
-  // unreadable iCloud file.
-  if (existsSync(path) && !isPlainObject(store)) {
-    // Log the resolved path server-side for diagnostics; keep the thrown
-    // message path-free so it doesn't get echoed back to the UI (route
-    // errors serialize as `error: error.message`).
-    console.error(`❌ MortalLoom store at ${path} is unreadable; refusing to overwrite`);
-    throw new Error('MortalLoom store is unreadable; refusing to overwrite');
+  //   (3) the real path is absent but an `.icloud` placeholder is shadowing it
+  //       → the file was evicted under the legacy rename mechanism and real
+  //       data is sitting there unmaterialized; seeding fresh would bury it.
+  // For (2) and (3) the most common cause on macOS is iCloud eviction
+  // (Optimize-Mac-Storage made the file dataless and the sub-200ms transient
+  // retry isn't long enough to materialize it). Before refusing — which blocks
+  // the user's write — force a BLOCKING `brctl download` and re-read once. This
+  // is the on-demand pre-warm the fire-and-forget boot pin can't guarantee
+  // hours after boot, when the file has been re-evicted under disk pressure.
+  // Only genuinely corrupt JSON / unexpected shapes / offline-evicted files
+  // survive to the throw. Without this guard, the iCloud transient-failure
+  // tolerance in readStoreAtPath would let updateStore silently truncate a
+  // momentarily unreadable iCloud file.
+  const unsafeToSeed = existsSync(path)
+    ? !isPlainObject(store)
+    : existsSync(icloudPlaceholderPath(path));
+  if (unsafeToSeed) {
+    const materialized = await materializeNow(path);
+    if (materialized) {
+      store = await readStoreAtPath(path);
+      console.log(`📥 MortalLoom store materialized from iCloud before write: ${path}`);
+    }
+    if (!isPlainObject(store)) {
+      // Log the resolved path server-side for diagnostics; keep the thrown
+      // message path-free so it doesn't get echoed back to the UI (route
+      // errors serialize as `error: error.message`).
+      console.error(`❌ MortalLoom store at ${path} is unreadable${materialized ? ' even after iCloud materialize' : ''}; refusing to overwrite`);
+      throw new Error('MortalLoom store is unreadable; refusing to overwrite');
+    }
   }
   const base = store || {};
   for (const k of ARRAY_KEYS) if (!Array.isArray(base[k])) base[k] = [];

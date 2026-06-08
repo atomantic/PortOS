@@ -201,7 +201,8 @@ export default function OverviewTab({ app, onRefresh }) {
                 >
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
                     proc.status === 'online' ? 'bg-port-success' :
-                    proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
+                    proc.status === 'stopped' ? 'bg-gray-500' :
+                    proc.status === 'unknown' ? 'bg-port-warning' : 'bg-port-error'
                   }`} />
                   <span className="text-sm text-white font-mono">{proc.name}</span>
                   {processConfig?.ports && Object.keys(processConfig.ports).length > 0 && (

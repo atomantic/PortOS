@@ -753,6 +753,23 @@ describe("universeBuilder service", () => {
     });
 
     describe("mergeUniversesFromSync", () => {
+      it("skips a peer record with an invalid id without aborting the batch", async () => {
+        const good = await seedWorld();
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        // A malformed-id record (slash → outside the store allowlist) sits
+        // BEFORE a valid edit in the same batch. The bad one must be skipped,
+        // not throw and drop the valid edit after it.
+        const r = await svc.mergeUniversesFromSync([
+          { id: "bad/id", name: "Evil", updatedAt: editTs },
+          { ...good, name: "Edited", updatedAt: editTs },
+        ]);
+        expect(r.applied).toBe(true);
+        expect(r.count).toBe(1); // only the valid record applied
+        expect((await svc.getUniverse(good.id)).name).toBe("Edited");
+        await expect(svc.getUniverse("bad/id", { includeDeleted: true }))
+          .rejects.toMatchObject({ code: "NOT_FOUND" });
+      });
+
       it("applies an inbound soft-delete from a peer", async () => {
         const w = await seedWorld();
         const tombstoneTs = new Date(Date.now() + 60_000).toISOString();

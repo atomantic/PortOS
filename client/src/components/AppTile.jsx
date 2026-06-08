@@ -30,6 +30,8 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
   };
 
   const isOnline = app.overallStatus === 'online';
+  // PM2 read failed — status is genuinely unknown, so don't offer Start/Stop.
+  const isDegraded = app.degraded || app.overallStatus === 'unknown';
 
   return (
     <article className={`border rounded-lg p-3 transition-colors ${
@@ -95,7 +97,18 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
           </a>
         )}
 
-        {!isOnline && (
+        {!isOnline && isDegraded && (
+          <button
+            onClick={() => onUpdate?.()}
+            className="px-2.5 py-1 text-xs rounded bg-port-warning hover:bg-port-warning/80 text-white transition-colors"
+            aria-label={`${app.name} status unavailable — refresh`}
+            title="PM2 status could not be read — refresh to retry"
+          >
+            Status unavailable
+          </button>
+        )}
+
+        {!isOnline && !isDegraded && (
           <button
             onClick={() => handleAction('start')}
             disabled={loading === 'start'}

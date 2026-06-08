@@ -2,115 +2,109 @@
  * Pipeline — Manuscript Editor.
  *
  * Full-bleed two-pane workspace (`/pipeline/series/:seriesId/manuscript`) that
- * makes the "Finish the draft" pass actionable:
- *   - Left  : the whole series manuscript, one editable section per issue in
- *             story order. The series "manuscript" is virtual — one chosen
- *             stage per issue (comicScript ▸ teleplay ▸ prose). Each section is
- *             a free-text editor that saves back to that issue's stage on blur.
- *   - Right : Word-style editorial comments from the completeness pass. Click a
- *             comment to jump to (and select) its anchor in the manuscript,
- *             generate AI edit suggestions, review diffs, edit/skip individual
- *             suggestions, and accept them into the manuscript — or dismiss it.
+ * makes the "Finish the draft" pass actionable, with editorial feedback shown
+ * IN CONTEXT inside the manuscript instead of read out of a disconnected list:
+ *   - Left  : the whole series manuscript, one section per issue in story order.
+ *             The series "manuscript" is virtual — one chosen stage per issue
+ *             (comicScript ▸ teleplay ▸ prose). Two viewing modes (toggle in the
+ *             header, persisted): "Live" keeps each section editable with
+ *             Grammarly-style underlines under anchored notes (click → popover);
+ *             "Review" shows read-only annotated prose with click-to-expand
+ *             cards and an Edit toggle per section.
+ *   - Right : a navigable/filterable INDEX of editorial comments — click a row
+ *             to reveal + open that note in the manuscript.
+ *   An "Impact preview" button shows a before/after side-by-side diff of how the
+ *   selected fixes change the whole manuscript.
  *
  * Data: GET /pipeline/series/:id/manuscript (sections) + .../manuscript/review
  * (comments). Section saves reuse PATCH /pipeline/issues/:id; fixes go through
- * the manuscript-review fix/accept routes.
+ * the manuscript-review fix/accept routes. See the design record at
+ * docs/plans/2026-06-06-manuscript-editor-inline-feedback.md.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Sparkles, Check, X, CornerDownRight, FileText, ChevronDown, ChevronRight, Star, History, RotateCcw, ClipboardCheck, Layers,
+  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare,
 } from 'lucide-react';
-import InlineDiff from '../components/ui/InlineDiff';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { timeAgo } from '../utils/formatters';
-import { filterSelectableModels } from '../utils/providers';
+import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
+import useLocalModels from '../hooks/useLocalModels';
+import { locateAnchors } from '../lib/manuscriptAnchors';
+import ManuscriptLiveSection from '../components/pipeline/manuscript/ManuscriptLiveSection';
+import AnnotatedManuscriptSection from '../components/pipeline/manuscript/AnnotatedManuscriptSection';
+import ManuscriptCommentIndex from '../components/pipeline/manuscript/ManuscriptCommentIndex';
+import ManuscriptIssueTabs from '../components/pipeline/manuscript/ManuscriptIssueTabs';
+import ManuscriptImpactPreview from '../components/pipeline/manuscript/ManuscriptImpactPreview';
+import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
-  patchPipelineManuscriptComment, savePipelineManuscriptSection, restorePipelineStageVersion,
-  generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
+  savePipelineManuscriptSection, restorePipelineStageVersion,
   analyzePipelineManuscriptCompleteness, getProviders,
 } from '../services/api';
 
-const STAGE_LABEL = { comicScript: 'comic script', teleplay: 'teleplay', prose: 'prose', idea: 'outline' };
-// Format switcher: the three manuscript formats the editor can span the full
-// story in. Order mirrors the server's MANUSCRIPT_STAGES precedence.
-const MANUSCRIPT_TYPES = [
-  { id: 'comicScript', label: 'Comic' },
-  { id: 'teleplay', label: 'Teleplay' },
-  { id: 'prose', label: 'Prose' },
-];
+// Stable empty array so sections that gain no comments/spans don't get a fresh
+// `[]` identity every render.
+const EMPTY = [];
 
-const SEVERITY_TONE = {
-  high: 'bg-port-error/15 text-port-error border-port-error/40',
-  medium: 'bg-port-warning/15 text-port-warning border-port-warning/40',
-  low: 'bg-gray-600/20 text-gray-300 border-port-border',
+const VIEW_MODE_KEY = 'portos.manuscript.viewMode';
+const initialViewMode = () => {
+  if (typeof window === 'undefined') return 'live';
+  return window.localStorage.getItem(VIEW_MODE_KEY) === 'review' ? 'review' : 'live';
 };
-
-const CATEGORY_LABEL = {
-  'missing-content': 'Missing content',
-  'arc-gap': 'Arc gap',
-  'character-gap': 'Character gap',
-  pacing: 'Pacing',
-  continuity: 'Continuity',
-  other: 'Note',
-};
-
-// Approximate the textarea height to its content so the manuscript reads as one
-// continuous scroll (lets jump-to-anchor scroll the page, not an inner box).
-const rowsFor = (text) => Math.min(400, Math.max(8, (text || '').split('\n').length + 1));
 
 export default function PipelineManuscriptEditor() {
-  const { seriesId } = useParams();
+  const params = useParams();
+  const { seriesId } = params;
   const navigate = useNavigate();
+  // The issue (by number) the editor is focused on — one issue per view,
+  // deep-linkable at /pipeline/series/:id/manuscript/:issueNumber. Read from the
+  // route splat (a single splat route, not two :param routes, so issue→issue
+  // navigation reuses this component instead of remounting). null on the bare
+  // /manuscript URL; a reconcile effect canonicalizes it to the first issue.
+  const issueParam = params['*'];
+  const activeNumber = issueParam ? Number(issueParam) : null;
   const [series, setSeries] = useState(null);
   const [sections, setSections] = useState([]);
   const [viewType, setViewType] = useState(null);          // format currently shown
-  const [pinnedPrimary, setPinnedPrimary] = useState(null);   // explicit bible value (may be null)
-  const [availableTypes, setAvailableTypes] = useState([]);   // formats with ≥1 drafted issue
+  const [pinnedPrimary, setPinnedPrimary] = useState(null);
+  const [availableTypes, setAvailableTypes] = useState([]);
   const [comments, setComments] = useState([]);
-  // Coverage shape of the last completeness run: { chunked, chunkCount }. A
-  // chunked run means the model couldn't hold the whole manuscript at once
-  // (small context window) — surfaced so the review's coverage isn't ambiguous.
   const [reviewMeta, setReviewMeta] = useState(null);
+  const [freshReview, setFreshReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
   const [pinning, setPinning] = useState(false);
-  // AI provider override for Generate-fix + Editorial-review actions.
-  // '' means "System default" (no override sent to server). Intentionally NOT
-  // auto-selected — useProviderModels always picks the first provider, but here
-  // "no selection" is the correct default so we manage this state directly.
   const [providers, setProviders] = useState([]);
   const [overrideProviderId, setOverrideProviderId] = useState('');
   const [overrideModel, setOverrideModel] = useState('');
-  // Per-issue free-text save state: 'saving' | 'saved' | undefined.
   const [saveState, setSaveState] = useState({});
-  // The comment last jumped to — pinned as a floating overlay so its editorial
-  // context (and its Generate/Accept/Dismiss actions) stay on screen after the
-  // manuscript scrolls away from the sidebar card. null = no overlay.
-  const [activeCommentId, setActiveCommentId] = useState(null);
-  // Per-comment fix-edit drafts (replacement text + which edits are checked),
-  // lifted out of CommentCard and keyed by comment id so the sidebar card and
-  // the pinned overlay card of the same comment share one editing state —
-  // editing a fix in one and accepting from the other no longer loses the
-  // in-progress edit. Each entry stamps the fixKey it was derived from.
+  // 'live' (Grammarly editable + underlines) | 'review' (annotated read-then-edit).
+  const [viewMode, setViewMode] = useState(initialViewMode);
+  // The comment whose card is open in-context (popover in Live, inline in Review).
+  const [openCommentId, setOpenCommentId] = useState(null);
+  // Which section (issueId) is in textarea edit mode in Review.
+  const [editingIssueId, setEditingIssueId] = useState(null);
+  const [showImpact, setShowImpact] = useState(false);
+  // Per-comment fix-edit drafts, keyed by comment id and shared across every
+  // place the card renders (sidebar reveal, in-context card, impact preview).
   const [fixDrafts, setFixDrafts] = useState({});
   const setCommentDraft = (commentId, entry) =>
     setFixDrafts((prev) => ({ ...prev, [commentId]: entry }));
-  // textarea elements keyed by issue number, for jump-to-anchor.
+  // textarea elements keyed by issue number, for reveal-to-section scroll/focus.
   const sectionRefs = useRef(new Map());
-  // Last-saved content per `${issueId}:${stageId}`, so a blur with no change
-  // doesn't create a spurious version.
   const baselineRef = useRef(new Map());
   const seedBaselines = (list) => {
     baselineRef.current = new Map((list || []).map((s) => [`${s.issueId}:${s.stageId}`, s.content]));
   };
 
-  // Patch one section's fields (content/versions) in place after a save/revert.
   const patchSection = (issueId, fields) =>
     setSections((prev) => prev.map((s) => (s.issueId === issueId ? { ...s, ...fields } : s)));
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.localStorage.setItem(VIEW_MODE_KEY, viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     let canceled = false;
@@ -137,9 +131,11 @@ export default function PipelineManuscriptEditor() {
       })
       .finally(() => { if (!canceled) setLoading(false); });
     return () => { canceled = true; };
-  }, [seriesId, navigate]);
+    // Keyed on seriesId only — `navigate`'s identity changes when the issue-tab
+    // URL changes, and including it would re-run this initial load (clobbering a
+    // format switch with a stale default-format refetch).
+  }, [seriesId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load the enabled provider list once for the override selector.
   useEffect(() => {
     let canceled = false;
     getProviders()
@@ -149,8 +145,31 @@ export default function PipelineManuscriptEditor() {
   }, []);
 
   const overrideProvider = providers.find((p) => p.id === overrideProviderId) || null;
-  const overrideModels = filterSelectableModels(overrideProvider?.models || [overrideProvider?.defaultModel]);
-  // undefined (not '') so the server treats it as "no override" → system default.
+  const localModels = useLocalModels();
+  const overrideBackend = localBackendForProvider(overrideProvider);
+  const overrideModels = useMemo(
+    () => filterGenerationModels(
+      mergeModelLists(
+        overrideProvider?.models || [overrideProvider?.defaultModel],
+        overrideBackend ? localModels[overrideBackend] : [],
+      ),
+    ),
+    [overrideProvider, overrideBackend, localModels],
+  );
+  const editorialPick = overrideBackend ? localModels.recommendations?.[overrideBackend] : null;
+  const showEditorialPick = Boolean(
+    editorialPick?.id && overrideModels.includes(editorialPick.id) && overrideModel !== editorialPick.id,
+  );
+
+  useEffect(() => {
+    if (!overrideProviderId || overrideModels.length === 0) return;
+    if (overrideModel && overrideModels.includes(overrideModel)) return;
+    const pick = (editorialPick?.id && overrideModels.includes(editorialPick.id))
+      ? editorialPick.id
+      : overrideModels[0];
+    setOverrideModel(pick);
+  }, [overrideProviderId, overrideModels, editorialPick, overrideModel]);
+
   const providerOverride = overrideProviderId || undefined;
   const modelOverride = overrideModel || undefined;
 
@@ -160,12 +179,9 @@ export default function PipelineManuscriptEditor() {
     setOverrideModel(p?.defaultModel || '');
   };
 
-  // Re-run the editorial completeness pass over the manuscript with the chosen
-  // provider. The route persists findings as the review comment set, so we just
-  // swap in the returned comments.
   const [runEditorialReview, reviewing] = useAsyncAction(
-    async () => {
-      const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride });
+    async (mode = 'merge') => {
+      const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride, mode });
       const next = Array.isArray(result?.review?.comments) ? result.review.comments : [];
       setComments(next);
       setReviewMeta({ chunked: !!result?.chunked, chunkCount: result?.chunkCount || 1 });
@@ -177,8 +193,6 @@ export default function PipelineManuscriptEditor() {
     { errorMessage: 'Failed to run editorial review' },
   );
 
-  // Switch which format the editor spans. Refetches that format's full-story
-  // sections (every issue, empty where undrafted).
   const changeView = async (type) => {
     if (type === viewType || switching) return;
     setSwitching(true);
@@ -194,9 +208,10 @@ export default function PipelineManuscriptEditor() {
     setViewType(manuscript.viewType || type);
     setAvailableTypes(Array.isArray(manuscript.availableTypes) ? manuscript.availableTypes : availableTypes);
     setSaveState({});
+    setOpenCommentId(null);
+    setEditingIssueId(null);
   };
 
-  // Pin the format currently being viewed as the series' source of truth.
   const pinPrimary = async () => {
     if (!viewType || pinning) return;
     setPinning(true);
@@ -210,13 +225,9 @@ export default function PipelineManuscriptEditor() {
 
   const setSectionContent = (issueId, content) => patchSection(issueId, { content });
 
-  // Save a section's edited text back to its issue stage (versioned — snapshots
-  // the prior text so the edit is revertible). Skips no-op blurs so we don't
-  // mint a version for an unchanged section. Server serializes the write, so a
-  // blur-save can't clobber a concurrent accept on the same stage.
   const saveSection = async (section) => {
     const key = `${section.issueId}:${section.stageId}`;
-    if (baselineRef.current.get(key) === section.content) return; // unchanged — nothing to version
+    if (baselineRef.current.get(key) === section.content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
     const result = await savePipelineManuscriptSection(
       seriesId,
@@ -234,9 +245,6 @@ export default function PipelineManuscriptEditor() {
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
   };
 
-  // Revert a section to a prior version (runId from its history). The restore
-  // route snapshots the now-displaced text first, so revert is itself
-  // reversible. Updates content + versions in place.
   const revertSection = async (section, runId) => {
     const result = await restorePipelineStageVersion(section.issueId, section.stageId, runId, { silent: true })
       .catch((err) => { toast.error(err.message || 'Failed to revert'); return null; });
@@ -250,35 +258,27 @@ export default function PipelineManuscriptEditor() {
     return result;
   };
 
-  // Jump to a comment's anchor: focus the issue's textarea, select the verbatim
-  // quote (native selection highlights it), and scroll it into view.
-  const jumpToComment = (comment) => {
-    // Pin the comment to the overlay first, so even an unanchored note keeps its
-    // context (and actions) visible while the user works in the manuscript.
-    setActiveCommentId(comment.id);
-    const ta = comment.issueNumber != null ? sectionRefs.current.get(comment.issueNumber) : null;
-    if (!ta) {
-      toast('This comment is not anchored to a specific issue');
-      return;
+  // Reveal a comment in context: drop into Review mode (where the note expands
+  // as an in-context card) and open it, switching to its issue tab if needed.
+  // The section's card-scroll effect brings the card into view — on arrival for
+  // a cross-issue jump, or immediately when it's the active issue. A story-level
+  // note with no issueNumber has no tab, so it expands inline in the sidebar.
+  const revealComment = (comment) => {
+    setOpenCommentId(comment.id);
+    setViewMode('review');     // surface the in-context review card…
+    setEditingIssueId(null);   // …and make sure it's the card showing, not the editor
+    if (comment.issueNumber == null) return; // unanchored — expands in the sidebar
+    if (comment.issueNumber !== activeNumber) {
+      navigate(`/pipeline/series/${seriesId}/manuscript/${comment.issueNumber}`);
     }
-    ta.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-    const quote = comment.anchorQuote || '';
-    const idx = quote ? ta.value.indexOf(quote) : -1;
-    ta.focus();
-    if (idx !== -1) ta.setSelectionRange(idx, idx + quote.length);
-    else ta.setSelectionRange(0, 0);
+    if (comment.stageId && viewType && comment.stageId !== viewType) {
+      toast(`This note is on the ${STAGE_LABEL[comment.stageId] || comment.stageId} — switch formats to edit it in context`);
+    }
   };
 
   const updateCommentLocal = (next) =>
     setComments((prev) => prev.map((c) => (c.id === next.id ? next : c)));
 
-  // After an accepted fix the server returns the rewritten section — reflect it
-  // in the manuscript pane so the edit shows without a reload. A comment can
-  // target a format other than the one on screen (the sidebar shows all
-  // comments); only patch the visible textarea when the edited stage matches
-  // the current view, or we'd paint (and later blur-save) the wrong format's
-  // text into this section. The edit still persisted server-side — it shows on
-  // switching to that format.
   const applyAccepted = ({ comment, section, sections: changedSections }) => {
     const list = Array.isArray(changedSections) && changedSections.length ? changedSections : [section].filter(Boolean);
     list.forEach((changed) => {
@@ -291,18 +291,72 @@ export default function PipelineManuscriptEditor() {
     if (comment) updateCommentLocal(comment);
   };
 
-  const grouped = useMemo(() => ({
-    open: comments.filter((c) => c.status === 'open'),
-    accepted: comments.filter((c) => c.status === 'accepted'),
-    dismissed: comments.filter((c) => c.status === 'dismissed'),
-  }), [comments]);
+  // Open editorial comments anchorable to the on-screen format, grouped by issue
+  // number. Comments targeting a different stage stay index-only (no highlight).
+  const openCommentsByNumber = useMemo(() => {
+    const map = new Map();
+    comments.forEach((c) => {
+      if (c.status !== 'open') return;
+      if (c.stageId && viewType && c.stageId !== viewType) return;
+      if (c.issueNumber == null) return;
+      if (!map.has(c.issueNumber)) map.set(c.issueNumber, []);
+      map.get(c.issueNumber).push(c);
+    });
+    return map;
+  }, [comments, viewType]);
 
-  // Only pin still-open comments — accepting/dismissing flips the status, which
-  // resolves this to null and closes the overlay automatically (resolved
-  // comments are navigational only, with no actions to keep on screen).
-  const activeComment = activeCommentId
-    ? comments.find((c) => c.id === activeCommentId && c.status === 'open')
-    : null;
+  // Locate every open comment's anchor span per section once, here — the
+  // sections render from these rather than recomputing locateAnchors each.
+  const sectionSpans = useMemo(() => {
+    const map = new Map();
+    sections.forEach((s) => {
+      map.set(s.issueId, locateAnchors(s.content || '', openCommentsByNumber.get(s.number) || []));
+    });
+    return map;
+  }, [sections, openCommentsByNumber]);
+
+  // Which comments actually located their anchor in the current draft.
+  const locatedCommentIds = useMemo(() => {
+    const set = new Set();
+    sectionSpans.forEach((spans) => spans.forEach((span) => set.add(span.commentId)));
+    return set;
+  }, [sectionSpans]);
+
+  // Open-note count per issue, for the tab badges.
+  const openCountByNumber = useMemo(() => {
+    const map = new Map();
+    openCommentsByNumber.forEach((list, number) => map.set(number, list.length));
+    return map;
+  }, [openCommentsByNumber]);
+
+  // The one issue the editor is focused on. On the bare /manuscript URL (or an
+  // unknown issue) fall back to the first issue so there's no blank frame, and
+  // canonicalize the URL to it so the tab highlights and deep links/back work.
+  const matchedSection = sections.find((s) => s.number === activeNumber) || null;
+  const activeSection = matchedSection || sections[0] || null;
+  useEffect(() => {
+    if (!activeSection) return;
+    if (activeNumber === activeSection.number) return;
+    navigate(`/pipeline/series/${seriesId}/manuscript/${activeSection.number}`, { replace: true });
+  }, [activeSection, activeNumber, seriesId, navigate]);
+
+  // Plain object (not memoized): its handlers close over viewType/sections, so a
+  // stale memo would apply accepts against the wrong format. Children read
+  // individual fields rather than the object identity, so there's nothing to gain.
+  const commentCardProps = {
+    seriesId,
+    providerOverride,
+    modelOverride,
+    onCommentChange: updateCommentLocal,
+    onAccepted: applyAccepted,
+    fixDrafts,
+    setCommentDraft,
+  };
+
+  const registerSectionRef = (number) => (el) => {
+    if (el) sectionRefs.current.set(number, el);
+    else sectionRefs.current.delete(number);
+  };
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading manuscript…</div>;
 
@@ -319,6 +373,35 @@ export default function PipelineManuscriptEditor() {
             <h1 className="text-xl font-bold text-white truncate">{series?.name || 'Manuscript'}</h1>
 
             <div className="ml-auto flex items-center gap-2 flex-wrap">
+              {/* View-mode toggle: Live (Grammarly) vs Review (annotated). */}
+              <div className="inline-flex rounded-lg border border-port-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('live')}
+                  title="Live editing with inline underlines (Grammarly-style)"
+                  className={`px-2.5 py-1.5 text-sm font-medium inline-flex items-center gap-1 ${viewMode === 'live' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                >
+                  <PencilLine size={13} /> Live
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setViewMode('review'); setEditingIssueId(null); }}
+                  title="Annotated read-through with click-to-expand notes"
+                  className={`px-2.5 py-1.5 text-sm font-medium inline-flex items-center gap-1 ${viewMode === 'review' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                >
+                  <BookOpen size={13} /> Review
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowImpact(true)}
+                title="Preview how the selected fixes change the whole manuscript"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40"
+              >
+                <GitCompare size={13} /> Impact preview
+              </button>
+
               {/* Format switcher — span the full story in any of the three formats. */}
               <div className="inline-flex rounded-lg border border-port-border overflow-hidden">
                 {MANUSCRIPT_TYPES.map((t) => {
@@ -343,7 +426,6 @@ export default function PipelineManuscriptEditor() {
                 })}
               </div>
               {switching ? <Loader2 size={14} className="animate-spin text-gray-500" /> : null}
-              {/* Pin the viewed format as the source of truth (stored in the bible). */}
               {viewType && viewType !== pinnedPrimary ? (
                 <button
                   type="button"
@@ -368,27 +450,48 @@ export default function PipelineManuscriptEditor() {
               No drafted manuscript yet — write a comic script, prose, or teleplay on at least one issue, then run “Finish the draft” from the series arc.
             </p>
           ) : (
-            sections.map((section) => (
-              <ManuscriptSection
-                key={section.issueId}
-                section={section}
-                saveState={saveState[section.issueId]}
-                onContentChange={(content) => setSectionContent(section.issueId, content)}
-                onBlurSave={() => saveSection(section)}
-                onRevert={(runId) => revertSection(section, runId)}
-                registerRef={(el) => {
-                  if (el) sectionRefs.current.set(section.number, el);
-                  else sectionRefs.current.delete(section.number);
-                }}
+            <>
+              <ManuscriptIssueTabs
+                seriesId={seriesId}
+                sections={sections}
+                activeNumber={activeNumber}
+                openCountByNumber={openCountByNumber}
               />
-            ))
+              {activeSection ? (() => {
+                const section = activeSection;
+                const common = {
+                  section,
+                  comments: openCommentsByNumber.get(section.number) || EMPTY,
+                  spans: sectionSpans.get(section.issueId) || EMPTY,
+                  saveState: saveState[section.issueId],
+                  openCommentId,
+                  onOpenComment: setOpenCommentId,
+                  onCloseComment: () => setOpenCommentId(null),
+                  onContentChange: (content) => setSectionContent(section.issueId, content),
+                  onBlurSave: () => saveSection(section),
+                  onRevert: (runId) => revertSection(section, runId),
+                  registerRef: registerSectionRef(section.number),
+                  commentCardProps,
+                };
+                // Key on issueId so switching issues mounts a fresh section —
+                // the card-scroll-into-view effect then fires on arrival.
+                return viewMode === 'live' ? (
+                  <ManuscriptLiveSection key={section.issueId} {...common} />
+                ) : (
+                  <AnnotatedManuscriptSection
+                    key={section.issueId}
+                    {...common}
+                    editing={editingIssueId === section.issueId}
+                    onToggleEdit={() => setEditingIssueId((cur) => (cur === section.issueId ? null : section.issueId))}
+                  />
+                );
+              })() : null}
+            </>
           )}
         </section>
 
-        {/* Comments sidebar */}
+        {/* Comments sidebar — provider override, review trigger, and the index. */}
         <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/40 lg:overflow-y-auto p-3 space-y-3">
-          {/* AI provider override + editorial-review trigger. The chosen provider
-              feeds both the per-comment "Generate fix" and the review re-run. */}
           <div className="border border-port-border rounded-lg bg-port-bg/40 p-2.5 space-y-2">
             <label htmlFor="ms-provider-override" className="block text-[10px] uppercase tracking-wider text-gray-500">
               AI provider — Generate fix &amp; Editorial review
@@ -413,13 +516,23 @@ export default function PipelineManuscriptEditor() {
                   onChange={(e) => setOverrideModel(e.target.value)}
                   className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white"
                 >
-                  {overrideModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                  {overrideModels.map((m) => <option key={m} value={m}>{modelOptionLabel(m, localModels.ctxById)}</option>)}
                 </select>
               ) : null}
             </div>
+            {showEditorialPick ? (
+              <button
+                type="button"
+                onClick={() => setOverrideModel(editorialPick.id)}
+                title={editorialPick.reason}
+                className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:underline"
+              >
+                <Sparkles size={11} /> Recommended for editing: {editorialPick.id}
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={runEditorialReview}
+              onClick={() => runEditorialReview(freshReview ? 'fresh' : 'merge')}
               disabled={reviewing || sections.length === 0}
               title={sections.length === 0
                 ? 'Draft at least one issue before running an editorial review'
@@ -429,12 +542,24 @@ export default function PipelineManuscriptEditor() {
               {reviewing ? <Loader2 size={12} className="animate-spin" /> : <ClipboardCheck size={12} />}
               {reviewing ? 'Running editorial review…' : 'Run editorial review'}
             </button>
+            <label htmlFor="ms-fresh-review" className="flex items-start gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+              <input
+                id="ms-fresh-review"
+                type="checkbox"
+                checked={freshReview}
+                onChange={(e) => setFreshReview(e.target.checked)}
+                disabled={reviewing}
+                className="mt-0.5 accent-port-accent"
+              />
+              <span>
+                Start fresh
+                <span className="text-gray-600">
+                  {' '}— auto-dismiss open notes this pass no longer finds; still-valid,
+                  accepted &amp; dismissed notes are kept.
+                </span>
+              </span>
+            </label>
           </div>
-
-          <h2 className="text-xs uppercase tracking-wider text-gray-500 flex items-center justify-between">
-            <span>Editorial comments</span>
-            <span className="text-gray-600">{grouped.open.length} open</span>
-          </h2>
 
           {reviewMeta?.chunked ? (
             <p
@@ -446,384 +571,23 @@ export default function PipelineManuscriptEditor() {
             </p>
           ) : null}
 
-          {comments.length === 0 ? (
-            <p className="text-xs text-gray-500 italic">
-              No comments yet. Run “Finish the draft” from the series arc to generate editorial feedback here.
-            </p>
-          ) : null}
-
-          {grouped.open.map((comment) => (
-            <CommentCard
-              key={comment.id}
-              comment={comment}
-              seriesId={seriesId}
-              providerOverride={providerOverride}
-              modelOverride={modelOverride}
-              onJump={jumpToComment}
-              onCommentChange={updateCommentLocal}
-              onAccepted={applyAccepted}
-              draft={fixDrafts[comment.id]}
-              onDraftChange={(entry) => setCommentDraft(comment.id, entry)}
-            />
-          ))}
-
-          <ResolvedGroup label="Accepted" icon={Check} items={grouped.accepted} onJump={jumpToComment} />
-          <ResolvedGroup label="Dismissed" icon={X} items={grouped.dismissed} onJump={jumpToComment} />
+          <ManuscriptCommentIndex
+            comments={comments}
+            locatedCommentIds={locatedCommentIds}
+            openCommentId={openCommentId}
+            onReveal={revealComment}
+            commentCardProps={commentCardProps}
+          />
         </aside>
       </div>
 
-      {/* Pinned overlay: the just-jumped-to comment, kept on screen over the
-          manuscript so its context and actions travel with the scroll. */}
-      {activeComment ? (
-        <ActiveCommentOverlay
-          comment={activeComment}
-          seriesId={seriesId}
-          providerOverride={providerOverride}
-          modelOverride={modelOverride}
-          onJump={jumpToComment}
-          onCommentChange={updateCommentLocal}
-          onAccepted={applyAccepted}
-          draft={fixDrafts[activeComment.id]}
-          onDraftChange={(entry) => setCommentDraft(activeComment.id, entry)}
-          onClose={() => setActiveCommentId(null)}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-// Floating, dismissable restatement of the comment the user just jumped to.
-// Anchored over the manuscript pane (bottom-left) — away from the right sidebar
-// and below the section that scrolled to the top — so the user can read/edit
-// the manuscript and act on the comment without losing either. Reuses
-// CommentCard with a distinct idScope so its form ids don't collide with the
-// sidebar's copy of the same open comment.
-function ActiveCommentOverlay({ comment, onClose, ...cardProps }) {
-  // Esc closes the pinned card — matches the dismiss convention of the app's
-  // other non-modal floating panels. (No click-outside: the overlay is meant to
-  // stay open while the user clicks into the manuscript to edit.)
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="false"
-      aria-label="Editorial comment"
-      className="fixed bottom-4 left-4 z-40 w-[min(440px,calc(100vw-2rem))] max-h-[70vh] overflow-y-auto rounded-lg border border-port-accent/40 bg-port-card shadow-2xl shadow-black/60"
-    >
-      <div className="sticky top-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-port-border bg-port-bg/90 backdrop-blur">
-        <span className="text-[11px] uppercase tracking-wider text-gray-400 inline-flex items-center gap-1.5">
-          <CornerDownRight size={12} className="text-port-accent" /> Editorial comment
-        </span>
-        <button type="button" onClick={onClose} className="text-gray-500 hover:text-white" aria-label="Close pinned comment" title="Close pinned comment">
-          <X size={14} />
-        </button>
-      </div>
-      <div className="p-2.5">
-        <CommentCard comment={comment} idScope={`overlay-${comment.id}`} {...cardProps} />
-      </div>
-    </div>
-  );
-}
-
-// One issue's manuscript section: an auto-sized free-text editor plus a
-// collapsible version history with one-click revert.
-function ManuscriptSection({ section, saveState, onContentChange, onBlurSave, onRevert, registerRef }) {
-  const [showVersions, setShowVersions] = useState(false);
-  const [revertingId, setRevertingId] = useState(null);
-  const versions = section.versions || [];
-
-  const revert = async (runId) => {
-    setRevertingId(runId);
-    await onRevert(runId);
-    setRevertingId(null);
-  };
-
-  return (
-    <article className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2 sticky top-0 bg-port-bg/95 backdrop-blur py-1 z-10">
-        <h2 className="text-sm font-semibold text-gray-200">
-          Issue {section.number}{section.title ? ` — ${section.title}` : ''}
-          <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">{STAGE_LABEL[section.stageId] || section.stageId}</span>
-        </h2>
-        <div className="flex items-center gap-2">
-          <SaveBadge state={saveState} />
-          {versions.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setShowVersions((v) => !v)}
-              className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white"
-              title="Show prior saved versions"
-            >
-              <History size={12} /> {versions.length}
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {showVersions && versions.length > 0 ? (
-        <div className="border border-port-border rounded bg-port-bg/40 p-2 space-y-1">
-          <p className="text-[10px] uppercase tracking-wider text-gray-500">Version history (newest first)</p>
-          {versions.map((v) => (
-            <div key={v.runId} className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="text-gray-400">{v.createdAt ? timeAgo(v.createdAt) : v.runId}</span>
-              <button
-                type="button"
-                onClick={() => revert(v.runId)}
-                disabled={revertingId === v.runId}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-gray-300 hover:text-white border border-port-border hover:border-port-accent/40 disabled:opacity-40"
-                title="Revert this section to that version (reversible)"
-              >
-                {revertingId === v.runId ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-                Revert
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <textarea
-        ref={registerRef}
-        value={section.content}
-        onChange={(e) => onContentChange(e.target.value)}
-        onBlur={onBlurSave}
-        rows={rowsFor(section.content)}
-        spellCheck
-        className="w-full px-3 py-2 bg-port-card border border-port-border rounded text-sm text-gray-100 font-mono leading-relaxed resize-y focus:border-port-accent/50 focus:outline-none"
+      <ManuscriptImpactPreview
+        open={showImpact}
+        onClose={() => setShowImpact(false)}
+        sections={sections}
+        comments={comments.filter((c) => c.status === 'open' && c.fix)}
+        fixDrafts={fixDrafts}
       />
-    </article>
-  );
-}
-
-function SaveBadge({ state }) {
-  if (state === 'saving') return <span className="text-[10px] text-gray-500 inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> saving</span>;
-  if (state === 'saved') return <span className="text-[10px] text-port-success">saved</span>;
-  return null;
-}
-
-function Badge({ comment }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${SEVERITY_TONE[comment.severity] || SEVERITY_TONE.low}`}>
-        {comment.severity}
-      </span>
-      <span className="text-[10px] uppercase tracking-wider text-gray-500">{CATEGORY_LABEL[comment.category] || comment.category}</span>
-    </span>
-  );
-}
-
-function CommentCard({ comment, seriesId, providerOverride, modelOverride, onJump, onCommentChange, onAccepted, idScope, draft, onDraftChange }) {
-  // Namespace form ids so the overlay's copy of an open comment doesn't collide
-  // with the sidebar's (duplicate ids break label/htmlFor association).
-  const scope = idScope || comment.id;
-  const hasFix = !!comment.fix;
-  const fixEdits = useMemo(() => {
-    if (Array.isArray(comment.fix?.edits) && comment.fix.edits.length) return comment.fix.edits;
-    if (comment.fix?.find || comment.fix?.replace) {
-      return [{
-        issueNumber: comment.issueNumber,
-        issueId: comment.issueId,
-        stageId: comment.stageId,
-        find: comment.fix.find || '',
-        replace: comment.fix.replace || '',
-        fuzzy: comment.fix.fuzzy,
-      }];
-    }
-    return [];
-  }, [comment.fix, comment.issueId, comment.issueNumber, comment.stageId]);
-  const fixKey = useMemo(
-    () => fixEdits.map((e, i) => `${i}:${e.issueId || ''}:${e.stageId || ''}:${e.find}:${e.replace}`).join('\n---\n'),
-    [fixEdits],
-  );
-  // Draft state is owned by the parent (keyed by comment id) and shared with the
-  // overlay copy of this comment. Use the stored entry only when it was derived
-  // from the current fix; a (re)generated fix has a new fixKey, so stale drafts
-  // fall back to fresh defaults (every edit checked, replacement prefilled).
-  const stored = draft && draft.fixKey === fixKey ? draft : null;
-  const editDrafts = stored ? stored.drafts : Object.fromEntries(fixEdits.map((e, i) => [i, e.replace || '']));
-  const selectedEdits = stored ? stored.selected : Object.fromEntries(fixEdits.map((_, i) => [i, true]));
-  const setEditDrafts = (updater) =>
-    onDraftChange({ fixKey, drafts: typeof updater === 'function' ? updater(editDrafts) : updater, selected: selectedEdits });
-  const setSelectedEdits = (updater) =>
-    onDraftChange({ fixKey, drafts: editDrafts, selected: typeof updater === 'function' ? updater(selectedEdits) : updater });
-
-  const [runGenerate, generating] = useAsyncAction(
-    () => generatePipelineManuscriptFix(seriesId, comment.id, { providerOverride, modelOverride }),
-    { errorMessage: 'Failed to generate fix' },
-  );
-  const [runAccept, accepting] = useAsyncAction(
-    (selected) => acceptPipelineManuscriptFix(seriesId, comment.id, { edits: selected }),
-    { errorMessage: 'Failed to apply fix' },
-  );
-
-  const generate = async () => {
-    const result = await runGenerate();
-    if (!result) return;
-    // The regenerated fix flows in via onCommentChange → comment.fix → a new
-    // fixKey, so the drafts above auto-reset to the new fix's defaults; no need
-    // to set them here.
-    if (result.comment) onCommentChange(result.comment);
-    if (result.fix?.fuzzy) toast('The suggested anchor was not found verbatim — edit the manuscript directly, or adjust the replacement.');
-  };
-
-  const accept = async () => {
-    if (!comment.fix) return;
-    const selected = fixEdits
-      .map((edit, i) => ({ ...edit, replace: editDrafts[i] ?? edit.replace ?? '' }))
-      .filter((_, i) => selectedEdits[i]);
-    if (selected.length === 0) {
-      toast('Select at least one suggested edit to apply');
-      return;
-    }
-    const result = await runAccept(selected);
-    if (!result) return;
-    onAccepted(result);
-    toast.success(selected.length === 1 ? 'Fix applied to the manuscript' : `${selected.length} fixes applied to the manuscript`);
-  };
-
-  const dismiss = async () => {
-    const result = await patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed' }, { silent: true })
-      .catch((err) => { toast.error(err.message || 'Failed to dismiss'); return null; });
-    if (result?.comment) onCommentChange(result.comment);
-  };
-
-  const fuzzy = comment.fix?.fuzzy || fixEdits.some((e) => e.fuzzy);
-
-  return (
-    <div className="border border-port-border rounded-lg bg-port-bg/40 p-2.5 space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <Badge comment={comment} />
-        <button
-          type="button"
-          onClick={() => onJump(comment)}
-          className="text-[11px] text-port-accent hover:underline inline-flex items-center gap-1"
-          title="Jump to this spot in the manuscript"
-        >
-          <CornerDownRight size={11} />
-          {comment.issueNumber != null ? `Issue ${comment.issueNumber}` : 'Jump'}
-        </button>
-      </div>
-
-      <p className="text-xs text-gray-200">{comment.problem}</p>
-      {comment.suggestion ? <p className="text-[11px] text-gray-400"><span className="text-gray-500">Fix: </span>{comment.suggestion}</p> : null}
-      {comment.anchorQuote ? <p className="text-[11px] text-gray-500 italic line-clamp-2">“{comment.anchorQuote}”</p> : null}
-
-      {hasFix ? (
-        <div className="space-y-1.5">
-          <p className="text-[10px] uppercase tracking-wider text-gray-500">
-            Suggested {fixEdits.length === 1 ? 'edit' : `${fixEdits.length} edits`}
-          </p>
-          {fixEdits.map((edit, i) => {
-            const draft = editDrafts[i] ?? edit.replace ?? '';
-            const checked = selectedEdits[i] !== false;
-            const label = edit.issueNumber != null ? `Issue ${edit.issueNumber}` : 'Manuscript';
-            return (
-              <div key={`${i}-${edit.issueId || ''}-${edit.find}`} className="border border-port-border rounded bg-port-card/60 overflow-hidden">
-                <label className="flex items-center gap-2 px-2 py-1.5 border-b border-port-border text-[11px] text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => setSelectedEdits((prev) => ({ ...prev, [i]: e.target.checked }))}
-                    className="accent-port-accent"
-                  />
-                  <span className="font-medium">{label}{edit.title ? ` — ${edit.title}` : ''}</span>
-                  {edit.fuzzy ? <span className="ml-auto text-port-warning">fuzzy</span> : null}
-                </label>
-                {edit.note ? <p className="px-2 pt-1.5 text-[11px] text-gray-500">{edit.note}</p> : null}
-                <InlineDiff oldText={edit.find || ''} newText={draft} emptyLabel="No replacement changes." />
-                <label htmlFor={`fix-replace-${scope}-${i}`} className="block px-2 pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Replacement (editable)</label>
-                <textarea
-                  id={`fix-replace-${scope}-${i}`}
-                  value={draft}
-                  onChange={(e) => setEditDrafts((prev) => ({ ...prev, [i]: e.target.value }))}
-                  rows={Math.min(14, Math.max(3, draft.split('\n').length + 1))}
-                  className="m-2 mt-1 w-[calc(100%-1rem)] px-2 py-1.5 bg-port-bg border border-port-border rounded text-[12px] text-gray-100 font-mono resize-y focus:border-port-accent/50 focus:outline-none"
-                />
-              </div>
-            );
-          })}
-          {fuzzy ? (
-            <p className="text-[10px] text-port-warning">Anchor not found verbatim — accepting may fail; edit the manuscript directly if so.</p>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="flex items-center gap-2 pt-0.5">
-        {!hasFix ? (
-          <button
-            type="button"
-            onClick={generate}
-            disabled={generating}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] font-medium border bg-port-bg text-port-accent border-port-border hover:border-port-accent/40 disabled:opacity-40"
-          >
-            {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-            Generate fix
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={accept}
-              disabled={accepting || !fixEdits.some((_, i) => selectedEdits[i] && (editDrafts[i] || '').trim())}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40"
-            >
-              {accepting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-              Accept
-            </button>
-            <button
-              type="button"
-              onClick={generate}
-              disabled={generating || accepting}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-400 hover:text-white disabled:opacity-40"
-              title="Regenerate the suggested fix"
-            >
-              {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-            </button>
-          </>
-        )}
-        <button
-          type="button"
-          onClick={dismiss}
-          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-500 hover:text-white"
-        >
-          <X size={12} /> Dismiss
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ResolvedGroup({ label, icon: Icon, items, onJump }) {
-  const [open, setOpen] = useState(false);
-  if (items.length === 0) return null;
-  return (
-    <div className="pt-1">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-gray-500 hover:text-gray-300"
-      >
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Icon size={12} /> {label} ({items.length})
-      </button>
-      {open ? (
-        <div className="mt-1.5 space-y-1.5">
-          {items.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => onJump(c)}
-              className="block w-full text-left border border-port-border rounded p-2 bg-port-bg/30 hover:border-port-accent/30"
-            >
-              <span className="text-[11px] text-gray-400 line-clamp-2">{c.problem}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 }

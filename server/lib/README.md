@@ -161,6 +161,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `curatedGenomeMarkers.js` | Curated SNP database with classification logic. |
+| `songCraftRef.js` | Server-side mirror of the a cappella rhythm-shape + voice-layer vocabulary (`RHYTHM_SHAPES`, `VOICE_LAYERS`, `DIRGE_RHYTHM_SHAPES`) injected into the song generate/evaluate prompts so the model returns ids the editor pickers understand. Mirrors `client/src/lib/songCraft.js`. |
 
 ## Domain utilities
 
@@ -171,6 +172,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `civitai.js` | Civitai URL parsing + API client. |
 | `localLlmCatalog.js` | Curated cross-backend (Ollama↔LM Studio) local-LLM catalog + install-id mapping for the migrate flow. Pure. |
 | `localLlmDisk.js` | Pure on-disk reasoning for the migrate "copy GGUF locally instead of re-downloading" fast-path (Ollama manifest/blob parsing, LM Studio path layout, MLX/projector/shard detection). |
+| `localModelHeuristics.js` | Capability heuristics for untyped local (Ollama/LM Studio) models. `isEmbeddingModel`/`isGenerationModel` (so a generation/fallback run never picks an embedding model like `nomic-embed-text`); `recommendEditorialModel(models)` ranks installed models for editorial review/editing. Pure. Mirror `isEmbeddingModel` in `client/src/utils/providers.js`. |
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
@@ -186,6 +188,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `browserConfig.js` | Shared custom browser path helpers for deriving macOS app bundles, detecting configured browser choices, normalizing browser config, and validating Chrome-compatible binary paths. |
 | `db.js` | PostgreSQL connection pool. |
+| `pgTimestamp.js` | `mirrorTimestamp(value, fallback)` — coerce a hand-editable timestamp into a value Postgres TIMESTAMPTZ always accepts (or fall back), guarding boot-time binds against `Date.parse` rollover + out-of-range years. |
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
 | `platform.js` | Platform/OS detection helpers. |
 | `timezone.js` | Timezone utilities for scheduling. |
@@ -198,6 +201,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `asyncMutex.js` | Promise-based async mutex. |
 | `authGate.js` | Express + Socket.IO middleware that gates `/api/*` and `/data/*` behind the password set in `settings.secrets.auth`. No-op when auth is off; emits 401 `AUTH_REQUIRED` (or plain text for `/data/*`) when on and the request has no valid session token. |
 | `domainAutonomy.js` | Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES` (`off`/`dry-run`/`execute`), `getDomainMode(config, id)`, and `normalizeDomainAutonomy(raw)` to coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so no migration needed). |
+| `domainBudgets.js` | Per-domain daily autonomy budgets (pure). `BUDGET_LIMIT_FIELDS` (`maxActionsPerDay`/`maxMinutesPerDay`), `getDomainBudget(config, id)`, `normalizeDomainBudgets(raw)`, `hasBudget(budget)`, and `evaluateBudget(budget, usage)` → `{ withinBudget, exceeded }`. A `null`/non-positive cap means unlimited (default per domain, so no migration needed). Token/$ caps are intentionally absent — CLI subscription providers expose no per-run metering. Usage ledger + gate wiring live in `services/domainUsage.js`. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
 | `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |

@@ -7,25 +7,31 @@
 
 import { addTask, isRunning } from './cos.js';
 import { errorEvents } from '../lib/errorHandler.js';
+import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 
 // Track recent errors to prevent duplicate auto-fix tasks
 const recentErrors = new Map();
 const ERROR_DEDUPE_WINDOW = 60000; // 1 minute
 
-// Defer task creation so an in-flight fallback retry (driven by
-// promptRunner.js) has a chance to handle the failure first. If
-// `noteFallbackHandled(provider, model)` fires within the window we cancel
-// the task — the user got a result via fallback and shouldn't see noise in
-// their plan. 5s covers the common case where the fallback is a fast API
-// (claude-code, codex) responding within seconds; a slower fallback whose
-// retry exceeds this window will produce both a result AND an investigation
-// task, which is acceptable (the user sees what failed and what recovered).
+// Defer task creation as a backstop for the case where NO fallback is
+// attempted (e.g. no fallback configured) — the timer fires and the
+// investigation task is created. When a fallback IS attempted, promptRunner.js
+// drives the lifecycle explicitly (noteFallbackStarted → noteFallbackHandled /
+// noteFallbackFailed), which is authoritative regardless of how long the
+// fallback takes. The fixed timer alone was a bug: a slow CLI fallback (Claude
+// Code can take 20–30s) outran the window, so a successfully-recovered failure
+// still left an investigation task in the user's plan.
 const TASK_DEFER_MS = 5000;
 // Invariant: every path that removes a timer here MUST also delete the
 // matching map entry (the setTimeout callback, noteFallbackHandled, and
 // _resetAutoFixerForTests all uphold this) — otherwise the map grows
 // unbounded across the lifetime of the process.
 const deferredTasks = new Map(); // errorKey -> { timer }
+// Error keys whose failure is currently being retried via a fallback. While a
+// key is in this set, the backstop timer is suppressed (we wait for the
+// fallback's real outcome). Cleared by noteFallbackHandled (success → no task)
+// and noteFallbackFailed (failure → the fallback's own task already covers it).
+const inFlightFallbacks = new Set(); // errorKey
 
 // Store pending tasks when CoS is not running (for later pickup)
 const pendingAutoFixTasks = [];
@@ -53,15 +59,49 @@ function aiProviderErrorKey(providerName, model) {
  */
 export function noteFallbackHandled({ provider, model }) {
   const errorKey = aiProviderErrorKey(provider, model);
+  inFlightFallbacks.delete(errorKey);
   const pending = deferredTasks.get(errorKey);
   if (pending) {
     clearTimeout(pending.timer);
     deferredTasks.delete(errorKey);
-    recentErrors.delete(errorKey);
     console.log(`✅ Suppressed investigation task: fallback handled failure for ${provider} (${model})`);
-    return true;
   }
-  return false;
+  // Always clear the dedupe entry — whether or not there was a timer to cancel
+  // (noteFallbackStarted may have already cancelled it) — so a *future*
+  // identical failure can still raise a task.
+  recentErrors.delete(errorKey);
+  return !!pending;
+}
+
+/**
+ * Mark that promptRunner is about to retry `provider`/`model` via a fallback.
+ * Cancels the deferred investigation task immediately and suppresses any that
+ * would otherwise be scheduled (handleAIProviderError checks the in-flight set),
+ * so a slow fallback that exceeds TASK_DEFER_MS can't leave a task behind. The
+ * fallback's eventual outcome (noteFallbackHandled / noteFallbackFailed) clears
+ * the in-flight marker.
+ */
+export function noteFallbackStarted({ provider, model }) {
+  const errorKey = aiProviderErrorKey(provider, model);
+  inFlightFallbacks.add(errorKey);
+  const pending = deferredTasks.get(errorKey);
+  if (pending) {
+    clearTimeout(pending.timer);
+    deferredTasks.delete(errorKey);
+  }
+}
+
+/**
+ * Mark that the fallback retry for `provider`/`model` ALSO failed. Releases the
+ * in-flight suppression without creating a task for the primary: the fallback
+ * provider's own failure already queued its investigation task, so one task per
+ * user action is enough. Also clears the dedupe entry so a later retry isn't
+ * silently suppressed.
+ */
+export function noteFallbackFailed({ provider, model }) {
+  const errorKey = aiProviderErrorKey(provider, model);
+  inFlightFallbacks.delete(errorKey);
+  recentErrors.delete(errorKey);
 }
 
 /**
@@ -135,6 +175,7 @@ export function clearPendingAutoFixTasks() {
 export function _resetAutoFixerForTests() {
   for (const { timer } of deferredTasks.values()) clearTimeout(timer);
   deferredTasks.clear();
+  inFlightFallbacks.clear();
   recentErrors.clear();
   pendingAutoFixTasks.length = 0;
 }
@@ -147,7 +188,27 @@ export function _resetAutoFixerForTests() {
  */
 async function handleAIProviderError(error) {
   const ctx = error.context || {};
+
+  // A content/safety refusal is not a provider fault — we know exactly why it
+  // failed (the model declined the prompt), so there's nothing for a CoS agent
+  // to investigate. promptRunner.js already retries with a fallback and the UI
+  // is told what happened. Bail before deferring/creating a task. (server's
+  // onRunFailed already emits a distinct code for refusals so this handler
+  // normally isn't even reached; this guard covers any other emitter.)
+  if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL) {
+    console.log(`🛟 AI model refused prompt on content/safety grounds: ${ctx.provider} (${ctx.model}) — no investigation task (fallback handles it)`);
+    return;
+  }
+
   const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
+
+  // A fallback retry for this exact failure is already in flight (promptRunner
+  // called noteFallbackStarted). Don't schedule the backstop timer — the
+  // fallback's outcome decides whether to investigate. This covers the case
+  // where the fallback started before this handler ran (microtask ordering).
+  if (inFlightFallbacks.has(errorKey)) {
+    return;
+  }
 
   if (isDuplicateError(errorKey)) {
     console.log(`⏭️ Skipping duplicate AI provider error: ${ctx.provider} (${ctx.model})`);

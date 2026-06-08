@@ -1,0 +1,78 @@
+/**
+ * Shared chrome for one manuscript section — the sticky title bar (issue +
+ * stage), the save badge, and the collapsible version history with one-click
+ * revert. The editing surface itself (Live overlay or Review prose) is passed in
+ * as children; `headerExtra` lets a mode add controls beside the title (e.g. an
+ * Edit toggle).
+ */
+
+import { useState } from 'react';
+import { Loader2, History, RotateCcw } from 'lucide-react';
+import { timeAgo } from '../../../utils/formatters';
+import { STAGE_LABEL } from './constants';
+
+function SaveBadge({ state }) {
+  if (state === 'saving') return <span className="text-[10px] text-gray-500 inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> saving</span>;
+  if (state === 'saved') return <span className="text-[10px] text-port-success">saved</span>;
+  return null;
+}
+
+export default function ManuscriptSectionFrame({ section, saveState, onRevert, headerExtra, registerRef, children }) {
+  const [showVersions, setShowVersions] = useState(false);
+  const [revertingId, setRevertingId] = useState(null);
+  const versions = section.versions || [];
+
+  const revert = async (runId) => {
+    setRevertingId(runId);
+    await onRevert(runId);
+    setRevertingId(null);
+  };
+
+  return (
+    <article ref={registerRef} className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2 sticky top-0 bg-port-bg/95 backdrop-blur py-1 z-10">
+        <h2 className="text-sm font-semibold text-gray-200">
+          Issue {section.number}{section.title ? ` — ${section.title}` : ''}
+          <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">{STAGE_LABEL[section.stageId] || section.stageId}</span>
+        </h2>
+        <div className="flex items-center gap-2">
+          {headerExtra}
+          <SaveBadge state={saveState} />
+          {versions.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowVersions((v) => !v)}
+              className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white"
+              title="Show prior saved versions"
+            >
+              <History size={12} /> {versions.length}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {showVersions && versions.length > 0 ? (
+        <div className="border border-port-border rounded bg-port-bg/40 p-2 space-y-1">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500">Version history (newest first)</p>
+          {versions.map((v) => (
+            <div key={v.runId} className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="text-gray-400">{v.createdAt ? timeAgo(v.createdAt) : v.runId}</span>
+              <button
+                type="button"
+                onClick={() => revert(v.runId)}
+                disabled={revertingId === v.runId}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-gray-300 hover:text-white border border-port-border hover:border-port-accent/40 disabled:opacity-40"
+                title="Revert this section to that version (reversible)"
+              >
+                {revertingId === v.runId ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
+                Revert
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {children}
+    </article>
+  );
+}

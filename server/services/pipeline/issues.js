@@ -18,10 +18,8 @@
  * Persisted to data/pipeline-issues/{id}/index.json.
  */
 
-import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS } from '../../lib/fileUtils.js';
-import { createCollectionStore } from '../../lib/collectionStore.js';
+import { getIssuesStore } from './issuesStore/store.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import {
@@ -39,24 +37,12 @@ import { applyVolumeOrderedNumbers, UNSCOPED_ANCHOR } from '../../lib/pipelineIs
 import { maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash } from '../../lib/conflictJournal.js';
 import * as seriesSvc from './series.js';
 
-// TYPE-level (storage layout) schema version stamped on
-// `data/pipeline-issues/index.json`.
-//   v1 — issues split out of monolithic `data/pipeline-issues.json` into
-//        per-record `data/pipeline-issues/{id}/index.json`. See migration 035.
-const TYPE_SCHEMA_VERSION = 1;
-
-let _store = null;
-const store = () => {
-  if (_store && _store.dir === join(PATHS.data, 'pipeline-issues')) return _store;
-  _store = createCollectionStore({
-    dir: join(PATHS.data, 'pipeline-issues'),
-    type: 'pipelineIssues',
-    schemaVersion: TYPE_SCHEMA_VERSION,
-    sanitizeRecord: sanitizeIssue,
-    idPattern: /^iss-[A-Za-z0-9-]+$/,
-  });
-  return _store;
-};
+// Storage backend dispatcher (#1015). Issue records moved from per-record
+// `data/pipeline-issues/{id}/index.json` (collectionStore) to one-row-per-issue
+// in PostgreSQL (`pipeline_issues`); the facade is a drop-in for the
+// collectionStore surface this service calls (loadAll/loadOne/saveOneNow/
+// deleteOne/queueTypeIndexWrite), so only this factory changed.
+const store = () => getIssuesStore(sanitizeIssue);
 
 export const issueStore = () => store();
 

@@ -10,7 +10,6 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, validateRequest } from '../lib/validation.js';
-import { catalogUserTypesSettingsSchema } from '../lib/catalogValidation.js';
 
 const router = Router();
 
@@ -97,21 +96,19 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.citySnapshots !== undefined) {
     validateRequest(citySnapshotConfigSchema.partial(), req.body.citySnapshots);
   }
-  // User-defined catalog types — validate the whole slice (unique-id +
-  // system-collision refinements) when the key is present, mirroring the
-  // backup/embeddings slice guards above. The catalog `/types` routes are the
-  // primary write path, but a direct PUT /api/settings must enforce the same
-  // contract so a malformed slice can't reach disk and break the registry.
-  if (req.body?.catalogUserTypes !== undefined) {
-    validateRequest(catalogUserTypesSettingsSchema, req.body.catalogUserTypes);
-  }
+  // User-defined catalog types moved out of settings.json into PostgreSQL
+  // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only
+  // write path; a `catalogUserTypes` key in a PUT /api/settings body (legacy
+  // client, restore bundle) is stripped below alongside `secrets` so it can't
+  // write a dead, unread slice back into settings.json (which the boot import
+  // would then re-import and rename aside on the next restart, churning state).
   // Strip `secrets` from the incoming PUT body so an authenticated session
   // (or stolen cookie) can't disable the auth gate or clobber other secrets
   // by sending `{ "secrets": { ... } }` directly to /api/settings — that
   // would bypass the current-password proof the /api/auth/password routes
   // require. Secrets are write-only through their dedicated routes
   // (/api/auth/password, /api/github/secrets, etc.).
-  const { secrets: _ignoredSecrets, ...settingsPatch } = req.body || {};
+  const { secrets: _ignoredSecrets, catalogUserTypes: _ignoredTypes, ...settingsPatch } = req.body || {};
   const merged = await updateSettings(settingsPatch);
   // The queue caches codex.parallelLimit in-process; sync it from the
   // merged value so a save takes effect without a restart and without

@@ -43,7 +43,9 @@ vi.mock('../services/providers.js', () => ({
 // to a spy so tests can assert it was/wasn't invoked without wiring up the
 // full task system.
 vi.mock('../services/autoFixer.js', () => ({
+  noteFallbackStarted: vi.fn(),
   noteFallbackHandled: vi.fn(),
+  noteFallbackFailed: vi.fn(),
 }));
 
 // aiToolkitState lookups gate the retry path on a real providerStatus
@@ -59,7 +61,7 @@ const tuiRunner = await import('./tuiPromptRunner.js');
 const providers = await import('../services/providers.js');
 const autoFixer = await import('../services/autoFixer.js');
 const toolkitState = await import('./aiToolkitState.js');
-const { runPromptThroughProvider, resolveProviderAndModel } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -678,10 +680,17 @@ describe('promptRunner — retry-with-fallback', () => {
       reason: expect.any(String),
     }));
     expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-cli', expect.any(Object));
+    // The fallback lifecycle is announced up front (so a slow fallback can't
+    // outrun the backstop timer) and resolved on success.
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({
+      provider: 'Primary CLI',
+      model: 'primary-model',
+    });
     expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({
       provider: 'Primary CLI',
       model: 'primary-model',
     });
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
   });
 
   it('runs the configured fallbackModel on the fallback (never the primary model) when one is pinned', async () => {
@@ -793,8 +802,11 @@ describe('promptRunner — retry-with-fallback', () => {
       source: 'test',
     })).rejects.toThrow(/fallback also boom/);
 
-    // noteFallbackHandled is reserved for SUCCESSFUL fallback — when both
-    // fail the user must see both deferred investigation tasks fire.
+    // noteFallbackHandled is reserved for SUCCESSFUL fallback. When both fail,
+    // the primary's suppression is released via noteFallbackFailed (the
+    // fallback provider's own failure already queued its investigation task).
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary CLI', model: 'primary-model' });
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary CLI', model: 'primary-model' });
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
   });
 
@@ -1079,6 +1091,41 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(providers.getAllProviders).toHaveBeenCalledTimes(1);
     expect(status.getFallbackProvider).toHaveBeenCalledTimes(1);
     expect(status.markUnavailable).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveEffectiveModel — embedding-model skip', () => {
+  it('skips an embedding-first models list when defaultModel is null (the nomic-embed-text fallback bug)', () => {
+    // Mirrors the real Ollama provider: defaultModel null, embedding model
+    // listed first. A generation/fallback run must NOT resolve the embedding.
+    const ollama = {
+      id: 'ollama', type: 'api', defaultModel: null,
+      models: ['nomic-embed-text:latest', 'qwen3.6:35b', 'gpt-oss:20b'],
+    };
+    expect(resolveEffectiveModel(ollama, null)).toBe('qwen3.6:35b');
+  });
+
+  it('still honors an explicit defaultModel', () => {
+    const p = { id: 'ollama', type: 'api', defaultModel: 'llama3.2:latest', models: ['nomic-embed-text:latest', 'llama3.2:latest'] };
+    expect(resolveEffectiveModel(p, null)).toBe('llama3.2:latest');
+  });
+
+  it('falls back to models[0] only when every model is an embedding model', () => {
+    const p = { id: 'ollama', type: 'api', defaultModel: null, models: ['nomic-embed-text:latest', 'mxbai-embed-large'] };
+    expect(resolveEffectiveModel(p, null)).toBe('nomic-embed-text:latest');
+  });
+
+  it('skips a stale embedding-only defaultModel (older config the UI never re-edited)', () => {
+    // A pre-existing local provider can carry an embedding id in defaultModel;
+    // a generation/fallback run must not route to it — fall through to the
+    // first generation model in the list.
+    const p = { id: 'ollama', type: 'api', defaultModel: 'nomic-embed-text:latest', models: ['nomic-embed-text:latest', 'qwen3.6:35b'] };
+    expect(resolveEffectiveModel(p, null)).toBe('qwen3.6:35b');
+  });
+
+  it('skips an embedding-only callerModel and falls through to a generation model', () => {
+    const p = { id: 'ollama', type: 'api', defaultModel: 'qwen3.6:35b', models: ['nomic-embed-text:latest', 'qwen3.6:35b'] };
+    expect(resolveEffectiveModel(p, 'nomic-embed-text:latest')).toBe('qwen3.6:35b');
   });
 });
 

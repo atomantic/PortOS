@@ -26,10 +26,12 @@ import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normal
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
+import { remainingActionBudget } from '../lib/domainBudgets.js';
+import { getDomainBudgetStatus } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
-import { isAppOnCooldown, markAppReviewStarted, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
@@ -314,11 +316,41 @@ export async function evaluateTasks(options) {
   // spawns (auto-approved system tasks, mission, feature-agent, idle-review);
   // user and on-demand tasks are unaffected. dry-run logs the concrete already-
   // queued auto-approved tasks it would have spawned without emitting them.
-  const cosAutonomyMode = getDomainMode(state.config, 'cos');
+  let cosAutonomyMode = getDomainMode(state.config, 'cos');
 
-  // Helper: check if a task can spawn (within both global and per-project limits)
-  const canSpawnTask = (task) => {
-    if (tasksToSpawn.length >= availableSlots) return false;
+  // Daily CoS budget (#711). Two dimensions, handled differently so a single
+  // evaluation can't overshoot a small cap by spawning a whole concurrent batch:
+  //  - minutes: binary — a run's wall-clock isn't known at spawn time, so once
+  //    today's autonomous minutes reach the cap we withhold all automatic spawns
+  //    (treat as `off`); a single in-flight run's overshoot is unavoidable.
+  //  - actions: precise — cap THIS cycle's autonomous admissions to the remaining
+  //    daily allowance, counting both completed (ledger) and in-flight autonomous
+  //    runs. `autonomousActionsRemaining` flows into `autonomousSlotCeiling` below.
+  // Usage is tallied in completeAgent for autonomous runs only, so a pure dry-run
+  // never accrues; user/on-demand spawns above are already past this gate.
+  const cosBudget = await getDomainBudgetStatus('cos');
+  let autonomousActionsRemaining = Infinity;
+  if (cosAutonomyMode !== 'off') {
+    if (cosBudget.exceeded === 'minutes') {
+      emitLog('info', `CoS auto-run paused — daily minutes budget reached`, { domainBudget: 'cos', exceeded: 'minutes' });
+      cosAutonomyMode = 'off';
+    } else if (cosBudget.budget?.maxActionsPerDay != null) {
+      const runningAutonomous = runningAgentEntries.filter(
+        (a) => a.metadata?.taskType && a.metadata.taskType !== 'user'
+      ).length;
+      autonomousActionsRemaining = remainingActionBudget(cosBudget.budget, cosBudget.usage, runningAutonomous);
+      if (autonomousActionsRemaining === 0) {
+        emitLog('info', `CoS auto-run paused — daily actions budget reached`, { domainBudget: 'cos', exceeded: 'actions' });
+        cosAutonomyMode = 'off';
+      }
+    }
+  }
+
+  // Helper: check if a task can spawn (within both global and per-project limits).
+  // `ceiling` defaults to the global slot count; autonomous sections pass the
+  // lower `autonomousSlotCeiling` so the CoS action budget (#711) caps them.
+  const canSpawnTask = (task, ceiling = availableSlots) => {
+    if (tasksToSpawn.length >= ceiling) return false;
     const project = task.metadata?.app || '_self';
     return (spawnProjectCounts[project] || 0) < perProjectLimit;
   };
@@ -371,12 +403,18 @@ export async function evaluateTasks(options) {
 
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+        // Advance the cooldown eagerly (deduped per app per cycle), but defer
+        // binding the active agent until a task is produced — a null result
+        // here must not strand `activeAgentId` (issue #978).
         if (!reviewStartedApps.has(targetApp.id)) {
-          await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+          await markAppReviewCooldown(targetApp.id);
           reviewStartedApps.add(targetApp.id);
         }
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
+        if (task) {
+          await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
+        }
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
         await taskSchedule.recordExecution(`task:${request.taskType}`);
@@ -419,16 +457,23 @@ export async function evaluateTasks(options) {
     trackSpawn(userTask);
   }
 
+  // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
+  // are already in `tasksToSpawn` and never count against the CoS action budget,
+  // so the autonomous sections below may add at most `autonomousActionsRemaining`
+  // more. With no action cap this equals `availableSlots`, so the default path is
+  // unchanged. The autonomous sections use this in place of `availableSlots`.
+  const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+
   // Priority 2: Auto-approved system tasks (if slots available) — gated by the
   // CoS auto-run domain. off/dry-run withhold the unattended spawn; dry-run logs
   // what would have run so the user can see the plan without it executing.
-  if (tasksToSpawn.length < availableSlots && cosTaskData.exists && cosAutonomyMode !== 'execute') {
+  if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists && cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode === 'dry-run') {
       // Log only the tasks execute mode would ACTUALLY spawn — applying the same
       // max-spawns / cooldown / per-project gates against virtual capacity —
       // rather than every auto-approved task regardless of eligibility.
       const wouldSpawn = await selectDryRunAutoApproved(cosTaskData.autoApproved || [], {
-        availableSlots,
+        availableSlots: autonomousSlotCeiling,
         alreadySpawned: tasksToSpawn.length,
         perProjectLimit,
         spawnProjectCounts,
@@ -439,10 +484,10 @@ export async function evaluateTasks(options) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
       }
     }
-  } else if (tasksToSpawn.length < availableSlots && cosTaskData.exists) {
+  } else if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists) {
     const autoApproved = cosTaskData.autoApproved || [];
     for (const task of autoApproved) {
-      if (tasksToSpawn.length >= availableSlots) break;
+      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
 
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
 
@@ -463,7 +508,7 @@ export async function evaluateTasks(options) {
       }
 
       const sysTask = { ...task, taskType: 'internal' };
-      if (!canSpawnTask(sysTask)) {
+      if (!canSpawnTask(sysTask, autonomousSlotCeiling)) {
         const sysProject = appId || '_self';
         emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${sysProject}`);
         await recordDecision(
@@ -492,14 +537,14 @@ export async function evaluateTasks(options) {
 
   // Priority 3: Mission-driven proactive tasks (if no user tasks). Autonomous —
   // gated by the CoS auto-run domain (off/dry-run skip generation entirely).
-  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
-    const missionTasks = await generateMissionTasks({ maxTasks: availableSlots - tasksToSpawn.length }).catch(err => {
+  if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
+    const missionTasks = await generateMissionTasks({ maxTasks: autonomousSlotCeiling - tasksToSpawn.length }).catch(err => {
       emitLog('debug', `Mission task generation failed: ${err.message}`);
       return [];
     });
 
     for (const missionTask of missionTasks) {
-      if (tasksToSpawn.length >= availableSlots) break;
+      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
       // Convert mission task to COS task format
       const cosTask = {
         id: missionTask.id,
@@ -510,7 +555,7 @@ export async function evaluateTasks(options) {
         taskType: 'internal',
         approvalRequired: !missionTask.autoApprove
       };
-      if (!canSpawnTask(cosTask)) continue;
+      if (!canSpawnTask(cosTask, autonomousSlotCeiling)) continue;
       tasksToSpawn.push(cosTask);
       trackSpawn(cosTask);
       emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
@@ -528,16 +573,16 @@ export async function evaluateTasks(options) {
 
   // Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks).
   // Autonomous — gated by the CoS auto-run domain.
-  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
+  if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
     const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
     const dueAgents = await getDueFeatureAgents().catch(err => {
       emitLog('debug', `Feature agents check failed: ${err.message}`);
       return [];
     });
     for (const fa of dueAgents) {
-      if (tasksToSpawn.length >= availableSlots) break;
+      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
       const task = generateTaskFromFeatureAgent(fa);
-      if (!canSpawnTask(task)) continue;
+      if (!canSpawnTask(task, autonomousSlotCeiling)) continue;
       tasksToSpawn.push(task);
       trackSpawn(task);
       // Mark agent as having a pending task to prevent duplicate spawns
@@ -555,7 +600,7 @@ export async function evaluateTasks(options) {
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
       const idleTask = await generateIdleReviewTask(state);
-      if (idleTask && canSpawnTask(idleTask)) {
+      if (idleTask && canSpawnTask(idleTask, autonomousSlotCeiling)) {
         tasksToSpawn.push(idleTask);
         trackSpawn(idleTask);
       }
@@ -639,9 +684,14 @@ export async function generateIdleReviewTask(state) {
     const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
 
     if (nextApp) {
-      // Mark that we're starting an idle review
+      // Mark that we're starting an idle review. Advance the per-app cooldown
+      // eagerly (so this app isn't re-picked on the next idle tick) but do NOT
+      // bind an active agent yet — the task generator below may return null
+      // (no claimable PLAN item, watcher no-op, precondition skip), in which
+      // case binding here would strand `activeAgentId` and leave the app stuck
+      // reading "in review" until stale-agent cleanup (issue #978).
       await markIdleReviewStarted();
-      await markAppReviewStarted(nextApp.id, `idle-review-${Date.now()}`);
+      await markAppReviewCooldown(nextApp.id);
 
       // Update lastIdleReview timestamp
       await withStateLock(async () => {
@@ -651,7 +701,12 @@ export async function generateIdleReviewTask(state) {
       });
 
       emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
-      return await generateManagedAppImprovementTask(nextApp, state);
+      const idleTask = await generateManagedAppImprovementTask(nextApp, state);
+      // Only bind the active marker once a real task exists.
+      if (idleTask) {
+        await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
+      }
+      return idleTask;
     }
   }
 
@@ -1209,12 +1264,21 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
   const reviewersCsv = normalizeReviewers(metadata).join(',');
+  // claim-issue: expand {issueAuthorFilter} into a concrete directive telling
+  // the agent which open issues are claimable. The filter was already merged
+  // (global → per-app override) and value-constrained by sanitizeTaskMetadata,
+  // so read it from `metadata`. 'owner' (the default, matching /claim --issues)
+  // restricts to repo-owner-filed issues; 'any' claims any open issue.
+  const issueAuthorFilterBlock = (metadata.issueAuthorFilter || 'owner') === 'any'
+    ? '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.'
+    : '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.';
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
     .replace(/\{reviewers\}/g, reviewersCsv)
+    .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     // Use a replacer function — String.replace with a replacement STRING
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and

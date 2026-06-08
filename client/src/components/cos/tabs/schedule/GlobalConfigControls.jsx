@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, RotateCcw, ChevronDown, AlertCircle, Package, Info } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS } from '../../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
@@ -110,6 +110,14 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     // object wholesale, and loadSchedule re-merges defaults on read.
     await onUpdate(taskType, {
       taskMetadata: { ...(config.taskMetadata || {}), prAuthorFilter: value }
+    });
+    setUpdating(false);
+  };
+
+  const handleIssueAuthorFilterChange = async (value) => {
+    setUpdating(true);
+    await onUpdate(taskType, {
+      taskMetadata: { ...(config.taskMetadata || {}), issueAuthorFilter: value }
     });
     setUpdating(false);
   };
@@ -236,6 +244,27 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <p className="text-xs text-gray-500 mt-1">
             {PR_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.prAuthorFilter || 'any'))?.description}
             {' '}Edit the prompt below to control what the agent does for each opened PR (it can use <code>{'{prData}'}</code>, <code>{'{repoFullName}'}</code>, <code>{'{defaultBranch}'}</code>).
+          </p>
+        </div>
+      )}
+
+      {taskType === 'claim-issue' && (
+        <div>
+          <label htmlFor={`issue-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">Issue Author Filter</label>
+          <select
+            id={`issue-author-filter-${taskType}`}
+            value={config.taskMetadata?.issueAuthorFilter || 'owner'}
+            onChange={(e) => handleIssueAuthorFilterChange(e.target.value)}
+            disabled={updating}
+            className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+          >
+            {ISSUE_AUTHOR_FILTER_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.issueAuthorFilter || 'owner'))?.description}.
+            {' '}This is the global default — individual apps can override it below.
           </p>
         </div>
       )}

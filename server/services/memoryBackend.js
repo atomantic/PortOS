@@ -1,8 +1,11 @@
 /**
  * Memory Backend Switcher
  *
- * Selects between file-based (memory.js) and PostgreSQL (memoryDB.js) backends.
- * Checks for MEMORY_BACKEND env var or falls back to DB health check.
+ * Selects the PostgreSQL backend (memoryDB.js) for normal installs. PostgreSQL
+ * is mandatory; when MEMORY_BACKEND is unset we require a healthy DB and do NOT
+ * silently fall back to file storage — an unavailable DB throws. The file
+ * backend (memory.js) is reachable only via the explicit MEMORY_BACKEND=file
+ * escape hatch or NODE_ENV=test (both unsupported for production).
  *
  * Usage:
  *   import * as memory from './memoryBackend.js';
@@ -26,10 +29,14 @@ async function getBackend() {
 
   const envBackend = process.env.MEMORY_BACKEND;
 
+  // `MEMORY_BACKEND=file` is an explicit, UNSUPPORTED-for-production escape
+  // hatch — honored for development/tests only. PostgreSQL is the mandatory
+  // backend for normal installs (the creative catalog has no file-backed
+  // equivalent). See docs/plans/2026-06-06-create-postgres-storage-inventory.md.
   if (envBackend === 'file') {
     backend = await import('./memory.js');
     backendName = 'file';
-    console.log('🧠 Memory backend: file-based (JSON)');
+    console.log('🧠 Memory backend: file-based (JSON) — explicit MEMORY_BACKEND=file (unsupported for production)');
     return backend;
   }
 
@@ -41,20 +48,36 @@ async function getBackend() {
     return backend;
   }
 
-  // Auto-detect: try PostgreSQL first, fall back to file
+  // MEMORY_BACKEND unset: require PostgreSQL. We do NOT silently fall back to
+  // file storage when Postgres is unavailable — that masks a broken install.
   const health = await checkHealth();
   if (health.connected && health.hasSchema) {
     await ensureSchema();
     backend = await import('./memoryDB.js');
     backendName = 'postgres';
     console.log('🧠 Memory backend: PostgreSQL + pgvector (auto-detected)');
-  } else {
-    backend = await import('./memory.js');
-    backendName = 'file';
-    console.log(`🧠 Memory backend: file-based (PostgreSQL unavailable: ${health.error || 'no schema'})`);
+    return backend;
   }
 
-  return backend;
+  // Postgres is required but unavailable/unhealthy. The only sanctioned
+  // file-backed path here is the test/dev escape hatch — and that requires
+  // NODE_ENV=test (explicit MEMORY_BACKEND=file is handled above). Tests boot
+  // without a database; gate the file backend on test mode so a real install
+  // never silently serves file-backed memory.
+  if (process.env.NODE_ENV === 'test') {
+    backend = await import('./memory.js');
+    backendName = 'file';
+    console.log(`🧠 Memory backend: file-based (test mode — PostgreSQL unavailable: ${health.error || 'no schema'})`);
+    return backend;
+  }
+
+  // Production / normal install with no DB and no escape hatch: this is an
+  // error condition, not a fallback. Log loudly and point at setup. Startup
+  // (server/index.js) fails fast on the same condition.
+  console.error(`❌ Memory backend unavailable: PostgreSQL is required but ${health.connected ? 'the schema is missing' : `unreachable (${health.error || 'connection failed'})`}`);
+  console.error('   PostgreSQL is a mandatory dependency for PortOS. Set it up with: npm run setup:db');
+  console.error('   Dev/test only: set PGMODE=file in .env (the launcher maps it to MEMORY_BACKEND=file) to use the (unsupported) file backend.');
+  throw new Error('PostgreSQL is required for the memory backend — run `npm run setup:db`');
 }
 
 /**

@@ -12,6 +12,7 @@ import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
@@ -270,7 +271,7 @@ export async function updateAgent(agentId, updates) {
 }
 
 export async function completeAgent(agentId, result = {}) {
-  return withStateLock(async () => {
+  const completed = await withStateLock(async () => {
     const state = await loadState();
 
     if (!state.agents[agentId]) {
@@ -329,6 +330,17 @@ export async function completeAgent(agentId, result = {}) {
 
     return state.agents[agentId];
   });
+
+  // Daily CoS budget accounting (#711): count only AUTONOMOUS runs (non-user
+  // tasks) — the same set the CoS auto-run gate withholds when over budget —
+  // toward the domain's actions/minutes ledger. Recorded outside the state lock
+  // (separate ledger file + write tail) so it never serializes against state.json.
+  if (completed?.metadata?.taskType && completed.metadata.taskType !== 'user') {
+    await recordDomainUsage('cos', { actions: 1, ms: Number(result.duration) || 0 })
+      .catch(err => console.error(`❌ Failed to record CoS budget usage for ${agentId}: ${err.message}`));
+  }
+
+  return completed;
 }
 
 export async function appendAgentOutput(agentId, line) {

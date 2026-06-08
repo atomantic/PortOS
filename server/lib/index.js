@@ -137,6 +137,7 @@ export * from './taskParser.js';
 
 // === Curated static data ===
 export * from './curatedGenomeMarkers.js';
+export * from './songCraftRef.js';
 
 // === Domain utilities ===
 export * from './appResolver.js';
@@ -144,6 +145,7 @@ export * from './capabilityMap.js';
 export * from './civitai.js';
 export * from './localLlmCatalog.js';
 export * from './localLlmDisk.js';
+export * from './localModelHeuristics.js';
 export * from './issueLength.js';
 export * from './mediaItemKey.js';
 export * from './navManifest.js';
@@ -157,6 +159,7 @@ export * from './telegramClient.js';
 export * from './browserConfig.js';
 export * from './buildId.js';
 export * from './db.js';
+export * from './pgTimestamp.js';
 export * from './platform.js';
 export * from './ports.js';
 export * from './timezone.js';
@@ -165,6 +168,7 @@ export * from './timezone.js';
 export * from './asyncMutex.js';
 export * from './authGate.js';
 export * from './domainAutonomy.js';
+export * from './domainBudgets.js';
 export * from './errorHandler.js';
 export * from './mapWithConcurrency.js';
 export * from './objects.js';

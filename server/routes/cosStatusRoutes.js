@@ -4,12 +4,14 @@
 
 import { Router } from 'express';
 import * as cos from '../services/cos.js';
+import { getAllDomainUsageToday } from '../services/domainUsage.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { z } from 'zod';
 import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
+import { BUDGET_LIMIT_FIELDS } from '../lib/domainBudgets.js';
 
 const router = Router();
 
@@ -47,6 +49,17 @@ export const cosConfigSchema = z.object({
   // Partial is fine — updateConfig() merges it over the stored map.
   domainAutonomy: z.object(
     Object.fromEntries(DOMAIN_IDS.map((id) => [id, z.enum(DOMAIN_MODES).optional()]))
+  ).strict().optional(),
+  // Per-domain daily budgets (#711): partial map of domainId → { cap → value }.
+  // Each cap is a non-negative integer or null (clear). Partial is fine —
+  // updateConfig() field-merges it over the stored map. 0/null = unlimited.
+  domainBudgets: z.object(
+    Object.fromEntries(DOMAIN_IDS.map((id) => [
+      id,
+      z.object(
+        Object.fromEntries(BUDGET_LIMIT_FIELDS.map((f) => [f, z.number().int().min(0).nullable().optional()]))
+      ).strict().optional()
+    ]))
   ).strict().optional(),
   rehabilitationGracePeriodDays: z.number().int().min(1).optional(),
   completedAgentRetentionMs: z.number().int().min(0).optional(),
@@ -95,6 +108,13 @@ router.post('/resume', asyncHandler(async (req, res) => {
 router.get('/config', asyncHandler(async (req, res) => {
   const config = await cos.getConfig();
   res.json(config);
+}));
+
+// GET /api/cos/budget-usage - Today's per-domain autonomy usage (for the
+// Domain Budgets panel). Reflects the rolling daily ledger that budgets gate on.
+router.get('/budget-usage', asyncHandler(async (req, res) => {
+  const usage = await getAllDomainUsageToday();
+  res.json(usage);
 }));
 
 // PUT /api/cos/config - Update configuration

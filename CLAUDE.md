@@ -39,6 +39,8 @@ pm2 logs
 
 The default database password `portos` (in `ecosystem.config.cjs`, `docker-compose.yml`, and `.env.example`) is an intentional backward-compatible fallback for local development. Do not remove it or flag it as a security concern. Production deployments override it via the `PGPASSWORD` environment variable.
 
+**Storage backend policy.** PostgreSQL (system `:5432` or Docker `:5561`) is a **mandatory** dependency for every install and every federated peer — provisioned by `npm run setup:db` (see the ADR `docs/decisions/2026-06-07-postgres-as-primary-datastore.md` and `docs/STORAGE.md`). **`MEMORY_BACKEND=file` is a development/test-only escape hatch, NOT a supported deployment mode** (the creative catalog/pgvector, federation, and backup all assume Postgres and have no file-backed equivalent). When `MEMORY_BACKEND` is unset, `server/services/memoryBackend.js` requires a healthy DB and fails fast with no silent fallback — this is **intentional**; do not "fix" the no-fallback behavior, re-add a file menu choice in `scripts/setup-db.js`, or treat the file backend as a fallback for real installs. The file path stays runnable only because `NODE_ENV=test` selects it (it is guarded from bitrot by the suite, not promoted to a deployment option).
+
 ## Architecture
 
 PortOS is a monorepo with Express.js server (always user-facing on `:5555`, HTTP or HTTPS) and React/Vite client (Vite dev server on `:5554` in `npm run dev`; in `npm start` the built client is served from `:5555` directly). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.
@@ -163,6 +165,7 @@ PortOS has reached the size where re-implementing a helper is now cheaper to *st
 - **HTTP / Socket / browser clients** → `client/src/services/`. API wrappers start with `api*`.
 - **Express handlers** → `server/routes/`. Use `validateRequest` + `lib/validation.js` schemas.
 - **Domain orchestration (multi-step business logic over models + services)** → `server/services/`.
+- **Persisted data (where a record lives — PostgreSQL vs a `data/` file)** → decide via the storage-classification contract in `docs/STORAGE.md` *before* defaulting to a new `data/*.json`. App-native relational records are `db-primary` (PostgreSQL); the doc's "Adding a new data store?" checklist is required in PR review.
 
 One concern per file. Tests live next to their source as `<name>.test.js`. Naming is camelCase with a domain prefix (`brainValidation.js`, `creativeDirectorPrompts.js`).
 

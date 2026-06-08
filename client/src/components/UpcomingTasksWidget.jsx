@@ -57,6 +57,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
       'documentation': '📝',
       'feature-ideas': '💡',
       'plan-task': '✅',
+      'claim-issue': '🎯',
       'accessibility': '♿',
       'dependency-updates': '📦',
       'do-replan': '📋'

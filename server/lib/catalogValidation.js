@@ -79,9 +79,11 @@ export const SCRAP_SOURCE_KINDS = Object.freeze([
   'voice-memo',  // POST /catalog/ingest/voice — recorded memo, Whisper-transcribed
 ]);
 
-// --- User-defined catalog types (settings.json `catalogUserTypes`) -------
-// A user type is a settings-persisted, federated definition that merges into
-// the active type registry at boot/runtime as a `system:false` entry. The
+// --- User-defined catalog types (PostgreSQL `catalog_user_types`, #1001) --
+// A user type is a DB-persisted (formerly settings.json), federated definition
+// that merges into the active type registry at boot/runtime as a `system:false`
+// entry. The schemas below still validate the slice/entry SHAPE — which is
+// storage-independent — at the route + sync boundaries. The
 // shape is intentionally minimal: an id (the stored `type` discriminator), a
 // label, a primary content key, and a flat list of typed fields the generic
 // editor renders. There is NO per-type React file — the renderer is generic.
@@ -112,10 +114,12 @@ export const catalogUserTypeSchema = z.object({
   deletedAt: z.string().datetime().nullable().optional(),
 }).strict();
 
-// The whole `catalogUserTypes` settings slice: ≤64 user types, unique ids, and
-// no id colliding with a built-in system type. (Prefix-collision is resolved
-// deterministically at merge time in `normalizeUserType`, so it's not gated
-// here — two user types with prefix-deriving-to-the-same base just get `name2`.)
+// The whole user-type slice: ≤64 user types, unique ids, and no id colliding
+// with a built-in system type. (Prefix-collision is resolved deterministically
+// at merge time in `normalizeUserType`, so it's not gated here — two user types
+// with prefix-deriving-to-the-same base just get `name2`.) The name retains the
+// `Settings` suffix for back-compat with the many importers; the slice now lives
+// in `catalog_user_types`, not settings.json.
 export const catalogUserTypesSettingsSchema = z.array(catalogUserTypeSchema).max(64)
   .refine((list) => new Set(list.map((t) => t.id)).size === list.length, {
     message: 'duplicate catalog user-type id',
@@ -512,7 +516,8 @@ export const catalogSyncMediaSchema = z.object({
 }).passthrough();
 
 // User-defined type DEFINITIONS on the wire (catalog v8). LWW-merged on the
-// receiver into its own `settings.json` `catalogUserTypes` slice. Loose-shaped
+// receiver into its own user-type store (`catalog_user_types` as of #1001; the
+// `settings.json` `catalogUserTypes` slice before that). Loose-shaped
 // (passthrough, no field-kind enum) so a forked peer's extra field shape still
 // stores — the active-registry merge re-normalizes on apply, and a malformed
 // entry is dropped there rather than 400-ing the whole envelope. `updatedAt`

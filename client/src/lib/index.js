@@ -32,17 +32,20 @@ export * from './wrImageDefaults.js';
 export * from './graphSimulation.js';
 
 // === Generic UI / collection utilities ===
+export * from './applyManuscriptEdits.js';
 export * from './audioRecorder.js';
 export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';
 export * from './consoleFilters.js';
+export * from './diffWords.js';
 export * from './genUtils.js';
 export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';
 export * from './localLlmTargetKey.js';
 export * from './loopbackHost.js';
+export * from './manuscriptAnchors.js';
 export * from './mediaNavigation.js';
 export * from './mediaSearch.js';
 export * from './sameJsonShape.js';
@@ -52,6 +55,12 @@ export * from './voiceLabel.js';
 
 // === Page-scoped pure helpers ===
 export * from './cityPlaybackFrame.js';
+export * from './metronome.js';
+export * from './pitchDetect.js';
+export * from './scoreNotation.js';
+export * from './scorePlayback.js';
+export * from './songCraft.js';
+export * from './songPlayback.js';
 export * from './universeBuilderExpand.js';
 export * from './wrSceneCursor.js';
 export * from './writingGuide.js';

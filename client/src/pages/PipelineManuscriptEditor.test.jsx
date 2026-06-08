@@ -27,17 +27,21 @@ const comment = {
   status: 'open', fix: null, createdAt: 't', updatedAt: 't',
 };
 
-const renderEditor = () => render(
-  <MemoryRouter initialEntries={['/pipeline/series/ser-1/manuscript']}>
+const renderEditor = (path = '/pipeline/series/ser-1/manuscript') => render(
+  <MemoryRouter initialEntries={[path]}>
     <Routes>
-      <Route path="/pipeline/series/:seriesId/manuscript" element={<PipelineManuscriptEditor />} />
+      <Route path="/pipeline/series/:seriesId/manuscript/*" element={<PipelineManuscriptEditor />} />
       <Route path="/pipeline/series/:seriesId" element={<div>series page</div>} />
     </Routes>
   </MemoryRouter>,
 );
 
+// Reveal a comment in context by clicking its sidebar index row.
+const revealFromIndex = (problem) => fireEvent.click(screen.getByText(problem));
+
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear(); // default to Live mode
   api.getPipelineSeries.mockResolvedValue({ id: 'ser-1', name: 'My Series', primaryManuscriptType: 'prose' });
   api.getPipelineManuscript.mockResolvedValue({
     sections: [{ issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. She left.' }],
@@ -55,7 +59,7 @@ beforeEach(() => {
 });
 
 describe('PipelineManuscriptEditor', () => {
-  it('renders the manuscript section and an open editorial comment', async () => {
+  it('renders the manuscript section and an open editorial comment in the index', async () => {
     renderEditor();
     expect(await screen.findByText('My Series')).toBeInTheDocument();
     expect(screen.getByText('The ending is abrupt')).toBeInTheDocument();
@@ -63,90 +67,48 @@ describe('PipelineManuscriptEditor', () => {
     expect(screen.getByText(/1 open/)).toBeInTheDocument();
   });
 
-  it('pins the clicked comment in a dismissable overlay so its context survives the jump', async () => {
+  it('revealing a comment from the sidebar switches to Review mode and opens it in-context, then closes', async () => {
     renderEditor();
     await screen.findByText('My Series');
 
-    // Initially only the sidebar card exists.
-    expect(screen.getByText('The ending is abrupt')).toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument();
+    // Initially only the sidebar index row references the comment, and we're in
+    // Live mode (the section is an editable textarea).
+    expect(screen.getAllByText('The ending is abrupt')).toHaveLength(1);
+    expect(screen.getByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
 
-    // Clicking Jump pins it as a floating overlay (problem text now appears twice).
-    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
-    const overlay = await screen.findByRole('dialog', { name: 'Editorial comment' });
-    expect(overlay).toBeInTheDocument();
-    expect(screen.getAllByText('The ending is abrupt').length).toBe(2);
+    revealFromIndex('The ending is abrupt');
+    // Reveal drops into Review mode (read-only prose, no textarea) and opens the
+    // note in-context — the problem text now shows in both the index and card.
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(2));
+    expect(screen.queryByDisplayValue('The hero walked in. She left.')).not.toBeInTheDocument();
 
-    // Closing the overlay leaves the sidebar card intact.
-    fireEvent.click(screen.getByTitle('Close pinned comment'));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
-    expect(screen.getByText('The ending is abrupt')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close note'));
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(1));
   });
 
-  it('dismisses the pinned overlay on Escape', async () => {
+  it('closes the in-context note on Escape', async () => {
     renderEditor();
     await screen.findByText('My Series');
-
-    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
-    await screen.findByRole('dialog', { name: 'Editorial comment' });
-
+    revealFromIndex('The ending is abrupt');
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(2));
     fireEvent.keyDown(window, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(1));
   });
 
-  it('preserves an in-progress fix edit made in the sidebar when accepting from the pinned overlay', async () => {
-    api.generatePipelineManuscriptFix.mockResolvedValue({
-      fix: { find: 'She left.', replace: 'She left, but paused.' },
-      comment: { ...comment, fix: { find: 'She left.', replace: 'She left, but paused.' } },
-    });
-    api.acceptPipelineManuscriptFix.mockResolvedValue({
-      comment: { ...comment, status: 'accepted', fix: { find: 'She left.', replace: 'edited in sidebar.' } },
-      section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. edited in sidebar.' },
-    });
-
-    renderEditor();
+  it('Live mode: Escape closes the popover and the trailing keyup does not reopen it', async () => {
+    renderEditor(); // Live is the default mode
     await screen.findByText('My Series');
+    const ta = screen.getByDisplayValue('The hero walked in. She left.');
+    // Put the caret inside the "She left." anchor span and click to open.
+    const idx = 'The hero walked in. She left.'.indexOf('She left.') + 2;
+    ta.selectionStart = idx; ta.selectionEnd = idx;
+    fireEvent.click(ta);
+    expect(await screen.findByText('Editorial note')).toBeInTheDocument();
 
-    // Generate a fix, then edit the replacement text in the sidebar card.
-    fireEvent.click(screen.getByText('Generate fix'));
-    const sidebarReplace = await screen.findByDisplayValue('She left, but paused.');
-    fireEvent.change(sidebarReplace, { target: { value: 'edited in sidebar.' } });
-
-    // Now jump → the overlay mounts a second card; it must carry the edit.
-    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
-    const overlay = await screen.findByRole('dialog', { name: 'Editorial comment' });
-    expect(within(overlay).getByDisplayValue('edited in sidebar.')).toBeInTheDocument();
-
-    // Accept from the overlay applies the edited replacement, not the original.
-    fireEvent.click(within(overlay).getByText('Accept'));
-    await waitFor(() => expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', {
-      edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'edited in sidebar.', fuzzy: undefined }],
-    }));
-  });
-
-  it('closes the pinned overlay automatically when its comment is accepted', async () => {
-    api.generatePipelineManuscriptFix.mockResolvedValue({
-      fix: { find: 'She left.', replace: 'She left, but paused.' },
-      comment: { ...comment, fix: { find: 'She left.', replace: 'She left, but paused.' } },
-    });
-    api.acceptPipelineManuscriptFix.mockResolvedValue({
-      comment: { ...comment, status: 'accepted', fix: { find: 'She left.', replace: 'She left, but paused.' } },
-      section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. She left, but paused.' },
-    });
-
-    renderEditor();
-    await screen.findByText('My Series');
-
-    fireEvent.click(screen.getByTitle('Jump to this spot in the manuscript'));
-    const overlay = await screen.findByRole('dialog', { name: 'Editorial comment' });
-
-    // Act on the comment from inside the overlay.
-    fireEvent.click(within(overlay).getByText('Generate fix'));
-    fireEvent.click(await within(overlay).findByText('Accept'));
-
-    // Accepting flips status → the overlay vanishes on its own.
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editorial comment' })).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText(/0 open/)).toBeInTheDocument());
+    // Esc (keydown) closes; the trailing keyup must NOT re-open it.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyUp(ta, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByText('Editorial note')).not.toBeInTheDocument());
   });
 
   it('generates a fix, then accepts it — moving the comment to Accepted and updating the section', async () => {
@@ -160,20 +122,71 @@ describe('PipelineManuscriptEditor', () => {
     });
 
     renderEditor();
-    fireEvent.click(await screen.findByText('Generate fix'));
+    await screen.findByText('My Series');
+    revealFromIndex('The ending is abrupt'); // → Review mode + opens the card
 
-    // The editable replacement appears.
+    fireEvent.click(await screen.findByText('Generate fix'));
     expect(await screen.findByDisplayValue('She left, but paused.')).toBeInTheDocument();
     expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', expect.any(Object));
 
     fireEvent.click(screen.getByText('Accept'));
 
-    // Section text updates and the open count drops to 0.
-    expect(await screen.findByDisplayValue('The hero walked in. She left, but paused.')).toBeInTheDocument();
+    // Review mode is read-only prose (no textarea) — the accepted text shows there.
+    expect(await screen.findByText('The hero walked in. She left, but paused.')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/0 open/)).toBeInTheDocument());
     expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', {
       edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'She left, but paused.', fuzzy: undefined }],
     });
+  });
+
+  it('shows issue tabs and focuses one issue; a deep link opens that issue', async () => {
+    const twoIssues = {
+      sections: [
+        { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'Issue one body.' },
+        { issueId: 'iss-2', number: 2, title: 'Two', stageId: 'prose', content: 'Issue two body.' },
+      ],
+      viewType: 'prose', primaryStageId: 'prose', pinnedPrimary: 'prose', availableTypes: ['prose'],
+    };
+    api.getPipelineManuscript.mockResolvedValue(twoIssues);
+    renderEditor('/pipeline/series/ser-1/manuscript/2');
+    await screen.findByText('My Series');
+    // Deep link focuses issue 2 only — issue 1's body is not rendered.
+    expect(await screen.findByDisplayValue('Issue two body.')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Issue one body.')).not.toBeInTheDocument();
+    // Both issues appear as tabs.
+    const tabs = within(screen.getByRole('navigation', { name: 'Issues' })).getAllByRole('link');
+    expect(tabs).toHaveLength(2);
+  });
+
+  it('redirects the bare /manuscript URL to the first issue', async () => {
+    renderEditor('/pipeline/series/ser-1/manuscript');
+    await screen.findByText('My Series');
+    // The single issue (number 1) renders; the canonical issue tab is current.
+    expect(await screen.findByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
+    // The bare→/1 redirect is an effect-driven navigate, so the tab's
+    // aria-current lands a tick after the textarea content paints. Wait for it.
+    await waitFor(() => {
+      const tab = within(screen.getByRole('navigation', { name: 'Issues' })).getByRole('link');
+      expect(tab).toHaveAttribute('aria-current', 'page');
+    });
+  });
+
+  it('switches issues via the tabs without refetching the manuscript', async () => {
+    api.getPipelineManuscript.mockResolvedValue({
+      sections: [
+        { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'Issue one body.' },
+        { issueId: 'iss-2', number: 2, title: 'Two', stageId: 'prose', content: 'Issue two body.' },
+      ],
+      viewType: 'prose', primaryStageId: 'prose', pinnedPrimary: 'prose', availableTypes: ['prose'],
+    });
+    renderEditor('/pipeline/series/ser-1/manuscript/1');
+    expect(await screen.findByDisplayValue('Issue one body.')).toBeInTheDocument();
+    const callsBefore = api.getPipelineManuscript.mock.calls.length;
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Issues' })).getByRole('link', { name: /Issue 2/ }));
+    expect(await screen.findByDisplayValue('Issue two body.')).toBeInTheDocument();
+    // Tab navigation is pure routing — no extra manuscript fetch.
+    expect(api.getPipelineManuscript.mock.calls.length).toBe(callsBefore);
   });
 
   it('switches manuscript format on demand', async () => {
@@ -201,11 +214,9 @@ describe('PipelineManuscriptEditor', () => {
     renderEditor();
     const ta = await screen.findByDisplayValue('The hero walked in. She left.');
 
-    // No-op blur (unchanged) must not save.
     fireEvent.blur(ta);
     expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
 
-    // Changed blur saves with the versioned section endpoint.
     fireEvent.change(ta, { target: { value: 'The hero walked in. She stayed.' } });
     fireEvent.blur(ta);
     await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalledWith(
@@ -214,8 +225,46 @@ describe('PipelineManuscriptEditor', () => {
       { stageId: 'prose', output: 'The hero walked in. She stayed.' },
       { silent: true },
     ));
-    // Version history surfaces after the save.
     expect(await screen.findByTitle('Show prior saved versions')).toBeInTheDocument();
+  });
+
+  it('Review mode renders annotated prose with an Edit toggle that swaps in the textarea', async () => {
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByRole('button', { name: /Review/ }));
+    // Read-only prose: the section textarea is gone, the anchor is a highlight.
+    await waitFor(() => expect(screen.queryByDisplayValue('The hero walked in. She left.')).not.toBeInTheDocument());
+    expect(screen.getByTitle('Open editorial note')).toBeInTheDocument();
+
+    // Edit toggle brings back the editable textarea.
+    fireEvent.click(screen.getByRole('button', { name: /Edit/ }));
+    expect(await screen.findByDisplayValue('The hero walked in. She left.')).toBeInTheDocument();
+  });
+
+  it('Review mode: revealing an anchored comment from the sidebar opens it in-context (no "not anchored")', async () => {
+    const toast = (await import('../components/ui/Toast')).default;
+    renderEditor();
+    await screen.findByText('My Series');
+    fireEvent.click(screen.getByRole('button', { name: /Review/ }));
+    await waitFor(() => expect(screen.queryByDisplayValue('The hero walked in. She left.')).not.toBeInTheDocument());
+
+    revealFromIndex('The ending is abrupt');
+    // The inline card appears (problem now shown in both the index row and card)…
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(2));
+    // …and the bogus "not anchored" toast is NOT fired for an anchored comment.
+    expect(toast).not.toHaveBeenCalledWith('This comment is not anchored to a specific issue');
+
+    // The card's close control collapses it back to index-only.
+    fireEvent.click(screen.getByLabelText('Close note'));
+    await waitFor(() => expect(screen.getAllByText('The ending is abrupt')).toHaveLength(1));
+  });
+
+  it('opens the whole-manuscript impact preview modal', async () => {
+    renderEditor();
+    await screen.findByText('My Series');
+    fireEvent.click(screen.getByText('Impact preview'));
+    expect(await screen.findByRole('dialog', { name: 'Manuscript impact preview' })).toBeInTheDocument();
   });
 
   it('routes Generate fix through the selected provider/model override', async () => {
@@ -226,14 +275,13 @@ describe('PipelineManuscriptEditor', () => {
     renderEditor();
     await screen.findByText('My Series');
 
-    // Only enabled providers populate the selector.
     const providerSelect = screen.getByLabelText(/AI provider/i);
     expect(screen.queryByRole('option', { name: 'Disabled' })).not.toBeInTheDocument();
     fireEvent.change(providerSelect, { target: { value: 'anthropic' } });
-    // Model defaults to the provider's defaultModel; switch it explicitly.
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-haiku' } });
 
-    fireEvent.click(screen.getByText('Generate fix'));
+    revealFromIndex('The ending is abrupt');
+    fireEvent.click(await screen.findByText('Generate fix'));
     await waitFor(() => expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith(
       'ser-1', 'mrc-1', { providerOverride: 'anthropic', modelOverride: 'claude-haiku' },
     ));
@@ -252,9 +300,24 @@ describe('PipelineManuscriptEditor', () => {
 
     expect(await screen.findByText('New pacing note')).toBeInTheDocument();
     expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalledWith(
-      'ser-1', { providerOverride: 'openai', modelOverride: 'gpt-5' },
+      'ser-1', { providerOverride: 'openai', modelOverride: 'gpt-5', mode: 'merge' },
     );
     await waitFor(() => expect(screen.getByText(/2 open/)).toBeInTheDocument());
+  });
+
+  it('sends mode "fresh" when the Start fresh checkbox is checked', async () => {
+    api.analyzePipelineManuscriptCompleteness.mockResolvedValue({
+      review: { schemaVersion: 1, comments: [comment] },
+    });
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByLabelText(/Start fresh/i));
+    fireEvent.click(screen.getByText('Run editorial review'));
+
+    await waitFor(() => expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalledWith(
+      'ser-1', expect.objectContaining({ mode: 'fresh' }),
+    ));
   });
 
   it('shows a chunk-count badge when the review ran in chunks (small context window)', async () => {

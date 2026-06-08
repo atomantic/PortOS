@@ -412,10 +412,13 @@ export const commitPipelineArcFromManuscript = (seriesId, proposal = {}) =>
 // Manuscript-completeness ("finish the draft") editor pass — reads the actual
 // drafted script and returns categorized { severity, category, location,
 // problem, suggestion } findings. Advisory; no auto-resolve. Empty = complete.
-export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride } = {}) =>
+// `mode`: 'merge' (default) leaves prior comments as-is and appends new
+// findings; 'fresh' also auto-dismisses open comments this pass no longer finds
+// (accepted/dismissed untouched, dismissed still suppress resurfacing).
+export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride, mode } = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness`, {
     method: 'POST',
-    body: JSON.stringify({ providerOverride, modelOverride }),
+    body: JSON.stringify({ providerOverride, modelOverride, mode }),
   });
 
 // ---- Manuscript editor ----

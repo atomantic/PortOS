@@ -11,6 +11,7 @@
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useClickOutside } from './useClickOutside.js';
 export { default as useContainerWidth } from './useContainerWidth.js';
+export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
@@ -24,6 +25,7 @@ export { default as useMounted } from './useMounted.js';
 export { default as useNextEvalCountdown } from './useNextEvalCountdown.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
 export { default as usePopoverPosition } from './usePopoverPosition.js';
+export { default as useLocalModels } from './useLocalModels.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderModels } from './useProviderModels.js';
 export { default as useRowDraft } from './useRowDraft.js';

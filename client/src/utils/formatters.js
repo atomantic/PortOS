@@ -115,6 +115,24 @@ export function formatBytes(bytes, decimals = 1) {
 }
 
 /**
+ * Format a model context window (in tokens) compactly, e.g. 32768 → "32K ctx",
+ * 131072 → "128K ctx", 1048576 → "1M ctx". Returns null for missing/invalid
+ * values so callers can omit the label entirely.
+ * @param {number|null|undefined} tokens
+ * @returns {string|null}
+ */
+export function formatContextLength(tokens) {
+  const n = Number(tokens);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1024 * 1024) {
+    const m = n / (1024 * 1024);
+    return `${parseFloat(m.toFixed(m % 1 ? 1 : 0))}M ctx`;
+  }
+  if (n >= 1024) return `${Math.round(n / 1024)}K ctx`;
+  return `${n} ctx`;
+}
+
+/**
  * Count whitespace-separated words in a string. Matches the server-side
  * countWords in writers-room storage so client + server agree.
  */

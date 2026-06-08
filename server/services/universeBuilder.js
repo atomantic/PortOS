@@ -27,8 +27,8 @@
 
 import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, ensureDir, resolveImageRef } from '../lib/fileUtils.js';
-import { createCollectionStore } from '../lib/collectionStore.js';
+import { PATHS, ensureDir, resolveImageRef } from '../lib/fileUtils.js';
+import { getUniverseStore, isValidUniverseId } from './universeBuilder/store.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../lib/canonPrompt.js';
 import {
@@ -64,36 +64,23 @@ import { listSeries } from './pipeline/series.js';
 //        characters[]. See "Categories vs canon — decision" in PLAN.md.
 export const CURRENT_SCHEMA_VERSION = 4;
 
-// TYPE-level (storage layout) schema version stamped on `data/universes/index.json`.
-//   v5 — universes split out of monolithic `data/universe-builder.json` into
-//        per-record `data/universes/{id}/index.json`. Cross-record `runs[]`
-//        moves into `index.json`'s `config.runs`. See migration 034.
-const TYPE_SCHEMA_VERSION = 5;
-
-// Lazy store factory so test harnesses that swap PATHS.data per-test
-// (mkdtempSync + Proxy mock) still see the right temp root — the store
-// captures PATHS.data once at first call, then stays warm.
-let _store = null;
-const store = () => {
-  if (_store && _store.dir === join(PATHS.data, 'universes')) return _store;
-  _store = createCollectionStore({
-    dir: join(PATHS.data, 'universes'),
-    type: 'universes',
-    schemaVersion: TYPE_SCHEMA_VERSION,
-    sanitizeRecord: sanitizeTemplate,
-    // Permissive — defense-in-depth against stray non-id entries from
-    // readdir, not an authoritative validator. The 8–80 / dash-only rule
-    // lives on UNIVERSE_ID_RE inside insertUniverseWithId, which is where
-    // user-supplied ids actually arrive.
-    idPattern: /^[A-Za-z0-9_-]{1,128}$/,
-  });
-  return _store;
-};
+// Universe storage facade (#1014). PostgreSQL-backed (`universes` +
+// `universe_runs`) on normal installs; the per-record file store
+// (collectionStore) only under MEMORY_BACKEND=file / NODE_ENV=test. The facade
+// is SYNCHRONOUS — it owns the per-id write queue + the mutation epoch + applies
+// `sanitizeTemplate` on read — and defers backend selection into each method, so
+// this service keeps calling `store()` exactly as it did the collectionStore.
+// Methods used here: loadOne / loadOneRaw / listIds / queueRecordWrite /
+// writeRecord(id, rec) / deleteRecord(id) / loadRuns / appendRun /
+// removeRunsForUniverses. `writeRecord`/`deleteRecord` replace the inline
+// ensureDir+atomicWrite(recordPath) / rm(recordDir) the file layout used, and
+// bump the mutation epoch so dataSync re-sends the universe snapshot to peers
+// (the storage swap stays invisible to federation — see the schema-design doc).
+const store = () => getUniverseStore(sanitizeTemplate);
 
 /**
- * Exported for the boot-time verifier in `server/index.js`. Lazy because the
- * universe-builder module loads BEFORE PATHS.data resolves in some test
- * harnesses; calling this getter at boot time picks up the right root.
+ * Exported for the boot-time verifier in `server/index.js`. The facade getter
+ * is cheap + memoized; calling it at boot picks up the right PATHS.data root.
  */
 export const universeStore = () => store();
 
@@ -834,21 +821,18 @@ let canonBackfillLogged = false;
 async function readState() {
   await ensureDir(PATHS.data);
   const s = store();
-  // Load raw records in parallel (no sanitizer) so we can detect schema-
-  // version drift before the in-memory sanitization step. We deliberately
-  // do NOT use store.loadAll() here — that runs sanitizeRecord, losing the
+  // Load raw records (no sanitizer) so we can detect schema-version drift
+  // before the in-memory sanitization step. listRaw() is one bulk read (a
+  // single SELECT on PG; parallel file reads on the escape hatch) — we
+  // deliberately sanitize HERE rather than via a loadAll() that would lose the
   // pre-sanitized schemaVersion needed for the backfill log.
-  const ids = await s.listIds();
-  const rawRecords = await Promise.all(ids.map((id) => s.loadOneRaw(id)));
+  const rawRecords = await s.listRaw();
   const rawById = new Map();
   for (const r of rawRecords) {
     if (r && typeof r.id === 'string') rawById.set(r.id, r);
   }
   const universes = rawRecords.map((r) => sanitizeTemplate(r)).filter(Boolean);
-  const typeIndex = await s.loadTypeIndex();
-  const runs = Array.isArray(typeIndex.config?.runs)
-    ? typeIndex.config.runs.map(sanitizeRun).filter(Boolean)
-    : [];
+  const runs = (await s.loadRuns()).map(sanitizeRun).filter(Boolean);
   // The in-memory result is always at CURRENT_SCHEMA_VERSION (sanitizeTemplate
   // re-stamps it on every read). Don't persist the migration here — that
   // write would race against any concurrent per-record mutator and could
@@ -953,10 +937,9 @@ export async function createUniverse(input = {}) {
       // Importer-orphan marker (issue #727) — see sanitizeTemplate.
       importDraft: input.importDraft === true,
     });
-    // Write through the store — we're inside the per-id queue so use
-    // atomicWrite directly to avoid re-queueing on the same id.
-    await ensureDir(store().recordDir(next.id));
-    await atomicWrite(store().recordPath(next.id), next);
+    // Persist through the facade (backend-agnostic). We're inside the per-id
+    // queue, and writeRecord does NOT re-queue, so this can't deadlock.
+    await store().writeRecord(next.id, next);
     return next;
   });
   // Fire-and-forget auto-subscribe to every peer with universe-sync enabled.
@@ -1006,8 +989,7 @@ export async function insertUniverseWithId(input = {}) {
     if (wasResurrection) {
       console.warn(`♻️  insertUniverseWithId: overwriting tombstone for ${input.id}`);
     }
-    await ensureDir(s.recordDir(next.id));
-    await atomicWrite(s.recordPath(next.id), next);
+    await s.writeRecord(next.id, next);
     return { next, wasResurrection };
   });
   // Mirror createUniverse's federation side-effects on tombstone-overwrite:
@@ -1042,7 +1024,7 @@ function canonEntryContentEqual(a, b) {
 // canon→catalog projection would skip a genuine change. Untouched entries keep
 // their old timestamp so this never manufactures projection churn.
 function stampChangedCanonEntries(prev, next) {
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
   for (const key of CANON_ARRAY_KEYS) {
     const nextList = Array.isArray(next[key]) ? next[key] : null;
     if (!nextList) continue;
@@ -1053,7 +1035,14 @@ function stampChangedCanonEntries(prev, next) {
       if (!entry?.id) return entry;
       const before = prevById.get(entry.id);
       if (before && canonEntryContentEqual(before, entry)) return entry;
-      return { ...entry, updatedAt: now };
+      // Monotonic bump: a content change MUST advance the LWW clock past the
+      // entry's prior `updatedAt`, even when the edit lands in the same
+      // millisecond as the create/last-edit (Date.now() granularity). Without
+      // this, a same-ms edit stamps an equal timestamp, and the canon→catalog
+      // projection's `>`-based LWW merge would not treat the change as newer.
+      const beforeMs = before?.updatedAt ? Date.parse(before.updatedAt) : NaN;
+      const stampMs = Number.isNaN(beforeMs) ? nowMs : Math.max(nowMs, beforeMs + 1);
+      return { ...entry, updatedAt: new Date(stampMs).toISOString() };
     });
   }
 }
@@ -1267,8 +1256,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     if (Array.isArray(mergedRecord.characters)) {
       mergedRecord.characters = pruneStaleReferenceSheets(mergedRecord.characters);
     }
-    await ensureDir(s.recordDir(id));
-    await atomicWrite(s.recordPath(id), mergedRecord);
+    await s.writeRecord(id, mergedRecord);
     // Project the freshly-persisted canon arrays back into their catalog rows
     // SYNCHRONOUSLY (inside the queue) so the authoritative catalog_ingredients
     // row can never lag the embedded cache on the same request. Best-effort:
@@ -1393,29 +1381,13 @@ export async function deleteUniverse(id) {
     if (cur.deleted) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
     const now = new Date().toISOString();
     const tombstone = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
-    await ensureDir(s.recordDir(id));
-    await atomicWrite(s.recordPath(id), tombstone);
+    await s.writeRecord(id, tombstone);
   });
   // Drop runs referencing the deleted universe — they're useless without it.
-  // CRITICAL: the load + filter + write MUST run inside queueTypeIndexWrite as a
-  // single critical section. An earlier version did the load OUTSIDE the queue
-  // and then saveTypeIndex inside it — saveTypeIndex's shallow merge then
-  // wholesale-replaced `config.runs` with the stale filtered snapshot,
-  // silently dropping any recordRun that landed between the outer load and
-  // the queued write. Stay inside the queue and use atomicWrite directly
-  // (saveTypeIndex would self-re-queue and deadlock).
-  await s.queueTypeIndexWrite(async () => {
-    const typeIndex = await s.loadTypeIndex();
-    const filteredRuns = (typeIndex.config?.runs || []).filter((r) => r.universeId !== id);
-    const next = {
-      schemaVersion: typeIndex.schemaVersion,
-      type: typeIndex.type,
-      config: { ...(typeIndex.config || {}), runs: filteredRuns },
-      updatedAt: new Date().toISOString(),
-    };
-    await ensureDir(s.dir);
-    await atomicWrite(s.typeIndexPath(), next);
-  });
+  // The facade's removeRunsForUniverses serializes the runs read→filter→write on
+  // its own run-tail, so a concurrent recordRun can't lose its newly-appended
+  // run to a stale filtered snapshot.
+  await s.removeRunsForUniverses([id]);
   // Release the rename-lock on any linked media collections — without this,
   // the orphan collection's `universeId` stays stamped and the lock in
   // updateCollection blocks renames forever even though the universe is gone.
@@ -1484,6 +1456,15 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
   const writeTasks = [];
   for (const remote of remoteUniverses) {
     if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+    // Skip a peer record whose id falls outside the store allowlist BEFORE the
+    // store throws on it — the store's writeRecord/queueRecordWrite reject such
+    // ids synchronously (collectionStore parity), which would otherwise abort
+    // this whole sync batch. A buggy/malicious peer can't poison the batch or
+    // plant a non-round-trippable id in `universes`.
+    if (!isValidUniverseId(remote.id)) {
+      console.warn(`⚠️ universe sync: skipping peer record with invalid id "${remote.id}"`);
+      continue;
+    }
     const sanitized = sanitizeTemplate(remote);
     if (!sanitized) continue;
     // `ephemeral` is a LOCAL-only marker — never trust the inbound value.
@@ -1504,8 +1485,7 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         // do NOT cascade orphan-cleanup. A tombstone for a record we never
         // had has nothing to clean up; firing `emitRecordDeleted` would
         // spuriously tear down share-bucket subscriptions.
-        await ensureDir(s.recordDir(sanitized.id));
-        await atomicWrite(s.recordPath(sanitized.id), sanitized);
+        await s.writeRecord(sanitized.id, sanitized);
         // No local counterpart to lose — nothing to journal, but seed the base
         // hash so a FUTURE divergence on this record is detected.
         await setSyncBaseHash('universe', sanitized.id, contentHashForRecord('universe', sanitized));
@@ -1537,8 +1517,7 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         // advances the base hash (clean or conflict) so the next snapshot
         // cycle doesn't re-journal the same divergence. Never throws.
         await maybeJournalBeforeOverwrite({ kind: 'universe', id: sanitized.id, local, remote: sanitized, source });
-        await ensureDir(s.recordDir(sanitized.id));
-        await atomicWrite(s.recordPath(sanitized.id), sanitized);
+        await s.writeRecord(sanitized.id, sanitized);
         if (sanitized.deleted && !local.deleted) transitionedToDeleted.push(sanitized.id);
         changed += 1;
       }
@@ -1548,25 +1527,12 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
   // Persist the batched base-hash updates accumulated above in one write.
   await flushBaseHashes();
   if (changed === 0) return { applied: false, count: 0 };
-  // Drop runs for any record that just transitioned to deleted — matches
-  // the local-delete contract that ditches now-orphan runs. Same critical-
-  // section requirement as deleteUniverse: load + filter + write all stay
-  // inside queueTypeIndexWrite so a concurrent recordRun doesn't get its
-  // newly-appended run overwritten by a stale filtered snapshot.
+  // Drop runs for any record that just transitioned to deleted — matches the
+  // local-delete contract that ditches now-orphan runs. The facade serializes
+  // the runs read→filter→write on its run-tail so a concurrent recordRun can't
+  // lose its newly-appended run to a stale filtered snapshot.
   if (transitionedToDeleted.length) {
-    const tombstoned = new Set(transitionedToDeleted);
-    await s.queueTypeIndexWrite(async () => {
-      const typeIndex = await s.loadTypeIndex();
-      const filtered = (typeIndex.config?.runs || []).filter((r) => !tombstoned.has(r.universeId));
-      const next = {
-        schemaVersion: typeIndex.schemaVersion,
-        type: typeIndex.type,
-        config: { ...(typeIndex.config || {}), runs: filtered },
-        updatedAt: new Date().toISOString(),
-      };
-      await ensureDir(s.dir);
-      await atomicWrite(s.typeIndexPath(), next);
-    });
+    await s.removeRunsForUniverses(transitionedToDeleted);
   }
   const result = { applied: true, count: changed };
   // Fire cascades after the queue releases (mirrors deleteUniverse ordering)
@@ -1589,11 +1555,13 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
 export async function pruneTombstonedUniverses(beforeMs) {
   if (!Number.isFinite(beforeMs)) return { pruned: 0 };
   const s = store();
-  const ids = await s.listIds();
-  const records = await Promise.all(ids.map((id) => s.loadOne(id)));
+  // Bulk raw read for the out-of-queue candidate scan — we only need
+  // id/deleted/deletedAt, so skip the per-record sanitize. The authoritative
+  // re-check inside each per-id queue below still uses loadOne (sanitized).
+  const records = await s.listRaw();
   const candidates = [];
   for (const u of records) {
-    if (!u?.deleted) continue;
+    if (!u?.deleted || !isStr(u.id)) continue;
     const t = Date.parse(u.deletedAt || '');
     if (!Number.isFinite(t)) continue;
     if (t < beforeMs) candidates.push(u.id);
@@ -1611,8 +1579,7 @@ export async function pruneTombstonedUniverses(beforeMs) {
       if (!fresh?.deleted) return false; // un-deleted between snapshot and queue
       const t = Date.parse(fresh.deletedAt || '');
       if (!Number.isFinite(t) || t >= beforeMs) return false;
-      const { rm } = await import('fs/promises');
-      await rm(s.recordDir(id), { recursive: true, force: true });
+      await s.deleteRecord(id);
       await deleteSyncBaseHash('universe', id);
       return true;
     })
@@ -1628,37 +1595,15 @@ export async function pruneTombstonedUniverses(beforeMs) {
 export async function recordRun(run) {
   const sanitized = sanitizeRun(run);
   if (!sanitized) throw makeErr('Invalid run payload', ERR_VALIDATION);
-  const s = store();
-  // Type-index queue serializes the runs[] read→append→write so concurrent
-  // recordRun + delete-cascade can't clobber each other's runs.
-  return s.queueTypeIndexWrite(async () => {
-    const typeIndex = await s.loadTypeIndex();
-    const runs = Array.isArray(typeIndex.config?.runs) ? [...typeIndex.config.runs] : [];
-    runs.push(sanitized);
-    // Keep last 200 runs to bound state growth.
-    const capped = runs.length > 200 ? runs.slice(-200) : runs;
-    // saveTypeIndex also queues, but we're already on the type-index queue —
-    // write the file directly with atomicWrite to avoid a re-entrant queue.
-    const next = {
-      schemaVersion: typeIndex.schemaVersion,
-      type: typeIndex.type,
-      config: { ...(typeIndex.config || {}), runs: capped },
-      updatedAt: new Date().toISOString(),
-    };
-    await ensureDir(s.dir);
-    await atomicWrite(s.typeIndexPath(), next);
-    return sanitized;
-  });
+  // The facade serializes the runs append→cap on its own run-tail (and caps at
+  // 200), so concurrent recordRun + delete-cascade can't clobber each other.
+  await store().appendRun(sanitized);
+  return sanitized;
 }
 
 export async function listRuns(universeId = null) {
-  const s = store();
-  const typeIndex = await s.loadTypeIndex();
-  const runs = Array.isArray(typeIndex.config?.runs)
-    ? typeIndex.config.runs.map(sanitizeRun).filter(Boolean)
-    : [];
-  const filtered = universeId ? runs.filter((r) => r.universeId === universeId) : runs;
-  return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const runs = (await store().loadRuns(universeId)).map(sanitizeRun).filter(Boolean);
+  return [...runs].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
 // Append a rendered gallery filename to the imageRefs[] of the entry the job

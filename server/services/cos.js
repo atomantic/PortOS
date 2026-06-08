@@ -18,7 +18,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, markAppReviewStarted, clearStaleActiveAgents } from './appActivity.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, clearStaleActiveAgents } from './appActivity.js';
 import { getActiveApps } from './apps.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
@@ -28,6 +28,8 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
+import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudgets.js';
+import { getDomainBudgetStatus } from './domainUsage.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -154,12 +156,22 @@ export async function updateConfig(updates) {
     // Capture the prior map BEFORE the spread clobbers it, then normalize the
     // merge so an unknown/invalid stored value resolves to the `execute` default.
     const priorDomainAutonomy = state.config.domainAutonomy;
+    // Same for domainBudgets — a PATCH naming one domain (or one cap on one
+    // domain) must merge field-by-field over the rest, not replace the map.
+    const priorDomainBudgets = state.config.domainBudgets;
     state.config = { ...state.config, ...updates };
     if (updates.domainAutonomy !== undefined) {
       state.config.domainAutonomy = normalizeDomainAutonomy({
         ...priorDomainAutonomy,
         ...updates.domainAutonomy
       });
+    }
+    if (updates.domainBudgets !== undefined) {
+      const mergedBudgets = { ...priorDomainBudgets };
+      for (const [id, caps] of Object.entries(updates.domainBudgets)) {
+        mergedBudgets[id] = { ...(priorDomainBudgets?.[id] || {}), ...caps };
+      }
+      state.config.domainBudgets = normalizeDomainBudgets(mergedBudgets);
     }
     await saveState(state);
     return state.config;
@@ -651,8 +663,10 @@ async function dequeueNextTask() {
   const spawnProjectCounts = { ...agentsByProject };
   let spawned = 0;
 
-  const canSpawn = (task) => {
-    if (spawned >= availableSlots) return false;
+  // `ceiling` defaults to the global slot count; autonomous sections pass the
+  // lower `autonomousSpawnCeiling` so the CoS daily action budget (#711) caps them.
+  const canSpawn = (task, ceiling = availableSlots) => {
+    if (spawned >= ceiling) return false;
     const project = task.metadata?.app || '_self';
     return (spawnProjectCounts[project] || 0) < perProjectLimit;
   };
@@ -704,12 +718,18 @@ async function dequeueNextTask() {
 
     if (targetApp) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+      // Advance the cooldown eagerly (deduped per app per cycle), but defer
+      // binding the active agent until a task is produced — a null result
+      // here must not strand `activeAgentId` (issue #978).
       if (!reviewStartedApps.has(targetApp.id)) {
-        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        await markAppReviewCooldown(targetApp.id);
         reviewStartedApps.add(targetApp.id);
       }
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
+      if (task) {
+        await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
+      }
     } else {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
@@ -749,7 +769,33 @@ async function dequeueNextTask() {
   // have run so the user can see the plan without it executing.
   const cosTaskData = await getCosTasks();
   const autoApproved = cosTaskData.autoApproved || [];
-  const cosAutonomyMode = getDomainMode(state.config, 'cos');
+  let cosAutonomyMode = getDomainMode(state.config, 'cos');
+
+  // Daily CoS budget (#711) — same enforcement as the periodic evaluator
+  // (cosTaskGenerator.evaluateTasks). This is the event-driven primary spawn
+  // path, so the budget MUST be applied here too. Minutes is a binary off-gate
+  // (a run's duration is unknown at spawn); actions cap THIS cycle's autonomous
+  // admissions to the remaining daily allowance (completed + in-flight runs),
+  // surfaced as `autonomousSpawnCeiling` below. On-demand (Priority 0) and user
+  // (Priority 1) tasks are already spawned above and never count against it.
+  const cosBudget = await getDomainBudgetStatus('cos');
+  let autonomousActionsRemaining = Infinity;
+  if (cosAutonomyMode !== 'off') {
+    if (cosBudget.exceeded === 'minutes') {
+      emitLog('info', `CoS auto-run paused — daily minutes budget reached`, { domainBudget: 'cos', exceeded: 'minutes' });
+      cosAutonomyMode = 'off';
+    } else if (cosBudget.budget?.maxActionsPerDay != null) {
+      const runningAutonomous = Object.values(state.agents).filter(
+        (a) => a.status === 'running' && a.metadata?.taskType && a.metadata.taskType !== 'user'
+      ).length;
+      autonomousActionsRemaining = remainingActionBudget(cosBudget.budget, cosBudget.usage, runningAutonomous);
+      if (autonomousActionsRemaining === 0) {
+        emitLog('info', `CoS auto-run paused — daily actions budget reached`, { domainBudget: 'cos', exceeded: 'actions' });
+        cosAutonomyMode = 'off';
+      }
+    }
+  }
+  const autonomousSpawnCeiling = Math.min(availableSlots, spawned + autonomousActionsRemaining);
 
   // Engine-specific gate shared by execute and dry-run: improvement tasks whose
   // task type was disabled after queuing are skipped.
@@ -765,7 +811,7 @@ async function dequeueNextTask() {
     // rather than every auto-approved task regardless of eligibility.
     if (cosAutonomyMode === 'dry-run') {
       const wouldSpawn = await selectDryRunAutoApproved(autoApproved, {
-        availableSlots,
+        availableSlots: autonomousSpawnCeiling,
         alreadySpawned: spawned,
         perProjectLimit,
         spawnProjectCounts,
@@ -778,7 +824,7 @@ async function dequeueNextTask() {
     }
   } else {
     for (const task of autoApproved) {
-      if (spawned >= availableSlots) break;
+      if (spawned >= autonomousSpawnCeiling) break;
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
       // Skip improvement tasks whose type was disabled after queuing
       if (isDisabledAnalysisType(task)) {
@@ -792,7 +838,7 @@ async function dequeueNextTask() {
         if (onCooldown) continue;
       }
       const sysTask = { ...task, taskType: 'internal' };
-      if (!canSpawn(sysTask)) continue;
+      if (!canSpawn(sysTask, autonomousSpawnCeiling)) continue;
       cosEvents.emit('task:ready', sysTask);
       trackSpawn(sysTask);
     }
@@ -804,14 +850,14 @@ async function dequeueNextTask() {
   // spawns — when CoS auto-run isn't `execute`, skip generating them entirely
   // (off and dry-run both withhold autonomous spawns; only the concrete already-
   // queued auto-approved tasks above are surfaced for dry-run).
-  if (spawned < availableSlots && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
-    const missionTasks = await generateMissionTasks({ maxTasks: availableSlots - spawned }).catch(err => {
+  if (spawned < autonomousSpawnCeiling && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
+    const missionTasks = await generateMissionTasks({ maxTasks: autonomousSpawnCeiling - spawned }).catch(err => {
       emitLog('debug', `Mission task generation failed: ${err.message}`);
       return [];
     });
 
     for (const missionTask of missionTasks) {
-      if (spawned >= availableSlots) break;
+      if (spawned >= autonomousSpawnCeiling) break;
       const cosTask = {
         id: missionTask.id,
         description: missionTask.description,
@@ -821,7 +867,7 @@ async function dequeueNextTask() {
         taskType: 'internal',
         approvalRequired: !missionTask.autoApprove
       };
-      if (!canSpawn(cosTask)) continue;
+      if (!canSpawn(cosTask, autonomousSpawnCeiling)) continue;
       cosEvents.emit('task:ready', cosTask);
       trackSpawn(cosTask);
       emitLog('info', `Generated mission task: ${missionTask.id}`, {
@@ -837,7 +883,7 @@ async function dequeueNextTask() {
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
       const idleTask = await generateIdleReviewTask(state);
-      if (idleTask && canSpawn(idleTask)) {
+      if (idleTask && canSpawn(idleTask, autonomousSpawnCeiling)) {
         cosEvents.emit('task:ready', idleTask);
         trackSpawn(idleTask);
       }

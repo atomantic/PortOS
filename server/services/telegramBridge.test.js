@@ -29,6 +29,20 @@ vi.mock('./cosState.js', () => ({
   getDomainAutonomyMode: vi.fn(async () => mockMessagesMode)
 }));
 
+// The bridge also reads the messages daily budget; keep it always-within-budget
+// here (the budget math itself is covered by domainBudgets/domainUsage tests) so
+// these gate tests stay focused on the autonomy mode.
+let mockMessagesWithinBudget = true;
+vi.mock('./domainUsage.js', () => ({
+  getDomainBudgetStatus: vi.fn(async () => ({
+    withinBudget: mockMessagesWithinBudget,
+    exceeded: mockMessagesWithinBudget ? null : 'actions',
+    budget: { maxActionsPerDay: null, maxMinutesPerDay: null },
+    usage: { actions: 0, ms: 0 }
+  })),
+  recordDomainUsage: vi.fn().mockResolvedValue(undefined)
+}));
+
 // We import the real notifications module so the bridge can subscribe to the
 // event emitter — that's the spot where forwardNotification is exercised
 // without poking at any private internal.
@@ -99,6 +113,7 @@ describe('telegramBridge service', () => {
     await cleanup();
     updateCachedForwardTypes(null);
     mockMessagesMode = 'execute';
+    mockMessagesWithinBudget = true;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -320,6 +335,27 @@ describe('telegramBridge service', () => {
         ).toHaveLength(0);
         await cleanup();
       }
+    });
+
+    it('suppresses forwarding when the messages daily budget is exhausted (#711)', async () => {
+      mockMessagesWithinBudget = false; // over budget while mode stays execute
+      seedCredentials();
+      const fetchSpy = mockTelegramFetch();
+      vi.stubGlobal('fetch', fetchSpy);
+      await init();
+      fetchSpy.mockClear();
+
+      notificationEvents.emit('added', {
+        type: NOTIFICATION_TYPES.HEALTH_ISSUE,
+        title: 'Over budget',
+        priority: PRIORITY_LEVELS.HIGH
+      });
+      await flush();
+
+      expect(
+        fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage')),
+        'an exhausted messages budget must not forward to Telegram'
+      ).toHaveLength(0);
     });
   });
 });

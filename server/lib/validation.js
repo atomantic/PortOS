@@ -1350,6 +1350,12 @@ const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 // agree on the vocabulary.
 export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
 
+// claim-issue author-gate values. 'owner' = only claim issues filed by the
+// repository owner/creator (matches the `/claim --issues` default); 'any' =
+// claim any open issue regardless of who filed it. Kept here so both the
+// sanitizer and the claim-issue prompt-builder agree on the vocabulary.
+export const ISSUE_AUTHOR_FILTERS = ['owner', 'any'];
+
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
@@ -1398,6 +1404,13 @@ export function sanitizeTaskMetadata(raw) {
   // string the watcher would silently treat as "any".
   if (Object.prototype.hasOwnProperty.call(raw, 'prAuthorFilter') && PR_AUTHOR_FILTERS.includes(raw.prAuthorFilter)) {
     clean.prAuthorFilter = raw.prAuthorFilter;
+    hasKeys = true;
+  }
+  // `issueAuthorFilter` gates claim-issue dispatch on issue authorship —
+  // constrained to a known value so a hand-edited config can't smuggle in an
+  // arbitrary string the claim flow would silently treat as "owner".
+  if (Object.prototype.hasOwnProperty.call(raw, 'issueAuthorFilter') && ISSUE_AUTHOR_FILTERS.includes(raw.issueAuthorFilter)) {
+    clean.issueAuthorFilter = raw.issueAuthorFilter;
     hasKeys = true;
   }
   // Pass through pipeline config (validated shape: object with stages array)

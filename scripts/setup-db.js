@@ -35,6 +35,15 @@ const PG_USER = envVar('PGUSER', 'portos');
 const PG_DATABASE = envVar('PGDATABASE', 'portos');
 const PG_PASSWORD = envVar('PGPASSWORD', 'portos');
 const PG_PORT_NATIVE = parsePgPort(envVar('PGPORT', 5432));
+// Docker host-port mapping (docker-compose.yml maps `${PGPORT_DOCKER:-5561}:5432`).
+// Resolve it the same tolerant way so the "ready on port N" log can't lie when a
+// user overrides PGPORT_DOCKER — a misleading success port is exactly the kind of
+// "looks fine but points at the wrong place" footgun this script exists to avoid.
+const parseDockerPort = (value) => {
+  const parsed = Number.parseInt(String(value).trim(), 10);
+  return Number.isFinite(parsed) ? parsed : 5561;
+};
+const PG_PORT_DOCKER = parseDockerPort(envVar('PGPORT_DOCKER', 5561));
 
 // Environment to pass to `db.sh` and other psql-wrapping subprocesses, so
 // values configured in .env (but not exported into the shell) reach the
@@ -130,19 +139,55 @@ function isPortOSDbReady(port = PG_PORT_NATIVE) {
   }
 }
 
-// Wait for PostgreSQL to accept connections
+// Whether the Docker container's base schema exists. We probe `memories` (the
+// first, always-present base table) — NOT a newest fresh-install table: an
+// install whose volume was initialized before a later table (e.g.
+// writers_room_exercises, #1017) existed is a valid UPGRADEABLE install, and
+// `npm start` runs this BEFORE the server's idempotent boot-time ensureSchema()
+// that adds the missing tables. Requiring the newest table here would wedge
+// every pre-existing Docker install (the probe would never go true). The
+// half-applied-init race that motivated checking the schema at all is handled
+// by the TCP readiness gate in waitForHealth() below — the postgres image runs
+// docker-entrypoint-initdb.d against a SOCKET-ONLY temp server and only opens
+// the TCP listener after init finishes, so a TCP probe is false mid-init.
+// `psql -tAc` exits 0 even on an empty result, so we require the literal "1".
+function isDockerSchemaReady() {
+  try {
+    const output = execFileSync(
+      'docker',
+      ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', 'portos', '-d', 'portos', '-tAc',
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"],
+      { stdio: 'pipe', cwd: rootDir }
+    ).toString();
+    return output.trim() === '1';
+  } catch {
+    return false;
+  }
+}
+
+// Wait for PostgreSQL to accept TCP connections AND for the base schema to be
+// in place. Both must hold before we report success, since PortOS now
+// fail-fasts at boot when the schema is missing. pg_isready is forced over TCP
+// (-h 127.0.0.1): during first-time init the entrypoint runs the schema load
+// against a socket-only temp server (listen_addresses=''), so a default
+// socket-based pg_isready would pass mid-init and let `npm start` race a
+// half-applied schema. The TCP listener opens only after init completes, so a
+// TCP probe cleanly distinguishes mid-init from done — for both fresh and
+// upgraded volumes (an upgraded volume skips init entirely and is TCP-ready at
+// once, then ensureSchema() backfills any newer tables at boot).
 function waitForHealth(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-U', 'portos'], {
+      execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'portos'], {
         stdio: 'pipe',
         cwd: rootDir
       });
-      return true;
+      if (isDockerSchemaReady()) return true;
     } catch {
-      if (i < maxAttempts - 1) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
-      }
+      // not accepting TCP connections yet (mid-init or starting) — wait below
+    }
+    if (i < maxAttempts - 1) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
     }
   }
   return false;
@@ -174,31 +219,38 @@ function setPgMode(mode) {
 
 // Prompt user to choose storage mode (TTY only)
 function promptStorageChoice(message, hint) {
-  // Stdout redirected means we can't show the prompt — warn and exit 0 without changing mode.
+  // Non-interactive (stdout/stdin redirected, e.g. `npm start` under PM2): we
+  // can't prompt. By the time we reach here, handleDockerUnavailable() has
+  // already ruled out a healthy native PostgreSQL, so there is no usable DB and
+  // no file fallback anymore — setup genuinely failed. Exit NON-ZERO so the
+  // `&&`-chained `npm start` / `npm run setup` halts here instead of launching
+  // a server that would immediately fail-fast and crash-loop under PM2.
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.error(`⚠️  ${message}`);
+    console.error(`❌ ${message}`);
     console.error(`   ${hint}`);
-    console.error('   Start Docker then run: npm run setup');
-    process.exit(0);
+    console.error('   PostgreSQL is required. Start Docker (or set up native PostgreSQL) then run: npm run setup');
+    process.exit(1);
   }
 
   return new Promise((resolve) => {
     console.log(`⚠️  ${message}`);
     console.log(`   ${hint}`);
     console.log('');
-    console.log('   Choose a storage backend:');
+    console.log('   Choose a PostgreSQL hosting mode:');
     console.log('');
     console.log('   1) Docker PostgreSQL (recommended — containerized, no system install)');
     console.log('   2) Native PostgreSQL (use system-installed PostgreSQL on port 5432)');
-    console.log('   3) File-based JSON storage (deprecated — no vector search)');
     console.log('');
+    // NOTE: File-based JSON storage is intentionally NOT offered here. PostgreSQL
+    // is a mandatory dependency (the creative catalog has no file-backed
+    // equivalent). `PGMODE=file` survives only as an advanced/unsupported dev
+    // escape hatch honored when already present in .env — never a menu choice.
 
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('   Enter choice [1/2/3]: ', (answer) => {
+    rl.question('   Enter choice [1/2]: ', (answer) => {
       rl.close();
       const trimmed = answer.trim();
       if (trimmed === '2') resolve('native');
-      else if (trimmed === '3') resolve('file');
       else resolve('exit'); // 1 or default = they want docker, so exit to install it
     });
   });
@@ -243,6 +295,17 @@ function exitNativeSetupFailed() {
 }
 
 async function handleDockerUnavailable(message, issue) {
+  // Default to native when a healthy local PortOS PostgreSQL is already
+  // reachable — no need to prompt or fall back to Docker. The schema-ready
+  // probe (role can auth + memories table present) is the proof that a usable
+  // native PostgreSQL 17 + pgvector install is in place.
+  if (isPortOSDbReady()) {
+    console.log('   Healthy native PostgreSQL detected — using native mode.');
+    setPgMode('native');
+    console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
+    process.exit(0);
+  }
+
   const hint = getDockerHints(issue);
   const choice = await promptStorageChoice(message, hint);
 
@@ -264,12 +327,6 @@ async function handleDockerUnavailable(message, issue) {
     exitNativeSetupFailed();
   }
 
-  if (choice === 'file') {
-    setPgMode('file');
-    console.log('   Memory system will use file-based JSON storage (deprecated)');
-    process.exit(0);
-  }
-
   // choice === 'exit' — user wants Docker, tell them to install/start it
   console.log(`   ${hint}`);
   console.log('   Install/start Docker and re-run setup');
@@ -279,8 +336,13 @@ async function handleDockerUnavailable(message, issue) {
 const mode = getMode();
 
 if (mode === 'file') {
-  console.log('🗄️  Storage mode: file-based JSON (deprecated)');
-  console.log('   Tip: switch to PostgreSQL with: scripts/db.sh set-mode docker');
+  // Advanced/unsupported escape hatch: PGMODE=file is honored ONLY when a user
+  // has explicitly set it in .env. It is not a normal setup choice — PostgreSQL
+  // is a mandatory dependency for production installs and the creative catalog
+  // has no file-backed equivalent. Kept for development/tests.
+  console.error('🚫 PGMODE=file is UNSUPPORTED for production — PostgreSQL is required.');
+  console.error('   File-based storage has no creative-catalog or vector-search support.');
+  console.log('   Switch to a supported mode with: scripts/db.sh set-mode native (or docker)');
   process.exit(0);
 }
 
@@ -317,8 +379,17 @@ if (!hasCompose()) {
 }
 
 if (isContainerRunning()) {
-  console.log('✅ PostgreSQL already running');
-  process.exit(0);
+  // "running" is the container state, not DB readiness — Postgres inside it may
+  // still be initializing. Now that PG is mandatory and boot fail-fasts, confirm
+  // it actually accepts connections before reporting success, or `npm start`
+  // proceeds into PM2 against a not-yet-ready DB and crash-loops.
+  if (waitForHealth()) {
+    console.log('✅ PostgreSQL already running');
+    process.exit(0);
+  }
+  console.error('❌ PostgreSQL container is running but not accepting connections');
+  console.error('   Check status: docker compose logs db');
+  process.exit(1);
 }
 
 // Start the container
@@ -329,16 +400,21 @@ try {
     cwd: rootDir
   });
 } catch (err) {
-  console.error(`⚠️  Failed to start PostgreSQL: ${err.message}`);
-  console.log('   Memory system will use file-based JSON storage');
-  process.exit(0);
+  console.error(`❌ Failed to start PostgreSQL container: ${err.message}`);
+  console.error('   PostgreSQL is required — try native mode instead:');
+  console.error('   scripts/db.sh set-mode native && npm run setup');
+  process.exit(1);
 }
 
 // Wait for health
 console.log('⏳ Waiting for PostgreSQL to be ready...');
 if (waitForHealth()) {
-  console.log('✅ PostgreSQL ready on port 5561');
+  console.log(`✅ PostgreSQL ready on port ${PG_PORT_DOCKER}`);
 } else {
-  console.warn('⚠️  PostgreSQL started but not responding yet — it may still be initializing');
-  console.log('   Check status: docker compose logs db');
+  // PG is mandatory and boot fail-fasts — a started-but-unresponsive container
+  // must fail setup, not warn-and-continue, so the &&-chained `npm start` halts
+  // here instead of crash-looping under PM2 against an unready DB.
+  console.error('❌ PostgreSQL started but never became ready');
+  console.error('   Check status: docker compose logs db');
+  process.exit(1);
 }

@@ -50,6 +50,8 @@ export const updateCosConfig = (config, options = {}) => request('/cos/config', 
   body: JSON.stringify(config),
   ...options
 });
+// Today's per-domain autonomy usage (#711) for the Domain Budgets panel.
+export const getCosBudgetUsage = (options = {}) => request('/cos/budget-usage', options);
 export const getCosTasks = (options) => request('/cos/tasks', options);
 export const addCosTask = (task) => request('/cos/tasks', {
   method: 'POST',

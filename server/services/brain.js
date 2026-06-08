@@ -16,6 +16,7 @@ import { validate } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getDomainAutonomyMode } from './cosState.js';
+import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import {
   classifierOutputSchema,
   digestOutputSchema,
@@ -138,7 +139,20 @@ export async function captureThought(text, providerOverride, modelOverride) {
   // Per-domain autonomy gate: `off` captures the thought but skips auto-classify
   // entirely (it lands in the inbox for manual review); `dry-run` classifies and
   // surfaces the suggestion but doesn't auto-file it.
-  const mode = await getDomainAutonomyMode('brain');
+  let mode = await getDomainAutonomyMode('brain');
+
+  // Daily brain budget (#711): when today's auto-classify actions/minutes reach
+  // the cap, fall back to `off` for the rest of the day — the thought is still
+  // captured for manual review, just not auto-classified. A manual retry
+  // (retryClassification) is user-initiated and never gated or counted.
+  let budgetPaused = false;
+  if (mode !== 'off') {
+    const budget = await getDomainBudgetStatus('brain');
+    if (!budget.withinBudget) {
+      mode = 'off';
+      budgetPaused = true;
+    }
+  }
 
   // Create initial inbox log entry. When auto-classify is off the entry goes
   // straight to needs_review rather than the transient classifying state — and
@@ -153,10 +167,12 @@ export async function captureThought(text, providerOverride, modelOverride) {
   });
 
   if (mode === 'off') {
-    console.log(`🧠 Thought captured, auto-classify is OFF — left for manual review: ${inboxEntry.id}`);
+    console.log(`🧠 Thought captured, ${budgetPaused ? 'auto-classify daily budget reached' : 'auto-classify is OFF'} — left for manual review: ${inboxEntry.id}`);
     return {
       inboxLog: inboxEntry,
-      message: 'Thought captured! Auto-classify is off — review it in the inbox.'
+      message: budgetPaused
+        ? 'Thought captured! Auto-classify daily budget reached — review it in the inbox.'
+        : 'Thought captured! Auto-classify is off — review it in the inbox.'
     };
   }
 
@@ -164,7 +180,7 @@ export async function captureThought(text, providerOverride, modelOverride) {
 
   // Run AI classification in background (don't await)
   // Pass resolved provider/model so callAI uses brain's configured provider, not the system active one
-  classifyInBackground(inboxEntry.id, text, meta, provider, model, mode)
+  classifyInBackground(inboxEntry.id, text, meta, provider, model, mode, true)
     .catch(err => console.error(`❌ Background classification failed for ${inboxEntry.id}: ${err.message}`));
 
   return {
@@ -179,7 +195,7 @@ export async function captureThought(text, providerOverride, modelOverride) {
  * Background AI classification for a captured thought.
  * Updates the inbox entry and emits a brain:classified event when done.
  */
-async function classifyInBackground(entryId, text, meta, providerOverride, modelOverride, mode = 'execute') {
+async function classifyInBackground(entryId, text, meta, providerOverride, modelOverride, mode = 'execute', recordBudget = false) {
   let classification = null;
   let aiError = null;
 
@@ -194,7 +210,16 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
     return null;
   });
 
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const durationMs = Date.now() - startTime;
+  const elapsed = (durationMs / 1000).toFixed(1);
+
+  // Daily brain budget accounting (#711): an auto-classify consumed compute
+  // whether or not it parsed, so count the attempt + its time. Only the auto
+  // path (captureThought) passes recordBudget — a manual retry doesn't count.
+  if (recordBudget) {
+    await recordDomainUsage('brain', { actions: 1, ms: durationMs })
+      .catch(err => console.error(`❌ Failed to record brain budget usage for ${entryId}: ${err.message}`));
+  }
   const aiResponse = aiResult?.content;
   // Patch ai metadata so the inbox entry reflects the model actually invoked
   // (captureThought/retryClassification stored the pre-resolved value, which may

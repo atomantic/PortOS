@@ -70,6 +70,68 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     });
   });
 
+  it('never creates an investigation task for a content/safety refusal', async () => {
+    // A refusal is self-explanatory (the model declined the prompt) — there's
+    // nothing for a CoS agent to investigate, and the fallback path handles
+    // recovery. Even if the failure arrives via AI_PROVIDER_EXECUTION_FAILED
+    // with refusal analysis, the guard must suppress the task.
+    errorEvents.emit('error', {
+      code: 'AI_PROVIDER_EXECUTION_FAILED',
+      message: 'AI provider Codex CLI execution failed: content refused',
+      severity: 'error',
+      canAutoFix: true,
+      timestamp: Date.now(),
+      context: {
+        runId: 'run-refuse', provider: 'Codex CLI', providerId: 'codex', model: 'm-1',
+        errorAnalysis: { category: 'content-refusal' },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).not.toHaveBeenCalled();
+  });
+
+  it('suppresses the task for a SLOW fallback that finishes after the defer window', async () => {
+    // The bug this fixes: a CLI fallback (Claude Code) can take 20–30s, far
+    // longer than TASK_DEFER_MS. noteFallbackStarted cancels the backstop timer
+    // immediately, so even though the success notice arrives late, no task fires.
+    const { noteFallbackStarted } = await import('./autoFixer.js');
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Fallback starts almost immediately — cancels the deferred task.
+    noteFallbackStarted({ provider: 'Ollama', model: 'command-r' });
+
+    // The backstop window elapses with the fallback still running — no task.
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).not.toHaveBeenCalled();
+
+    // Fallback finally succeeds ~25s later — still no task.
+    noteFallbackHandled({ provider: 'Ollama', model: 'command-r' });
+    await vi.advanceTimersByTimeAsync(25000);
+    expect(cos.addTask).not.toHaveBeenCalled();
+  });
+
+  it('suppresses the task even when noteFallbackStarted races ahead of the error event', async () => {
+    // Microtask-ordering guard: if the fallback is announced before the error
+    // handler schedules its timer, the in-flight set still suppresses it.
+    const { noteFallbackStarted } = await import('./autoFixer.js');
+    noteFallbackStarted({ provider: 'Ollama', model: 'command-r' });
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r' });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).not.toHaveBeenCalled();
+  });
+
+  it('noteFallbackFailed releases suppression so a later identical failure can raise a task', async () => {
+    const { noteFallbackStarted, noteFallbackFailed } = await import('./autoFixer.js');
+    noteFallbackStarted({ provider: 'Ollama', model: 'command-r' });
+    noteFallbackFailed({ provider: 'Ollama', model: 'command-r' });
+
+    // A fresh failure with no fallback in flight now schedules + fires a task.
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r' });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+  });
+
   it('cancels the deferred task when noteFallbackHandled fires within the window', async () => {
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1' });
     await vi.advanceTimersByTimeAsync(0);

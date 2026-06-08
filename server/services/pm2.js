@@ -233,6 +233,9 @@ export async function deleteApp(name, pm2Home = null) {
  */
 export async function getAppStatus(name, pm2Home = null) {
   const processes = await fetchJlist(pm2Home);
+  // `error` here means "PM2 read failed", but it's the same forgiving shape the
+  // generic callers expect. App-status callers that must distinguish a failed
+  // read from a genuine state use getAppStatusStrict (null sentinel) instead.
   if (!processes) return { name, status: 'error', pm2_env: null };
   const proc = processes.find(p => p.name === name);
 
@@ -240,6 +243,28 @@ export async function getAppStatus(name, pm2Home = null) {
     return { name, status: 'not_found', pm2_env: null };
   }
 
+  return shapeProcStatus(proc);
+}
+
+/**
+ * Strict variant of {@link getAppStatus}: returns `null` when the PM2 read
+ * FAILED, distinct from a `{ status: 'not_found' }` for a read that succeeded
+ * but found no matching process. The detail endpoint uses this so a daemon
+ * blip surfaces as `degraded` rather than a confident `not_started`.
+ *
+ * @returns {Promise<object|null>} Process status, `{ status: 'not_found' }`, or
+ *   `null` on read failure.
+ */
+export async function getAppStatusStrict(name, pm2Home = null) {
+  const processes = await fetchJlist(pm2Home);
+  if (!processes) return null;
+  const proc = processes.find(p => p.name === name);
+  if (!proc) return { name, status: 'not_found', pm2_env: null };
+  return shapeProcStatus(proc);
+}
+
+// Shared shaping for getAppStatus / getAppStatusStrict so the two never drift.
+function shapeProcStatus(proc) {
   return {
     name: proc.name,
     status: proc.pm2_env?.status || 'unknown',
@@ -252,6 +277,28 @@ export async function getAppStatus(name, pm2Home = null) {
     unstableRestarts: proc.pm2_env?.unstable_restarts || 0,
     createdAt: proc.pm2_env?.created_at || null
   };
+}
+
+/**
+ * Parse the stdout of a `pm2 jlist` (custom PM2_HOME CLI path) into a raw
+ * process array, or `null` when the read effectively failed.
+ *
+ * PM2 jlist always emits a JSON array (`[]` when there are no processes), so an
+ * exit-0 with empty or garbage stdout (no array literal at all) is a FAILED read
+ * — not a successful "no processes." Returning `[]` there would reintroduce the
+ * absent-vs-empty footgun (issue #968) for custom PM2_HOME reads. `extractJSONArray`
+ * itself falls back to `'[]'` on garbage, so we must detect a real array literal
+ * before trusting it (mirroring extractJSONArray's own detection) and return null
+ * otherwise — matching the default-home path, which resolves null for a non-array.
+ *
+ * @param {string} stdout Raw `pm2 jlist` stdout (may carry ANSI noise).
+ * @returns {Array|null} The parsed process array (incl. `[]`), or `null` on failure.
+ */
+export function parseJlistStdout(stdout) {
+  const hasArrayLiteral = typeof stdout === 'string' && (stdout.includes('[{') || /\[\](?![0-9])/.test(stdout));
+  if (!hasArrayLiteral) return null;
+  const list = safeJSONParse(extractJSONArray(stdout), null);
+  return Array.isArray(list) ? list : null;
 }
 
 /**
@@ -310,7 +357,11 @@ function fetchJlist(pm2Home = null) {
           resolve(null);
           return;
         }
-        const list = safeJSONParse(extractJSONArray(stdout), []);
+        const list = parseJlistStdout(stdout);
+        if (list === null) {
+          resolve(null);
+          return;
+        }
         jlistCache.set(key, { data: list, ts: Date.now() });
         resolve(list);
       });
@@ -333,7 +384,32 @@ function fetchJlist(pm2Home = null) {
 export async function listProcesses(pm2Home = null) {
   const list = await fetchJlist(pm2Home);
   if (!list) return [];
-  return list.map(proc => ({
+  return list.map(mapProcess);
+}
+
+/**
+ * Strict variant of {@link listProcesses}: returns `null` when the PM2 read
+ * FAILED (daemon unreachable / non-zero exit) and the mapped array otherwise —
+ * including `[]` for a successful read with no processes.
+ *
+ * `listProcesses()` flattens a failed read into `[]`, which is the right
+ * forgiving behavior for log/command/voice callers that just want "whatever is
+ * running." But app-status getters MUST distinguish "PM2 unreachable" from
+ * "nothing running" (CLAUDE.md absent-vs-empty rule) — collapsing them records
+ * a transient blip as every app `not_started`. Those callers use this instead.
+ *
+ * @param {string} pm2Home Optional custom PM2_HOME path
+ * @returns {Promise<Array|null>} Mapped process list, or `null` on read failure.
+ */
+export async function listProcessesStrict(pm2Home = null) {
+  const list = await fetchJlist(pm2Home);
+  if (!list) return null;
+  return list.map(mapProcess);
+}
+
+// Shared shaping for listProcesses / listProcessesStrict so the two never drift.
+function mapProcess(proc) {
+  return {
     name: proc.name,
     status: proc.pm2_env?.status || 'unknown',
     pid: proc.pid,
@@ -343,7 +419,7 @@ export async function listProcesses(pm2Home = null) {
     uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
     restarts: proc.pm2_env?.restart_time || 0,
     unstableRestarts: proc.pm2_env?.unstable_restarts || 0
-  }));
+  };
 }
 
 /**

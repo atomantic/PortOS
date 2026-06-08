@@ -12,6 +12,9 @@ export const CITY_COLORS = {
     stopped: '#ef4444',
     not_started: '#8b5cf6',
     not_found: '#8b5cf6',
+    // PM2 read failed — status unavailable. A muted amber-gray so it reads as
+    // "unknown," distinct from the purple "never launched" buildings.
+    unknown: '#9ca3af',
     archived: '#64748b',
   },
   buildingBody: '#0c0c24',
@@ -149,6 +152,7 @@ export const BUILDING_PARAMS = {
     stopped: 2.5,
     not_started: 1.5,
     not_found: 1.5,
+    unknown: 1.5,
     archived: 2.0,
   },
   processHeightBonus: 0.8,

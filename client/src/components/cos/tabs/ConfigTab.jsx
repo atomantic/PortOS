@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
-import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS, AUTONOMY_DOMAINS, DOMAIN_AUTONOMY_MODES, getDomainMode } from '../constants';
+import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS, AUTONOMY_DOMAINS, DOMAIN_AUTONOMY_MODES, getDomainMode, DOMAIN_BUDGET_FIELDS, getDomainBudget, normalizeBudgetLimit } from '../constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
 
@@ -189,6 +189,67 @@ function DomainAutonomyControl({ config, onDomainChange }) {
   );
 }
 
+// Per-domain daily budgets (#711) — caps on autonomous work per domain plus a
+// readout of today's usage. Each cap PATCHes only its field on blur (the server
+// field-merges). Blank/0 = unlimited. Token/$ caps are intentionally absent —
+// CLI subscription providers report no per-run cost to enforce against.
+function DomainBudgetControl({ config, usage, onBudgetChange }) {
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-4 mb-6">
+      <h4 className="text-sm font-medium text-gray-400 mb-1">Domain Budgets</h4>
+      <p className="text-xs text-gray-600 mb-3">
+        Daily caps on autonomous work per domain — blank or 0 means unlimited. Once a
+        cap is reached the domain pauses until the counters reset at midnight (UTC).
+      </p>
+      <div className="space-y-3">
+        {AUTONOMY_DOMAINS.map((domain) => {
+          const budget = getDomainBudget(config, domain.id);
+          const u = usage?.[domain.id] || { actions: 0, ms: 0 };
+          const minutesUsed = Math.round((u.ms || 0) / 60000);
+          return (
+            <div key={domain.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div className="min-w-0">
+                <span className="text-sm text-gray-300">{domain.label}</span>
+                <p className="text-xs text-gray-600">
+                  Today: {u.actions || 0} actions · {minutesUsed} min
+                </p>
+              </div>
+              <div className="flex gap-3 shrink-0">
+                {DOMAIN_BUDGET_FIELDS.map((field) => {
+                  const inputId = `budget-${domain.id}-${field.id}`;
+                  const cap = budget[field.id];
+                  // Compare exact minutes (not the rounded display) so the
+                  // highlight matches server enforcement, which gates on raw ms.
+                  const used = field.usageKey === 'actions' ? (u.actions || 0) : (u.ms || 0) / 60000;
+                  const over = cap != null && used >= cap;
+                  return (
+                    <div key={field.id} className="flex flex-col">
+                      <label htmlFor={inputId} className="text-[10px] text-gray-500 mb-0.5">{field.label}</label>
+                      <input
+                        id={inputId}
+                        // Remount when the persisted cap changes so the uncontrolled
+                        // input reflects external updates without fighting typing.
+                        key={`${inputId}-${cap ?? ''}`}
+                        type="number"
+                        min="0"
+                        inputMode="numeric"
+                        defaultValue={cap ?? ''}
+                        placeholder="∞"
+                        onBlur={(e) => onBudgetChange(domain.id, field.id, e.target.value, domain.label, field.label)}
+                        className={`w-20 px-2 py-1 text-xs rounded-md border bg-port-bg text-gray-200 ${over ? 'border-port-warning text-port-warning' : 'border-port-border'}`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle, evalCountdown }) {
   const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
   const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
@@ -227,6 +288,15 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     onUpdate();
   };
 
+  // Today's per-domain usage for the Domain Budgets readout (#711).
+  const [budgetUsage, setBudgetUsage] = useState({});
+  const refreshBudgetUsage = useCallback(() => {
+    api.getCosBudgetUsage({ silent: true })
+      .then((res) => setBudgetUsage(res?.usage || {}))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { refreshBudgetUsage(); }, [refreshBudgetUsage]);
+
   const handleDomainChange = async (domainId, mode, modeLabel, domainLabel) => {
     // Custom error toast ⇒ pass { silent: true } so the helper doesn't also
     // toast; and only show success / refresh AFTER the PUT actually resolves.
@@ -234,6 +304,21 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
       await api.updateCosConfig({ domainAutonomy: { [domainId]: mode } }, { silent: true });
       toast.success(`${domainLabel} autonomy set to ${modeLabel}`);
       onUpdate();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleBudgetChange = async (domainId, field, rawValue, domainLabel, fieldLabel) => {
+    // Empty / 0 / NaN / negative → null (unlimited), mirroring the server.
+    const value = normalizeBudgetLimit(rawValue);
+    const current = getDomainBudget(config, domainId)[field];
+    if ((current ?? null) === value) return; // no-op (e.g. blur without edit)
+    try {
+      await api.updateCosConfig({ domainBudgets: { [domainId]: { [field]: value } } }, { silent: true });
+      toast.success(`${domainLabel} ${fieldLabel} ${value == null ? 'set to unlimited' : `capped at ${value}`}`);
+      onUpdate();
+      refreshBudgetUsage();
     } catch (err) {
       toast.error(err.message);
     }
@@ -284,6 +369,8 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
 
       {/* Per-domain Autonomy Guardrails */}
       <DomainAutonomyControl config={config} onDomainChange={handleDomainChange} />
+
+      <DomainBudgetControl config={config} usage={budgetUsage} onBudgetChange={handleBudgetChange} />
 
       <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
         <ConfigRow

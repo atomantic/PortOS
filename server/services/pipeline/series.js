@@ -11,10 +11,8 @@
  * collection (server/services/pipeline/issues.js) and reference a series by id.
  */
 
-import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS } from '../../lib/fileUtils.js';
-import { createCollectionStore } from '../../lib/collectionStore.js';
+import { getSeriesStore } from './seriesStore/store.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
@@ -26,26 +24,13 @@ import {
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 
-// TYPE-level (storage layout) schema version stamped on
-// `data/pipeline-series/index.json`.
-//   v1 — series split out of monolithic `data/pipeline-series.json` into
-//        per-record `data/pipeline-series/{id}/index.json`. See migration 036.
-const TYPE_SCHEMA_VERSION = 1;
-
-// Lazy store factory so tests that swap PATHS.data per-test still see the
-// right temp root — the store captures PATHS.data once at first call.
-let _store = null;
-const store = () => {
-  if (_store && _store.dir === join(PATHS.data, 'pipeline-series')) return _store;
-  _store = createCollectionStore({
-    dir: join(PATHS.data, 'pipeline-series'),
-    type: 'pipelineSeries',
-    schemaVersion: TYPE_SCHEMA_VERSION,
-    sanitizeRecord: sanitizeSeries,
-    idPattern: /^ser-[A-Za-z0-9-]+$/,
-  });
-  return _store;
-};
+// Storage backend dispatcher (#1015). Series records moved from per-record
+// `data/pipeline-series/{id}/index.json` (collectionStore) to one-row-per-series
+// in PostgreSQL (`pipeline_series`); the facade is a drop-in for the
+// collectionStore surface this service calls, so only this factory changed. The
+// `manuscript-review.json` sibling doc stays file-primary — the facade's
+// `recordDir(id)` still resolves to the on-disk path manuscriptReview.js reads.
+const store = () => getSeriesStore(sanitizeSeries);
 
 export const seriesStore = () => store();
 

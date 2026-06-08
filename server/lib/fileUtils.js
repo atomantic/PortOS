@@ -14,7 +14,9 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
 
-const execFileAsync = promisify(execFile);
+// Promisified execFile — shared so callers (e.g. backup's pg_dump probing)
+// don't each re-wrap it. Returns { stdout, stderr }.
+export const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
 
 // Cache __dirname calculation for services importing this module

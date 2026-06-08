@@ -25,12 +25,14 @@ vi.mock('./taskSchedule.js', () => ({
 }));
 
 vi.mock('./pm2.js', () => ({
-  listProcesses: vi.fn().mockResolvedValue([]),
+  // Strict variant: resolves an array on success (incl. []), or null on a
+  // failed PM2 read. The status getters use this, not the forgiving listProcesses.
+  listProcessesStrict: vi.fn().mockResolvedValue([]),
 }));
 
 import { readJSONFile } from '../lib/fileUtils.js';
-import { listProcesses } from './pm2.js';
-import { getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID } from './apps.js';
+import { listProcessesStrict } from './pm2.js';
+import { getAppStatuses, getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID } from './apps.js';
 
 describe('getReservedPorts', () => {
   beforeEach(() => {
@@ -157,7 +159,7 @@ describe('getAppStatusSummary', () => {
         }
       }
     });
-    listProcesses.mockResolvedValue([
+    listProcessesStrict.mockResolvedValue([
       { name: 'portos-server', status: 'online' },
       { name: 'svc-a', status: 'stopped' }
       // svc-b is missing → not_found → notStarted
@@ -169,6 +171,8 @@ describe('getAppStatusSummary', () => {
       online: 1,
       stopped: 1,
       notStarted: 1,
+      unknown: 0,
+      degraded: false,
       unmanaged: 2
     });
   });
@@ -183,7 +187,7 @@ describe('getAppStatusSummary', () => {
         }
       }
     });
-    listProcesses.mockResolvedValue([{ name: 'portos-server', status: 'online' }]);
+    listProcessesStrict.mockResolvedValue([{ name: 'portos-server', status: 'online' }]);
 
     const summary = await getAppStatusSummary();
     expect(summary).toEqual({
@@ -191,6 +195,8 @@ describe('getAppStatusSummary', () => {
       online: 1,
       stopped: 0,
       notStarted: 0,
+      unknown: 0,
+      degraded: false,
       unmanaged: 0
     });
   });
@@ -221,7 +227,7 @@ describe('getAppStatusSummary', () => {
         }
       }
     });
-    listProcesses.mockImplementation(async (home) => {
+    listProcessesStrict.mockImplementation(async (home) => {
       if (home === '/tmp/other-pm2') return [{ name: 'c', status: 'online' }];
       return [
         { name: 'portos-server', status: 'online' },
@@ -231,7 +237,7 @@ describe('getAppStatusSummary', () => {
     });
 
     const summary = await getAppStatusSummary();
-    expect(listProcesses).toHaveBeenCalledTimes(2);
+    expect(listProcessesStrict).toHaveBeenCalledTimes(2);
     expect(summary).toMatchObject({ total: 4, online: 3, stopped: 1, notStarted: 0, unmanaged: 0 });
   });
 
@@ -251,9 +257,83 @@ describe('getAppStatusSummary', () => {
         }
       }
     });
-    listProcesses.mockResolvedValue([{ name: 'portos-server', status: 'online' }]);
+    listProcessesStrict.mockResolvedValue([{ name: 'portos-server', status: 'online' }]);
 
     const summary = await getAppStatusSummary();
     expect(summary.total).toBe(1);
+  });
+
+  it('marks the summary degraded (not all not-started) when a PM2 read fails', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] },
+        'svc-a': { name: 'svc-a', type: 'express', pm2ProcessNames: ['svc-a'] }
+      }
+    });
+    // Strict read returns null on a transient PM2 failure (NOT an empty list).
+    listProcessesStrict.mockResolvedValue(null);
+
+    const summary = await getAppStatusSummary();
+    expect(summary).toEqual({
+      total: 2,
+      online: 0,
+      stopped: 0,
+      notStarted: 0,
+      unknown: 2,
+      degraded: true,
+      unmanaged: 0
+    });
+  });
+
+  it('keeps accurate counts for healthy homes when only one home fails', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] },
+        'custom-home': { name: 'c', type: 'express', pm2Home: '/tmp/other-pm2', pm2ProcessNames: ['c'] }
+      }
+    });
+    listProcessesStrict.mockImplementation(async (home) => {
+      if (home === '/tmp/other-pm2') return null; // this home's read failed
+      return [{ name: 'portos-server', status: 'online' }];
+    });
+
+    const summary = await getAppStatusSummary();
+    expect(summary).toMatchObject({ total: 2, online: 1, unknown: 1, degraded: true });
+  });
+});
+
+describe('getAppStatuses', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it('reports unknown + degraded for apps whose PM2 home read failed', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] }
+      }
+    });
+    listProcessesStrict.mockResolvedValue(null);
+
+    const statuses = await getAppStatuses();
+    const portos = statuses.find(s => s.id === PORTOS_APP_ID);
+    expect(portos.overallStatus).toBe('unknown');
+    expect(portos.degraded).toBe(true);
+  });
+
+  it('does NOT mark apps unknown when the PM2 home reads an empty list', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] }
+      }
+    });
+    // Successful read, genuinely no processes → not_started, NOT unknown.
+    listProcessesStrict.mockResolvedValue([]);
+
+    const statuses = await getAppStatuses();
+    const portos = statuses.find(s => s.id === PORTOS_APP_ID);
+    expect(portos.overallStatus).toBe('not_started');
+    expect(portos.degraded).toBeUndefined();
   });
 });

@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getSettings } from './settings.js';
 import { notificationEvents, NOTIFICATION_TYPES, getNotifications } from './notifications.js';
 import { getDomainAutonomyMode } from './cosState.js';
+import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { approveMemory, rejectMemory, peekMemory } from './memoryBackend.js';
 import { ensureDir, PATHS, readJSONFile, formatDuration, atomicWrite } from '../lib/fileUtils.js';
 import { getActiveAgents } from './subAgentSpawner.js';
@@ -388,6 +389,14 @@ async function forwardNotification(notification) {
     return;
   }
 
+  // Daily messages budget (#711): once today's auto-send count reaches the cap,
+  // suppress further forwarding for the rest of the day (acts like `off`).
+  const budget = await getDomainBudgetStatus('messages');
+  if (!budget.withinBudget) {
+    console.log(`📨 Messages auto-send daily ${budget.exceeded} budget reached — suppressing forward: ${notification.type} — "${notification.title}"`);
+    return;
+  }
+
   const emoji = NOTIFICATION_EMOJI[notification.type] || '🔔';
   const priorityEmoji = PRIORITY_EMOJI[notification.priority] || '';
   const lines = [`${emoji} <b>${escapeHtml(notification.title)}</b>`];
@@ -414,7 +423,12 @@ async function forwardNotification(notification) {
   }
 
   if (notification.priority) lines.push(`Priority: ${priorityEmoji} ${notification.priority}`);
+  const startTime = Date.now();
   await sendMessage(lines.join('\n'), opts);
+  // Count the forward (and its wall-clock) against the messages daily budget
+  // (#711) so both the actions and minutes caps are enforced for this domain.
+  await recordDomainUsage('messages', { actions: 1, ms: Date.now() - startTime })
+    .catch(err => console.error(`❌ Failed to record messages budget usage: ${err.message}`));
 }
 
 /**

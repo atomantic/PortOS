@@ -96,6 +96,7 @@ import {
   getScheduleStatus,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
+  MANAGED_AGENT_OPTIONS,
   REFERENCE_WATCH_AUDITED_VERSION
 } from './taskSchedule.js'
 
@@ -835,6 +836,64 @@ describe('taskSchedule', () => {
       // It still drives the /claim flow: in-flight scan + claim/<slug> branch.
       expect(prompt).toContain('claim/<slug>')
       expect(prompt).toContain('in-flight set')
+    })
+
+    it('claim-issue drives the /claim --issues flow against GitHub issues', async () => {
+      const prompt = await getTaskPrompt('claim-issue')
+      // Work source is the GitHub issue tracker, not PLAN.md.
+      expect(prompt).toContain('claim/issue-')
+      expect(prompt).toContain('gh issue list')
+      expect(prompt).toContain('Closes #')
+      // The author-filter placeholder is substituted at dispatch time
+      // (cosTaskGenerator), so it stays literal in the raw stored prompt.
+      expect(prompt).toContain('{issueAuthorFilter}')
+      // Issues mode ships GitHub issues only — it explicitly does not touch PLAN.md.
+      expect(prompt).toContain('does NOT touch PLAN.md')
+    })
+  })
+
+  describe('claim-issue defaults', () => {
+    it('is registered as a self-improvement task type', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('claim-issue')
+    })
+
+    it('defaults to owner-filed issues with worktree/PR managed by the agent', () => {
+      const cfg = DEFAULT_TASK_INTERVALS['claim-issue']
+      expect(cfg.type).toBe(INTERVAL_TYPES.DAILY)
+      expect(cfg.enabled).toBe(false)
+      expect(cfg.taskMetadata.issueAuthorFilter).toBe('owner')
+      // Mirrors plan-task: the agent creates its own worktree + opens the PR,
+      // so CoS must keep both off (and lock them).
+      expect(cfg.taskMetadata.useWorktree).toBe(false)
+      expect(cfg.taskMetadata.openPR).toBe(false)
+      expect(MANAGED_AGENT_OPTIONS['claim-issue']).toEqual(['useWorktree', 'openPR'])
+    })
+  })
+
+  describe('refresh-local-llm-catalog defaults', () => {
+    it('is registered as a self-improvement task type', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('refresh-local-llm-catalog')
+    })
+
+    it('defaults to weekly, disabled, with CoS-managed worktree + PR', () => {
+      const cfg = DEFAULT_TASK_INTERVALS['refresh-local-llm-catalog']
+      expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
+      expect(cfg.enabled).toBe(false)
+      // CoS manages the worktree + PR (like feature-ideas), so these are NOT
+      // in MANAGED_AGENT_OPTIONS (the user could turn them off if they wanted).
+      expect(cfg.taskMetadata.useWorktree).toBe(true)
+      expect(cfg.taskMetadata.openPR).toBe(true)
+      expect(MANAGED_AGENT_OPTIONS['refresh-local-llm-catalog']).toBeUndefined()
+    })
+
+    it('prompt guards on the PortOS catalog file and targets the catalog + ranking', async () => {
+      const prompt = await getTaskPrompt('refresh-local-llm-catalog')
+      // No-ops on any repo lacking the catalog file (so enabling on a non-PortOS app is safe).
+      expect(prompt).toContain('server/lib/localLlmCatalog.js')
+      expect(prompt).toContain('LOCAL_LLM_CATALOG')
+      expect(prompt).toContain('EDITORIAL_FAMILY_RANK')
+      // Must not open an empty PR when nothing changed (phrase may be line-wrapped).
+      expect(prompt).toContain('empty PR')
     })
   })
 

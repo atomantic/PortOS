@@ -49,7 +49,7 @@ import {
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
 import { canonicalTagKey, setUserCatalogTypes, INGREDIENT_TYPE_IDS } from '../lib/catalogTypes.js';
-import { getSettings, updateSettings } from './settings.js';
+import { readUserTypes as readUserTypeSlice, writeUserTypes } from './catalogUserTypes/store.js';
 
 const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
@@ -97,11 +97,14 @@ export async function getChangesSince(since = '0', limit = 100) {
   // receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
   const tableMaxSequences = await getMaxSequences();
 
-  // User-defined type definitions ride EVERY envelope (settings-sourced, not
-  // sequence-tracked — there are at most 64 and they're small). The receiver
-  // LWW-merges them into its own settings slice. Absent → empty array.
-  const settings = await getSettings();
-  const catalogTypes = Array.isArray(settings.catalogUserTypes) ? settings.catalogUserTypes : [];
+  // User-defined type definitions ride EVERY envelope (not sequence-tracked —
+  // there are at most 64 and they're small). The receiver LWW-merges them into
+  // its own user-type store. Absent → empty array. (The wire shape is storage-
+  // independent: #1001 moved the local store from settings.json to Postgres
+  // without changing this `catalogTypes` block, so peers interoperate across
+  // the migration with no schema-version bump.)
+  const catalogTypesRaw = await readUserTypeSlice();
+  const catalogTypes = Array.isArray(catalogTypesRaw) ? catalogTypesRaw : [];
 
   return {
     catalogTypes,
@@ -322,8 +325,8 @@ export async function applyRemoteChanges(envelope = {}) {
  * skipped, failed }`.
  */
 export async function applyUserTypesFromPeer(incoming = []) {
-  const settings = await getSettings();
-  const local = Array.isArray(settings.catalogUserTypes) ? settings.catalogUserTypes : [];
+  const localRaw = await readUserTypeSlice();
+  const local = Array.isArray(localRaw) ? localRaw : [];
   const byId = new Map(local.map((t) => [t.id, t]));
   let applied = 0;
   let skipped = 0;
@@ -353,7 +356,7 @@ export async function applyUserTypesFromPeer(incoming = []) {
   }
   if (applied > 0) {
     const next = [...byId.values()];
-    await updateSettings({ catalogUserTypes: next });
+    await writeUserTypes(next);
     setUserCatalogTypes(next);
     console.log(`🧩 Catalog sync: merged ${applied} user type(s) from peer`);
   }

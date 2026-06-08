@@ -59,6 +59,15 @@ CREATE INDEX IF NOT EXISTS idx_memories_tags ON memories USING gin (tags);
 -- Sync sequence index for federation
 CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence);
 
+-- Versioned DB-migration tracker (#1029). Records which ordered migration files
+-- in server/scripts/db-migrations/ have been applied on THIS install. Part of
+-- the base schema (mirrored in db.js ensureSchema, parity-locked by
+-- db.catalogDdlParity.test.js) so the boot-time runner can always read it.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Memory relationships (bidirectional links)
 CREATE TABLE IF NOT EXISTS memory_links (
   source_id UUID REFERENCES memories(id) ON DELETE CASCADE,
@@ -558,3 +567,270 @@ CREATE TRIGGER trg_catalog_tag_updated_at
   BEFORE UPDATE ON catalog_tags
   FOR EACH ROW
   EXECUTE FUNCTION update_catalog_tag_timestamp();
+
+-- ===========================================================================
+-- Creative Director projects (Phase 3, issue #997)
+-- ===========================================================================
+-- One row per project. The full project record — treatment, scenes, runs[],
+-- and the misc back-pointers (collectionId / timelineProjectId / finalVideoId
+-- / sourceIssueId) — lives in `data` JSONB. `status` / `created_at` /
+-- `updated_at` are mirrored into columns (kept in lockstep with the JSONB on
+-- every write) so future queries CAN filter/sort on them without a JSONB
+-- expression; `listProjects` sorts by `created_at`. No index on status/
+-- updated_at yet — nothing queries them today (the recovery scan filters
+-- p.status in JS over the loaded record), and an unused index is just write
+-- amplification. Add one alongside the query that needs it.
+--
+-- Why JSONB and not normalized scene/run tables: no code queries INTO scenes
+-- or runs relationally (the orchestrator loads the whole project, mutates a
+-- scene or appends a run, writes it back), and scenes carry ad-hoc fields
+-- outside the Zod schema (evaluationFrames). Per-PROJECT rows already remove
+-- the monolithic-file write contention + O(N²) reserialize the old single
+-- creative-director-projects.json caused. Normalizing scenes/runs is deferred
+-- to a later phase if a cross-project scene/run query ever materializes.
+--
+-- CD is local-only (NOT federated — see plan §"Peer sync"), so there is no
+-- sync_sequence / soft-delete-tombstone column: a delete is a hard DELETE.
+-- `status` has no DB CHECK; valid values are gated at the app layer via
+-- PROJECT_STATUSES (creativeDirectorPresets.js), matching the catalog
+-- ingredients convention so a new status needs no constraint migration.
+CREATE TABLE IF NOT EXISTS creative_director_projects (
+  id TEXT PRIMARY KEY,
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Media asset index (Phase 3.2, issue #1000). One row per generated image or
+-- video. The bytes stay on disk (data/images, data/videos) and the image
+-- sidecars + data/video-history.json remain authoritative — this table is a
+-- DERIVED, queryable index, reconciled from disk at boot and kept warm by a
+-- generation-completed hook. `media_key` is the shared `<kind>:<ref>` key
+-- (mediaItemKey.js); `kind`/`ref` mirror into columns for queries while the
+-- full metadata record lives in `data` JSONB. created_at is the asset's own
+-- timestamp; indexed_at is when this index row was written. No
+-- sync_sequence/tombstone: the index is local-only (rebuilt from disk), not
+-- federated — a row vanishes when its file does (prune on reconcile). Mirrors
+-- the media_assets block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS media_assets (
+  media_key TEXT PRIMARY KEY,
+  kind VARCHAR(16) NOT NULL,
+  ref TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  indexed_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- created_at DESC is the gallery/history sort order; kind narrows
+-- images-vs-videos. A composite (kind, created_at DESC) serves both.
+CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC);
+
+-- Catalog user-defined types (Phase 4 lead-in, issue #1001). One row per
+-- user-defined ingredient type — the registry that defines catalog row
+-- semantics, moved out of data/settings.json (`catalogUserTypes`) so type
+-- evolution versions/syncs alongside the catalog data it governs. `id` is the
+-- type discriminator (the `type` column on catalog_ingredients + the
+-- `cat-<prefix>-<uuid>` mint seed); the full definition lives in `data` JSONB.
+-- updated_at / deleted_at mirror the federation LWW clock + tombstone (a
+-- soft-deleted type is KEPT as a tombstone row so the deletion federates —
+-- setUserCatalogTypes filters tombstones out of the active registry). ≤64 rows,
+-- read whole on every warm/sync, so no secondary index. Mirrors the
+-- catalog_user_types block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS catalog_user_types (
+  id TEXT PRIMARY KEY,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Universe Builder records (Phase 3 Create migration, issue #1014). One row per
+-- universe, the full sanitized record (canon bibles, categories, compositeSheets,
+-- locks, influences) in `data` JSONB, moved out of data/universes/{id}/index.json
+-- (collectionStore). Only the fields the service/federation query, join, or sort
+-- on are mirrored into columns: `name` (rename-cascade + delete-guard + list
+-- sort), `schema_version` (the RECORD-shape version sanitizeTemplate stamps — a
+-- column so a future migration can find unmigrated rows without parsing JSONB),
+-- `ephemeral` (the snapshot loop filters local-only records), and the
+-- LWW/tombstone trio (updated_at/deleted/deleted_at). NO sync_sequence: universes
+-- federate via the EXISTING dataSync snapshot/push model (LWW on the body's
+-- updatedAt), NOT catalog-style pull cursors — the storage swap is invisible to
+-- peers (no schema-version bump). The mirror columns are populated FROM the
+-- record body, not a DB trigger. Mirrors the universes block in db.js
+-- ensureSchema().
+CREATE TABLE IF NOT EXISTS universes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  schema_version INTEGER NOT NULL DEFAULT 4,
+  ephemeral BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+-- Partial index on the live set — the common list/scan path is "non-deleted
+-- universes". updated_at supports LWW-staleness scans.
+CREATE INDEX IF NOT EXISTS idx_universes_live ON universes (deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_universes_updated ON universes (updated_at);
+
+-- Universe render-history log (issue #1014). The type-level `config.runs[]` array
+-- collectionStore kept in data/universes/index.json (capped 200, NEVER federated
+-- — per-peer local) becomes its own table. `universe_id` is a soft ref (no FK):
+-- the cascade-clean on universe delete is handled in the service exactly as the
+-- file backend did, and a soft ref keeps the table independent of universe-row
+-- insert ordering during the one-time import. `data` holds
+-- jobIds[]/promptCount/collectionId. Mirrors db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS universe_runs (
+  id TEXT PRIMARY KEY,
+  universe_id TEXT NOT NULL,
+  collection_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_universe_runs_universe ON universe_runs (universe_id, created_at DESC);
+
+-- Pipeline series (Phase 3 Create migration, issue #1015). One row per series,
+-- the full sanitized record (arc/seasons/locks/covers/style) in `data` JSONB,
+-- moved out of data/pipeline-series/{id}/index.json (collectionStore). Only the
+-- fields the service/federation query, join, or sort on are mirrored into
+-- columns: `name` (rename-cascade + list sort), `universe_id` (the hot
+-- relationship — delete-guard + "series in this universe" lists; soft ref, no
+-- FK — a series can sync before its universe arrives), and the promote
+-- back-link `writers_room_work_id`. `ephemeral` + the LWW/tombstone trio
+-- (updated_at/deleted/deleted_at) populated FROM the record body, not a DB
+-- trigger. NO sync_sequence: pipeline records federate via the EXISTING
+-- dataSync snapshot/push model — the storage swap is invisible to peers (no
+-- schema-version bump). Mirrors the pipeline_series block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS pipeline_series (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  universe_id TEXT,
+  writers_room_work_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ephemeral BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_series_universe ON pipeline_series (universe_id) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_series_wr_work ON pipeline_series (writers_room_work_id);
+CREATE INDEX IF NOT EXISTS idx_series_updated ON pipeline_series (updated_at);
+
+-- Pipeline issues (issue #1015). One row per issue; the 8-stage `stages` map
+-- (text/visual/audio, runHistory, canonExtraction, covers) + lastRunId pointers
+-- stay entirely in `data` JSONB (document-shaped, sanitizer-owned). `series_id`
+-- (parent, soft ref), `season_id` (arc grouping), and `number`
+-- (renumber-recomputed ordinal) are promoted — the renumber pass reads all
+-- issues of a series ordered by number, the single most common cross-record
+-- pipeline query, served directly by idx_issues_series (series_id, number).
+-- `status` promoted for "issues needing review" dashboards. `ephemeral` +
+-- LWW/tombstone trio mirror the body. NO sync_sequence (see pipeline_series).
+-- Mirrors the pipeline_issues block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS pipeline_issues (
+  id TEXT PRIMARY KEY,
+  series_id TEXT NOT NULL,
+  season_id TEXT,
+  number INTEGER,
+  status VARCHAR(32),
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ephemeral BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_issues_series ON pipeline_issues (series_id, number) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_issues_season ON pipeline_issues (season_id) WHERE season_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_updated ON pipeline_issues (updated_at);
+
+-- Story Builder sessions (issue #1016). One row per session; the conductor
+-- bookkeeping (`steps` lock/integrity map, `syncedHashes` baseline,
+-- `currentStep`, `llm` picker choice) stays entirely in `data` JSONB. The two
+-- FKs `universe_id` / `series_id` are promoted for "sessions linked to this
+-- record" lookups. `sync` is promoted because Story Builder is the one store
+-- whose federation is OPT-IN — the snapshot loop filters WHERE sync = TRUE to
+-- decide what to even consider pushing, so promoting it avoids deserializing
+-- every session's `data` per snapshot tick. `ephemeral` + the LWW/tombstone
+-- trio mirror the body. NO sync_sequence (sessions ride the existing dataSync
+-- snapshot/LWW model, not the per-record push pipeline).
+-- Mirrors the story_builder_sessions block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS story_builder_sessions (
+  id TEXT PRIMARY KEY,
+  universe_id TEXT,
+  series_id TEXT,
+  sync BOOLEAN DEFAULT FALSE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ephemeral BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_stb_universe ON story_builder_sessions (universe_id);
+CREATE INDEX IF NOT EXISTS idx_stb_series ON story_builder_sessions (series_id);
+CREATE INDEX IF NOT EXISTS idx_stb_updated ON story_builder_sessions (updated_at);
+
+-- Writers Room (Phase 3 Create migration, issue #1017). FOUR tables replace the
+-- bespoke file layout (folders.json, exercises.json, per-work manifest.json).
+-- Writers Room is NOT federated (no dataSync category, no schema-version gate),
+-- so unlike the universe/pipeline/story-builder tables these carry NO
+-- `ephemeral`/`sync`/sync_sequence columns. The only thing that stays on disk is
+-- the draft prose body (drafts/<draftId>.md, file-primary); its metadata is the
+-- draft_versions row.
+-- Mirrors the writers_room_* blocks in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS writers_room_folders (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wr_folders_parent ON writers_room_folders (parent_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS writers_room_works (
+  id TEXT PRIMARY KEY,
+  folder_id TEXT,
+  title TEXT NOT NULL,
+  kind VARCHAR(32),
+  status VARCHAR(32),
+  active_draft_version_id TEXT,
+  pipeline_series_id TEXT,
+  pipeline_issue_id TEXT,
+  cd_project_id TEXT,
+  media_collection_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_wr_works_folder ON writers_room_works (folder_id) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_wr_works_series ON writers_room_works (pipeline_series_id) WHERE pipeline_series_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS writers_room_draft_versions (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  label TEXT,
+  content_file TEXT NOT NULL,
+  content_hash TEXT,
+  word_count INTEGER DEFAULT 0,
+  segment_index JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_from_version_id TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wr_drafts_work ON writers_room_draft_versions (work_id, created_at);
+
+CREATE TABLE IF NOT EXISTS writers_room_exercises (
+  id TEXT PRIMARY KEY,
+  work_id TEXT,
+  status VARCHAR(16),
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_wr_exercises_work ON writers_room_exercises (work_id, started_at DESC);

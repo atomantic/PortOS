@@ -324,6 +324,8 @@ Configure AI providers for the runner and Chief of Staff:
 ### Architecture & Operations
 - [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
 - [API Reference](./docs/API.md) — 50+ REST endpoints and WebSocket events
+- [Storage Classification Contract](./docs/STORAGE.md) — when data belongs in PostgreSQL vs the filesystem, plus the new-data-store checklist
+- [Backup & Restore](./docs/BACKUP.md) — filesystem snapshots + mandatory PostgreSQL dumps and how to restore them
 - [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5561) and allocation guide
 - [PM2 Configuration](./docs/PM2.md) — PM2 patterns and best practices
 

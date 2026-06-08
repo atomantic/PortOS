@@ -68,7 +68,8 @@ export const WORKFLOW_STAGES = [
       'error-handling',
       'typing',
       'ui-bugs',
-      'mobile-responsive'
+      'mobile-responsive',
+      'refresh-local-llm-catalog'
     ],
     jobIds: ['job-wiki-maintenance']
   },
@@ -76,7 +77,7 @@ export const WORKFLOW_STAGES = [
     id: 'build',
     label: 'Build',
     description: 'Implement the next planned feature. Gated on do-replan so new work is grounded in a fresh plan.',
-    taskTypes: ['feature-ideas', 'plan-task'],
+    taskTypes: ['feature-ideas', 'plan-task', 'claim-issue'],
     jobIds: []
   },
   {

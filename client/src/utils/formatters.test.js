@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { formatDurationMin, formatEventDateTime, timeAgo } from './formatters.js';
+import { formatContextLength, formatDurationMin, formatEventDateTime, timeAgo } from './formatters.js';
+
+describe('formatContextLength', () => {
+  it('formats common context windows compactly', () => {
+    expect(formatContextLength(4096)).toBe('4K ctx');
+    expect(formatContextLength(8192)).toBe('8K ctx');
+    expect(formatContextLength(32768)).toBe('32K ctx');
+    expect(formatContextLength(131072)).toBe('128K ctx');
+    expect(formatContextLength(1048576)).toBe('1M ctx');
+  });
+
+  it('returns null for missing/invalid values', () => {
+    expect(formatContextLength(null)).toBeNull();
+    expect(formatContextLength(undefined)).toBeNull();
+    expect(formatContextLength(0)).toBeNull();
+    expect(formatContextLength(-5)).toBeNull();
+    expect(formatContextLength('nope')).toBeNull();
+  });
+});
 
 describe('formatDurationMin', () => {
   it('formats sub-hour, exact-hour, and hour+min durations', () => {

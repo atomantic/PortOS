@@ -26,6 +26,8 @@ import { getUserTimezone, getLocalParts, nextLocalTime } from '../lib/timezone.j
 import { formatDuration } from '../lib/fileUtils.js';
 import { loadState, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
+import { remainingActionBudget } from '../lib/domainBudgets.js';
+import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getCosTasks } from './cosTaskStore.js';
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
@@ -126,6 +128,26 @@ export async function registerSingleJobSchedule(jobId) {
 const spawningJobIds = new Set();
 const spawningJobTimeouts = new Map();
 
+// Synchronous daily-action reservation counter (#984). The budget gate in
+// executeScheduledJob reads recorded usage + spawningJobIds + running autonomous
+// agents — but there are awaits between a job passing that gate and being
+// counted by spawningJobIds (agent jobs) or recordDomainUsage (script/shell
+// jobs). Two jobs coming due in the SAME event-loop tick could therefore both
+// clear a `maxActionsPerDay == 1` gate before either was counted, nudging a soft
+// daily cap by one. This counter is incremented the instant a job is admitted to
+// fire — synchronously, before any further await — and included in the gate's
+// in-flight term, so a same-tick sibling sees the reservation and is withheld.
+// It's released the moment the job is handed off to spawningJobIds /
+// recordDomainUsage or hits any exit path (a `finally` plus the agent handoff
+// cover every path, so the two counters never double-count the same job).
+let scheduledActionReservations = 0;
+
+// Test-only observability: lets the concurrency test assert the reservation
+// counter settles back to zero after a tick (no leak across any exit path).
+export function getScheduledActionReservations() {
+  return scheduledActionReservations;
+}
+
 function addSpawningJob(jobId) {
   spawningJobIds.add(jobId);
   // Auto-clear after 5 minutes if spawn never completes, and re-register the timer
@@ -182,7 +204,42 @@ export async function executeScheduledJob(jobId) {
   // re-registration computes a FUTURE fire time — re-registering a past-due job
   // with stale lastRun would refire every second (the same 1s-loop the spawn
   // branch's comment warns about).
-  const cosAutonomyMode = getDomainMode(state.config, 'cos');
+  let cosAutonomyMode = getDomainMode(state.config, 'cos');
+
+  // Daily CoS budget (#711): a scheduled job firing is one autonomous action, so
+  // once today's actions/minutes cap is hit, withhold it like `off` (and skip the
+  // dry-run "would fire" log — over budget means stop, not narrate). The action
+  // check counts in-flight autonomous runs too (recorded usage lags behind spawn),
+  // so concurrent scheduled jobs can't slip past a small cap. Same gate-skip
+  // bookkeeping below advances lastRun so re-registration is future-dated.
+  const cosBudget = await getDomainBudgetStatus('cos');
+  if (cosAutonomyMode !== 'off') {
+    let overBudget = false;
+    if (cosBudget.exceeded === 'minutes') {
+      overBudget = true;
+    } else if (cosBudget.budget?.maxActionsPerDay != null) {
+      // In-flight = autonomous agents already running PLUS jobs admitted this
+      // tick whose agent hasn't registered yet (`spawningJobIds`) PLUS jobs
+      // admitted-to-fire this tick but not yet handed off to `spawningJobIds`
+      // or recorded usage (`scheduledActionReservations`, #984). The reservation
+      // term closes the same-tick window: two jobs coming due in one event-loop
+      // tick used to each clear this gate before either was counted, because an
+      // agent job reserves `spawningJobIds` only after later awaits and an inline
+      // script/shell job records usage only post-execution. The reservation is
+      // bumped synchronously the instant a job is admitted (below), so a same-tick
+      // sibling reading this gate sees it and is correctly withheld.
+      const runningAutonomous = Object.values(state.agents).filter(
+        (a) => a.status === 'running' && a.metadata?.taskType && a.metadata.taskType !== 'user'
+      ).length;
+      const inFlight = runningAutonomous + spawningJobIds.size + scheduledActionReservations;
+      if (remainingActionBudget(cosBudget.budget, cosBudget.usage, inFlight) < 1) overBudget = true;
+    }
+    if (overBudget) {
+      emitLog('info', `CoS auto-run paused — daily ${cosBudget.exceeded || 'actions'} budget reached, withholding scheduled job: ${job.name}`, { jobId, domainBudget: 'cos', exceeded: cosBudget.exceeded || 'actions' });
+      cosAutonomyMode = 'off';
+    }
+  }
+
   if (cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode === 'dry-run') {
       emitLog('info', `[dry-run] CoS auto-run would fire scheduled job: ${job.name}`, { jobId, domainAutonomy: 'cos' });
@@ -194,92 +251,134 @@ export async function executeScheduledJob(jobId) {
     return;
   }
 
-  // Script jobs and shell jobs execute directly without spawning an AI agent
-  if (isScriptJob(job)) {
-    const scriptOk = await executeScriptJob(job).then(() => true, err => {
-      emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
-      return false;
-    });
-    if (scriptOk) emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
-  } else if (isShellJob(job)) {
-    const shellOk = await executeShellJob(job).then(() => true, err => {
-      emitLog('error', `Shell job failed: ${job.name} - ${err.message}`, { jobId: job.id });
-      return false;
-    });
-    if (shellOk) emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
-  } else {
-    // Check if this job is already being spawned or has a running agent.
-    // Don't re-register the timer here — the job:spawned handler will do it
-    // after recordJobExecution updates lastRun. Re-registering with stale
-    // lastRun causes a 1-second re-fire loop.
-    if (spawningJobIds.has(jobId)) {
-      emitLog('debug', `Job ${job.name} skipped - already spawning`, { jobId });
-      return;
-    }
-    const agentAlreadyRunning = Object.values(state.agents).some(
-      a => a.status === 'running' && a.metadata?.jobId === jobId
-    );
-    if (agentAlreadyRunning) {
-      emitLog('debug', `Job ${job.name} skipped - agent already running`, { jobId });
-      return;
-    }
+  // Admitted to fire: reserve one daily action SYNCHRONOUSLY, before any further
+  // await (#984). The budget gate above read `scheduledActionReservations`, and
+  // there is no `await` between that read and this increment — so "read gate →
+  // reserve" is an atomic critical section. Two jobs coming due in the same tick
+  // serialize on it: the first reads remaining≥1 and reserves; the second reads
+  // the reservation and is withheld. The reservation is handed off to
+  // `spawningJobIds` (agent jobs) or recorded usage (script/shell jobs) the
+  // moment either takes over the in-flight accounting, and the `finally`
+  // releases it on every non-firing exit path (already-spawning, already-running,
+  // capacity-defer, gate-skip, spawn failure). `releaseReservation` is idempotent
+  // so the explicit handoff release and the `finally` can both fire harmlessly.
+  let reserved = true;
+  scheduledActionReservations += 1;
+  const releaseReservation = () => {
+    if (!reserved) return;
+    reserved = false;
+    scheduledActionReservations = Math.max(0, scheduledActionReservations - 1);
+  };
 
-    // Check capacity before spawning an agent
-    const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
-    if (runningAgents >= state.config.maxConcurrentAgents) {
-      emitLog('debug', `Job ${job.name} deferred - no agent slots`, { jobId });
-      // Retry in 60s
-      scheduleEvent({
-        id: `job:${jobId}`,
-        type: 'once',
-        delayMs: 60000,
-        handler: () => executeScheduledJob(jobId),
-        metadata: { description: `Autonomous job: ${job.name} (retry)`, jobId }
+  try {
+    // Script jobs and shell jobs execute directly without spawning an AI agent —
+    // so they never reach completeAgent's budget tally. Record them against the CoS
+    // daily budget (#711) here on success, since a fired scheduled job is exactly
+    // the autonomous action the gate above withholds when over budget.
+    if (isScriptJob(job)) {
+      const startedAt = Date.now();
+      const scriptOk = await executeScriptJob(job).then(() => true, err => {
+        emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+        return false;
       });
-      return;
-    }
-
-    // Run gate check — skip LLM if precondition not met
-    // Gate errors fail-open (run the job) to avoid silently dropping scheduled work
-    let gateResult;
-    try {
-      gateResult = await checkJobGate(jobId);
-    } catch (gateErr) {
-      emitLog('warn', `Job ${job.name} gate error, failing open: ${gateErr?.message || gateErr}`, { jobId });
-      gateResult = { shouldRun: true, reason: 'Gate error — failing open' };
-    }
-    if (!gateResult.shouldRun) {
-      emitLog('debug', `Job ${job.name} gate skipped: ${gateResult.reason}`, { jobId, gate: gateResult });
-      // Update lastRun so the job reschedules at its normal interval, but don't increment runCount
-      await recordJobGateSkip(jobId).catch(err =>
-        console.error(`❌ Failed to record gate-skip for ${jobId}: ${err.message}`)
+      // Count the fired attempt against the budget whether it succeeded or failed —
+      // a failing/looping scheduled job still consumes autonomous work + wall-clock,
+      // and must not be able to bypass the daily cap.
+      await recordDomainUsage('cos', { actions: 1, ms: Date.now() - startedAt })
+        .catch(err => console.error(`❌ Failed to record CoS budget usage for script job ${job.id}: ${err.message}`));
+      releaseReservation(); // recorded usage now owns the in-flight count for this action
+      if (scriptOk) emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
+    } else if (isShellJob(job)) {
+      const startedAt = Date.now();
+      const shellOk = await executeShellJob(job).then(() => true, err => {
+        emitLog('error', `Shell job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+        return false;
+      });
+      await recordDomainUsage('cos', { actions: 1, ms: Date.now() - startedAt })
+        .catch(err => console.error(`❌ Failed to record CoS budget usage for shell job ${job.id}: ${err.message}`));
+      releaseReservation(); // recorded usage now owns the in-flight count for this action
+      if (shellOk) emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
+    } else {
+      // Check if this job is already being spawned or has a running agent.
+      // Don't re-register the timer here — the job:spawned handler will do it
+      // after recordJobExecution updates lastRun. Re-registering with stale
+      // lastRun causes a 1-second re-fire loop.
+      if (spawningJobIds.has(jobId)) {
+        emitLog('debug', `Job ${job.name} skipped - already spawning`, { jobId });
+        return;
+      }
+      const agentAlreadyRunning = Object.values(state.agents).some(
+        a => a.status === 'running' && a.metadata?.jobId === jobId
       );
-      await registerSingleJobSchedule(jobId);
-      return;
-    }
-    if (hasGate(jobId)) {
-      emitLog('info', `Job ${job.name} gate passed: ${gateResult.reason}`, { jobId, gate: gateResult });
+      if (agentAlreadyRunning) {
+        emitLog('debug', `Job ${job.name} skipped - agent already running`, { jobId });
+        return;
+      }
+
+      // Check capacity before spawning an agent
+      const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+      if (runningAgents >= state.config.maxConcurrentAgents) {
+        emitLog('debug', `Job ${job.name} deferred - no agent slots`, { jobId });
+        // Retry in 60s
+        scheduleEvent({
+          id: `job:${jobId}`,
+          type: 'once',
+          delayMs: 60000,
+          handler: () => executeScheduledJob(jobId),
+          metadata: { description: `Autonomous job: ${job.name} (retry)`, jobId }
+        });
+        return;
+      }
+
+      // Run gate check — skip LLM if precondition not met
+      // Gate errors fail-open (run the job) to avoid silently dropping scheduled work
+      let gateResult;
+      try {
+        gateResult = await checkJobGate(jobId);
+      } catch (gateErr) {
+        emitLog('warn', `Job ${job.name} gate error, failing open: ${gateErr?.message || gateErr}`, { jobId });
+        gateResult = { shouldRun: true, reason: 'Gate error — failing open' };
+      }
+      if (!gateResult.shouldRun) {
+        emitLog('debug', `Job ${job.name} gate skipped: ${gateResult.reason}`, { jobId, gate: gateResult });
+        // Update lastRun so the job reschedules at its normal interval, but don't increment runCount
+        await recordJobGateSkip(jobId).catch(err =>
+          console.error(`❌ Failed to record gate-skip for ${jobId}: ${err.message}`)
+        );
+        await registerSingleJobSchedule(jobId);
+        return;
+      }
+      if (hasGate(jobId)) {
+        emitLog('info', `Job ${job.name} gate passed: ${gateResult.reason}`, { jobId, gate: gateResult });
+      }
+
+      // Mark as spawning before emitting task:ready to prevent races
+      addSpawningJob(jobId);
+      releaseReservation(); // spawningJobIds now owns the in-flight count for this action
+      try {
+        const task = await generateTaskFromJob(job);
+        emitLog('info', `Autonomous job firing: ${job.name}`, { jobId, category: job.category });
+        cosEvents.emit('task:ready', task);
+        // Don't re-register timer here — lastRun hasn't been updated yet, so
+        // computeNextJobFireTime would return a past-due time and the timer would
+        // fire in 1s, creating a rapid re-fire loop. The job:spawned handler
+        // re-registers after recordJobExecution updates lastRun.
+        return;
+      } catch (err) {
+        clearSpawningJob(jobId);
+        emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
+      }
     }
 
-    // Mark as spawning before emitting task:ready to prevent races
-    addSpawningJob(jobId);
-    try {
-      const task = await generateTaskFromJob(job);
-      emitLog('info', `Autonomous job firing: ${job.name}`, { jobId, category: job.category });
-      cosEvents.emit('task:ready', task);
-      // Don't re-register timer here — lastRun hasn't been updated yet, so
-      // computeNextJobFireTime would return a past-due time and the timer would
-      // fire in 1s, creating a rapid re-fire loop. The job:spawned handler
-      // re-registers after recordJobExecution updates lastRun.
-      return;
-    } catch (err) {
-      clearSpawningJob(jobId);
-      emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
-    }
+    // Re-register for next fire time (script/shell jobs, early returns, and error paths)
+    await registerSingleJobSchedule(jobId);
+  } finally {
+    // Catch-all: release on every exit path that didn't hand the reservation off
+    // (already-spawning / already-running / capacity-defer / gate-skip /
+    // generation+spawn failure). Idempotent, so a path that already handed off is
+    // a no-op here.
+    releaseReservation();
   }
-
-  // Re-register for next fire time (script/shell jobs, early returns, and error paths)
-  await registerSingleJobSchedule(jobId);
 }
 
 /**

@@ -10,6 +10,7 @@ import { join, dirname } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
+import { normalizeDomainBudgets } from '../lib/domainBudgets.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
 export const AGENTS_DIR = join(PATHS.cos, 'agents');
@@ -61,6 +62,10 @@ export const DEFAULT_CONFIG = {
   // Default is `execute` for every domain, reproducing pre-#711 behavior so no
   // migration is needed — an install with no stored value reads `execute`.
   domainAutonomy: normalizeDomainAutonomy({}),
+  // Per-domain daily autonomy budgets (#711). Each domain caps maxActionsPerDay
+  // and maxMinutesPerDay; `null` = unlimited, which is the default for every
+  // domain — so an install with no stored value enforces nothing (no migration).
+  domainBudgets: normalizeDomainBudgets({}),
   rehabilitationGracePeriodDays: 7,
   completedAgentRetentionMs: 86400000,
   embeddingProviderId: 'lmstudio',

@@ -136,7 +136,7 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
-  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'error-handling',
+  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
   // Polls the app's GitHub repo for pull requests newly opened against the
@@ -148,7 +148,13 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // repo, finds commits since lastReviewedSha, and appends slug-tagged
   // `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
   // `plan-task` to pick up. No source-code edits, no separate review file.
-  'reference-watch'
+  'reference-watch',
+  // PortOS-only: researches the current best local LLMs per category and
+  // refreshes the bundled suggested-models catalog (server/lib/localLlmCatalog.js)
+  // + the editorial family ranking (server/lib/localModelHeuristics.js), opening a
+  // PR. No-ops on any repo lacking that catalog file, so enabling it on a
+  // non-PortOS app does nothing. See DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'].
+  'refresh-local-llm-catalog'
 ];
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
@@ -180,6 +186,16 @@ export const DEFAULT_TASK_INTERVALS = {
   //     and merges via `gh pr merge`, so CoS doesn't need to.
   // The agent runs in the source repo's working directory; `git worktree add` doesn't touch that working tree, so it's safe even with uncommitted user changes.
   'plan-task':           { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true } },
+  // claim-issue drives the /claim --issues flow — the agent creates its OWN
+  // claim/issue-<num> worktree, opens the PR (Closes #<num>), merges via
+  // `gh pr merge`, and cleans up. Both `useWorktree` and `openPR` are OFF on the
+  // CoS side for the SAME reasons as plan-task (a CoS-managed worktree under
+  // cos/<task>/<agent> would hide the issue-<num> slug from the in-flight scan
+  // and trigger cleanupAgentWorktree's auto-merge into the source repo's HEAD).
+  // `issueAuthorFilter` gates which issues are claimable: 'owner' (default,
+  // matching /claim --issues) only claims issues the repo owner filed; 'any'
+  // claims any open issue. Per-app override supported via taskTypeOverrides.
+  'claim-issue':         { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'owner' } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
@@ -211,7 +227,13 @@ export const DEFAULT_TASK_INTERVALS = {
   // it to 'self' or 'others' in the schedule UI. `readOnly: false` so a
   // customized prompt can make changes if the operator wants — the shipped
   // default prompt only reviews + comments.
-  'pr-watcher':          { type: INTERVAL_TYPES.CUSTOM, intervalMs: 1800000, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'any', readOnly: false } }
+  'pr-watcher':          { type: INTERVAL_TYPES.CUSTOM, intervalMs: 1800000, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'any', readOnly: false } },
+  // refresh-local-llm-catalog maintains PortOS's own bundled suggested-models
+  // catalog. CoS manages the worktree + PR (like feature-ideas/do-replan) — the
+  // agent only edits the catalog file. Weekly is generous; the prompt only opens
+  // a PR when the catalog is actually stale, so most runs are no-ops. Off by
+  // default; the user enables it on the PortOS app.
+  'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -220,7 +242,10 @@ export const DEFAULT_TASK_INTERVALS = {
 // (e.g., plan-task's prompt creates its own claim/<slug> worktree, so a
 // CoS-managed worktree would clobber it).
 export const MANAGED_AGENT_OPTIONS = {
-  'plan-task': ['useWorktree', 'openPR']
+  'plan-task': ['useWorktree', 'openPR'],
+  // claim-issue's prompt creates its own claim/issue-<num> worktree (same
+  // rationale as plan-task), so CoS must not pre-create one or open the PR.
+  'claim-issue': ['useWorktree', 'openPR']
 };
 
 // Strip managed-agent fields from a per-app override map before merging on top
@@ -1186,6 +1211,7 @@ function getTaskTypeDescription(taskType) {
     'documentation': 'Update documentation',
     'feature-ideas': 'Implement next planned feature or brainstorm new one',
     'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
+    'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
     'accessibility': 'Accessibility audit',
     'branch-cleanup': 'Clean up merged branches',
     'dependency-updates': 'Update dependencies',
@@ -1195,7 +1221,9 @@ function getTaskTypeDescription(taskType) {
     'pr-reviewer': 'Review open PRs from contributors',
     'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
     'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
-    'jira-status-report': 'Generate JIRA weekly status report'
+    'jira-status-report': 'Generate JIRA weekly status report',
+    'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
+    'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
   };
   return descriptions[taskType] || taskType.replace(/-/g, ' ');
 }

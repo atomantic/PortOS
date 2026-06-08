@@ -180,7 +180,12 @@ export function BackupTab() {
     if (pgBackup.status === 'skipped') {
       return <span className="text-gray-400">⏭️ Not configured (file mode)</span>;
     }
-    return <span className="text-port-warning">❌ Dump failed: {pgBackup.reason}</span>;
+    // title carries the raw pg_dump stderr so the exact cause is one hover away.
+    return (
+      <span className="text-port-warning" title={pgBackup.error || undefined}>
+        ❌ Dump failed: {pgBackup.reason}
+      </span>
+    );
   };
 
   const handleRestoreDb = async (snapshotId) => {
@@ -213,7 +218,12 @@ export function BackupTab() {
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
       {backupStatus === 'degraded' && (
         <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
-          ⚠️ Last backup degraded — files were saved but the database dump failed. Check that <code>pg_dump</code> is installed and PostgreSQL is reachable.
+          ⚠️ Last backup degraded — files were saved but the database dump failed.{' '}
+          {pgBackup?.reason === 'version_mismatch' ? (
+            <>Your <code>pg_dump</code> is older than the running PostgreSQL server. Install/point at a <code>pg_dump</code> at least as new as the server (e.g. <code>brew install postgresql@17</code>), or set <code>PORTOS_PGDUMP</code> to its path.</>
+          ) : (
+            <>Check that <code>pg_dump</code> is installed and PostgreSQL is reachable.</>
+          )}
         </div>
       )}
 

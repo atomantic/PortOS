@@ -20,10 +20,13 @@ import {
   formatVersionGap,
 } from '../lib/schemaVersions.js';
 import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
+import { getUniverseMutationEpoch } from './universeBuilder/store.js';
+import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listIssues } from './pipeline/issues.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
+import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
@@ -35,14 +38,38 @@ const CHRONOTYPE_FILE = join(PATHS.digitalTwin, 'chronotype.json');
 const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
 const FEEDBACK_FILE = join(PATHS.digitalTwin, 'feedback.json');
 const MEATSPACE_DIR = PATHS.meatspace;
+// Pipeline series + issues used to live under data/pipeline-series/<id> and
+// data/pipeline-issues/<id>; #1015 moved the RECORDS into PostgreSQL
+// (`pipeline_series` / `pipeline_issues`). Same federation-invisibility problem
+// as universes (#1014): a PG-backed pipeline edit no longer touches these
+// directories, so the dir fingerprint alone would go stale and peers would stop
+// receiving pipeline edits. The pipeline store exports a monotonic mutation
+// epoch (bumped on every series/issue record write/delete) folded into this
+// path's fingerprint via PIPELINE_EPOCH_KEY below. The series dir is still
+// stat'd because its `manuscript-review.json` siblings remain file-primary —
+// a review-only edit must still invalidate the pipeline checksum.
 const PIPELINE_SERIES_DIR = join(PATHS.data, 'pipeline-series');
 const PIPELINE_ISSUES_DIR = join(PATHS.data, 'pipeline-issues');
+// Sentinel fingerprint-map key (not a real path — readFingerprintMap special-
+// cases it) carrying the pipeline mutation epoch into the pipeline +
+// mediaCollections checksum caches.
+const PIPELINE_EPOCH_KEY = '__pipelineEpoch';
 // Universes used to live in a single `universe-builder.json`; migration 034
-// splits them into `data/universes/<id>/index.json` with a type-level
-// `data/universes/index.json`. Sync uses the directory for both reading
-// (listUniverses, below) and for fingerprint-based checksum caching — the
-// fingerprint walker descends into the dir so per-record edits invalidate.
+// split them into `data/universes/<id>/index.json`, and #1014 moved them again
+// into PostgreSQL (`universes` + `universe_runs`). Sync reads them through the
+// service (listUniverses, below). For the fingerprint-based checksum cache, a
+// PG-backed edit no longer touches this directory, so the dir fingerprint alone
+// would go stale and peers would silently stop receiving universe edits. The
+// universe store exports a monotonic mutation epoch (bumped on every record
+// write/delete) that we fold into this path's fingerprint via
+// UNIVERSE_EPOCH_KEY below — so the checksum cache invalidates on a DB edit just
+// as it did on a file edit, keeping the storage swap invisible to federation.
+// Under the file backend the dir still changes too (harmless double-signal).
 const UNIVERSE_BUILDER_DIR = join(PATHS.data, 'universes');
+// Sentinel fingerprint-map key (not a real path — readFingerprintMap special-
+// cases it) carrying the universe mutation epoch into the universe +
+// mediaCollections checksum caches.
+const UNIVERSE_EPOCH_KEY = '__universeEpoch';
 // Migration 059 split the monolithic media-collections.json into per-record
 // `data/media-collections/<id>/index.json`. The fingerprint walker descends
 // into the dir so per-record edits invalidate the snapshot checksum cache.
@@ -56,11 +83,20 @@ const MEDIA_COLLECTIONS_DIR = join(PATHS.data, 'media-collections');
 // CHECKSUM_PATHS below.
 const PEER_SUBSCRIPTIONS_FILE = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 const VIDEO_HISTORY_FILE = join(PATHS.data, 'video-history.json');
-// Story Builder sessions live in per-record `data/story-builder/<id>/index.json`
-// (collectionStore layout) with a type-level `data/story-builder/index.json`.
-// Only `sync: true` sessions ride this category (#730); the fingerprint walker
-// descends into the dir so a session edit invalidates the snapshot checksum.
+// Story Builder sessions used to live in per-record `data/story-builder/<id>/
+// index.json`; #1016 moved the RECORDS into PostgreSQL (`story_builder_sessions`).
+// Only `sync: true` sessions ride this category (#730). Same federation-
+// invisibility problem as universes (#1014): a PG-backed session edit no longer
+// touches this directory, so the dir fingerprint alone would go stale and peers
+// would stop receiving session edits. The store exports a monotonic mutation
+// epoch (bumped on every session record write/delete) folded into this path's
+// fingerprint via STORY_BUILDER_EPOCH_KEY below. Under the file backend the dir
+// still changes too (harmless double-signal).
 const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
+// Sentinel fingerprint-map key (not a real path — readFingerprintMap special-
+// cases it) carrying the Story Builder mutation epoch into the storyBuilder
+// checksum cache.
+const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -733,23 +769,33 @@ const CHECKSUM_PATHS = {
   // subscribe/unsubscribe invalidates the per-peer snapshot checksum cache —
   // the exclude-set is derived from subscriptions, so the scoped snapshot's
   // content (and checksum) can change even when no record file moved.
-  universe: [UNIVERSE_BUILDER_DIR, PEER_SUBSCRIPTIONS_FILE],
-  pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR, PEER_SUBSCRIPTIONS_FILE],
+  // UNIVERSE_EPOCH_KEY folds in the store's mutation epoch so a PG-backed
+  // universe edit (which doesn't touch UNIVERSE_BUILDER_DIR) still invalidates
+  // the cache — see UNIVERSE_BUILDER_DIR's note. PEER_SUBSCRIPTIONS_FILE so a
+  // subscribe/unsubscribe re-checksums the per-peer scoped snapshot.
+  universe: [UNIVERSE_BUILDER_DIR, UNIVERSE_EPOCH_KEY, PEER_SUBSCRIPTIONS_FILE],
+  // PIPELINE_EPOCH_KEY folds in the pipeline store's mutation epoch so a
+  // PG-backed series/issue edit (which doesn't touch these dirs) still
+  // invalidates the cache — see PIPELINE_SERIES_DIR's note. The series dir is
+  // still stat'd for the file-primary manuscript-review.json siblings.
+  pipeline: [PIPELINE_SERIES_DIR, PIPELINE_ISSUES_DIR, PIPELINE_EPOCH_KEY, PEER_SUBSCRIPTIONS_FILE],
   // mediaCollections invalidates on its own record dir AND on the parent
   // record files — `getMediaCollectionsSnapshot` filters collections whose
   // linked universe/series is ephemeral, so a "mark ephemeral" PATCH on a
   // universe must re-checksum the collections snapshot even though no
   // media-collections record file moved. Same goes for un-ephemeral.
-  mediaCollections: [MEDIA_COLLECTIONS_DIR, UNIVERSE_BUILDER_DIR, PIPELINE_SERIES_DIR, PEER_SUBSCRIPTIONS_FILE],
+  mediaCollections: [MEDIA_COLLECTIONS_DIR, UNIVERSE_BUILDER_DIR, UNIVERSE_EPOCH_KEY, PIPELINE_SERIES_DIR, PIPELINE_EPOCH_KEY, PEER_SUBSCRIPTIONS_FILE],
   // videoHistory is a flat history file with no parent-record dependency —
   // its checksum invalidates only when video-history.json itself moves.
   videoHistory: [VIDEO_HISTORY_FILE],
-  // storyBuilder invalidates on its own per-record dir. The snapshot includes
-  // ONLY sync-enabled sessions, but the fingerprint walker is content-agnostic
-  // (any session file edit re-checksums) — over-invalidation is harmless: the
-  // snapshot getter filters back to sync:true and the checksum is unchanged
-  // when no synced session moved, so the orchestrator still skips the transfer.
-  storyBuilder: [STORY_BUILDER_DIR],
+  // STORY_BUILDER_EPOCH_KEY folds in the store's mutation epoch so a PG-backed
+  // session edit (which doesn't touch STORY_BUILDER_DIR) still invalidates the
+  // cache — see STORY_BUILDER_DIR's note. The snapshot includes ONLY
+  // sync-enabled sessions, but the epoch/dir signal is content-agnostic (any
+  // session write re-checksums) — over-invalidation is harmless: the snapshot
+  // getter filters back to sync:true and the checksum is unchanged when no
+  // synced session moved, so the orchestrator still skips the transfer.
+  storyBuilder: [STORY_BUILDER_DIR, STORY_BUILDER_EPOCH_KEY],
 };
 
 const CATEGORIES = {
@@ -859,6 +905,12 @@ async function fingerprintDirTwoLevels(dirPath) {
 async function readFingerprintMap(paths) {
   const out = {};
   await Promise.all(paths.map(async (p) => {
+    // Sentinel: carry the universe store's mutation epoch (a number) instead of
+    // a file stat, so a PG-backed universe edit invalidates the cache even
+    // though no file moved. fingerprintsEqual compares these like any value.
+    if (p === UNIVERSE_EPOCH_KEY) { out[p] = `epoch:${getUniverseMutationEpoch()}`; return; }
+    if (p === PIPELINE_EPOCH_KEY) { out[p] = `epoch:${getPipelineMutationEpoch()}`; return; }
+    if (p === STORY_BUILDER_EPOCH_KEY) { out[p] = `epoch:${getStoryBuilderMutationEpoch()}`; return; }
     const s = await stat(p).catch(() => null);
     if (!s) { out[p] = null; return; }
     if (s.isDirectory()) {

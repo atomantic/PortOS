@@ -11,6 +11,7 @@ import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
 import { getDomainAutonomyMode } from './cosState.js';
+import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 
 const DEDUP_SIMILARITY_THRESHOLD = 0.82;
 
@@ -211,6 +212,16 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     return { created: 0, pendingApproval: 0, memories: [], pendingMemories: [], skipped: 'domain-off' };
   }
 
+  // Daily memory budget (#711): once today's extraction actions/minutes reach the
+  // cap, skip for the rest of the day — same outcome as `off`, distinct reason.
+  const budget = await getDomainBudgetStatus('memory');
+  if (!budget.withinBudget) {
+    console.log(`🧠 Memory auto-extract daily ${budget.exceeded} budget reached — skipping extraction for agent ${agentId}`);
+    return { created: 0, pendingApproval: 0, memories: [], pendingMemories: [], skipped: 'domain-budget' };
+  }
+
+  // Time the extraction (incl. the LLM classify) for the minutes budget.
+  const startTime = Date.now();
   const allMemories = [];
   let usedLLM = false;
 
@@ -374,6 +385,10 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     pendingApproval: pendingMemories.length,
     skippedDuplicates
   });
+
+  // Record the extraction against the memory domain's daily budget (#711).
+  await recordDomainUsage('memory', { actions: 1, ms: Date.now() - startTime })
+    .catch(err => console.error(`❌ Failed to record memory budget usage for agent ${agentId}: ${err.message}`));
 
   return {
     created: created.length,

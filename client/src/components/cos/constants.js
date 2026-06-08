@@ -86,6 +86,14 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
   { value: 'others', label: 'Opened by others', description: 'Only PRs opened by someone other than the gh-authenticated user' }
 ];
 
+// claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
+// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'owner' = only claim issues
+// the repo owner filed (matches /claim --issues); 'any' = claim any open issue.
+export const ISSUE_AUTHOR_FILTER_OPTIONS = [
+  { value: 'owner', label: 'Owner-filed only', description: 'Only claim open issues filed by the repository owner/creator' },
+  { value: 'any', label: 'Any author', description: 'Claim the next eligible open issue regardless of who filed it' }
+];
+
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 
@@ -199,6 +207,31 @@ export const DEFAULT_DOMAIN_MODE = 'execute';
 export const getDomainMode = (config, domainId) => {
   const candidate = config?.domainAutonomy?.[domainId];
   return DOMAIN_AUTONOMY_MODES.some(m => m.id === candidate) ? candidate : DEFAULT_DOMAIN_MODE;
+};
+
+// Per-domain daily autonomy budgets (#711). Mirrors server/lib/domainBudgets.js.
+// Each domain caps autonomous work on two measurable dimensions; an empty/0 cap
+// means unlimited. (No token/$ caps — CLI subscription providers expose no
+// per-run metering, so a money/token cap couldn't be enforced honestly.)
+export const DOMAIN_BUDGET_FIELDS = [
+  { id: 'maxActionsPerDay', label: 'Actions/day', usageKey: 'actions' },
+  { id: 'maxMinutesPerDay', label: 'Minutes/day', usageKey: 'minutes' }
+];
+
+// Coerce a cap to a positive integer or null (unlimited) — mirrors the server's
+// normalizeBudgetLimit so the UI's "is a cap set?" view matches enforcement.
+export const normalizeBudgetLimit = (value) => {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+};
+
+// Resolve a domain's budget from config, tolerating absent/partial config.
+export const getDomainBudget = (config, domainId) => {
+  const b = config?.domainBudgets?.[domainId] || {};
+  return {
+    maxActionsPerDay: normalizeBudgetLimit(b.maxActionsPerDay),
+    maxMinutesPerDay: normalizeBudgetLimit(b.maxMinutesPerDay)
+  };
 };
 
 // Autonomy level presets for CoS behavior

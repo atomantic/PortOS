@@ -137,16 +137,19 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // ≤v6 receiver doesn't understand child scrap rows, so a v7 sender pushing to
   // it is sender-ahead and gets a 412. A v7 receiver still accepts ≤v6 senders
   // (their scraps carry no chunk fields → chunkIndex 0 / parentScrapId null).
-  // v8 = user-defined ingredient types. The definitions live in settings.json
-  // (`catalogUserTypes`), merge into the active type registry at boot/runtime,
-  // and ride a new additive `catalogTypes: [...]` block in the catalog sync
-  // envelope (LWW-merged into the receiver's own settings slice). Same gating
-  // rationale as v4–v7: a ≤v7 receiver doesn't understand the `catalogTypes`
-  // block, so a v8 sender pushing to it is sender-ahead and gets a 412
-  // (otherwise the older peer would silently drop every user-type definition,
-  // then reject every ingredient row carrying one of those unknown types). A v8
-  // receiver still accepts ≤v7 senders (sender-behind); their envelopes carry no
-  // `catalogTypes` block and the receiver applies the other kinds as before.
+  // v8 = user-defined ingredient types. The definitions are persisted in the
+  // catalogUserTypes store (`catalog_user_types` as of #1001; settings.json
+  // `catalogUserTypes` before that — the move did NOT bump this version because
+  // the wire shape is storage-independent), merge into the active type registry
+  // at boot/runtime, and ride a new additive `catalogTypes: [...]` block in the
+  // catalog sync envelope (LWW-merged into the receiver's own user-type store).
+  // Same gating rationale as v4–v7: a ≤v7 receiver doesn't understand the
+  // `catalogTypes` block, so a v8 sender pushing to it is sender-ahead and gets
+  // a 412 (otherwise the older peer would silently drop every user-type
+  // definition, then reject every ingredient row carrying one of those unknown
+  // types). A v8 receiver still accepts ≤v7 senders (sender-behind); their
+  // envelopes carry no `catalogTypes` block and the receiver applies the other
+  // kinds as before.
   catalog: 8,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions

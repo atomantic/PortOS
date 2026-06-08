@@ -118,6 +118,7 @@ import lorasRoutes from './routes/loras.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
+import songsRoutes from './routes/songs.js';
 import peerSyncRoutes from './routes/peerSync.js';
 import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
@@ -133,6 +134,7 @@ import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { initTaskLearning } from './services/taskLearning.js';
 import { recordSession, recordMessages } from './services/usage.js';
 import { errorEvents } from './lib/errorHandler.js';
+import { ERROR_CATEGORIES } from './lib/aiToolkit/errorDetection.js';
 import { initSpawner } from './services/subAgentSpawner.js';
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
@@ -141,8 +143,9 @@ import { startBackupScheduler } from './services/backupScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
-import { getSettings as getInitSettings, settingsEvents } from './services/settings.js';
+import { getSettings as getInitSettings } from './services/settings.js';
 import { setUserCatalogTypes } from './lib/catalogTypes.js';
+import { readUserTypes as readUserTypeSlice } from './services/catalogUserTypes/store.js';
 import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
@@ -160,6 +163,7 @@ import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
+import { writersRoomStore } from './services/writersRoom/store.js';
 import { mediaCollectionStore } from './services/mediaCollections.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -241,11 +245,20 @@ const aiToolkitHooks = {
   },
   onRunFailed: (metadata, error, output) => {
     const errorMessage = error?.message ?? String(error);
+    // A content/safety refusal is a known, self-explanatory outcome — not a
+    // provider fault. Emit a distinct code + warning severity so (a) the
+    // autofixer skips it (it only spawns investigation tasks for
+    // AI_PROVIDER_EXECUTION_FAILED) and (b) the client shows a calm "model
+    // declined, trying a fallback" notice instead of a red error toast. The
+    // fallback retry itself is driven by promptRunner.js.
+    const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
     errorEvents.emit('error', {
-      code: 'AI_PROVIDER_EXECUTION_FAILED',
-      message: `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-      severity: 'error',
-      canAutoFix: true,
+      code: isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED',
+      message: isRefusal
+        ? `${metadata.providerName} declined this prompt on content/safety grounds — trying a fallback model if one is configured.`
+        : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
+      severity: isRefusal ? 'warning' : 'error',
+      canAutoFix: !isRefusal,
       timestamp: Date.now(),
       context: {
         runId: metadata.id,
@@ -499,6 +512,7 @@ app.use('/api/loras', lorasRoutes);
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
+app.use('/api/songs', songsRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 
@@ -543,18 +557,18 @@ startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot sched
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
-// Warm the catalog user-type registry from settings before any catalog request
-// can land, so user-defined types validate + mint ids immediately on boot.
-// Refresh on every settings write (the Settings → Catalog tab persists through
-// updateSettings, which emits this event) so the in-process registry tracks
-// edits without a restart.
-getInitSettings()
-  .then(s => setUserCatalogTypes(s.catalogUserTypes || []))
+// Warm the catalog user-type registry from the user-type store (Postgres as of
+// #1001; the settings.json slice under the escape hatch) before any catalog
+// request can land, so user-defined types validate + mint ids immediately on
+// boot. The store's PG backend self-runs ensureSchema + the one-time settings→DB
+// import, so this is safe even though it fires before the boot DB gate. No
+// settings:updated listener anymore: the registry's only writers are the
+// `/api/catalog/types` routes and the sync merge, both of which call
+// setUserCatalogTypes(next) directly — a settings save no longer touches types,
+// and a listener reading the now-absent settings key would wipe the registry.
+readUserTypeSlice()
+  .then(list => setUserCatalogTypes(Array.isArray(list) ? list : []))
   .catch(err => console.error(`❌ Catalog user-type warm failed: ${err.message}`));
-settingsEvents.on('settings:updated', (s) => {
-  try { setUserCatalogTypes(s?.catalogUserTypes || []); }
-  catch (err) { console.error(`❌ Catalog user-type refresh failed: ${err.message}`); }
-});
 // Initialize Telegram (manual bot or MCP bridge based on settings)
 getInitSettings().then(s => {
   if (s.telegram?.method === 'mcp-bridge') {
@@ -741,12 +755,88 @@ ensureSelf()
     // Catalog backfill: promote universe canon (characters/places/objects)
     // into the Postgres ingredients catalog. Idempotent — marker in
     // data/catalog-backfill.applied.json gates the walk after the first run.
-    // Fire-and-forget so a DB hiccup doesn't block server boot — the route
-    // surface tolerates an empty catalog and the user can re-trigger via
-    // the admin endpoint.
+    // Individual migration steps stay inside a try/catch so a transient hiccup
+    // mid-walk doesn't crash an otherwise-healthy boot; the route surface
+    // tolerates an empty catalog and the user can re-trigger via the admin
+    // endpoint.
+    //
+    // PostgreSQL is a mandatory dependency. Before running any DB-dependent
+    // boot work, verify the database is reachable and the required schema is
+    // present. If not — and we're NOT in a sanctioned escape-hatch/test mode —
+    // this is a fatal misconfiguration: the creative catalog has no file-backed
+    // equivalent, so booting "successfully" would silently serve a broken
+    // install. Fail fast with an actionable message instead.
+    //
+    // Escape hatches (dev/tests only, UNSUPPORTED for production):
+    //   - MEMORY_BACKEND=file  (explicit file backend)
+    //   - NODE_ENV=test        (test suites boot without a database)
+    const dbEscapeHatch =
+      process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
+    const { checkHealth, ensureSchema } = await import('./lib/db.js');
+    let health = await checkHealth();
+    // An EXISTING install can be reachable but lag the current schema — e.g.
+    // `memories` exists but a newer column (`sync_sequence`) is missing, which
+    // is exactly what checkHealth() requires for hasSchema. ensureSchema() is
+    // idempotent and exists to bring such installs up to date, so when the DB
+    // is connected but reports incomplete schema, run the upgrade and re-probe
+    // BEFORE declaring the install unbootable. A truly uninitialized DB (base
+    // tables absent) makes ensureSchema() throw — we catch, log, and fall
+    // through to the fail-fast below. (try/catch is appropriate here: this runs
+    // outside the request lifecycle, so an uncaught throw would crash boot.)
+    if (health.connected && (!health.hasSchema || !health.hasCatalogSchema)) {
+      try {
+        await ensureSchema();
+        health = await checkHealth();
+      } catch (err) {
+        console.error(`🗄️  Schema upgrade on boot failed: ${err.message}`);
+      }
+    }
+    // Both the memory schema AND the creative-catalog schema are required —
+    // the catalog has no file-backed equivalent. ensureSchema() creates the
+    // catalog tables idempotently, but if that DDL fails (e.g. the role can't
+    // CREATE) the swallowed error in the migration block below would otherwise
+    // let the server boot with the catalog missing. Gate boot on both.
+    const dbReady = health.connected && health.hasSchema && health.hasCatalogSchema;
+    if (!dbEscapeHatch && !dbReady) {
+      const reason = health.connected ? 'required schema missing' : `unreachable (${health.error || 'connection failed'})`;
+      console.error(`❌ PostgreSQL is required but ${reason} — refusing to start.`);
+      console.error('   Set up the database with: npm run setup:db');
+      console.error('   Dev/test only: set PGMODE=file in .env to boot without PostgreSQL (unsupported for production).');
+      process.exit(1);
+    }
+    if (dbEscapeHatch && !dbReady) {
+      console.warn(`⚠️  PostgreSQL unavailable (${health.error || 'no schema'}) — booting via escape hatch; catalog/DB features are disabled.`);
+    }
+
     try {
-      const { ensureSchema } = await import('./lib/db.js');
+      // Two early exits guard the migrations below: (1) the fail-fast
+      // process.exit(1) above when the DB is required but missing, and (2) this
+      // return when on the escape hatch with no healthy DB — ensureSchema and
+      // the migrations would throw otherwise.
+      if (!dbReady) {
+        return;
+      }
       await ensureSchema();
+      // Versioned DB-migration runner (#1029): apply ordered schema-DELTA
+      // migrations (renames / type changes / data transforms / embedding-dim
+      // changes) that ensureSchema()'s additive IF NOT EXISTS gates can't
+      // express. Runs AFTER ensureSchema() (base schema + schema_migrations
+      // tracking table present) and AFTER the DB-ready gate, but BEFORE any
+      // store warm or httpServer.listen — so a half-applied delta can't race a
+      // request. Skipped under the file backend by the !dbReady early return
+      // above. A FAILED migration is FATAL: each migration runs in a transaction
+      // so a failure rolls back (NOT marked applied), but we must NOT let boot
+      // continue — a partially-migrated install serving requests is worse than a
+      // hard stop. So this gets its own try/catch (not the generic catalog one
+      // below, which only logs and continues) that exits the process loudly.
+      // This is a process boundary, so the explicit try/catch is sanctioned.
+      const { runDbMigrations } = await import('./scripts/run-db-migrations.js');
+      try {
+        await runDbMigrations();
+      } catch (err) {
+        console.error(`❌ DB migration failed at boot — refusing to start: ${err?.stack ?? err.message}`);
+        process.exit(1);
+      }
       const { migrateBibleToCatalog } = await import('./scripts/migrateBibleToCatalog.js');
       await migrateBibleToCatalog();
       // One-time data repair: rewrite legacy machine universe tags
@@ -769,8 +859,72 @@ ensureSelf()
       // version; marker-gated in data/catalog-canon-reconcile.applied.json.
       const { reconcileCanonCatalog } = await import('./scripts/reconcileCanonCatalog.js');
       await reconcileCanonCatalog();
+      // Media asset index (#1000): subscribe the generation-completed hooks +
+      // reconcile the derived media_assets table against on-disk images/videos.
+      // Bytes + sidecars + video-history.json stay authoritative; this builds a
+      // queryable index over them. Idempotent, safe to run every boot.
+      const { initMediaAssetIndex } = await import('./services/mediaAssetIndex/index.js');
+      await initMediaAssetIndex();
     } catch (err) {
       console.error(`🪄 catalog migrations failed at boot: ${err.message}`);
+    }
+
+    // Mandatory PostgreSQL store warmups (#1014–1017, #1001, #997) + legacy
+    // prune. Each touch forces backend selection and runs a one-time, marker-
+    // gated file→DB import that MUST complete before httpServer.listen — so the
+    // first request/sync sees fully-migrated records, never a half-applied
+    // import racing a request. Unlike the best-effort catalog migrations above
+    // (which log-and-continue), a failure here is FATAL: a store that couldn't
+    // select its backend or finish its import would serve unmigrated/empty data,
+    // which is worse than a hard stop. So this gets its own try/catch (a process
+    // boundary, like runDbMigrations above) that exits loudly instead of
+    // swallowing the error and booting a partially-migrated install. Skipped
+    // when not dbReady (escape hatch), matching the early return above.
+    if (dbReady) {
+      try {
+        // Universe Builder PG warm (#1014): listIds() is the cheapest call that
+        // forces backend selection + the migrateUniversesToDB import.
+        await universeStore().listIds();
+        // Pipeline series + issues PG warm (#1015): same contract. Series first
+        // (issues soft-ref it for universe resolution / lists).
+        await seriesStore().listIds();
+        await issueStore().listIds();
+        // Story Builder sessions PG warm (#1016): same contract. Universe +
+        // series warmed first (sessions soft-ref both for staleness recompute).
+        await storyBuilderStore().listIds();
+        // Writers Room PG warm (#1017): listWorkIds() forces backend selection +
+        // migrateWritersRoomToDB. Draft .md bodies stay on disk (file-primary);
+        // only the metadata migrates.
+        await writersRoomStore().listWorkIds();
+        // Authoritative catalog user-type warm (#1001): load the registry from
+        // the catalog_user_types store (runs the one-time settings→DB import on
+        // first access), so a normal install always serves with the registry
+        // warm even if the early fire-and-forget warm raced a cold DB.
+        const warmTypes = await readUserTypeSlice();
+        setUserCatalogTypes(Array.isArray(warmTypes) ? warmTypes : []);
+        // Creative Director PG warm (#997): unlike the other stores, CD's file→DB
+        // import is triggered lazily on first backend access; at boot the only
+        // other trigger is a NOT-awaited fire-and-forget recoverInFlightProjects()
+        // in an earlier .then(), so it can still be in flight here. The prune
+        // below stamps a single completion marker once no domain is blocked, so
+        // it must not run while CD's import (and its
+        // creative-director-projects.migrated.json marker) is unfinished, or CD's
+        // .imported file would never be pruned. listProjects() forces
+        // selectBackend() → the (idempotent, marker-gated) import to completion.
+        const { listProjects: warmCdProjects } = await import('./services/creativeDirector/local.js');
+        await warmCdProjects();
+        // Legacy artifact prune: runs LAST, after every file→DB warm above has
+        // imported + stamped its marker, so both the migration markers AND the
+        // authoritative DB rows exist. Removes the `.imported` / `.bak-NNN`
+        // recovery copies the migrators parked aside, but ONLY when the live row
+        // count matches the marker's recorded import (a wiped/restored DB keeps
+        // the recovery files). Marker-gated in data/legacy-prune.applied.json.
+        const { pruneImportedLegacyFiles } = await import('./scripts/pruneImportedLegacyFiles.js');
+        await pruneImportedLegacyFiles();
+      } catch (err) {
+        console.error(`❌ Mandatory store warmup failed at boot — refusing to start: ${err?.stack ?? err.message}`);
+        process.exit(1);
+      }
     }
   })
   .then(() => {

@@ -105,7 +105,10 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
     setTransitioning(false);
   }, []);
 
-  const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online').length;
+  // Weather reflects confirmed outages. A PM2-unavailable ('unknown') app's
+  // status is simply unknown, not down — excluded so a read blip doesn't
+  // conjure rain/lightning over apps that may well be online.
+  const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online' && a.overallStatus !== 'unknown').length;
   const totalCount = apps.filter(a => !a.archived).length;
 
   // Quality presets always express dpr as a [min, max] pair. Cap it to the live

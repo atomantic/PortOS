@@ -80,6 +80,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useArmedAction` | Two-click-arm `[armed, fire]` confirmation. | Destructive button needing a confirm tap. (Project memory: user finds this less discoverable — prefer inline confirm rows for new UI.) |
 | `useAutoRefetch` | Poll-based refetch on an interval. `{ pollOnly: true }` skips internal data/loading state for side-effect-only callers (returns `{ refetch }` only). | Data needs periodic refresh (no socket / SSE available). |
 | `useClickOutside` | Fire `onOutside` on mousedown outside a ref. | Popovers, menus, drawers. |
+| `useEscapeKey` | `useEscapeKey(active, handler)` — call `handler` on Escape while `active`. | Non-modal dismissables (in-context popovers/cards); Modal owns Esc for true modals. |
 | `useCmdKSearch` | `⌘K` open/close state. | Anywhere that needs to toggle the palette. |
 | `useContainerWidth` | `[ref, width]` via ResizeObserver. | Layout responds to a specific container's width. |
 | `useCooldownTick` | 1-second ticker over a `{ id: epochMs }` cooldown map; fires `onAllExpired` once when every deadline passes. | Rate-limit countdown labels that need to refetch when the last cooldown clears (agents tabs pattern). |
@@ -120,6 +121,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useRecordMerge` | Duplicate Universe/Series merge flow: open → dry-run preview → resolve field conflicts → execute, with an `onMerged` refresh callback. Drives `<MergeModal>`. | Surfacing the merge-duplicates UI anywhere (Sharing → Duplicates, Universes page). Don't re-implement the preview/execute dance. |
 | `useProviderModels` | AI providers + two-step provider→model selection. | Any UI that picks a provider + model. |
+| `useLocalModels` | Live installed Ollama/LM Studio model ids per backend + the server's editorial recommendation. | Model pickers that must show currently-installed local models (not just a provider's stale stored `models`). Fold in via `mergeModelLists` + `localBackendForProvider`. |
 | `useTheme` | Dark/light theme + paired-theme switching. | Theme picker. |
 | `useSyncIntegrity` | Fetches per-kind integrity diff from every eligible online peer; reduces to worst-case `statusById` + `byPeer` breakdown maps. | Federated media sync integrity UI — badges, drawers, peer breakdown. |
 | `useUniverse` | Loads the universe record for a `universeId` with mount/cancel guards; returns `[universe, setUniverse, loading, error]` (setter exposed for optimistic post-mutation updates). | Any surface that loads a linked universe (pipeline stages, etc.) — use instead of re-rolling the getUniverse-on-mount effect. |

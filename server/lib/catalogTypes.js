@@ -216,8 +216,9 @@ export function getCatalogType(id) {
 }
 
 // --- User-defined types (runtime layer) ----------------------------------
-// User types are defined in `data/settings.json` (`catalogUserTypes: []`) and
-// merged into the active registry at boot/runtime via `setUserCatalogTypes`.
+// User types are persisted in PostgreSQL (`catalog_user_types`, #1001 — they
+// lived in `data/settings.json` `catalogUserTypes: []` before that) and merged
+// into the active registry at boot/runtime via `setUserCatalogTypes`.
 // They are NOT in the static REGISTRY/CATALOG_TYPES export — that stays the six
 // built-ins so the parity + DDL-literal tests keep asserting against a stable
 // list. Active-type callers (validation refine, id minting, type-validity
@@ -296,13 +297,14 @@ export function normalizeUserType(raw, taken = new Set()) {
 let activeUserTypes = [];
 
 /**
- * Replace the active user-type set from a settings `catalogUserTypes` array.
- * Called at boot (after settings load) and on every settings-update event so
- * the in-process registry tracks the persisted definitions without a restart.
- * Skips entries that fail to normalize, collide with a system id, duplicate an
- * earlier user id, or carry a `deletedAt` tombstone (a soft-deleted type is
- * retained in the persisted slice so the deletion federates, but it must not
- * appear in the active registry).
+ * Replace the active user-type set from a user-type slice (the array the
+ * catalogUserTypes store returns; `catalog_user_types` rows / the settings slice
+ * under the escape hatch). Called at boot (after the store warm) and by every
+ * route/sync write so the in-process registry tracks the persisted definitions
+ * without a restart. Skips entries that fail to normalize, collide with a
+ * system id, duplicate an earlier user id, or carry a `deletedAt` tombstone (a
+ * soft-deleted type is retained in the persisted slice so the deletion
+ * federates, but it must not appear in the active registry).
  */
 export function setUserCatalogTypes(list = []) {
   const taken = new Set();

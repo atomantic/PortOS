@@ -163,6 +163,152 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     expect(/type VARCHAR\(32\)/i.test(extractCreateTable(DB_JS, 'catalog_ingredients'))).toBe(true);
   });
 
+  // Non-catalog table that nonetheless lives in BOTH DDL sources (fresh-install
+  // init-db.sql + upgrade-path ensureSchema) and so has the same drift risk.
+  it('creative_director_projects has the same columns in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'creative_director_projects');
+    const jsBody = extractCreateTable(DB_JS, 'creative_director_projects');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE creative_director_projects').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE creative_director_projects').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+  });
+
+  // Media asset index (#1000) — non-catalog table in BOTH DDL sources, plus a
+  // non-`idx_catalog_`-prefixed index, so it needs its own parity assertion.
+  it('media_assets has the same columns and index in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'media_assets');
+    const jsBody = extractCreateTable(DB_JS, 'media_assets');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE media_assets').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE media_assets').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_media_assets_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_media_assets_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Catalog user-defined types (#1001) — non-`catalog_`-prefixed table name in
+  // BOTH DDL sources (the parity `CATALOG_TABLES` loop matches by literal table
+  // name, and this one isn't in that list), so it gets its own column assertion.
+  // It declares no secondary index, so nothing to compare there.
+  it('catalog_user_types has the same columns in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'catalog_user_types');
+    const jsBody = extractCreateTable(DB_JS, 'catalog_user_types');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE catalog_user_types').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE catalog_user_types').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+  });
+
+  // Universe Builder records (#1014) — non-`catalog_`-prefixed table in BOTH
+  // DDL sources, with non-`idx_catalog_`-prefixed indexes, so it gets its own
+  // column + index parity assertion.
+  it('universes has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'universes');
+    const jsBody = extractCreateTable(DB_JS, 'universes');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE universes').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE universes').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_universes_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_universes_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Universe render-history log (#1014) — same drift risk; its own table + index.
+  it('universe_runs has the same columns and index in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'universe_runs');
+    const jsBody = extractCreateTable(DB_JS, 'universe_runs');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE universe_runs').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE universe_runs').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_universe_runs_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_universe_runs_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Pipeline series (#1015) — non-`catalog_`-prefixed table in BOTH DDL
+  // sources, with non-`idx_catalog_`-prefixed indexes, so its own assertion.
+  it('pipeline_series has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'pipeline_series');
+    const jsBody = extractCreateTable(DB_JS, 'pipeline_series');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE pipeline_series').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE pipeline_series').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_series_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_series_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Pipeline issues (#1015) — same drift risk; its own table + indexes.
+  it('pipeline_issues has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'pipeline_issues');
+    const jsBody = extractCreateTable(DB_JS, 'pipeline_issues');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE pipeline_issues').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE pipeline_issues').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_issues_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_issues_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Story Builder sessions (#1016) — same drift risk; its own table + indexes.
+  it('story_builder_sessions has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'story_builder_sessions');
+    const jsBody = extractCreateTable(DB_JS, 'story_builder_sessions');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE story_builder_sessions').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE story_builder_sessions').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_stb_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_stb_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Writers Room (#1017) — four tables, each its own column + index parity
+  // assertion (distinct idx_wr_<table>_ prefixes keep them isolated).
+  for (const { table, idxPrefix } of [
+    { table: 'writers_room_folders', idxPrefix: 'idx_wr_folders_' },
+    { table: 'writers_room_works', idxPrefix: 'idx_wr_works_' },
+    { table: 'writers_room_draft_versions', idxPrefix: 'idx_wr_drafts_' },
+    { table: 'writers_room_exercises', idxPrefix: 'idx_wr_exercises_' },
+  ]) {
+    it(`${table} has the same columns and indexes in both files`, () => {
+      const sqlBody = extractCreateTable(INIT_SQL, table);
+      const jsBody = extractCreateTable(DB_JS, table);
+      expect(sqlBody, `init-db.sql missing CREATE TABLE ${table}`).toBeTruthy();
+      expect(jsBody, `db.js missing CREATE TABLE ${table}`).toBeTruthy();
+      expect([...new Set(extractColumnNames(sqlBody))].sort())
+        .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+      const sqlIdx = extractIndexNames(INIT_SQL, idxPrefix);
+      const jsIdx = extractIndexNames(DB_JS, idxPrefix);
+      expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+      expect(sqlIdx.size).toBeGreaterThan(0);
+    });
+  }
+
+  // Versioned DB-migration tracker (#1029) — non-`catalog_`-prefixed table in
+  // BOTH DDL sources (base schema), so it gets its own column parity assertion.
+  // No secondary index, nothing to compare there.
+  it('schema_migrations has the same columns in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'schema_migrations');
+    const jsBody = extractCreateTable(DB_JS, 'schema_migrations');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE schema_migrations').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE schema_migrations').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+  });
+
   it('search_tsv payload field set matches', () => {
     // Both files re-declare the GENERATED ALWAYS expression character-for-
     // character today. If one side adds a payload key (e.g. voiceNotes) and

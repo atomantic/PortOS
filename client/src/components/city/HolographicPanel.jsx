@@ -5,6 +5,7 @@ const STATUS_ICONS = {
   stopped: '\u25A0',
   not_started: '\u25CB',
   not_found: '\u25CB',
+  unknown: '\u25CB',
 };
 
 export default function HolographicPanel({ app, agentCount, position, expanded = false }) {
@@ -13,6 +14,8 @@ export default function HolographicPanel({ app, agentCount, position, expanded =
     stopped: 'border-red-500/50 text-red-400',
     not_started: 'border-violet-500/50 text-violet-400',
     not_found: 'border-violet-500/50 text-violet-400',
+    // PM2 read failed \u2014 gray, matching the city building, distinct from violet.
+    unknown: 'border-gray-400/50 text-gray-400',
   };
 
   const statusDotColors = {
@@ -20,6 +23,7 @@ export default function HolographicPanel({ app, agentCount, position, expanded =
     stopped: 'text-red-400',
     not_started: 'text-violet-400',
     not_found: 'text-violet-400',
+    unknown: 'text-gray-400',
   };
 
   const colorClass = app.archived

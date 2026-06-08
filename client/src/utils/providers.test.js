@@ -4,6 +4,11 @@ import {
   CODEX_CONFIGURED_DEFAULT,
   PROVIDER_TYPES,
   filterSelectableModels,
+  filterGenerationModels,
+  isEmbeddingModel,
+  localBackendForProvider,
+  mergeModelLists,
+  modelOptionLabel,
   isTuiProvider,
   isCliProvider,
   isApiProvider,
@@ -172,5 +177,65 @@ describe('getProviderTimeout', () => {
 
   it('returns undefined when the id matches no provider in the list', () => {
     expect(getProviderTimeout(providers, 'ghost', 'also-ghost')).toBeUndefined();
+  });
+});
+
+describe('isEmbeddingModel / filterGenerationModels', () => {
+  it('flags embedding models and not chat models', () => {
+    expect(isEmbeddingModel('nomic-embed-text:latest')).toBe(true);
+    expect(isEmbeddingModel('mxbai-embed-large')).toBe(true);
+    expect(isEmbeddingModel('qwen3.6:35b')).toBe(false);
+    expect(isEmbeddingModel('')).toBe(false);
+  });
+
+  it('drops sentinels and embedding models from generation lists', () => {
+    expect(filterGenerationModels([
+      CODEX_CONFIGURED_DEFAULT,
+      'nomic-embed-text:latest',
+      'qwen3.6:35b',
+      'llama3.2:latest',
+    ])).toEqual(['qwen3.6:35b', 'llama3.2:latest']);
+  });
+});
+
+describe('localBackendForProvider', () => {
+  it('detects Ollama by endpoint or name', () => {
+    expect(localBackendForProvider({ endpoint: 'http://localhost:11434/v1' })).toBe('ollama');
+    expect(localBackendForProvider({ name: 'Ollama' })).toBe('ollama');
+  });
+
+  it('detects LM Studio by endpoint or name', () => {
+    expect(localBackendForProvider({ endpoint: 'http://localhost:1234/v1' })).toBe('lmstudio');
+    expect(localBackendForProvider({ name: 'LM Studio' })).toBe('lmstudio');
+  });
+
+  it('returns null for cloud providers', () => {
+    expect(localBackendForProvider({ endpoint: 'https://api.openai.com/v1', name: 'OpenAI' })).toBeNull();
+    expect(localBackendForProvider({})).toBeNull();
+    expect(localBackendForProvider(null)).toBeNull();
+  });
+});
+
+describe('modelOptionLabel', () => {
+  it('appends a context parenthetical when known', () => {
+    expect(modelOptionLabel('qwen3.6:35b', { 'qwen3.6:35b': 32768 })).toBe('qwen3.6:35b (32K ctx)');
+  });
+
+  it('returns the bare id when context is unknown', () => {
+    expect(modelOptionLabel('gpt-4o', {})).toBe('gpt-4o');
+    expect(modelOptionLabel('gpt-4o')).toBe('gpt-4o');
+    expect(modelOptionLabel('gpt-4o', { 'gpt-4o': 0 })).toBe('gpt-4o');
+  });
+});
+
+describe('mergeModelLists', () => {
+  it('unions lists, de-dupes, preserves order, drops falsy', () => {
+    expect(mergeModelLists(['a', 'b'], ['b', 'c'], undefined, [null, 'd', '']))
+      .toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('returns [] for no input', () => {
+    expect(mergeModelLists()).toEqual([]);
+    expect(mergeModelLists(undefined, null)).toEqual([]);
   });
 });

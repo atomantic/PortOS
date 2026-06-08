@@ -166,6 +166,14 @@ describe('appsRow', () => {
     expect(r.detail.notStarted).toBe(3);
   });
 
+  it('warns and reports "status unavailable" when PM2 read degraded the summary', () => {
+    const r = appsRow({ total: 3, online: 2, stopped: 0, notStarted: 0, unknown: 1, degraded: true });
+    expect(r.status).toBe(WARN);
+    expect(r.summary).toContain('1 status unavailable');
+    expect(r.detail.unknown).toBe(1);
+    expect(r.detail.degraded).toBe(true);
+  });
+
   it('reports native-only (unmanaged) apps as present, not "No apps"', () => {
     // getAppStatusSummary().total excludes unmanaged native/Xcode apps.
     const r = appsRow({ total: 0, online: 0, unmanaged: 2 });

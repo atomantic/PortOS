@@ -59,6 +59,11 @@ function extractTaskType(description) {
     if (d.includes('replan') || d.includes('audit plan.md') || d.includes('plan.md')) return 'task:do-replan';
   }
 
+  // claim-issue carries a "[Claim Issue: <app>]" prefix (not the [improvement]
+  // marker), so classify it here before the generic "issue" → bug-fix fallback
+  // below would otherwise mislabel it (and skew its historical duration lookup).
+  if (d.includes('[claim issue:')) return 'task:claim-issue';
+
   // General task type classification
   if (d.includes('fix') || d.includes('bug') || d.includes('error') || d.includes('issue')) return 'bug-fix';
   if (d.includes('refactor') || d.includes('clean up') || d.includes('improve') || d.includes('optimize')) return 'refactor';

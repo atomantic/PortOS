@@ -25,6 +25,7 @@ import { readJSONFile, sha256File } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
 } from '../lib/localLlmDisk.js'
+import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
 
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
@@ -420,6 +421,50 @@ async function getVersion() {
   return data?.version || null
 }
 
+// A model's native context length is immutable for a given build, but Ollama's
+// /api/tags listing doesn't include it — only /api/show does (one POST per
+// model). Cache name → contextLength so enriching the model list on every
+// status poll doesn't re-hit /api/show. Busted alongside installedModels on
+// delete (a deleted name shouldn't linger), but a re-pull of the same name
+// yields the same value so we don't bust on pull.
+const modelContextCache = new Map() // name -> number|null
+
+/**
+ * Fetch a model's native maximum context length (in tokens) via /api/show.
+ * Ollama nests it under `model_info["<arch>.context_length"]`; the arch prefix
+ * varies by family so we scan for the suffix. Cached; returns null when the
+ * daemon doesn't report it.
+ * @param {string} name
+ * @returns {Promise<number|null>}
+ */
+async function getModelContextLength(name) {
+  if (!name) return null
+  if (modelContextCache.has(name)) return modelContextCache.get(name)
+  // /api/show documents the id under `model`; current Ollama also accepts the
+  // legacy `name`, so send both (extra fields are ignored) for cross-version safety.
+  const data = await ollamaRequest('/api/show', { method: 'POST', body: JSON.stringify({ model: name, name }) }).catch(() => null)
+  // A transient /api/show failure must NOT be cached as a permanent null —
+  // that would pin the model with no context label until restart. Only cache
+  // when the daemon actually answered; a present-but-no-context_length response
+  // legitimately caches null ("daemon doesn't report it"). Mirrors the
+  // null-vs-empty sentinel rule used by the installed-model caches.
+  if (!data) return null
+  let ctx = null
+  for (const [key, value] of Object.entries(data.model_info || {})) {
+    if (key.endsWith('.context_length') && Number.isFinite(value)) { ctx = value; break }
+  }
+  modelContextCache.set(name, ctx)
+  return ctx
+}
+
+/** Add `contextLength` to each model (parallel, cached). */
+async function enrichWithContextLength(models) {
+  return Promise.all(models.map(async (m) => ({
+    ...m,
+    contextLength: await getModelContextLength(m.id || m.name)
+  })))
+}
+
 /**
  * Get embeddings for `text` from a loaded Ollama model.
  *
@@ -444,7 +489,7 @@ async function getEmbeddings(text, options = {}) {
   let model = options.model
   if (!model) {
     const models = await getInstalledModels()
-    const guess = models.find((m) => /embed|bge|nomic|mxbai|gte|e5/i.test(m.id || m.name || ''))
+    const guess = models.find((m) => isEmbeddingModel(m.id || m.name || ''))
     if (!guess) {
       return { success: false, error: 'No embedding model installed in Ollama' }
     }
@@ -732,6 +777,7 @@ async function deleteModel(modelId) {
     return { success: false, error: result._err, modelId }
   }
   installedModels = null
+  modelContextCache.delete(modelId)
   console.log(`🗑️ Ollama deleted: ${modelId}`)
   return { success: true, modelId }
 }
@@ -848,7 +894,10 @@ function getBaseUrl() {
  */
 async function getStatus(forceRefresh = false) {
   const available = await checkOllamaAvailable(forceRefresh)
-  const models = available ? await getInstalledModels(true) : []
+  const baseModels = available ? await getInstalledModels(true) : []
+  // Enrich with native context length (cached /api/show per model) so the
+  // model cards + selector dropdowns can show each model's window.
+  const models = available ? await enrichWithContextLength(baseModels) : baseModels
   const service = await getServiceStatus().catch(() => ({ supported: false, manager: null, running: false, runAtStartup: false, status: null }))
   return {
     available,

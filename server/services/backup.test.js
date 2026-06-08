@@ -16,6 +16,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the DB health check and child_process.spawn before importing backup.js
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
+  // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
+  // path and the existing status tests don't trigger live binary discovery.
+  getServerMajorVersion: vi.fn(() => null),
 }));
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
@@ -25,6 +28,7 @@ vi.mock('./memoryBackend.js', () => ({
 }));
 
 import { EventEmitter } from 'events';
+import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
@@ -41,10 +45,10 @@ vi.mock('fs/promises', async (importOriginal) => {
   return { ...actual, stat: vi.fn(actual.stat), readFile: vi.fn(actual.readFile) };
 });
 
-import { checkHealth } from '../lib/db.js';
+import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { getBackendName } from './memoryBackend.js';
 import * as fs from 'fs/promises';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, pickPgDump, listSnapshots } from './backup.js';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
@@ -152,6 +156,79 @@ describe('computeEffectiveExcludes', () => {
     const result = computeEffectiveExcludes();
     expect(result).toEqual(DEFAULT_EXCLUDES.map(e => e.path));
   });
+
+  it('does NOT exclude legacy file→DB migration artifacts (they are the recovery source while a prune is blocked)', () => {
+    // The boot-time prune deletes these on disk once the DB is authoritative;
+    // excluding them from snapshots would strip the only recovery source during
+    // a blocked (wiped/partial-restore) prune, while pg_dump captures the
+    // incomplete DB. So none of these patterns may appear in the default set.
+    const mustNotExclude = ['/*.imported', '/*.bak-034', '/*.migrated.json', '/writers-room/works/*/manifest.imported.json'];
+    const paths = DEFAULT_EXCLUDES.map(e => e.path);
+    for (const p of mustNotExclude) {
+      expect(paths, `${p} must NOT be a default exclude`).not.toContain(p);
+    }
+  });
+});
+
+describe('pickPgDump', () => {
+  const c = (major, binary = `pg_dump@${major}`) => ({ binary, major });
+
+  it('returns null when no candidates were discovered', () => {
+    expect(pickPgDump(17, [])).toBeNull();
+    expect(pickPgDump(17, undefined)).toBeNull();
+  });
+
+  it('picks the exact-major binary when one is installed', () => {
+    const chosen = pickPgDump(17, [c(15), c(17), c(16)]);
+    expect(chosen).toBe('pg_dump@17');
+  });
+
+  it('picks the closest binary that is >= the server (newer is fine, never older)', () => {
+    // server 16: 15 is too old, choose 17 (smallest qualifying), not 18.
+    expect(pickPgDump(16, [c(15), c(17), c(18)])).toBe('pg_dump@17');
+  });
+
+  it('falls back to the newest available when nothing is new enough (forces a clear mismatch error)', () => {
+    // This is the reported bug: server 17, only pg_dump 15 installed.
+    expect(pickPgDump(17, [c(15)])).toBe('pg_dump@15');
+    expect(pickPgDump(17, [c(14), c(15)])).toBe('pg_dump@15');
+  });
+
+  it('trusts the first (PATH) candidate when the server version is unknown', () => {
+    expect(pickPgDump(null, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
+    expect(pickPgDump(NaN, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
+  });
+});
+
+describe('listSnapshots', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const dirent = (name, isDir) => ({ name, isDirectory: () => isDir });
+
+  it('skips non-directory entries like .DS_Store (iCloud/Finder droppings)', async () => {
+    // The backup target is commonly an iCloud folder; macOS drops a `.DS_Store`
+    // FILE into every dir. It must not be treated as a snapshot id (reading
+    // `<.DS_Store>/manifest.json` would throw ENOTDIR).
+    vi.spyOn(fs, 'readdir').mockResolvedValue([
+      dirent('.DS_Store', false),
+      dirent('2026-06-08T15-18-34', true),
+      dirent('2026-06-07T09-00-00', true),
+    ]);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
+      if (String(p).includes('.DS_Store')) throw new Error('ENOTDIR — .DS_Store should never be read');
+      return JSON.stringify({ generatedAt: '2026-06-08T00:00:00Z', fileCount: 10 });
+    });
+    const result = await listSnapshots('/dest');
+    const ids = result.map(s => s.id);
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain('2026-06-08T15-18-34');
+    expect(ids).not.toContain('.DS_Store');
+  });
+
+  it('returns [] for a falsy destPath without touching the filesystem', async () => {
+    const readdirSpy = vi.spyOn(fs, 'readdir');
+    expect(await listSnapshots('')).toEqual([]);
+    expect(readdirSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('dumpPostgres status classification', () => {
@@ -161,15 +238,31 @@ describe('dumpPostgres status classification', () => {
     ({ dumpPostgres } = await import('./backup.js'));
   });
 
-  it('returns skipped/not_configured when PG is not connected and not the active backend', async () => {
+  it('returns skipped/not_configured when PG is down and the backend resolved to file (escape hatch)', async () => {
     const prev = process.env.MEMORY_BACKEND;
     delete process.env.MEMORY_BACKEND;
-    getBackendName.mockReturnValue('file'); // auto-detect resolved to file
+    getBackendName.mockReturnValue('file'); // dev/test escape hatch resolved to file
     checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
     const result = await dumpPostgres('/tmp/x.sql');
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
     expect(spawn).not.toHaveBeenCalled();
     getBackendName.mockReturnValue(null);
+    if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
+  });
+
+  it('returns failed/pg_unreachable when PG is down, env unset, and backend not yet initialized (null)', async () => {
+    // Post-mandatory-Postgres contract: a default install whose memory backend
+    // hasn't initialized yet (getBackendName() === null) still REQUIRES Postgres.
+    // A DB outage before the first memory access must degrade the backup, not
+    // read as a benign "not configured" skip.
+    const prev = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    getBackendName.mockReturnValue(null);
+    checkHealth.mockResolvedValue({ connected: false, hasSchema: false, error: 'ECONNREFUSED' });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('pg_unreachable');
+    expect(spawn).not.toHaveBeenCalled();
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
@@ -213,10 +306,25 @@ describe('dumpPostgres status classification', () => {
     if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
-  it('returns skipped/not_configured when connected but no schema', async () => {
+  it('returns failed/pg_unreachable when connected but schema missing and PG required', async () => {
+    // Post-mandatory-Postgres: a reachable-but-uninitialized DB on a non-file
+    // install is a real backup failure (required schema/data not capturable),
+    // not a benign skip.
+    getBackendName.mockReturnValue(null);
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: false });
+    const result = await dumpPostgres('/tmp/x.sql');
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('pg_unreachable');
+  });
+
+  it('returns skipped/not_configured when connected but no schema in file escape-hatch mode', async () => {
+    const prev = process.env.MEMORY_BACKEND;
+    process.env.MEMORY_BACKEND = 'file';
     checkHealth.mockResolvedValue({ connected: true, hasSchema: false });
     const result = await dumpPostgres('/tmp/x.sql');
     expect(result.status).toBe('skipped');
+    expect(result.reason).toBe('not_configured');
+    if (prev === undefined) delete process.env.MEMORY_BACKEND; else process.env.MEMORY_BACKEND = prev;
   });
 
   it('returns failed/pg_dump_missing when spawn errors', async () => {
@@ -243,6 +351,73 @@ describe('dumpPostgres status classification', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('dump_error');
     expect(result.error).toContain('auth failed');
+  });
+
+  it('honors the PORTOS_PGDUMP override outright, even when the server version is known', async () => {
+    // Escape hatch: an explicit override must win over auto-discovery's
+    // closest-major selection, not be funneled through it (a known server
+    // version triggers resolvePgDump, which is where the override short-circuits).
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    getServerMajorVersion.mockResolvedValue(17);
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
+    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    process.env.PORTOS_PGDUMP = '/custom/bin/pg_dump';
+    try {
+      const p = dumpPostgres('/tmp/x.sql');
+      await flush();
+      proc.emit('close', 0);
+      await p;
+      expect(spawn).toHaveBeenCalledWith('/custom/bin/pg_dump', expect.any(Array), expect.any(Object));
+    } finally {
+      delete process.env.PORTOS_PGDUMP;
+      // clearAllMocks() doesn't reset implementations — restore the null default
+      // so later tests keep the bare-pg_dump path (no live binary discovery).
+      getServerMajorVersion.mockResolvedValue(null);
+    }
+  });
+
+  it('honors the PORTOS_PGDUMP override even when the server version is unknown (detection failed)', async () => {
+    // The override is the documented escape hatch for exactly this case — when
+    // getServerMajorVersion() returns null, dumpPostgres must still use the
+    // override instead of falling back to bare pg_dump.
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    getServerMajorVersion.mockResolvedValue(null);
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
+    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    process.env.PORTOS_PGDUMP = '/custom/bin/pg_dump';
+    try {
+      const p = dumpPostgres('/tmp/x.sql');
+      await flush();
+      proc.emit('close', 0);
+      await p;
+      expect(spawn).toHaveBeenCalledWith('/custom/bin/pg_dump', expect.any(Array), expect.any(Object));
+    } finally {
+      delete process.env.PORTOS_PGDUMP;
+    }
+  });
+
+  it('classifies a "server version mismatch" stderr as failed/version_mismatch, not dump_error', async () => {
+    // Even with the server version unknown (default mock → bare pg_dump), the
+    // stderr regex must reclassify pg_dump's own mismatch error so the UI can
+    // point at "install a newer pg_dump" instead of the generic hint.
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const p = dumpPostgres('/tmp/x.sql');
+    await flush();
+    proc.stderr.emit('data', Buffer.from(
+      'pg_dump: error: aborting because of server version mismatch\n' +
+      'pg_dump: detail: server version: 17.10; pg_dump version: 15.18'
+    ));
+    proc.emit('close', 1);
+    const result = await p;
+    expect(result.status).toBe('failed');
+    expect(result.reason).toBe('version_mismatch');
+    expect(result.error).toContain('server version mismatch');
   });
 
   it('unlinks the partial dump file on non-zero exit (no restorable artifact left behind)', async () => {
@@ -365,6 +540,65 @@ describe('restorePostgres', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('restore_error');
     expect(result.error).toContain('already exists');
+  });
+
+  // Manifest SHA-256 verification (#980). The dump is hashed in generateManifest
+  // under the parent-relative key '../portos-db.sql' — these tests assert the
+  // exact key, the mismatch refusal, and the backward-compat skip paths.
+  //
+  // sha256File reads the dump via fs.readFile (small-file path). We mock
+  // readFile path-aware: manifest.json returns the manifest JSON, the dump path
+  // returns the SQL bytes that sha256File hashes. The dump content here is the
+  // small string 'CREATE TABLE a;' — its real sha256 is the constant below.
+  const DUMP_SQL = 'CREATE TABLE a;';
+  // Compute the genuine hash so the "match" test verifies real bytes, not a
+  // hard-coded string that could drift from sha256File's implementation.
+  const REAL_DUMP_SHA256 = createHash('sha256').update(Buffer.from(DUMP_SQL)).digest('hex');
+
+  function mockDumpAndManifest(manifestObj) {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: DUMP_SQL.length, isFile: () => true });
+    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
+      const path = String(p);
+      if (path.endsWith('manifest.json')) {
+        if (manifestObj === null) {
+          const err = new Error('ENOENT');
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return JSON.stringify(manifestObj);
+      }
+      return DUMP_SQL;
+    });
+  }
+
+  it('proceeds when the dump hash matches the manifest (match)', async () => {
+    mockDumpAndManifest({ files: { '../portos-db.sql': REAL_DUMP_SHA256 } });
+    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
+    expect(result.status).toBe('ok');
+    expect(result.dryRun).toBe(true);
+    expect(result.tableCount).toBe(1);
+  });
+
+  it('refuses with manifest_mismatch when the dump hash differs (mismatch)', async () => {
+    mockDumpAndManifest({ files: { '../portos-db.sql': 'deadbeef'.repeat(8) } });
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+    expect(result).toEqual({ status: 'failed', reason: 'manifest_mismatch' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('skips verification when manifest.json is absent (backward-compat)', async () => {
+    mockDumpAndManifest(null);
+    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
+    expect(result.status).toBe('ok');
+    expect(result.tableCount).toBe(1);
+  });
+
+  it('skips verification when the manifest lacks the dump key (pre-#976 manifest)', async () => {
+    mockDumpAndManifest({ files: { 'instances.json': 'abc123' } });
+    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
+    expect(result.status).toBe('ok');
+    expect(result.tableCount).toBe(1);
   });
 });
 

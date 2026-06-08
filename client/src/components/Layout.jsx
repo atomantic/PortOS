@@ -83,6 +83,7 @@ import {
   Pin,
   PinOff,
   Navigation,
+  Music,
   Workflow as WorkflowIcon
 } from 'lucide-react';
 /* global __APP_VERSION__ */
@@ -199,6 +200,7 @@ const navItems = [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
+      { to: '/songs', label: 'Songs', icon: Music },
       { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
       { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen },
@@ -1183,6 +1185,10 @@ export default function Layout() {
             location.pathname === '/prompts' ||
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
+            // Song EDITOR (/songs/:id) and the Learning Guide (/songs/guide)
+            // are full-width and own their own scroll; the bare /songs index
+            // (list + create form) takes the normal padded+scrolling main.
+            location.pathname.startsWith('/songs/') ||
             location.pathname.startsWith('/wiki') ||
             // Only the universe EDITOR (/universes/:id, /universes/new) is
             // full-width — it manages its own scroll. The /universes index
