@@ -858,6 +858,12 @@ ensureSelf()
       // Series first (issues soft-ref it for universe resolution / lists).
       await seriesStore().listIds();
       await issueStore().listIds();
+      // Story Builder sessions PG warm (#1016): same contract — touch the store
+      // so it selects Postgres and runs its one-time file→DB import
+      // (migrateStoryBuilderToDB) BEFORE httpServer.listen, so the first
+      // request/sync sees migrated sessions. Universe + series warmed first
+      // (sessions soft-ref both for the staleness recompute / linked-record view).
+      await storyBuilderStore().listIds();
       // Authoritative catalog user-type warm (#1001): with the DB confirmed +
       // schema ensured, load the registry from the catalog_user_types store
       // (running the one-time settings→DB import on first access). This runs

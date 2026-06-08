@@ -735,3 +735,30 @@ CREATE TABLE IF NOT EXISTS pipeline_issues (
 CREATE INDEX IF NOT EXISTS idx_issues_series ON pipeline_issues (series_id, number) WHERE deleted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_issues_season ON pipeline_issues (season_id) WHERE season_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON pipeline_issues (updated_at);
+
+-- Story Builder sessions (issue #1016). One row per session; the conductor
+-- bookkeeping (`steps` lock/integrity map, `syncedHashes` baseline,
+-- `currentStep`, `llm` picker choice) stays entirely in `data` JSONB. The two
+-- FKs `universe_id` / `series_id` are promoted for "sessions linked to this
+-- record" lookups. `sync` is promoted because Story Builder is the one store
+-- whose federation is OPT-IN — the snapshot loop filters WHERE sync = TRUE to
+-- decide what to even consider pushing, so promoting it avoids deserializing
+-- every session's `data` per snapshot tick. `ephemeral` + the LWW/tombstone
+-- trio mirror the body. NO sync_sequence (sessions ride the existing dataSync
+-- snapshot/LWW model, not the per-record push pipeline).
+-- Mirrors the story_builder_sessions block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS story_builder_sessions (
+  id TEXT PRIMARY KEY,
+  universe_id TEXT,
+  series_id TEXT,
+  sync BOOLEAN DEFAULT FALSE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ephemeral BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_stb_universe ON story_builder_sessions (universe_id);
+CREATE INDEX IF NOT EXISTS idx_stb_series ON story_builder_sessions (series_id);
+CREATE INDEX IF NOT EXISTS idx_stb_updated ON story_builder_sessions (updated_at);

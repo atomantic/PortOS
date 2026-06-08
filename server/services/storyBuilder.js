@@ -30,13 +30,13 @@
  * The tombstone/origin/ephemeral fields are carried only for on-disk shape
  * parity (and forward-compat with the eventual sync wire integration).
  *
- * Persisted to data/story-builder/{id}/index.json.
+ * Storage: one row per session in PostgreSQL (`story_builder_sessions`) as of
+ * #1016 (legacy on-disk shape was data/story-builder/{id}/index.json). The
+ * storyBuilderStore facade is a drop-in for the collectionStore surface this
+ * service calls, so only the `store()` factory below changed.
  */
 
-import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS } from '../lib/fileUtils.js';
-import { createCollectionStore } from '../lib/collectionStore.js';
 import { isStr, trimTo, pickPromptFields, BIBLE_KIND } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
@@ -45,6 +45,7 @@ import {
   STEP_IDS, STEP_STATUSES, isValidStepId,
 } from '../lib/storyBuilderSteps.js';
 import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
+import { getStoryBuilderStore } from './storyBuilderStore/store.js';
 import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
 import { refineWorldPrompts } from './universeBuilderRefine.js';
@@ -58,20 +59,11 @@ import {
   ERR_VALIDATION as ARC_ERR_VALIDATION,
 } from './pipeline/arcPlanner.js';
 
-const TYPE_SCHEMA_VERSION = 1;
-
-let _store = null;
-const store = () => {
-  if (_store && _store.dir === join(PATHS.data, 'story-builder')) return _store;
-  _store = createCollectionStore({
-    dir: join(PATHS.data, 'story-builder'),
-    type: 'storyBuilder',
-    schemaVersion: TYPE_SCHEMA_VERSION,
-    sanitizeRecord: sanitizeSession,
-    idPattern: /^stb-[A-Za-z0-9-]+$/,
-  });
-  return _store;
-};
+// Storage backend dispatcher (#1016): the facade is a drop-in for the
+// collectionStore surface this service used to call directly, so every method
+// below keeps calling `store().loadAll()`, `store().queueRecordWrite(...)`, etc.
+// unchanged — only the backend (PostgreSQL vs the file escape hatch) moved.
+const store = () => getStoryBuilderStore(sanitizeSession);
 export const storyBuilderStore = () => store();
 
 export const ERR_NOT_FOUND = 'STORY_BUILDER_NOT_FOUND';

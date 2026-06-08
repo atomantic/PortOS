@@ -261,6 +261,20 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     expect(sqlIdx.size).toBeGreaterThan(0);
   });
 
+  // Story Builder sessions (#1016) — same drift risk; its own table + indexes.
+  it('story_builder_sessions has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'story_builder_sessions');
+    const jsBody = extractCreateTable(DB_JS, 'story_builder_sessions');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE story_builder_sessions').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE story_builder_sessions').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_stb_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_stb_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
   it('search_tsv payload field set matches', () => {
     // Both files re-declare the GENERATED ALWAYS expression character-for-
     // character today. If one side adds a payload key (e.g. voiceNotes) and

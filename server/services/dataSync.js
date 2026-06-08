@@ -26,6 +26,7 @@ import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listIssues } from './pipeline/issues.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
+import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
@@ -82,11 +83,20 @@ const MEDIA_COLLECTIONS_DIR = join(PATHS.data, 'media-collections');
 // CHECKSUM_PATHS below.
 const PEER_SUBSCRIPTIONS_FILE = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 const VIDEO_HISTORY_FILE = join(PATHS.data, 'video-history.json');
-// Story Builder sessions live in per-record `data/story-builder/<id>/index.json`
-// (collectionStore layout) with a type-level `data/story-builder/index.json`.
-// Only `sync: true` sessions ride this category (#730); the fingerprint walker
-// descends into the dir so a session edit invalidates the snapshot checksum.
+// Story Builder sessions used to live in per-record `data/story-builder/<id>/
+// index.json`; #1016 moved the RECORDS into PostgreSQL (`story_builder_sessions`).
+// Only `sync: true` sessions ride this category (#730). Same federation-
+// invisibility problem as universes (#1014): a PG-backed session edit no longer
+// touches this directory, so the dir fingerprint alone would go stale and peers
+// would stop receiving session edits. The store exports a monotonic mutation
+// epoch (bumped on every session record write/delete) folded into this path's
+// fingerprint via STORY_BUILDER_EPOCH_KEY below. Under the file backend the dir
+// still changes too (harmless double-signal).
 const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
+// Sentinel fingerprint-map key (not a real path — readFingerprintMap special-
+// cases it) carrying the Story Builder mutation epoch into the storyBuilder
+// checksum cache.
+const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -778,12 +788,14 @@ const CHECKSUM_PATHS = {
   // videoHistory is a flat history file with no parent-record dependency —
   // its checksum invalidates only when video-history.json itself moves.
   videoHistory: [VIDEO_HISTORY_FILE],
-  // storyBuilder invalidates on its own per-record dir. The snapshot includes
-  // ONLY sync-enabled sessions, but the fingerprint walker is content-agnostic
-  // (any session file edit re-checksums) — over-invalidation is harmless: the
-  // snapshot getter filters back to sync:true and the checksum is unchanged
-  // when no synced session moved, so the orchestrator still skips the transfer.
-  storyBuilder: [STORY_BUILDER_DIR],
+  // STORY_BUILDER_EPOCH_KEY folds in the store's mutation epoch so a PG-backed
+  // session edit (which doesn't touch STORY_BUILDER_DIR) still invalidates the
+  // cache — see STORY_BUILDER_DIR's note. The snapshot includes ONLY
+  // sync-enabled sessions, but the epoch/dir signal is content-agnostic (any
+  // session write re-checksums) — over-invalidation is harmless: the snapshot
+  // getter filters back to sync:true and the checksum is unchanged when no
+  // synced session moved, so the orchestrator still skips the transfer.
+  storyBuilder: [STORY_BUILDER_DIR, STORY_BUILDER_EPOCH_KEY],
 };
 
 const CATEGORIES = {
@@ -898,6 +910,7 @@ async function readFingerprintMap(paths) {
     // though no file moved. fingerprintsEqual compares these like any value.
     if (p === UNIVERSE_EPOCH_KEY) { out[p] = `epoch:${getUniverseMutationEpoch()}`; return; }
     if (p === PIPELINE_EPOCH_KEY) { out[p] = `epoch:${getPipelineMutationEpoch()}`; return; }
+    if (p === STORY_BUILDER_EPOCH_KEY) { out[p] = `epoch:${getStoryBuilderMutationEpoch()}`; return; }
     const s = await stat(p).catch(() => null);
     if (!s) { out[p] = null; return; }
     if (s.isDirectory()) {
