@@ -226,6 +226,76 @@ describe('songs service', () => {
     expect(song.recordings[0]).not.toHaveProperty('accuracy');
   });
 
+  // --- Training progress (#1028) -----------------------------------------
+  it('legacy/untrained songs load with no progress key', () => {
+    expect(svc.sanitizeSong({ id: 'x' })).not.toHaveProperty('progress');
+    // An empty history object is nothing to persist → omit.
+    expect(svc.sanitizeSong({ id: 'x', progress: { history: {} } })).not.toHaveProperty('progress');
+  });
+
+  it('persists a per-scope training history, clamping percent and dropping zero-note attempts', () => {
+    const song = svc.sanitizeSong({
+      id: 'x',
+      progress: {
+        history: {
+          '__whole__': [
+            { percentInTune: 250, graded: 6, at: '2026-06-08T00:00:00.000Z' }, // clamped to 100
+            { percentInTune: 50, graded: 0 }, // zero-note → dropped
+          ],
+          'sec-1': [{ percentInTune: 80, graded: 4 }],
+        },
+      },
+    });
+    expect(song.progress.history['__whole__']).toHaveLength(1);
+    expect(song.progress.history['__whole__'][0].percentInTune).toBe(100);
+    expect(song.progress.history['sec-1'][0].graded).toBe(4);
+  });
+
+  it('drops a scope whose attempts all fail sanitization', () => {
+    const song = svc.sanitizeSong({
+      id: 'x',
+      progress: { history: { 'sec-1': [{ percentInTune: 90, graded: 0 }], 'sec-2': [{ percentInTune: 70, graded: 3 }] } },
+    });
+    expect(song.progress.history).not.toHaveProperty('sec-1');
+    expect(song.progress.history['sec-2']).toHaveLength(1);
+  });
+
+  it('drops prototype-pollution-prone scope keys from a hand-edited file', () => {
+    const song = svc.sanitizeSong({
+      id: 'x',
+      progress: { history: { '__proto__': [{ percentInTune: 90, graded: 3 }], 'sec-1': [{ percentInTune: 70, graded: 3 }] } },
+    });
+    expect(Object.keys(song.progress.history)).toEqual(['sec-1']);
+    // The Object prototype was not polluted.
+    expect({}.percentInTune).toBeUndefined();
+  });
+
+  it('clamps an oversized per-scope history to PROGRESS_HISTORY_MAX', () => {
+    const attempts = Array.from({ length: svc.PROGRESS_HISTORY_MAX + 20 }, () => ({ percentInTune: 80, graded: 3 }));
+    const song = svc.sanitizeSong({ id: 'x', progress: { history: { 'sec-1': attempts } } });
+    expect(song.progress.history['sec-1']).toHaveLength(svc.PROGRESS_HISTORY_MAX);
+  });
+
+  it('updateSong merges progress and preserves it across an unrelated edit', async () => {
+    await svc.listSongs();
+    const created = await svc.createSong({ title: 'Practice me' });
+    const withProgress = await svc.updateSong(created.id, {
+      progress: { history: { '__whole__': [{ percentInTune: 85, graded: 5 }] } },
+    });
+    expect(withProgress.progress.history['__whole__']).toHaveLength(1);
+    // A later edit that doesn't touch progress keeps it (absent key preserves).
+    const renamed = await svc.updateSong(created.id, { title: 'Renamed' });
+    expect(renamed.progress.history['__whole__']).toHaveLength(1);
+  });
+
+  it('refreshSongFromTemplate preserves the user training progress', async () => {
+    await svc.listSongs();
+    const seedId = [...svc.BUILTIN_SONG_IDS][0];
+    await svc.updateSong(seedId, { progress: { history: { 'sec-1': [{ percentInTune: 90, graded: 4 }] } } });
+    const refreshed = await svc.refreshSongFromTemplate(seedId);
+    expect(refreshed.progress.history['sec-1']).toHaveLength(1);
+  });
+
   it('stamps builtIn from the seed-id set, ignoring the raw value', () => {
     const seedId = [...svc.BUILTIN_SONG_IDS][0];
     expect(svc.sanitizeSong({ id: seedId }).builtIn).toBe(true);

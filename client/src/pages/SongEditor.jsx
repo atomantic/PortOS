@@ -35,6 +35,7 @@ import { RHYTHM_SHAPES, VOICE_LAYERS, rhythmShapeLabel } from '../lib/songCraft'
 import Pill from '../components/ui/Pill';
 import SongAiPanel from '../components/songs/SongAiPanel';
 import SongRecordings from '../components/songs/SongRecordings';
+import SongTraining from '../components/songs/SongTraining';
 import SongScoreEditor from '../components/songs/SongScoreEditor';
 import SongScoreParts from '../components/songs/SongScoreParts';
 import ScoreSheet from '../components/songs/ScoreSheet';
@@ -195,6 +196,7 @@ export default function SongEditor() {
       title: song.title, artist: song.artist, key: song.key,
       tempo: song.tempo ?? null, rhythmShapeId: song.rhythmShapeId,
       notation: song.notation, score: song.score, notes: song.notes, learned: song.learned,
+      progress: song.progress ?? null,
       // Strip in-session temp ids so the server assigns stable uuids — keeps
       // them from being persisted and later colliding after a reload.
       sections: (song.sections || []).map(stripTempId),
@@ -584,6 +586,15 @@ export default function SongEditor() {
             onChange={(recordings) => setField('recordings', recordings)}
           />
 
+          {/* Training — practice loop, scoring, and learned-progress tracking */}
+          <SongTraining
+            score={song.score}
+            lyricSections={song.sections || []}
+            tempo={song.tempo ?? null}
+            progress={song.progress ?? null}
+            onProgress={(progress) => setField('progress', progress)}
+          />
+
           {/* Reference material — links / videos (TikTok embeds in read view) */}
           <section>
             <div className="flex items-center justify-between mb-2">
@@ -768,6 +779,18 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
         score={song.score}
         onChange={(recordings) => setField('recordings', recordings)}
       />
+
+      {/* Training — practice & memorize against the score, tracking progress.
+          Hidden while the round stack is open (the stack is its own surface). */}
+      {!showingStack && (
+        <SongTraining
+          score={song.score}
+          lyricSections={song.sections || []}
+          tempo={song.tempo ?? null}
+          progress={song.progress ?? null}
+          onProgress={(progress) => setField('progress', progress)}
+        />
+      )}
 
       {!showingStack && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

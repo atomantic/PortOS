@@ -80,6 +80,23 @@ const recordingSchema = z.object({
   accuracy: accuracySchema.optional(),
 });
 
+// One training attempt — a graded take of one scope (#1028). The service clamps
+// the percent and drops zero-note attempts; the schema only types the fields.
+const attemptSchema = z.object({
+  percentInTune: z.number().optional(),
+  graded: z.number().optional(),
+  at: z.string().optional(),
+});
+
+// Training progress (#1028): `{ history: { <scope>: [attempt…] } }`. A record
+// of the scope → recent graded attempts; the service bounds both the per-scope
+// history and the number of scopes, and recomputes derived stats client-side.
+// `.passthrough()` is NOT used — only `history` is meaningful, and the service
+// re-sanitizes regardless, but typing it keeps the contract explicit.
+const progressSchema = z.object({
+  history: z.record(z.string(), z.array(attemptSchema).max(svc.PROGRESS_HISTORY_MAX)).optional(),
+}).optional();
+
 // A sheet-music part — a harmony variation of the base score, in the same
 // lead-sheet DSL. `score` is required (a part without notation is meaningless);
 // `role` is a HARMONY_PARTS id when known but free-text-safe.
@@ -120,6 +137,9 @@ const songInputSchema = z.object({
   scoreParts: z.array(scorePartSchema).max(svc.SCORE_PARTS_MAX).optional(),
   notes: str(svc.FIELD_MAX_LENGTH).optional(),
   learned: z.boolean().optional(),
+  // Training progress (#1028) — per-scope rolling accuracy history. Optional and
+  // absent-tolerant: a legacy/untrained song omits it; the service bounds + clamps.
+  progress: progressSchema,
   sections: z.array(sectionSchema).max(svc.SECTIONS_MAX).optional(),
   layers: z.array(layerSchema).max(svc.LAYERS_MAX).optional(),
   recordings: z.array(recordingSchema).max(svc.RECORDINGS_MAX).optional(),

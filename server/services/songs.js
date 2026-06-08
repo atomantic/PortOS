@@ -57,6 +57,13 @@ export const URL_MAX_LENGTH = 512;     // uploaded-file path/url
 // be arbitrarily long.
 export const PITCH_TRACK_MAX = 4000;   // downsampled tuner samples per take
 export const PER_NOTE_GRADES_MAX = 2000; // per-note color-match grades per take
+// Training progress (#1028). `progress.history` maps a training scope (a
+// section id or the whole-song sentinel) to a bounded array of graded attempts.
+// Mirrors client/src/lib/songProgress.js HISTORY_MAX (kept window per scope) and
+// caps the number of distinct scopes so a hand-edited file can't balloon the
+// record. An attempt is `{ percentInTune, graded, at }`.
+export const PROGRESS_HISTORY_MAX = 50;   // attempts kept per scope
+export const PROGRESS_SCOPES_MAX = 80;    // distinct training scopes tracked
 // Valid color-match grades — mirrors client/src/lib/colorMatch.js GRADE. An
 // unrecognized grade is dropped (a newer/older client vocabulary can't 400 or
 // poison the persisted array).
@@ -151,6 +158,49 @@ const sanitizeAccuracy = (a) => {
     },
     perNote,
   };
+};
+
+// One training attempt ({ percentInTune, graded, at }) — a graded take of one
+// scope (a section or the whole song). Numbers are clamped; an attempt with no
+// graded notes carries no signal and is dropped (mirrors songProgress.js, which
+// never records a zero-note take). Returns null for a shapeless/empty attempt.
+const sanitizeAttempt = (a) => {
+  if (!a || typeof a !== 'object') return null;
+  const graded = finiteOrNull(a.graded);
+  if (graded === null || graded <= 0) return null;
+  const pct = finiteOrNull(a.percentInTune);
+  return {
+    percentInTune: pct === null ? 0 : Math.max(0, Math.min(100, Math.round(pct))),
+    graded: Math.max(0, Math.round(graded)),
+    at: typeof a.at === 'string' ? a.at : new Date().toISOString(),
+  };
+};
+
+// Training progress (#1028): `{ history: { <scope>: [attempt…] } }`. Each scope
+// (a section id or the whole-song sentinel) keys a bounded, newest-last attempt
+// list. Absent on legacy/untrained songs — returns null when there's nothing to
+// persist so the field stays off the record (no wave of empty objects). The
+// number of scopes and the per-scope history are both bounded so a hand-edited
+// file can't grow the record without limit. Derived stats (best/avg/learned)
+// are recomputed client-side from this history on read, never stored.
+const sanitizeProgress = (p) => {
+  if (!p || typeof p !== 'object') return null;
+  const rawHistory = p.history && typeof p.history === 'object' ? p.history : {};
+  const history = {};
+  let scopeCount = 0;
+  for (const [scope, attempts] of Object.entries(rawHistory)) {
+    if (scopeCount >= PROGRESS_SCOPES_MAX) break;
+    const key = trimField(scope, ID_MAX_LENGTH);
+    // Skip empty keys and the prototype-pollution-prone keys — a section id is
+    // always `sec-N` (or the `__whole__` sentinel), never one of these, so a
+    // hand-edited `__proto__`/`constructor` scope is a malformed file, not data.
+    if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    const cleaned = sanitizeList(attempts, sanitizeAttempt, PROGRESS_HISTORY_MAX);
+    if (!cleaned.length) continue;
+    history[key] = cleaned;
+    scopeCount += 1;
+  }
+  return Object.keys(history).length ? { history } : null;
 };
 
 // One saved vocal take ({ id, layerId, filename, label, durationMs, peak,
@@ -259,7 +309,7 @@ export const sanitizeSong = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const id = trimField(raw.id, ID_MAX_LENGTH);
   if (!id) return null;
-  return {
+  const song = {
     id,
     title: trimField(raw.title, TITLE_MAX_LENGTH) || 'Untitled song',
     artist: trimField(raw.artist, ARTIST_MAX_LENGTH),
@@ -291,6 +341,12 @@ export const sanitizeSong = (raw) => {
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
   };
+  // Training progress (#1028). Absent ⇒ omit (legacy/untrained song); present ⇒
+  // attach the bounded per-scope attempt history. Keeping the key off the record
+  // when there's no progress avoids an empty husk on every untrained song.
+  const progress = sanitizeProgress(raw.progress);
+  if (progress) song.progress = progress;
+  return song;
 };
 
 // Worked-example harmony stack for the built-in "500 Miles" — the chord-tone
@@ -698,7 +754,7 @@ export async function updateSong(id, patch) {
     // Merge field-by-field so an absent key preserves the stored value while a
     // present key (including empty string / empty array) applies the change.
     const merged = { ...songs[idx] };
-    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'score', 'scoreParts', 'notes', 'learned', 'sections', 'layers', 'recordings', 'references', 'partnerSongIds']) {
+    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'score', 'scoreParts', 'notes', 'learned', 'progress', 'sections', 'layers', 'recordings', 'references', 'partnerSongIds']) {
       if (key in patch) merged[key] = patch[key];
     }
     merged.id = id;
@@ -736,6 +792,9 @@ export async function refreshSongFromTemplate(id) {
       ...template,
       id,
       learned: existing.learned,
+      // Preserve the user's training progress — it's their practice record, not
+      // the template's to reset (mirrors keeping `learned` + `recordings`).
+      progress: existing.progress,
       recordings,
       createdAt: existing.createdAt,
       updatedAt: new Date().toISOString(),

@@ -19,6 +19,7 @@ export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
 export { default as useSingToScore } from './useSingToScore.js';
 export * from './useSingToScore.js';
+export { default as useSongTraining } from './useSongTraining.js';
 export { default as useMediaPreviewActions } from './useMediaPreviewActions.js';
 export { default as useKeyboardControls } from './useKeyboardControls.js';
 export { default as useMediaJobProgress } from './useMediaJobProgress.js';
