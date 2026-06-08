@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import * as catalogDB from '../services/catalogDB.js';
 import * as catalogSync from '../services/catalogSync.js';
+import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js';
 import { projectToCanon } from '../services/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -355,6 +356,24 @@ router.get('/ingredients/:id/refs', asyncHandler(async (req, res) => {
 
 router.get('/refs/:refKind/:refId/ingredients', asyncHandler(async (req, res) => {
   res.json(await catalogDB.listIngredientsForRef(req.params.refKind, req.params.refId));
+}));
+
+// Resolver (#1018): does this (refKind, refId) target a LIVE app-native record?
+// Pairs with the ingredients list above so a caller rendering "everything
+// related to this universe/series/issue/work" can also tell whether the target
+// itself still exists. Read-only, local — no FK, by design (D3 of #999).
+router.get('/refs/:refKind/:refId/resolve', asyncHandler(async (req, res) => {
+  const [resolved] = await resolveRefs([{ refKind: req.params.refKind, refId: req.params.refId }]);
+  res.json(resolved);
+}));
+
+// Integrity surface (#1018): every LIVE ref whose target record no longer
+// resolves (deleted, or never arrived after a federated ref). Mirrors the media
+// `metadata-missing` check — a dangling ref isn't an error (the target may sync
+// in later), just a report. `count` is handy for a badge.
+router.get('/refs/dangling', asyncHandler(async (req, res) => {
+  const dangling = await listDanglingRefs();
+  res.json({ count: dangling.length, dangling });
 }));
 
 // --- Ingredient↔ingredient relations -----------------------------------
