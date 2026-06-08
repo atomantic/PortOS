@@ -148,4 +148,13 @@ describe.skipIf(!dbReady)('catalog ref resolver — live resolution + dangling r
     const dangling = await resolver.listDanglingRefs();
     expect(dangling.some((d) => d.refId === 'ser-rt-missing')).toBe(false);
   });
+
+  it('a ref whose INGREDIENT is soft-deleted is excluded (no live consumer)', async () => {
+    // The ref row stays deleted = FALSE when its ingredient is soft-deleted, but
+    // there's no live "Appears in" consumer, so it must not surface as dangling.
+    await linkRef('series', 'ser-rt-missing');
+    await query(`UPDATE catalog_ingredients SET deleted = TRUE, deleted_at = NOW() WHERE id = $1`, [ING]);
+    const dangling = await resolver.listDanglingRefs();
+    expect(dangling.some((d) => d.refId === 'ser-rt-missing')).toBe(false);
+  });
 });
