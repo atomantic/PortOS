@@ -3,16 +3,16 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     testTimeout: 10000,
-    // Pick up tests from the client tree too — a handful of client-side pure
-    // helpers (normalize.js sidecar field resolution) have unit tests that
-    // belong alongside the source, but the client itself has no test runner.
-    // The server's vitest is the project's single test entrypoint, so we
-    // include the client *.test.js files here. Also pick up migration tests
-    // from scripts/migrations/ so each one-shot migration can be verified
+    // The client owns its own test runner (`client/vitest.config.js`, jsdom,
+    // `cd client && npm test`) which already covers every `client/src/**` test
+    // — including the pure helper tests (e.g. normalize.js sidecar resolution).
+    // So this server runner covers only server, scripts/migrations, and lib
+    // tests; it intentionally does NOT glob the client tree (its default node
+    // environment has no DOM, so DOM-dependent client tests would fail here).
+    // The scripts/migrations glob lets each one-shot migration be verified
     // against synthetic fixtures.
     include: [
       '**/*.test.js',
-      '../client/src/**/*.test.js',
       '../scripts/**/*.test.js',
       '../lib/**/*.test.js',
     ],

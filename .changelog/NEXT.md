@@ -9,3 +9,4 @@
 ## Changed
 
 - **[issue-1027] Songs: vocal takes remember their pitch analysis** — a recorded take now saves its tuner trace and color-match score so your accuracy isn't recomputed every time you reopen the song.
+- **[issue-1060] Cleaner test runs** — browser-dependent tests now run only under their own test environment, so the server test run no longer reports spurious failures from double-running them.
