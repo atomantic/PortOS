@@ -13,9 +13,11 @@
 // Timing mirrors `scorePlayback.buildSchedule` exactly (same global note index,
 // same `(60/bpm)·(beatValue/4)` quarter-beat duration) so a color-match cursor
 // lines up note-for-note with both the rendered staff and the reference-tone
-// playhead.
+// playhead. The note→frequency mapping comes from `pitchDetect` — the shared
+// note↔frequency source of truth the tuner and detector also use — so a target
+// note and a detected note are compared on one tuning reference.
 
-import { noteToFrequency } from './scorePlayback.js';
+import { noteToFrequency } from './pitchDetect.js';
 
 // Grade levels — the same three buckets the tuner uses (`pitchDetect.tuningQuality`),
 // plus `missed` (no clear pitch detected while the note was active). Exported so

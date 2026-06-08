@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseScore } from './scoreNotation.js';
-import { noteToFrequency } from './scorePlayback.js';
+import { noteToFrequency } from './pitchDetect.js';
 import {
   buildColorMatchTimeline,
   noteAtTime,
