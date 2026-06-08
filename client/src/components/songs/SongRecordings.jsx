@@ -21,6 +21,7 @@ import { createLayeredPlayer } from '../../lib/songPlayback';
 import { uploadFile, getUploadUrl } from '../../services/api';
 import { formatDurationMs } from '../../utils/formatters';
 import Metronome from './Metronome';
+import PitchTuner from './PitchTuner';
 
 // Lower bound peak amplitude — below this the take is effectively silence
 // (dead mic / muted input), worth warning about before it joins the stack.
@@ -38,6 +39,9 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
   const [saving, setSaving] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [targetLayerId, setTargetLayerId] = useState('');
+  // Live mic stream while recording — passed to the tuner so it taps the SAME
+  // mic (no second getUserMedia). Null whenever a take isn't in flight.
+  const [liveStream, setLiveStream] = useState(null);
   const handleRef = useRef(null);   // active MediaRecorder handle
   const playerRef = useRef(null);   // active layered player
 
@@ -61,6 +65,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     });
     if (!handle) return;
     handleRef.current = handle;
+    setLiveStream(handle.stream || null); // feed the tuner the recording mic
     setRecording(true);
   }, []);
 
@@ -68,6 +73,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     const handle = handleRef.current;
     if (!handle) return;
     handleRef.current = null;
+    setLiveStream(null); // stream is being torn down with the take
     setRecording(false);
     setSaving(true);
     const take = await handle.stop().catch((err) => {
@@ -177,8 +183,11 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
       </p>
 
       {/* Tempo reference + count-in — the shared timing grid for recording. */}
-      <div className="mb-3">
+      <div className="mb-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Metronome tempo={tempo} score={score} />
+        {/* Live tuner — taps the recording mic while a take is live, else offers
+            a standalone "just tune" mode that opens its own mic. */}
+        <PitchTuner stream={liveStream} />
       </div>
 
       {/* Layer the next take targets (optional) */}
