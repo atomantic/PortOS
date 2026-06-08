@@ -21,6 +21,8 @@ import { useState } from 'react';
 import { Music2, Plus, Trash2, Wand2, Loader2, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet.jsx';
+import ProviderModelSelector from '../ProviderModelSelector.jsx';
+import useProviderModels from '../../hooks/useProviderModels.js';
 import { deriveSongParts } from '../../services/api';
 import { HARMONY_PARTS, harmonyPartLabel, harmonyPartOrder } from '../../lib/songCraft';
 import { scoreHasMusic } from '../../lib/scoreNotation';
@@ -39,6 +41,21 @@ export default function SongScoreParts({ songId, baseScore = '', baseDirty = fal
   const [deriving, setDeriving] = useState(false);
   const [openId, setOpenId] = useState(null);
 
+  // AI provider/model for the derive run, via the shared hook. `allowDefault`
+  // keeps the empty-string "use the active provider's default" sentinel selected
+  // until the user picks (the server's optProvider coerces '' → undefined), and
+  // `silent` means a failed provider fetch just hides the picker rather than
+  // toasting. The choice is transient — it scopes this derive call only, not
+  // persisted on the song (unlike the pipeline's SeriesLlmPicker → series.llm).
+  const {
+    providers,
+    selectedProviderId,
+    selectedModel,
+    availableModels,
+    setSelectedProviderId,
+    setSelectedModel,
+  } = useProviderModels({ allowDefault: true, silent: true });
+
   const hasBase = scoreHasMusic(baseScore);
   // Derive needs a SAVED base melody — the server reads the persisted score, so a
   // dirty (unsaved) base would derive harmony from stale notes.
@@ -56,7 +73,7 @@ export default function SongScoreParts({ songId, baseScore = '', baseDirty = fal
 
   const derive = async () => {
     setDeriving(true);
-    const data = await deriveSongParts(songId, {}, { silent: true })
+    const data = await deriveSongParts(songId, { providerId: selectedProviderId, model: selectedModel }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not derive harmony parts'); return null; });
     setDeriving(false);
     if (!data?.scoreParts?.length) return;
@@ -112,6 +129,28 @@ export default function SongScoreParts({ songId, baseScore = '', baseDirty = fal
         Bass, mid & high harmonies built from the melody above — each rhythm-aligned so the parts stack when sung together.
         Derive writes a full set with AI (Bass, Mid Harmony I/II, High Harmony I/II); review and <strong>Save</strong> to keep.
       </p>
+
+      {/* AI provider/model for the derive run (defaults to the active provider). */}
+      {hasBase && providers.length > 0 && (
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500 shrink-0">Derive with</span>
+          <ProviderModelSelector
+            providers={providers}
+            selectedProviderId={selectedProviderId}
+            selectedModel={selectedModel}
+            availableModels={availableModels}
+            onProviderChange={setSelectedProviderId}
+            onModelChange={setSelectedModel}
+            label="AI provider"
+            disabled={deriving}
+            modelDisabled={availableModels.length === 0}
+            compact
+            alwaysShowModel
+            emptyProviderOption="Active provider (default)"
+            emptyModelOption="Default model"
+          />
+        </div>
+      )}
 
       {!hasBase && (
         <p className="text-xs text-gray-500">Add a base melody in the Sheet music editor above, then derive or add harmony parts.</p>
