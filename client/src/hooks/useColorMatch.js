@@ -150,13 +150,18 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
       beatValue: ts.beatValue,
       countInBars,
       onBeat: (info) => { if (mountedRef.current) setBeat(info); },
-      onCountInComplete: (info) => {
-        // The first music downbeat — anchor the grading clock to this audio time
-        // and start the rAF loop. Use the same AudioContext the analyser reads so
-        // `currentTime` is on one clock.
+      onCountInComplete: () => {
+        // The first music downbeat — anchor the grading clock and start the rAF
+        // loop. The metronome and the analyser run on SEPARATE AudioContexts with
+        // unrelated `currentTime` origins, so we must anchor to the analyser's own
+        // clock (`info.whenAudioTime` is on the metronome's clock and can't be
+        // subtracted from the analyser's `currentTime`). This callback fires aligned
+        // to the downbeat click, so the analyser's `currentTime` here is the start.
         if (!mountedRef.current) return;
         setCountingIn(false);
-        startAudioTimeRef.current = info.whenAudioTime;
+        const ctx = analyserRef.current?.context;
+        if (!ctx) { stop(); return; }
+        startAudioTimeRef.current = ctx.currentTime;
         rafRef.current = requestAnimationFrame(grade);
       },
     });
