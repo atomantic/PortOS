@@ -17,7 +17,18 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { getInstanceId } from './instances.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
-const withRemoteLock = createMutex();
+// ONE mutex serializes EVERY write to a brain entity store — local mutations
+// (create/update/remove/upsertWithId/updateMany) AND remote peer applies
+// (applyRemoteRecord) AND tombstone GC. They all do whole-file read-modify-write
+// on the same data/brain/<type>.json, so a peer sync landing mid-way through a
+// local journal append / inbox capture (or vice-versa) would otherwise read a
+// stale snapshot and drop the other write. This is the CLAUDE.md-sanctioned
+// "serialize two write paths that mutate the same record" case (sync orchestrator
+// vs request handler are two in-process writers, not competing humans) — NOT a
+// concurrency defense against multiple users. brainJournal layers its own
+// storeMutex ON TOP for the read→mutate→write of a single journal entry; that
+// only ever nests storeMutex → this lock (one direction), so no deadlock.
+const withStoreWriteLock = createMutex();
 
 const DATA_DIR = PATHS.brain;
 
@@ -254,56 +265,62 @@ export async function getById(type, id) {
  * Create a new record
  */
 export async function create(type, recordData) {
-  const data = await loadJsonStore(type);
-  const id = generateId();
-  const timestamp = now();
+  // getInstanceId() before the lock — it's an independent read, and acquiring
+  // the lock first would needlessly serialize identity reads behind every write.
   const originInstanceId = await getInstanceId();
+  return withStoreWriteLock(async () => {
+    const data = await loadJsonStore(type);
+    const id = generateId();
+    const timestamp = now();
 
-  const record = {
-    ...recordData,
-    originInstanceId,
-    createdAt: timestamp,
-    updatedAt: timestamp
-  };
+    const record = {
+      ...recordData,
+      originInstanceId,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
 
-  data.records[id] = record;
-  await saveJsonStore(type, data);
-  brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-  await brainSyncLog.appendChange('create', type, id, record, originInstanceId)
-    .catch(err => console.error(`⚠️ Sync log append failed for create ${type}/${id}: ${err.message}`));
+    data.records[id] = record;
+    await saveJsonStore(type, data);
+    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    await brainSyncLog.appendChange('create', type, id, record, originInstanceId)
+      .catch(err => console.error(`⚠️ Sync log append failed for create ${type}/${id}: ${err.message}`));
 
-  console.log(`🧠 Created ${type} record: ${id}`);
-  return { id, ...record };
+    console.log(`🧠 Created ${type} record: ${id}`);
+    return { id, ...record };
+  });
 }
 
 /**
  * Update a record
  */
 export async function update(type, id, updates) {
-  const data = await loadJsonStore(type);
+  return withStoreWriteLock(async () => {
+    const data = await loadJsonStore(type);
 
-  // A tombstoned record is gone — treat it as not-found rather than reviving it.
-  if (!data.records[id] || isTombstone(data.records[id])) {
-    return null;
-  }
+    // A tombstoned record is gone — treat it as not-found rather than reviving it.
+    if (!data.records[id] || isTombstone(data.records[id])) {
+      return null;
+    }
 
-  const record = {
-    ...data.records[id],
-    ...updates,
-    // Preserve immutable fields — originInstanceId tracks the creating instance
-    originInstanceId: data.records[id].originInstanceId,
-    createdAt: data.records[id].createdAt,
-    updatedAt: now()
-  };
+    const record = {
+      ...data.records[id],
+      ...updates,
+      // Preserve immutable fields — originInstanceId tracks the creating instance
+      originInstanceId: data.records[id].originInstanceId,
+      createdAt: data.records[id].createdAt,
+      updatedAt: now()
+    };
 
-  data.records[id] = record;
-  await saveJsonStore(type, data);
-  brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-  await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-    .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    data.records[id] = record;
+    await saveJsonStore(type, data);
+    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
+      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
 
-  console.log(`🧠 Updated ${type} record: ${id}`);
-  return { id, ...record };
+    console.log(`🧠 Updated ${type} record: ${id}`);
+    return { id, ...record };
+  });
 }
 
 /**
@@ -323,27 +340,32 @@ export async function update(type, id, updates) {
  * own richer, bridge-shaped event instead of the generic one.
  */
 export async function upsertWithId(type, id, recordData, { emitEvent = true } = {}) {
-  const data = await loadJsonStore(type);
-  const existing = data.records[id];
-  const live = existing && !isTombstone(existing) ? existing : null;
-  const timestamp = now();
-  const originInstanceId = live?.originInstanceId ?? await getInstanceId();
+  // Resolve our instance id outside the lock (independent read); the existing
+  // record's origin is preferred inside the lock when one is present.
+  const fallbackOrigin = await getInstanceId();
+  return withStoreWriteLock(async () => {
+    const data = await loadJsonStore(type);
+    const existing = data.records[id];
+    const live = existing && !isTombstone(existing) ? existing : null;
+    const timestamp = now();
+    const originInstanceId = live?.originInstanceId ?? fallbackOrigin;
 
-  const record = {
-    ...recordData,
-    originInstanceId,
-    createdAt: live?.createdAt ?? timestamp,
-    updatedAt: timestamp
-  };
+    const record = {
+      ...recordData,
+      originInstanceId,
+      createdAt: live?.createdAt ?? timestamp,
+      updatedAt: timestamp
+    };
 
-  data.records[id] = record;
-  await saveJsonStore(type, data);
-  if (emitEvent) brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-  await brainSyncLog.appendChange(live ? 'update' : 'create', type, id, record, originInstanceId)
-    .catch(err => console.error(`⚠️ Sync log append failed for upsert ${type}/${id}: ${err.message}`));
+    data.records[id] = record;
+    await saveJsonStore(type, data);
+    if (emitEvent) brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    await brainSyncLog.appendChange(live ? 'update' : 'create', type, id, record, originInstanceId)
+      .catch(err => console.error(`⚠️ Sync log append failed for upsert ${type}/${id}: ${err.message}`));
 
-  console.log(`🧠 Upserted ${type} record: ${id}`);
-  return { id, ...record };
+    console.log(`🧠 Upserted ${type} record: ${id}`);
+    return { id, ...record };
+  });
 }
 
 /**
@@ -358,63 +380,67 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true } = 
  * Returns the updated records.
  */
 export async function updateMany(type, updates) {
-  const data = await loadJsonStore(type);
-  const applied = [];
-  for (const { id, ...fields } of updates) {
-    const existing = data.records[id];
-    if (!existing || isTombstone(existing)) continue;
-    const record = {
-      ...existing,
-      ...fields,
-      // Preserve immutable fields, exactly as update() does.
-      originInstanceId: existing.originInstanceId,
-      createdAt: existing.createdAt,
-      updatedAt: now()
-    };
-    data.records[id] = record;
-    applied.push({ id, record });
-  }
-  if (applied.length === 0) return [];
+  return withStoreWriteLock(async () => {
+    const data = await loadJsonStore(type);
+    const applied = [];
+    for (const { id, ...fields } of updates) {
+      const existing = data.records[id];
+      if (!existing || isTombstone(existing)) continue;
+      const record = {
+        ...existing,
+        ...fields,
+        // Preserve immutable fields, exactly as update() does.
+        originInstanceId: existing.originInstanceId,
+        createdAt: existing.createdAt,
+        updatedAt: now()
+      };
+      data.records[id] = record;
+      applied.push({ id, record });
+    }
+    if (applied.length === 0) return [];
 
-  await saveJsonStore(type, data);
-  for (const { id, record } of applied) {
-    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
-  }
-  console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
-  return applied.map(({ id, record }) => ({ id, ...record }));
+    await saveJsonStore(type, data);
+    for (const { id, record } of applied) {
+      brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+      await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
+        .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    }
+    console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
+    return applied.map(({ id, record }) => ({ id, ...record }));
+  });
 }
 
 /**
  * Delete a record
  */
 export async function remove(type, id) {
-  const data = await loadJsonStore(type);
+  return withStoreWriteLock(async () => {
+    const data = await loadJsonStore(type);
 
-  const existing = data.records[id];
-  // Already gone (absent) or already tombstoned — nothing to delete, and
-  // re-tombstoning would mint a redundant sync-log entry that relays needlessly.
-  if (!existing || isTombstone(existing)) {
-    return false;
-  }
+    const existing = data.records[id];
+    // Already gone (absent) or already tombstoned — nothing to delete, and
+    // re-tombstoning would mint a redundant sync-log entry that relays needlessly.
+    if (!existing || isTombstone(existing)) {
+      return false;
+    }
 
-  const originInstanceId = existing.originInstanceId ?? 'unknown';
-  const deletedRecord = { id, ...existing };
-  const ts = now();
-  // Retain a tombstone in place (not a hard delete) so a stale `create` echoed
-  // from a peer is rejected by the LWW guard in applyRemoteRecord.
-  data.records[id] = makeTombstone(ts, originInstanceId);
-  await saveJsonStore(type, data);
-  brainEvents.emit(`${type}:deleted`, { id, record: deletedRecord });
-  // Wire format unchanged: the sync-log delete entry still carries only
-  // { updatedAt } so an older peer (no tombstone support) applies it as a
-  // plain hard delete exactly as before.
-  await brainSyncLog.appendChange('delete', type, id, { updatedAt: ts }, originInstanceId)
-    .catch(err => console.error(`⚠️ Sync log append failed for delete ${type}/${id}: ${err.message}`));
+    const originInstanceId = existing.originInstanceId ?? 'unknown';
+    const deletedRecord = { id, ...existing };
+    const ts = now();
+    // Retain a tombstone in place (not a hard delete) so a stale `create` echoed
+    // from a peer is rejected by the LWW guard in applyRemoteRecord.
+    data.records[id] = makeTombstone(ts, originInstanceId);
+    await saveJsonStore(type, data);
+    brainEvents.emit(`${type}:deleted`, { id, record: deletedRecord });
+    // Wire format unchanged: the sync-log delete entry still carries only
+    // { updatedAt } so an older peer (no tombstone support) applies it as a
+    // plain hard delete exactly as before.
+    await brainSyncLog.appendChange('delete', type, id, { updatedAt: ts }, originInstanceId)
+      .catch(err => console.error(`⚠️ Sync log append failed for delete ${type}/${id}: ${err.message}`));
 
-  console.log(`🧠 Deleted ${type} record: ${id}`);
-  return true;
+    console.log(`🧠 Deleted ${type} record: ${id}`);
+    return true;
+  });
 }
 
 /**
@@ -507,37 +533,31 @@ export async function getInboxLogById(id) {
   return getById('inbox', id);
 }
 
-// Serialize every inbox write (create/update/delete). create/update/remove are
-// each a whole-file read-modify-write of inbox.json, and the inbox has genuinely
-// concurrent same-file write paths in normal single-user operation: a capture
-// (create) immediately followed by background classification (update) on the
-// same entry, plus the boot recovery sweep. Without a lock, two such writes can
-// read the same baseline and the last save wins, dropping an entry — exactly the
-// lost-update the old JSONL appendFile path couldn't suffer. This is the
-// CLAUDE.md-sanctioned "serialize two write paths that mutate the same record"
-// case (mirrors brainJournal's storeMutex), NOT a competing-humans defense.
-const withInboxLock = createMutex();
+// The inbox's concurrent same-file write paths (a capture's create immediately
+// followed by a background-classification update on the same entry, plus the
+// boot recovery sweep) are serialized by create/update/remove's own
+// withStoreWriteLock — no separate inbox lock is needed.
 
 /**
  * Create inbox log entry. `capturedAt` is the user-facing capture time (kept
  * distinct from the sync `createdAt`/`updatedAt` clocks stamped by create()).
  */
 export async function createInboxLog(entry) {
-  return withInboxLock(() => create('inbox', { ...entry, capturedAt: entry.capturedAt || now() }));
+  return create('inbox', { ...entry, capturedAt: entry.capturedAt || now() });
 }
 
 /**
  * Update inbox log entry (partial merge — returns null if absent/tombstoned).
  */
 export async function updateInboxLog(id, updates) {
-  return withInboxLock(() => update('inbox', id, updates));
+  return update('inbox', id, updates);
 }
 
 /**
  * Delete inbox log entry (tombstones in place for sync convergence).
  */
 export async function deleteInboxLog(id) {
-  return withInboxLock(() => remove('inbox', id));
+  return remove('inbox', id);
 }
 
 /**
@@ -717,7 +737,7 @@ export const deleteBucket = (id) => remove('buckets', id);
  * Apply a remote record to a JSON store (last-writer-wins by updatedAt)
  */
 export async function applyRemoteRecord(type, id, record, op) {
-  return withRemoteLock(async () => {
+  return withStoreWriteLock(async () => {
     const data = await loadJsonStore(type);
 
     if (op === 'delete') {
@@ -779,7 +799,7 @@ export async function applyRemoteRecord(type, id, record, op) {
  * Returns the number of tombstones removed.
  */
 export async function pruneTombstones(type, cutoffMs) {
-  return withRemoteLock(async () => {
+  return withStoreWriteLock(async () => {
     const data = await loadJsonStore(type);
     let pruned = 0;
     for (const [id, record] of Object.entries(data.records)) {

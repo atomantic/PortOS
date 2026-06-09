@@ -59,6 +59,25 @@ describe('brainStorage tombstones', () => {
     expect(second).toBe(false); // already tombstoned → no-op, no extra sync entry
   });
 
+  it('serializes a local write against a concurrent remote apply on the same store (no lost update)', async () => {
+    // A local create and a peer apply both do whole-file read-modify-write on
+    // buckets.json. The shared withStoreWriteLock must serialize them so neither
+    // overwrites the other's record. Fire both without awaiting in between.
+    const localP = brainStorage.create('buckets', { name: 'LocalBucket' });
+    const remoteP = brainStorage.applyRemoteRecord(
+      'buckets', 'remote-bucket-1',
+      { name: 'RemoteBucket', updatedAt: ISO('2026-06-09'), originInstanceId: 'peer-x' },
+      'create',
+    );
+    const [local] = await Promise.all([localP, remoteP]);
+
+    brainStorage.invalidateAllCaches();
+    const all = await brainStorage.getAll('buckets');
+    // Both records must survive — a lost update would drop one.
+    expect(all.find((r) => r.id === local.id)?.name).toBe('LocalBucket');
+    expect(all.find((r) => r.id === 'remote-bucket-1')?.name).toBe('RemoteBucket');
+  });
+
   it('getRawRecords surfaces tombstones that getAll hides (sync reconcile path #1077)', async () => {
     const created = await brainStorage.create('ideas', { title: 'RawIdea', oneLiner: 'x' });
     await brainStorage.remove('ideas', created.id);

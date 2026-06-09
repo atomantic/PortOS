@@ -262,16 +262,23 @@ export async function up({ rootDir }) {
     journalsChanged, inboxCount,
   } = computeDailyLogInboxMigration(journalsStore, inboxRows, { instanceId, nowIso, bridgeMap, obsidianLocations });
 
-  if (outJournals && journalsChanged) {
-    await writeFile(journalsPath, JSON.stringify(outJournals, null, 2));
-  }
-
+  // ORDER MATTERS for crash-safety: write the DERIVED copies (Obsidian sidecar,
+  // re-keyed bridge map) BEFORE overwriting journals.json with the stripped
+  // records. journals.json is the only source of the inner uuids and the
+  // Obsidian fields; if we stripped it first and the process died before the
+  // sidecar/bridge writes landed, a rerun couldn't recover them (the data would
+  // be gone from the only copy). Writing the copies first means a crash at worst
+  // leaves journals.json un-stripped, which a rerun re-processes idempotently.
   if (outObsidian && obsidianExtracted > 0) {
     await writeFile(obsidianLocationsPath, JSON.stringify(outObsidian, null, 2));
   }
 
   if (outBridge && bridgeRemapped > 0) {
     await writeFile(bridgeMapPath, JSON.stringify(outBridge, null, 2));
+  }
+
+  if (outJournals && journalsChanged) {
+    await writeFile(journalsPath, JSON.stringify(outJournals, null, 2));
   }
 
   // Only write inbox.json + retire the legacy file when there was a legacy file
