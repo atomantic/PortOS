@@ -633,6 +633,31 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(idleIdx, 'generateIdleReviewTask must appear after generateMissionTasks').toBeGreaterThan(missionIdx);
   });
 
+  it('evaluateTasks orchestrates the spawnPriority* tiers in priority order', () => {
+    // evaluateTasks (cosTaskGenerator.js) decomposes each priority tier into a
+    // named helper (issue #1082). This pins that the orchestrator actually
+    // INVOKES each tier helper, in order — so a helper carrying an autonomy/idle
+    // fence can't drift out of the spawn path while the broader, module-scoped
+    // gate guards below still match its (now-orphaned) fence text and pass green.
+    const fnBody = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
+
+    const onDemandIdx = fnBody.indexOf('spawnPriority0OnDemand(ctx)');
+    const userIdx     = fnBody.indexOf('spawnPriority1UserTasks(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx)');
+    const queueIdx    = fnBody.indexOf('maybeQueueImprovementTasks(ctx)');
+    const missionIdx  = fnBody.indexOf('spawnPriority3Missions(ctx)');
+    const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx)');
+    const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx)');
+
+    expect(onDemandIdx, 'spawnPriority0OnDemand must be invoked').toBeGreaterThan(-1);
+    expect(userIdx, 'spawnPriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
+    expect(autoSysIdx, 'spawnPriority2AutoApproved must run after user tasks').toBeGreaterThan(userIdx);
+    expect(queueIdx, 'maybeQueueImprovementTasks must run after auto-approved').toBeGreaterThan(autoSysIdx);
+    expect(missionIdx, 'spawnPriority3Missions must run after improvement queueing').toBeGreaterThan(queueIdx);
+    expect(featureIdx, 'spawnPriority36FeatureAgents must run after missions').toBeGreaterThan(missionIdx);
+    expect(idleIdx, 'spawnPriority4IdleReview must run after feature agents').toBeGreaterThan(featureIdx);
+  });
+
   it('per-project cap defaults to global cap when unset', () => {
     // The fallback `state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents`
     // is the safety net for older state.json files that pre-date the
