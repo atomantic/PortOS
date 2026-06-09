@@ -1,12 +1,13 @@
 import { Router } from 'express';
-import { ToolkitHttpError } from '../internal/httpError.js';
+import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 
 export function createPromptsRoutes(promptsService, options = {}) {
   const router = Router();
-  // `ServerError` is injected by the host (PortOS passes its real ServerError
-  // so thrown errors normalize into `{ error, code, timestamp, context? }`).
-  // Defaults to the toolkit's own error class for standalone use.
-  const { asyncHandler = (fn) => fn, ServerError = ToolkitHttpError } = options;
+  // `asyncHandler`/`ServerError` are injected by the host (PortOS passes its
+  // real ServerError + asyncHandler so thrown errors normalize into
+  // `{ error, code, timestamp, context? }` and route to errorMiddleware).
+  // Standalone, the toolkit's own defaults serialize the same envelope.
+  const { asyncHandler = defaultAsyncHandler, ServerError = ToolkitHttpError } = options;
 
   router.get('/stages', asyncHandler(async (req, res) => {
     const stages = promptsService.getStages();

@@ -81,18 +81,37 @@ describe('issue-1084: toolkit routes emit the PortOS error envelope', () => {
   });
 });
 
-describe('issue-1084: standalone default (no injected ServerError)', () => {
-  it('falls back to ToolkitHttpError and Express 5 honors its status', async () => {
-    // No ServerError injected → routes throw ToolkitHttpError. With Express 5's
-    // built-in async error handling, the thrown error's `status` is honored.
-    const identityHandler = (fn) => fn;
+describe('issue-1084: standalone default (no injected asyncHandler/ServerError)', () => {
+  it('serializes the canonical JSON envelope via the toolkit defaults', async () => {
+    // No asyncHandler/ServerError injected → routes throw ToolkitHttpError and
+    // the toolkit's defaultAsyncHandler serializes the same envelope. Without
+    // it, Express 5's built-in handler would honor the status but render an
+    // HTML error page, dropping code/timestamp/context — assert the body, not
+    // just the status, so that regression can't slip back in.
     const providers = { getProviderById: vi.fn().mockResolvedValue(null) };
     const app = express();
     app.use(express.json());
-    app.use('/api/providers', createProvidersRoutes(providers, { asyncHandler: identityHandler }));
+    app.use('/api/providers', createProvidersRoutes(providers));
 
     const res = await request(app).get('/api/providers/ghost');
     expect(res.status).toBe(404);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(res.body).toMatchObject({ error: 'Provider not found', code: 'NOT_FOUND' });
+    expect(typeof res.body.timestamp).toBe('number');
+  });
+
+  it('standalone validation error carries context.details as JSON', async () => {
+    const runner = { createRun: vi.fn() };
+    const app = express();
+    app.use(express.json());
+    app.use('/api/runs', createRunsRoutes(runner));
+
+    const res = await request(app).post('/api/runs').send({ providerId: 'p1', prompt: 'hi', timeout: 'abc' });
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(res.body).toMatchObject({ error: 'Invalid run data', code: 'VALIDATION_ERROR' });
+    expect(res.body.context?.details).toBeDefined();
+    expect(runner.createRun).not.toHaveBeenCalled();
   });
 
   it('ToolkitHttpError derives code from status and stamps a timestamp', () => {

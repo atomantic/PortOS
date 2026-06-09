@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import { runSchema, validate } from '../validation.js';
-import { ToolkitHttpError } from '../internal/httpError.js';
+import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 
 export function createRunsRoutes(runnerService, options = {}) {
   const router = Router();
-  // `ServerError` is injected by the host (PortOS passes its real ServerError
-  // so thrown errors normalize into `{ error, code, timestamp, context? }`).
-  // Defaults to the toolkit's own error class for standalone use.
-  const { asyncHandler = (fn) => fn, io = null, ServerError = ToolkitHttpError } = options;
+  // `asyncHandler`/`ServerError` are injected by the host (PortOS passes its
+  // real ServerError + asyncHandler so thrown errors normalize into
+  // `{ error, code, timestamp, context? }` and route to errorMiddleware).
+  // Standalone, the toolkit's own defaults serialize the same envelope.
+  const { asyncHandler = defaultAsyncHandler, io = null, ServerError = ToolkitHttpError } = options;
 
   router.get('/', asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
