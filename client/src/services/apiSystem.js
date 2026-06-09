@@ -173,6 +173,7 @@ export const addPeer = (data) => request('/instances/peers', { method: 'POST', b
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'DELETE' });
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });
+export const reciprocatePeer = (id, options) => request(`/instances/peers/${id}/reciprocate`, { method: 'POST', ...options });
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
 export const getTailnetInfo = () => request('/instances/tailnet-suffix');

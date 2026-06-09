@@ -15,6 +15,7 @@
 
 ## Changed
 
+- **[issue-1070] Federation sync is now bidirectional from one switch** — turning on a sync category for a peer (Brain, Goals, Universe, etc.) now automatically asks that peer to sync the same category back, so you no longer have to set the toggle on both machines by hand. Since you typically own every federated machine, enabling once establishes two-way sync. The Sync Categories panel explains this inline, and a new **Make mutual** button pushes the current set to a peer that was offline during an earlier change (or was configured one-directionally before this existed). Peers on older versions that don't understand the request simply stay one-directional until you toggle again — nothing breaks.
 - **Songs: built-in alert stacks cleanly on mobile** — the "Built-in default" banner on the song page now stacks its label, description, and Refresh action vertically on narrow screens instead of cramming them onto one row, with full-width touch targets for the refresh/confirm buttons.
 - **[issue-1027] Songs: vocal takes remember their pitch analysis** — a recorded take now saves its tuner trace and color-match score so your accuracy isn't recomputed every time you reopen the song.
 - **[issue-1060] Cleaner test runs** — browser-dependent tests now run only under their own test environment, so the server test run no longer reports spurious failures from double-running them.

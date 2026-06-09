@@ -43,7 +43,7 @@ vi.mock('../lib/ports.js', () => ({
 
 // fetch is stubbed per-test in beforeEach and restored in afterEach
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import {
@@ -61,6 +61,8 @@ import {
   handleAnnounce,
   redactPeerForWire,
   sanitizePeerForClient,
+  applyReciprocalSync,
+  requestReciprocalSync,
   startPolling,
   stopPolling
 } from './instances.js';
@@ -533,6 +535,98 @@ describe('instances.js', () => {
 
       await updatePeer('peer-1', { host: 'bad!!host' });
       expect(disconnectFromPeer).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- Bidirectional sync reciprocation ---
+
+  describe('applyReciprocalSync', () => {
+    it('mirrors a peer\'s enabled categories onto our local record for that peer', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: false, goals: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed, peer } = await applyReciprocalSync('inst-A', { brain: true });
+
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.brain).toBe(true);
+      expect(peer.syncEnabled).toBe(true); // recomputed from the resulting map
+      expect(peer._reciprocalChanged).toBeUndefined(); // no transient marker leaks onto the record
+      // And the persisted payload must not carry any transient marker either.
+      const written = atomicWrite.mock.calls.at(-1)?.[1];
+      expect(written.peers[0]._reciprocalChanged).toBeUndefined();
+    });
+
+    it('is a no-op (changed:false) when our record already matches — the echo guard', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed } = await applyReciprocalSync('inst-A', { brain: true });
+
+      expect(changed).toBe(false);
+    });
+
+    it('returns changed:false for an unknown peer instanceId', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers: [] });
+      const { changed, peer } = await applyReciprocalSync('nope', { brain: true });
+      expect(changed).toBe(false);
+      expect(peer).toBeNull();
+    });
+
+    it('drops unknown/garbage category keys (only DEFAULT_SYNC_CATEGORIES keys applied)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { peer } = await applyReciprocalSync('inst-A', { brain: true, __proto__: true, bogus: true });
+
+      expect(peer.syncCategories.brain).toBe(true);
+      expect(peer.syncCategories.bogus).toBeUndefined();
+    });
+
+    it('ignores a non-object categories payload', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers: [] });
+      const { changed } = await applyReciprocalSync('inst-A', 'not-an-object');
+      expect(changed).toBe(false);
+    });
+  });
+
+  describe('requestReciprocalSync', () => {
+    it('POSTs our self instanceId + sanitized categories to the peer', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me-id', name: 'me' }, peers: [] });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await requestReciprocalSync(
+        { id: 'p1', address: '10.0.0.2', port: 5555, name: 'B' },
+        { brain: true, bogus: true }
+      );
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toContain('/api/instances/peers/sync-categories');
+      const body = JSON.parse(opts.body);
+      expect(body.instanceId).toBe('me-id');
+      expect(body.syncCategories).toEqual({ brain: true }); // bogus dropped
+    });
+
+    it('returns ok:false (not throw) when the peer 404s the endpoint (older version)', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me-id' }, peers: [] });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+      const result = await requestReciprocalSync(
+        { id: 'p1', address: '10.0.0.2', port: 5555, name: 'B' },
+        { brain: true }
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('http-404');
+    });
+
+    it('returns ok:false when we have no self identity', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      const result = await requestReciprocalSync({ id: 'p1', address: '10.0.0.2', port: 5555 }, { brain: true });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('no-self-identity');
     });
   });
 

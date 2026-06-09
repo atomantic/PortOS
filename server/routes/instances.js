@@ -95,6 +95,16 @@ const querySchema = z.object({
   path: z.string().startsWith('/api/', 'Path must start with /api/')
 });
 
+// Reciprocal sync request from a peer: it enabled `syncCategories` toward us
+// and asks us to mirror them so the sync is bidirectional. instanceId is the
+// announcing peer's identity (matched against our peer record).
+const reciprocalSyncSchema = z.object({
+  instanceId: z.string().guid(),
+  // `.unwrap()` strips the `.optional()` from the shared schema — the category
+  // map is required on this endpoint (an empty/absent map has nothing to mirror).
+  syncCategories: syncCategoriesSchema.unwrap()
+});
+
 // GET /api/instances — list self + all peers
 router.get('/', asyncHandler(async (req, res) => {
   const [self, peers, syncStatus] = await Promise.all([
@@ -237,6 +247,29 @@ router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
   const result = await instances.connectPeer(req.params.id);
   if (!result) throw new ServerError('Peer not found', { status: 404 });
   res.json(instances.sanitizePeerForClient(result));
+}));
+
+// POST /api/instances/peers/sync-categories — reciprocal-sync callback from a
+// peer. The peer enabled some categories toward us and is asking us to mirror
+// them so the sync is bidirectional. No :id — the peer is identified by the
+// instanceId in the body (we may not know its local-peer-id mapping).
+router.post('/peers/sync-categories', asyncHandler(async (req, res) => {
+  const data = reciprocalSyncSchema.parse(req.body);
+  const { changed, peer } = await instances.applyReciprocalSync(data.instanceId, data.syncCategories);
+  // 200 even when the peer is unknown to us / nothing changed — this is a
+  // best-effort convergence signal, not a command that must succeed.
+  res.json({ applied: changed, peer: peer ? instances.sanitizePeerForClient(peer) : null });
+}));
+
+// POST /api/instances/peers/:id/reciprocate — explicit "make all enabled
+// categories mutual" for an existing (likely one-directional) peer. Pushes our
+// current category map to the peer so it enables the same toward us.
+router.post('/peers/:id/reciprocate', asyncHandler(async (req, res) => {
+  const peers = await instances.getPeers();
+  const peer = peers.find(p => p.id === req.params.id);
+  if (!peer) throw new ServerError('Peer not found', { status: 404 });
+  const result = await instances.requestReciprocalSync(peer, peer.syncCategories || {});
+  res.json(result);
 }));
 
 // POST /api/instances/peers/:id/probe — force immediate probe

@@ -295,6 +295,11 @@ export async function updatePeer(id, updates) {
   // peer object) and consumed after the lock releases.
   const turnedOnKinds = [];
   let backfillPeerInstanceId = null;
+  // When the user changes which categories sync toward this peer, mirror the
+  // change back so the sync is bidirectional (the user owns all machines). We
+  // reciprocate the FULL resulting category map, not just the delta, so the
+  // peer converges even if an earlier reciprocate was missed (peer offline).
+  let reciprocateCategories = null;
   const result = await withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
@@ -313,6 +318,9 @@ export async function updatePeer(id, updates) {
       }
       peer.syncCategories = { ...prev, ...incoming };
       if (turnedOnKinds.length > 0) backfillPeerInstanceId = peer.instanceId || null;
+      // Reciprocate the resulting map so the peer enables the same categories
+      // toward us. Only when we know the peer's identity (post-handshake).
+      if (peer.instanceId) reciprocateCategories = { ...peer.syncCategories };
     }
     // Optional proxy credential. `null` (or both fields blank) clears it; a
     // valid object replaces it; malformed input (sanitizePeerAuth → undefined)
@@ -397,6 +405,14 @@ export async function updatePeer(id, updates) {
       }
     }).catch((err) => {
       console.log(`⚠️ peer: backfill-subscribe after category toggle failed: ${err.message}`);
+    });
+  }
+  // Mirror the category change back to the peer so sync is bidirectional.
+  // Fire-and-forget — a peer that's offline / on an older version just stays
+  // one-directional until the next toggle (or the "make mutual" backfill).
+  if (reciprocateCategories && result) {
+    requestReciprocalSync(result, reciprocateCategories).catch((err) => {
+      console.log(`⚠️ peer: reciprocal sync request failed: ${err.message}`);
     });
   }
   return result;
@@ -673,6 +689,107 @@ export async function connectPeer(id) {
   await announceSelf(peer);
   const probed = await probePeer(peer);
   return probed;
+}
+
+// --- Bidirectional sync reciprocation ---
+//
+// A single user commonly owns every federated machine and expects enabling a
+// sync category toward a peer to make it two-way without also toggling it on
+// the peer by hand. Sync is pull-based per direction, so enabling category C
+// toward peer B only makes US pull B's C. For B to pull OUR C, B must enable C
+// toward US. `requestReciprocalSync` asks B to do exactly that; the peer side
+// is `applyReciprocalSync`, invoked by the POST /sync-categories route.
+
+// Keep only the keys DEFAULT_SYNC_CATEGORIES defines, coerced to booleans, so a
+// peer can never inject unknown/garbage category flags onto our peer record.
+function sanitizeSyncCategories(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const out = {};
+  for (const key of Object.keys(DEFAULT_SYNC_CATEGORIES)) {
+    if (typeof input[key] === 'boolean') out[key] = input[key];
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * Receiver side of reciprocation: a peer is telling us it enabled `categories`
+ * toward us and is asking us to mirror them so the sync is bidirectional.
+ * Find the local peer record for the announcing instance and apply the same
+ * category flags. Returns `{ changed, peer }`; `changed` is false when our
+ * record already matched (the echo guard — the caller never re-reciprocates,
+ * but this keeps a misbehaving peer from churning our state).
+ */
+export async function applyReciprocalSync(instanceId, categories) {
+  const sanitized = sanitizeSyncCategories(categories);
+  if (!sanitized) return { changed: false, peer: null };
+  const turnedOnKinds = [];
+  let backfillInstanceId = null;
+  let changed = false;
+  const peer = await withData(async (data) => {
+    const entry = data.peers.find(p => p.instanceId === instanceId);
+    if (!entry) return null;
+    const prev = entry.syncCategories || { ...DEFAULT_SYNC_CATEGORIES };
+    const next = { ...prev, ...sanitized };
+    // No-op when nothing actually flips — the echo guard.
+    if (Object.keys(next).every(k => next[k] === prev[k])) return entry;
+    for (const [cat, kind] of [['universe', 'universe'], ['pipeline', 'series']]) {
+      if (prev[cat] !== true && next[cat] === true) turnedOnKinds.push(kind);
+    }
+    entry.syncCategories = next;
+    entry.syncEnabled = Object.values(next).some(Boolean);
+    if (turnedOnKinds.length > 0) backfillInstanceId = entry.instanceId || null;
+    changed = true;
+    instanceEvents.emit('peers:updated', data.peers);
+    return entry;
+  });
+  if (!peer) return { changed: false, peer: null };
+  // Mirror updatePeer's backfill-subscribe so a reciprocally-enabled
+  // per-record category (universe/pipeline) pushes our existing records too.
+  if (changed && turnedOnKinds.length > 0 && backfillInstanceId) {
+    import('./sharing/peerSync.js').then(async ({ autoSubscribePeerToAllRecords }) => {
+      for (const kind of turnedOnKinds) {
+        await autoSubscribePeerToAllRecords(backfillInstanceId, kind).catch((err) => {
+          console.log(`⚠️ peer: reciprocal backfill-subscribe ${kind} failed: ${err.message}`);
+        });
+      }
+    }).catch((err) => console.log(`⚠️ peer: reciprocal backfill-subscribe failed: ${err.message}`));
+  }
+  if (changed) console.log(`🔁 Reciprocal sync applied for peer ${peer.name}: ${Object.keys(sanitized).filter(k => sanitized[k]).join(',') || 'none'}`);
+  return { changed, peer };
+}
+
+/**
+ * Sender side: ask `peer` to enable `categories` toward us (mirror what we just
+ * enabled toward them). Best-effort and fire-and-forget at the call site — a
+ * peer that's offline or on an older version (404s the endpoint) just stays
+ * one-directional until the next toggle. Returns `{ ok, reason }`.
+ */
+export async function requestReciprocalSync(peer, categories) {
+  const self = await getSelf();
+  if (!self?.instanceId) return { ok: false, reason: 'no-self-identity' };
+  const sanitized = sanitizeSyncCategories(categories);
+  if (!sanitized) return { ok: false, reason: 'no-categories' };
+  const url = `${peerBaseUrl(peer)}/api/instances/peers/sync-categories`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await peerFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized }),
+      signal: controller.signal
+    }, peer);
+    if (res.ok) {
+      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${Object.keys(sanitized).filter(k => sanitized[k]).join(',') || 'none'}`);
+      return { ok: true };
+    }
+    // 404 = peer predates this endpoint; not an error worth surfacing loudly.
+    return { ok: false, reason: `http-${res.status}` };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function markDirection(peerId, direction) {

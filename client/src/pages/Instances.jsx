@@ -14,7 +14,7 @@ import Pill from '../components/ui/Pill';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
-  removePeer, connectPeer, probePeer, getTailnetInfo, provisionTailnetCert,
+  removePeer, connectPeer, reciprocatePeer, probePeer, getTailnetInfo, provisionTailnetCert,
   getNetworkExposure,
   listPeerSubscriptions,
 } from '../services/api';
@@ -531,6 +531,17 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
     onRefresh();
   };
 
+  // Explicitly push our current category map to the peer so it enables the same
+  // toward us. Toggling already auto-reciprocates; this is the catch-up button
+  // for peers configured one-directionally before auto-reciprocate existed, or
+  // when the peer was offline during an earlier toggle.
+  const makeMutual = async () => {
+    const result = await reciprocatePeer(peer.id, { silent: true }).catch(() => null);
+    if (result?.ok) toast.success(`Asked ${peer.name} to sync the same categories back`);
+    else toast.error(`Couldn't reach ${peer.name} to make sync mutual — try again when it's online`);
+    onRefresh();
+  };
+
   return (
     <div className="mt-2 pt-2 border-t border-port-border/50">
       <button
@@ -549,7 +560,21 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
 
       {expanded && (
         <div className="mt-2 space-y-1">
-          <div className="flex justify-end gap-2 mb-1.5">
+          <p className="text-[10px] text-gray-600 mb-1.5 leading-snug">
+            Enabling a category syncs it both ways — we ask {peer.name || 'the peer'} to
+            sync the same back automatically.
+          </p>
+          <div className="flex items-center justify-end gap-2 mb-1.5">
+            {peer.instanceId && enabledCount > 0 && (
+              <button
+                onClick={makeMutual}
+                className="flex items-center gap-1 mr-auto text-[10px] text-gray-500 hover:text-port-accent transition-colors"
+                title="Push the current categories to this peer so it syncs them back (use if it was offline during a change)"
+              >
+                <ArrowLeftRight size={10} />
+                Make mutual
+              </button>
+            )}
             <button
               onClick={() => toggleAll(true)}
               className="text-[10px] text-port-accent hover:text-port-accent/80 transition-colors"
