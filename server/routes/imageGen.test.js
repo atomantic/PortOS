@@ -914,5 +914,27 @@ describe('Image Gen Routes', () => {
       // The variant PNG and its sidecar are both written.
       expect(mockWriteFile).toHaveBeenCalledTimes(2);
     });
+
+    it('anchors the variant group at the root original when de-sparkling an already-cleaned image', async () => {
+      // De-sparkling a cleaned/regenerated variant must stamp the ROOT
+      // filename as cleanedFrom (not the clicked variant), or the new render
+      // orphans from the family's variant switch — same rule as /clean and
+      // runLightRegen. The source sidecar already carries a cleanedFrom.
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({ path: '', metadata: { cleanedFrom: 'root.png' } });
+      mockReadFile.mockImplementation(async () => Buffer.from('png-bytes'));
+      mockRemoveGeminiSparkle.mockResolvedValue({
+        removed: true,
+        data: Buffer.from('clean-bytes'),
+        width: 800,
+        height: 1200,
+        bbox: { left: 730, top: 1140, width: 48, height: 48 },
+      });
+      const response = await request(app)
+        .post('/api/image-gen/root_clean-aggressive.png/remove-watermark')
+        .send({});
+      expect(response.status).toBe(200);
+      expect(response.body.cleanedFrom).toBe('root.png');
+      expect(response.body.filename).toBe('root_clean-aggressive_no-watermark.png');
+    });
   });
 });

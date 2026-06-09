@@ -90,6 +90,25 @@ describe('computeImageVariantGroup', () => {
     expect(result.active.label).toBe('Regenerated');
   });
 
+  it('labels a de-sparkled variant "De-sparkled" (grouped via cleanedFrom)', () => {
+    const orig = img('a.png');
+    const desparkled = img('a_no-watermark.png', { cleanedFrom: 'a.png', watermarkRemoved: true });
+    const result = computeImageVariantGroup(orig, [orig, desparkled]);
+    expect(result.group.map((g) => g.label)).toEqual(['Original', 'De-sparkled']);
+  });
+
+  it('labels a de-sparkled variant correctly through the real normalizeImage path', () => {
+    // Same guard as the regen normalize-path test: the gallery feeds
+    // normalizeImage output (not raw sidecars) into computeImageVariantGroup,
+    // so the `watermarkRemoved` discriminator must survive normalization or the
+    // variant mislabels as "Cleaned".
+    const orig = normalizeImage({ filename: 'a.png', prompt: 'x' });
+    const desparkled = normalizeImage({ filename: 'a_no-watermark.png', cleanedFrom: 'a.png', watermarkRemoved: true });
+    const result = computeImageVariantGroup(desparkled, [orig, desparkled]);
+    expect(result.group.map((g) => g.label)).toEqual(['Original', 'De-sparkled']);
+    expect(result.active.label).toBe('De-sparkled');
+  });
+
   it('returns null when only the original exists (no clean siblings yet — no toggle needed)', () => {
     const orig = img('a.png');
     const unrelated = img('b.png');

@@ -26,3 +26,10 @@ independently.
   `autoFileCleanedToSourceCollections`. Now a rule-of-three candidate; skipped
   here because folding it in would refactor two pre-existing routes outside the
   visible-watermark task's scope.
+- [ ] Migrate `client/src/pages/ImageGen.jsx`'s hand-rolled `handleClean` /
+  `handleRemoveWatermark` onto the shared `useMediaPreviewActions` hook (the
+  other three gallery surfaces — MediaHistory, MediaCollectionDetail,
+  UniverseBuilder — already use it). ImageGen predates the hook for its clean
+  handler too; consolidating avoids the "identical copies drift" the hook's
+  docblock exists to prevent. Use `onCleanComplete: (v) => setGallery(g => [v,
+  ...g.filter(x => x.filename !== v.filename)])`.

@@ -53,6 +53,13 @@ export function computeImageVariantGroup(item, items) {
       group.push({ label: 'Regenerated', item: c });
       continue;
     }
+    // Visible-watermark removal (Gemini sparkle) also reuses `cleanedFrom` for
+    // grouping but is an inpaint, not a clean — label it to match the lightbox
+    // lineage ("Watermark removed from …") instead of falling through to "Cleaned".
+    if (c.watermarkRemoved) {
+      group.push({ label: 'De-sparkled', item: c });
+      continue;
+    }
     const levelTag = c.cleanLevel ? ` (${c.cleanLevel})` : '';
     group.push({ label: `Cleaned${levelTag}`, item: c });
   }
