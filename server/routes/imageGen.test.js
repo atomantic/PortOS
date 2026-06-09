@@ -3,6 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import imageGenRoutes from './imageGen.js';
+import * as fileUtils from '../lib/fileUtils.js';
+import * as regen from '../services/imageGen/regen.js';
 
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
@@ -519,7 +521,7 @@ describe('Image Gen Routes', () => {
       expect(response.body.path).toBe('/data/images/avatar.png');
     });
 
-    it('should accept empty body for default avatar', async () => {
+    it('should accept empty body for default avatar and return a response shape', async () => {
       imageGen.generateAvatar.mockResolvedValue({
         generationId: 'gen-004',
         filename: 'default.png',
@@ -531,6 +533,9 @@ describe('Image Gen Routes', () => {
         .send({});
 
       expect(response.status).toBe(200);
+      expect(response.body.generationId).toBe('gen-004');
+      expect(response.body.filename).toBe('default.png');
+      expect(response.body.path).toBe('/data/images/default.png');
     });
   });
 
@@ -845,6 +850,44 @@ describe('Image Gen Routes', () => {
         .send({});
       expect(response.status).toBe(404);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('enqueues a regen job and returns the queued response shape', async () => {
+      // Arrange — stand in for the real filesystem and regen helpers.
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({
+        path: '/fake/gallery/source.png.json',
+        metadata: { modelId: 'flux-dev', prompt: 'a robot' },
+      });
+      const readDimsSpy = vi.spyOn(regen, 'readImageDimensions')
+        .mockResolvedValueOnce({ width: 1024, height: 1024 });
+      const resolveBackendSpy = vi.spyOn(regen, 'resolveRegenBackend')
+        .mockResolvedValueOnce({ available: true, model: { id: 'flux-dev' }, pythonPath: '/fake/venv/python' });
+      const buildParamsSpy = vi.spyOn(regen, 'buildRegenParams')
+        .mockReturnValueOnce({ kind: 'image', regenJob: true, filename: 'source.png' });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'regen-job-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ strength: 0.25 });
+
+      expect(response.status).toBe(200);
+      // Response must carry the queuedImageResponse shape: jobId, generationId,
+      // filename, path, mode, model, status, position.
+      expect(response.body.jobId).toBe('regen-job-001');
+      expect(response.body.generationId).toBe('regen-job-001');
+      expect(response.body.filename).toBe('regen-job-001.png');
+      expect(response.body.mode).toBe('local');
+      expect(response.body.model).toBe('flux-dev');
+      expect(response.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+      expect(buildParamsSpy).toHaveBeenCalledWith(expect.objectContaining({ strength: 0.25 }));
+
+      resolveGallerySpy.mockRestore();
+      readDimsSpy.mockRestore();
+      resolveBackendSpy.mockRestore();
+      buildParamsSpy.mockRestore();
     });
   });
 });

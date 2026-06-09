@@ -44,6 +44,8 @@ import { runPromptRefineRaw, trimChanges } from './refineHelpers.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
+import { extractCanonFromProse } from '../universeCanon.js';
+import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { renderCategoriesForPrompt, renderCompositesForPrompt, renderCanonForPrompt, renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 
@@ -1241,6 +1243,77 @@ export async function commitEpisodesToIssues(seriesId, seasonId, episodes = [], 
     created.push(issue);
   }
   return created;
+}
+
+/**
+ * Collapse `extractCanonFromProse` result counts into { characters, places, objects }.
+ * Mirrors the `countExtractedCanon` helper in the pipeline route.
+ */
+function countExtractedCanon(results) {
+  return {
+    characters: results.characters?.extracted?.length || 0,
+    places: results.places?.extracted?.length || 0,
+    objects: results.objects?.extracted?.length || 0,
+  };
+}
+
+/**
+ * Post-commit canon extraction for season-episode generation. Called after
+ * commitEpisodesToIssues succeeds to run continuity extraction on the newly
+ * committed episode corpus. Non-fatal: episode creation already succeeded, so
+ * extraction failure must not invalidate the user's accepted breakdown.
+ *
+ * Orphan series (no universeId) and empty episode corpora skip extraction and
+ * return `null`. On success returns
+ * `{ characters, places, objects, universe }` (the `bibleExtracted` shape the
+ * route sends down to the client).
+ *
+ * @param {object} opts
+ * @param {object}         opts.series          - full series record (preloaded by caller)
+ * @param {object[]}       opts.episodes        - committed episode list from generateSeasonEpisodes
+ * @param {string|undefined} opts.providerOverride - explicit provider override from client body
+ * @param {string|undefined} opts.modelOverride  - explicit model override from client body
+ * @returns {Promise<{characters,places,objects,universe}|null>}
+ */
+export async function extractEpisodeCanon({ series, episodes, providerOverride, modelOverride }) {
+  const corpus = episodes
+    .map((ep) => `## E${ep.number} — ${ep.title}\n\n${ep.logline || ''}\n\n${ep.synopsis || ''}`.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  if (!corpus.trim() || !series?.universeId) return null;
+
+  // Fall back to the series' configured LLM when the client doesn't pass an
+  // explicit override — matches the extract-canon and extract-scenes routes so
+  // continuity extraction honors the provider/model picked in the series header
+  // instead of the global active provider. A model id is provider-specific, so
+  // only inherit the series model when the effective provider is still the series
+  // provider; an override that switches providers without naming a model leaves it
+  // blank so the new provider's default resolves.
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: providerOverride,
+    overrideModel: modelOverride,
+  });
+
+  // Stamp new inserts as series-extracted (autoLock + sourceSeriesId) so
+  // continuity-derived canon survives later AI refines and stays attributable
+  // to this series. Matches the pre-B.4 series-side extract semantics.
+  const extractRes = await extractCanonFromProse(series.universeId, {
+    corpus,
+    providerOverride: provider,
+    modelOverride: model,
+    parallel: true,
+    autoLock: true,
+    sourceSeriesId: series.id,
+  }).catch((err) => {
+    console.warn(`⚠️ Continuity extraction failed for series ${series.id}: ${err.message}`);
+    return null;
+  });
+  if (!extractRes) return null;
+
+  return {
+    ...countExtractedCanon(extractRes.results),
+    universe: extractRes.universe,
+  };
 }
 
 /**

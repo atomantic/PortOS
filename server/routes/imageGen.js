@@ -11,22 +11,21 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { copyFile, unlink } from 'fs/promises';
-import { randomUUID } from 'crypto';
+import { unlink, stat } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
-import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '../services/imageGen/index.js';
+import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
 import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
 import { inspectModelCache } from '../lib/hfCache.js';
-import { startHfDownloadStream } from '../lib/sseDownload.js';
+import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import {
   REQUIRED_PACKAGES, detectPython, installPackages,
   createVenv, isAllowedPython, pipNameFor,
@@ -34,19 +33,16 @@ import {
   detectArm64Python, HOST_ARCH, probePythonHealth,
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
+import { prepareGenerateParams } from '../services/imageGen/prepareParams.js';
+import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { join } from 'node:path';
-import { readFile, writeFile, stat } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
-import { cleanImageBuffer } from '../lib/imageClean.js';
-import { removeCornerWatermark } from '../lib/imageWatermark.js';
 import {
   resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
   REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX,
-  resolveRegenStrengthDefault, applyLightRegen, computePixelDelta,
+  resolveRegenStrengthDefault,
 } from '../services/imageGen/regen.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
-import { listCollections, addItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
-import { itemKey } from '../lib/mediaItemKey.js';
 
 const router = Router();
 
@@ -226,129 +222,11 @@ const queuedImageResponse = ({ jobId, position, status, mode, model }) => ({
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
-  // Resolve init image source: uploaded file > gallery filename. The local
-  // service double-checks that the path stays under PATHS.images.
-  let initImagePath = null;
-  const uploadedTempPaths = [];
-  const initUpload = req.files?.initImage;
-  const referenceImagePaths = [];
-  const referenceImageStrengths = [];
-  // Pair strengths by PACK position (post-filter), not slot position — the
-  // client renumbers populated slots into `referenceImage1..N` and sends a
-  // parallel `referenceStrengths` array sized N. A curl user could leave a
-  // gap (`referenceImage2` + `referenceImage4` only); the strength at index 0
-  // still pairs with the first surviving upload in slot order.
-  const referenceUploads = REFERENCE_IMAGE_FIELDS
-    .map((field) => req.files?.[field])
-    .filter(Boolean)
-    .map((upload, packedIndex) => ({ upload, strength: data.referenceStrengths?.[packedIndex] }));
-
-  // Best-effort cleanup of every multer-staged file currently on `req.files`.
-  // The multipart parser writes uploads to `os.tmpdir()` as they stream in,
-  // so a 400 thrown from validation BEFORE we've registered the `res.on('close')`
-  // sweep would otherwise leak those temp files. Call this from any pre-stage
-  // throw site (FLUX.2-only gate, non-local-backend gate).
-  const cleanupReqFilesTemp = () => {
-    if (!req.files) return;
-    for (const f of Object.values(req.files)) {
-      if (f?.path) unlink(f.path).catch(() => {});
-    }
-  };
-
-  // Resolve the effective backend BEFORE staging reference uploads — only the
-  // local FLUX.2 runner consumes `referenceImagePaths`; an `external` or `codex`
-  // request that uploaded refs would otherwise stage files under
-  // `PATHS.imageRefs` and write sidecar metadata claiming references were used,
-  // while the actual generation silently ignored them. (Reading settings here
-  // is cheap — it's already read again below for the per-mode dispatch.)
-  const settings = await getSettings();
-  const mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
-  // Resolve cleaners ONCE at the route layer so all three dispatch paths
-  // (synchronous external, codex queue, local queue) see the same values.
-  // Stamp onto `data` so they flow through the spread-into-params calls
-  // below verbatim.
-  const cleaners = resolveImageCleaners(data, settings, mode);
-  data.cleanC2PA = cleaners.cleanC2PA;
-  data.denoise = cleaners.denoise;
-  delete data.autoClean; // legacy field — already mapped into both flags above
-
-  // Multi-reference is a FLUX.2-only, local-backend-only feature — local.js's
-  // buildArgs only emits --reference-images/--reference-strengths inside the
-  // isFlux2 branch, and codex/external backends don't read these fields at all.
-  // Reject up-front rather than copying the uploads to PATHS.imageRefs and
-  // silently dropping them downstream (which would orphan files on disk and
-  // produce metadata sidecars that lie about how the render was conditioned).
-  if (referenceUploads.length) {
-    if (mode !== IMAGE_GEN_MODE.LOCAL) {
-      cleanupReqFilesTemp();
-      throw new ServerError(
-        'Reference images are only supported for local FLUX.2 renders',
-        { status: 400, code: 'REFERENCE_IMAGES_LOCAL_ONLY' },
-      );
-    }
-    const candidate = getImageModels().find((m) => m.id === data.modelId)
-      ?? getImageModels().find((m) => m.id === 'dev')
-      ?? getImageModels()[0];
-    if (!isFlux2(candidate)) {
-      cleanupReqFilesTemp();
-      throw new ServerError(
-        'Reference images are only supported for FLUX.2 models',
-        { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
-      );
-    }
-  }
-
-  if (initUpload) await ensureDir(PATHS.images);
-  if (referenceUploads.length) await ensureDir(PATHS.imageRefs);
-  if (initUpload) {
-    // Trust the validated mimetype from the fileFilter — picking the ext
-    // off the original filename can mismatch the bytes (e.g. HEIC saved
-    // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
-    const ext = MIME_TO_EXT[(initUpload.mimetype || '').toLowerCase()] || '.png';
-    const initFilename = `init-${randomUUID()}${ext}`;
-    initImagePath = join(PATHS.images, initFilename);
-    await copyFile(initUpload.path, initImagePath);
-    uploadedTempPaths.push(initUpload.path);
-  } else if (data.initImageFile) {
-    const resolved = resolveGalleryImage(data.initImageFile);
-    if (!resolved) {
-      throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });
-    }
-    initImagePath = resolved;
-  }
-  // Multi-reference editing (FLUX.2). Walk packed slot entries in submit
-  // order — each contributes a path + its parallel strength. Empty slots
-  // are filtered out above so the runner sees `referenceImagePaths: [p1, ...]`
-  // and aligns strengths by index.
-  for (const { upload, strength } of referenceUploads) {
-    const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
-    const refFilename = `ref-${randomUUID()}${ext}`;
-    const refPath = join(PATHS.imageRefs, refFilename);
-    await copyFile(upload.path, refPath);
-    uploadedTempPaths.push(upload.path);
-    referenceImagePaths.push(refPath);
-    // Default to 1.0 when the client didn't send a parallel strength entry,
-    // matching the "full influence" intent of an uploaded reference.
-    referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
-  }
-  // Strip the route-only fields — providers expect normalized `…Path(s)`.
-  delete data.initImageFile;
-  delete data.referenceStrengths;
-  if (initImagePath) data.initImagePath = initImagePath;
-  if (referenceImagePaths.length) {
-    data.referenceImagePaths = referenceImagePaths;
-    data.referenceImageStrengths = referenceImageStrengths;
-  }
-  // Empty prompt is allowed for i2i / local / external, but Codex text-to-image
-  // (no init image) still needs one — reject synchronously here so direct API
-  // callers get a 400 instead of a 200-then-async-job-failure. Mirrors the guard
-  // in codex.js and the client's codexNeedsPrompt gate.
-  if (mode === IMAGE_GEN_MODE.CODEX && !initImagePath && !data.prompt?.trim()) {
-    throw new ServerError('Prompt is required for Codex text-to-image', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (data.guidance == null && data.cfgScale != null) {
-    data.guidance = data.cfgScale;
-  }
+  const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
+    data,
+    files: req.files,
+    referenceImageFields: REFERENCE_IMAGE_FIELDS,
+  });
 
   // Multer's tmp upload is no longer needed once we've copied it into
   // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
@@ -384,7 +262,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
         mode: IMAGE_GEN_MODE.CODEX,
         codexPath: c.codexPath,
         model: c.model,
-        ...data,
+        ...params,
       },
     });
     return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: c.model || null }));
@@ -398,21 +276,21 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // Reject a typo'd modelId synchronously rather than enqueueing a doomed
     // job. When omitted, fall through to the default ('dev'-ish) — the
     // worker does the same lookup so behavior stays consistent.
-    if (data.modelId && !allModels.some((m) => m.id === data.modelId)) {
+    if (params.modelId && !allModels.some((m) => m.id === params.modelId)) {
       throw new ServerError(
-        `Unknown modelId: ${data.modelId}`,
+        `Unknown modelId: ${params.modelId}`,
         { status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL' },
       );
     }
-    const selectedModel = allModels.find((m) => m.id === data.modelId)
+    const selectedModel = allModels.find((m) => m.id === params.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
     // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
     // source image. Reject a text-only submission up-front rather than
-    // enqueueing a job that crashes deep inside diffusers. `data.initImagePath`
+    // enqueueing a job that crashes deep inside diffusers. `params.initImagePath`
     // is already populated above from either an uploaded `initImage` or a
     // gallery `initImageFile`.
-    if (isEditOnly(selectedModel) && !data.initImagePath) {
+    if (isEditOnly(selectedModel) && !params.initImagePath) {
       throw new ServerError(
         `${selectedModel.name || selectedModel.id} is an image-edit model — it requires a source image. Upload an init image to use it.`,
         { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
@@ -426,7 +304,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     }
     const queued = enqueueJob({
       kind: 'image',
-      params: { pythonPath: py, ...data },
+      params: { pythonPath: py, ...params },
     });
     // Resolve the effective model the same way the validation block above
     // does so the response reflects the actual fallback chain (caller
@@ -434,10 +312,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     return res.json(queuedImageResponse({
       ...queued,
       mode: IMAGE_GEN_MODE.LOCAL,
-      model: selectedModel?.id || data.modelId || 'dev',
+      model: selectedModel?.id || params.modelId || 'dev',
     }));
   }
-  res.json(await imageGen.generateImage(data));
+  res.json(await imageGen.generateImage(params));
 }));
 
 router.post('/avatar', asyncHandler(async (req, res) => {
@@ -588,78 +466,8 @@ router.post('/:filename/visibility', asyncHandler(async (req, res) => {
 router.post('/:filename/clean', asyncHandler(async (req, res) => {
   const filename = req.params.filename;
   local.assertGalleryFilename(filename);
-
-  const sourcePath = join(PATHS.images, filename);
-  const [buffer, { metadata: sourceMeta }] = await Promise.all([
-    readFile(sourcePath).catch((err) => {
-      if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
-      throw err;
-    }),
-    local.readImageSidecar(filename),
-  ]);
-
-  const result = await cleanImageBuffer(buffer);
-  if (result.format !== 'png') {
-    throw new ServerError('Gallery images must be PNG', { status: 400, code: 'UNSUPPORTED_FORMAT' });
-  }
-
-  // The `_clean-aggressive` filename suffix and `cleanLevel: 'aggressive'`
-  // sidecar field survive the light/aggressive collapse so already-cleaned
-  // images on disk keep round-tripping through the gallery unchanged. A future
-  // rename to `_cleaned.png` would need a backfill migration.
-  const base = filename.slice(0, -'.png'.length);
-  const outFilename = `${base}_clean-aggressive.png`;
-  const outPath = join(PATHS.images, outFilename);
-  const sidecarPath = join(PATHS.images, `${base}_clean-aggressive.metadata.json`);
-
-  const createdAt = new Date().toISOString();
-  // Strip `hidden` so a clean of a hidden source still surfaces in the gallery
-  // — cleaning is a deliberate user action that implies wanting to see the result.
-  // Strip `filename`/`id` so listGallery's `...metadata` spread doesn't overwrite
-  // the disk-derived filename for the cleaned copy with the source's filename.
-  const { hidden: _hidden, filename: _srcFilename, id: _srcId, ...sourceMetaForCleaned } = sourceMeta;
-  const cleanedMeta = {
-    ...sourceMetaForCleaned,
-    createdAt,
-    cleanedFrom: filename,
-    cleanLevel: 'aggressive',
-    c2paStripped: result.c2paStripped,
-  };
-
-  await Promise.all([
-    writeFile(outPath, result.data),
-    writeFile(sidecarPath, JSON.stringify(cleanedMeta, null, 2)),
-  ]);
-
-  // Auto-file the cleaned copy into every collection that contained the
-  // source. Without this, users who built a collection around an original
-  // would have to manually re-add the cleaned variant — the prior behavior
-  // surprised users (cleaned image vanished from "their" view). Best-effort:
-  // a collection-add failure must not fail the clean itself. ERR_DUPLICATE
-  // is silently swallowed so re-cleans of an already-filed pair are no-ops.
-  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
-    console.warn(`⚠️ Auto-file cleaned ${outFilename} → source collections failed: ${err?.message || err}`);
-    return [];
-  });
-
-  console.log(`🧼 Cleaned ${filename} → ${outFilename} (${result.sizeBefore}B → ${result.sizeAfter}B, c2pa=${result.c2paStripped}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
-
-  // sourceMeta first so explicit fields below win on key collisions (the
-  // cleaned copy's createdAt must reflect the cleaning, not the original).
-  res.json({
-    ...sourceMetaForCleaned,
-    filename: outFilename,
-    path: `/data/images/${outFilename}`,
-    createdAt,
-    sizeBefore: result.sizeBefore,
-    sizeAfter: result.sizeAfter,
-    sizeBytes: result.sizeAfter,
-    width: result.width,
-    height: result.height,
-    cleanedFrom: filename,
-    cleanLevel: 'aggressive',
-    c2paStripped: result.c2paStripped,
-  });
+  const { metadata: sourceMeta } = await local.readImageSidecar(filename);
+  res.json(await applyImageClean({ filename, sourceMeta }));
 }));
 
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
@@ -673,142 +481,9 @@ router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
   const filename = req.params.filename;
   local.assertGalleryFilename(filename);
   const body = validateRequest(removeWatermarkSchema, req.body || {});
-
-  const sourcePath = join(PATHS.images, filename);
-  const [buffer, { metadata: sourceMeta }] = await Promise.all([
-    readFile(sourcePath).catch((err) => {
-      if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
-      throw err;
-    }),
-    local.readImageSidecar(filename),
-  ]);
-
-  const result = await removeCornerWatermark(buffer, { size: body.size, region: body.region });
-
-  const base = filename.slice(0, -'.png'.length);
-  const outFilename = `${base}_nowatermark.png`;
-  const outPath = join(PATHS.images, outFilename);
-  const sidecarPath = join(PATHS.images, `${base}_nowatermark.metadata.json`);
-  // Anchor the variant group at the root original (same rule as /clean):
-  // de-watermarking a cleaned/regenerated variant groups under the root.
-  const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
-    ? sourceMeta.cleanedFrom : filename;
-  const createdAt = new Date().toISOString();
-  // Strip hidden/filename/id so listGallery's `...metadata` spread doesn't
-  // overwrite the disk-derived filename or re-hide the deliberate variant. Also
-  // drop the regen lineage fields: de-watermarking a REGENERATED source would
-  // otherwise inherit `regenerated:true` + stale fidelity numbers, and both the
-  // lightbox lineage (`describeCleanedLineage`) and variant grouping check
-  // `regenerated` BEFORE `watermarkRemoved` — so the variant would mislabel as
-  // "Regenerated … % changed" instead of "Watermark removed from …".
-  const {
-    hidden: _hidden, filename: _srcFilename, id: _srcId,
-    regenerated: _regenerated, regenStrength: _regenStrength,
-    regenSteps: _regenSteps, regenModelId: _regenModelId,
-    regenPixelDeltaPct: _regenPixelDeltaPct, regenPsnr: _regenPsnr,
-    regenMethod: _regenMethod,
-    ...sourceMetaForVariant
-  } = sourceMeta;
-  const variantMeta = {
-    ...sourceMetaForVariant,
-    createdAt,
-    cleanedFrom: groupRoot,
-    watermarkRemoved: true,
-    watermarkRegion: result.region,
-  };
-  await Promise.all([
-    writeFile(outPath, result.data),
-    writeFile(sidecarPath, JSON.stringify(variantMeta, null, 2)),
-  ]);
-
-  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
-    console.warn(`⚠️ Auto-file de-watermarked ${outFilename} → collections failed: ${err?.message || err}`);
-    return [];
-  });
-  console.log(`✦ Removed watermark ${filename} → ${outFilename} (${result.region.w}×${result.region.h} @ ${result.region.x},${result.region.y}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
-
-  res.json({
-    ...variantMeta,
-    filename: outFilename,
-    path: `/data/images/${outFilename}`,
-    sizeBefore: result.sizeBefore,
-    sizeAfter: result.sizeAfter,
-    sizeBytes: result.sizeAfter,
-    width: result.width,
-    height: result.height,
-  });
+  const { metadata: sourceMeta } = await local.readImageSidecar(filename);
+  res.json(await applyWatermarkRemoval({ filename, sourceMeta, size: body.size, region: body.region }));
 }));
-
-// CPU-only "light" regen (issue #912). The no-GPU fallback: applies sharp's
-// spatial-domain disruption stack (resize-squeeze + color nudge + median/sharpen)
-// to overwrite SynthID's resolution-dependent carriers without a FLUX runner.
-// Synchronous like Clean — writes a `_regen-light.png` variant + sidecar and
-// returns it. Honestly LESS reliable than the GPU round-trip (no FFT phase
-// subtraction); the sidecar stamps `regenMethod: 'light-spatial'` so the UI
-// never overclaims. Mirrors the manual-clean route's file/sidecar/collection shape.
-async function runLightRegen({ filename, sourceAbsPath, sourceMeta }) {
-  const buffer = await readFile(sourceAbsPath).catch((err) => {
-    if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
-    throw err;
-  });
-  const result = await applyLightRegen(buffer);
-  if (!result) {
-    throw new ServerError('Could not decode image for light regen', { status: 400, code: 'INVALID_IMAGE' });
-  }
-
-  const base = filename.slice(0, -'.png'.length);
-  const outFilename = `${base}_regen-light.png`;
-  const outPath = join(PATHS.images, outFilename);
-  const sidecarPath = join(PATHS.images, `${base}_regen-light.metadata.json`);
-  // Anchor the variant group at the root original (same rule as buildRegenParams):
-  // regenerating a cleaned/regenerated variant must group under the root, not orphan.
-  const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
-    ? sourceMeta.cleanedFrom : filename;
-  const createdAt = new Date().toISOString();
-  // Strip hidden/filename/id so the listGallery `...metadata` spread doesn't
-  // overwrite the disk-derived filename or re-hide the deliberate variant.
-  // Also strip the FLUX-regen-specific fields: when the source is itself a
-  // prior FLUX regen, carrying its regenStrength/Steps/ModelId + stale
-  // delta into a SPATIAL pass would make the lineage row falsely read
-  // "· N% denoise" (a light pass has no denoise) and show a stale fidelity.
-  const {
-    hidden: _hidden, filename: _srcFilename, id: _srcId,
-    regenStrength: _rs, regenSteps: _rst, regenModelId: _rm,
-    regenPixelDeltaPct: _rpd, regenPsnr: _rp,
-    ...sourceMetaForVariant
-  } = sourceMeta;
-
-  // Compare the in-memory source/output buffers — no need to re-read outPath
-  // off disk just to measure the delta.
-  const delta = await computePixelDelta(buffer, result.data).catch(() => null);
-  const variantMeta = {
-    ...sourceMetaForVariant,
-    createdAt,
-    cleanedFrom: groupRoot,
-    regenerated: true,
-    regenMethod: 'light-spatial',
-    ...(delta ? { regenPixelDeltaPct: delta.pixelDeltaPct, regenPsnr: delta.psnr } : {}),
-  };
-  await Promise.all([
-    writeFile(outPath, result.data),
-    writeFile(sidecarPath, JSON.stringify(variantMeta, null, 2)),
-  ]);
-
-  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
-    console.warn(`⚠️ Auto-file light-regen ${outFilename} → collections failed: ${err?.message || err}`);
-    return [];
-  });
-  console.log(`♻️ Light-regen ${filename} → ${outFilename} (${delta ? `${delta.pixelDeltaPct}% changed` : 'fidelity n/a'}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
-
-  // Response is the sidecar record plus the disk-derived fields listGallery adds.
-  return {
-    ...variantMeta,
-    filename: outFilename,
-    path: `/data/images/${outFilename}`,
-    width: result.width,
-    height: result.height,
-  };
-}
 
 // SynthID-defeat regeneration (issue #912). Round-trips an existing gallery
 // image through local FLUX img2img at low–moderate denoise so the per-pixel
@@ -837,7 +512,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   // for installs that can't run the GPU round-trip — synchronous like Clean:
   // it writes a `_regen-light.png` variant inline and returns it (no queue).
   if (body.method === 'light') {
-    return res.json(await runLightRegen({ filename, sourceAbsPath, sourceMeta }));
+    return res.json(await applyLightRegenVariant({ filename, sourceAbsPath, sourceMeta }));
   }
 
   const backend = await resolveRegenBackend({ sourceModelId: sourceMeta.modelId });
@@ -865,29 +540,6 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));
 }));
 
-// Add the cleaned-image filename to every collection that already contains
-// the source filename. Returns the ids of the collections that received the
-// new entry (excluding ones that already contained the cleaned filename).
-// Cross-collection writes run in parallel — addItem serializes per file write
-// internally, so concurrent calls on different collections are safe.
-async function autoFileCleanedToSourceCollections(sourceFilename, cleanedFilename) {
-  const sourceKey = itemKey({ kind: 'image', ref: sourceFilename });
-  const all = await listCollections();
-  const matching = all.filter((c) => c.items.some((it) => itemKey(it) === sourceKey));
-  if (matching.length === 0) return [];
-  const results = await Promise.all(matching.map(async (c) => {
-    try {
-      await addItem(c.id, { kind: 'image', ref: cleanedFilename });
-      return c.id;
-    } catch (err) {
-      if (err?.code === ERR_DUPLICATE) return null;
-      console.warn(`⚠️ Auto-file ${cleanedFilename} → collection ${c.id} failed: ${err?.message || err}`);
-      return null;
-    }
-  }));
-  return results.filter(Boolean);
-}
-
 // --- Local-mode setup automation ---
 
 router.get('/setup/python', asyncHandler(async (_req, res) => {
@@ -909,15 +561,7 @@ router.get('/setup/python', asyncHandler(async (_req, res) => {
 let flux2InstallInFlight = null;
 
 router.get('/setup/flux2-install', asyncHandler(async (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  const send = (event) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
-  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+  const { send, safeEnd } = openSseStream(res);
 
   // Skip only when the venv binary AND the import work — a half-broken venv
   // (binary present, packages missing from a killed mid-install) needs to
@@ -1156,19 +800,10 @@ router.get('/setup/install', (req, res) => {
     return res.end(JSON.stringify({ error: `Packages not in allowlist: ${disallowed.join(', ')}` }));
   }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  // `send` and `safeEnd` no-op once the response has ended so a late
-  // pip-output line (or the promise.then below) doesn't trigger
+  // `send` and `safeEnd` from openSseStream no-op once the response has ended
+  // so a late pip-output line (or the promise.then below) doesn't trigger
   // ERR_STREAM_WRITE_AFTER_END or double-end the response.
-  const send = (event) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
-  const safeEnd = () => { if (!res.writableEnded) res.end(); };
-
+  const { send, safeEnd } = openSseStream(res);
   const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, send);
   promise.then(() => {
     // Drop the now-stale setup-check snapshot before the client re-runs the

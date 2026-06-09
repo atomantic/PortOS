@@ -9,6 +9,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.cybercity', path: '/city', label: 'City', section: 'Main', aliases: ['city', 'cybercity'], keywords: ['3d', 'visualization', 'cybercity'] },
   { id: 'nav.cybercity.settings', path: '/city/settings', label: 'City Settings', section: 'Main', aliases: ['city settings', 'cybercity settings', 'city-settings', 'cybercity-config'], keywords: ['cybercity', 'settings', '3d', 'configure'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
+  { id: 'nav.templates', path: '/templates', label: 'Templates', section: 'Main', aliases: ['templates', 'app-templates'], keywords: ['app template', 'create app', 'pre-configured', 'starter'] },
 
   { id: 'nav.catalog', path: '/catalog', label: 'Catalog', section: 'Create', aliases: ['catalog', 'ingredients', 'cast', 'creative-catalog'], keywords: ['character', 'place', 'object', 'idea', 'scene', 'concept', 'inventory', 'reference', 'creative'] },
   { id: 'nav.catalog.ingest', path: '/catalog/ingest', label: 'Catalog Ingest', section: 'Create', aliases: ['catalog-ingest', 'ingest', 'paste-scrap', 'extract-ingredients'], keywords: ['paste', 'snippet', 'scene', 'idea', 'extract', 'scrap', 'import-catalog'] },

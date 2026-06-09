@@ -2064,3 +2064,11 @@ export const storyIssuesGenerateSchema = z.object({
   // on the arc.
   seasonId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
 }).strict();
+
+// Per-request LLM provider/model override. Shared by universe-builder expand
+// routes and pipeline arc-planning routes. Optional so callers that omit the
+// llm field fall back to the server's active provider.
+export const llmSchema = z.object({
+  provider: z.string().trim().max(80).nullable().optional(),
+  model: z.string().trim().max(200).nullable().optional(),
+}).optional();

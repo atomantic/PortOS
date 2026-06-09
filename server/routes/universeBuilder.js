@@ -15,7 +15,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, optionalBooleanMap } from '../lib/validation.js';
+import { validateRequest, optionalBooleanMap, llmSchema } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
 import { expandUniverseCharacter } from '../services/universeCharacterExpand.js';
@@ -116,11 +116,6 @@ const categoriesSchema = z.record(
 ).refine((categories) => Object.keys(categories).length <= svc.WORLD_CATEGORY_COUNT_MAX, {
   message: `categories cannot exceed ${svc.WORLD_CATEGORY_COUNT_MAX} buckets`,
 });
-
-export const llmSchema = z.object({
-  provider: z.string().trim().max(80).nullable().optional(),
-  model: z.string().trim().max(200).nullable().optional(),
-}).optional();
 
 // `locked` is a sparse map of `{ field: true }` for the LOCKABLE_FIELDS list.
 // `false` is treated the same as omitted — only `true` records a lock so the
