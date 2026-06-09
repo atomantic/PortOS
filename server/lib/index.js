@@ -100,6 +100,7 @@ export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
 
 // === Process execution ===
+export * from './bashResolver.js';
 export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
 export * from './execGit.js';

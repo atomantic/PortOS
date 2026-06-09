@@ -114,6 +114,13 @@ export async function checkHealth() {
 // cleared on settle so a deliberate later call (the gate runs it twice) still
 // re-applies (cheap — ~30 no-op parses on an up-to-date DB).
 let ensureSchemaInFlight = null;
+// Every DB-backed store self-runs ensureSchema() when it warms its backend at
+// boot (memory, creative-director, media index, catalog, universe/story/writers
+// stores, pipeline series/issues, plus the boot DB gate). Those warm
+// sequentially, so the in-flight dedup above can't collapse them — each re-runs
+// the idempotent DDL (cheap no-ops) and would otherwise re-log the same line.
+// Log it once per process so the boot output isn't a wall of identical lines.
+let schemaUpgradeLogged = false;
 
 /**
  * Apply idempotent schema upgrades to an existing database.
@@ -834,7 +841,10 @@ async function ensureSchemaImpl() {
   for (const sql of catalogDDL) {
     await pool.query(sql);
   }
-  console.log('🗄️ Database schema upgrades applied');
+  if (!schemaUpgradeLogged) {
+    console.log('🗄️ Database schema upgrades applied');
+    schemaUpgradeLogged = true;
+  }
 }
 
 /**

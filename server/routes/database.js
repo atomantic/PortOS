@@ -6,6 +6,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { resolveBashBinary } from '../lib/bashResolver.js';
 
 const rootDir = PATHS.root;
 // Pass the script path to bash with forward slashes. On Windows the native
@@ -14,6 +15,11 @@ const rootDir = PATHS.root;
 // Git Bash accepts drive paths with forward slashes (`H:/.../db.sh`), so
 // normalize separators here. POSIX paths are unaffected (no backslashes).
 const dbScript = join(rootDir, 'scripts', 'db.sh').replace(/\\/g, '/');
+// Resolve the interpreter explicitly. A bare `bash` on Windows often resolves
+// (via PM2's PATH) to WSL, which mounts drives at /mnt/h and can't see the
+// `H:/...` drive path above — exit 127. resolveBashBinary() prefers Git Bash,
+// which both accepts drive paths and runs db.sh against the Windows toolchain.
+const bashBinary = resolveBashBinary();
 
 const router = Router();
 
@@ -39,7 +45,7 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env) {
   });
 }
 
-const runDbScript = (args) => runCmd('bash', [dbScript, ...args]);
+const runDbScript = (args) => runCmd(bashBinary, [dbScript, ...args]);
 
 function parseDbMode(stdout) {
   const match = stdout.match(/Current mode:\s*(\w+)/);
@@ -100,7 +106,7 @@ async function getDockerDiskUsage() {
  * Get native PostgreSQL process stats via ps.
  */
 async function getNativeStats() {
-  const result = await runCmd('bash', ['-c',
+  const result = await runCmd(bashBinary, ['-c',
     'ps aux | grep "[p]ostgres.*-D" | head -1'
   ], 5_000);
   if (result.exitCode !== 0 || !result.stdout.trim()) return null;
@@ -111,7 +117,7 @@ async function getNativeStats() {
   if (!Number.isInteger(pidRaw) || pidRaw <= 0) return null;
   const pid = String(pidRaw);
   // Get all postgres child processes
-  const childResult = await runCmd('bash', ['-c',
+  const childResult = await runCmd(bashBinary, ['-c',
     `ps -o pid=,pcpu=,pmem=,rss= -p $(pgrep -P ${pid} | tr '\\n' ',')${pid} 2>/dev/null`
   ], 5_000);
   let totalCpu = 0, totalMem = 0, totalRss = 0, pids = 0;
@@ -372,7 +378,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
   // Step 3: Import into target (active backend untouched — different port)
   // Strip pg17-only features for compat with older psql: \restrict/\unrestrict, transaction_timeout
   emit('start', { message: `Importing into ${targetMode} (port ${targetPort})...` });
-  const importResult = await runCmd('bash', ['-c',
+  const importResult = await runCmd(bashBinary, ['-c',
     `sed -e '/^\\\\restrict /d' -e '/^\\\\unrestrict /d' -e '/^SET transaction_timeout/d' "${dumpFile}" | psql -h localhost -p ${targetPort} -U ${pgUser} -d ${pgDb} -v ON_ERROR_STOP=1 --single-transaction`
   ], 120_000, pgEnv(targetPort));
 
@@ -398,7 +404,7 @@ router.post('/start', asyncHandler(async (req, res) => {
   }
 
   // Native: use db.sh which handles brew services / pg_ctl
-  const result = await runCmd('bash', [dbScript, 'start'], 30_000);
+  const result = await runCmd(bashBinary, [dbScript, 'start'], 30_000);
   res.json({ success: result.exitCode === 0, output: result.stdout });
 }));
 
@@ -415,7 +421,7 @@ router.post('/stop', asyncHandler(async (req, res) => {
   }
 
   // Native stop
-  const result = await runCmd('bash', [dbScript, 'stop'], 15_000);
+  const result = await runCmd(bashBinary, [dbScript, 'stop'], 15_000);
   res.json({ success: result.exitCode === 0, output: result.stdout });
 }));
 

@@ -11,6 +11,7 @@
 ## Fixed
 
 - **Database page works on Windows** — the Database page's Start/Fix/Status actions invoke the `db.sh` manager through bash; on Windows the script's native path (`H:\…\db.sh`) was passed with backslashes, which bash collapsed into a bogus path (exit 127, "No such file or directory"), so the page reported the Docker database as stopped even while it was running. The path is now normalized to forward slashes, which Git Bash accepts on Windows. A second Windows-only failure in the per-backend export path (spawning `mkdir -p`, which isn't a real executable on Windows) was also fixed by using Node's filesystem API instead. Mac/Linux behavior is unchanged.
+- **Database page works on Windows (follow-up: use Git Bash, not WSL)** — even after the path was forward-slashed, Start/Fix/Status still failed with exit 127 on machines that have **both** Git Bash and WSL installed: the server (launched by PM2) resolved a bare `bash` to WSL's `C:\Windows\System32\bash.exe`, which mounts drives at `/mnt/h/…` and genuinely cannot see a `H:/…` drive path — and would run `db.sh` against Linux tools even if it could. PortOS now resolves the interpreter explicitly, preferring **Git Bash** (the correct Windows interpreter), with a `PORTOS_BASH` override for non-standard installs. Mac/Linux behavior is unchanged (bare `bash`).
 
 ## Changed
 
