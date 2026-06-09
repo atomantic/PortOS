@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { execFile } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
@@ -8,7 +8,12 @@ import { PATHS } from '../lib/fileUtils.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 
 const rootDir = PATHS.root;
-const dbScript = join(rootDir, 'scripts', 'db.sh');
+// Pass the script path to bash with forward slashes. On Windows the native
+// path is `H:\...\db.sh`; bash treats each backslash as an escape character
+// and collapses it to `H:...db.sh` (exit 127, "No such file or directory").
+// Git Bash accepts drive paths with forward slashes (`H:/.../db.sh`), so
+// normalize separators here. POSIX paths are unaffected (no backslashes).
+const dbScript = join(rootDir, 'scripts', 'db.sh').replace(/\\/g, '/');
 
 const router = Router();
 
@@ -484,7 +489,10 @@ router.post('/export', asyncHandler(async (req, res) => {
       throw new ServerError(`${backend} database not running on port ${port}`, { status: 400 });
     }
     const dumpDir = join(rootDir, 'data', 'db-dumps');
-    await runCmd('mkdir', ['-p', dumpDir], 5_000);
+    // Use Node's fs (not `mkdir -p`): on Windows `mkdir` is a cmd.exe builtin,
+    // not a spawnable executable, and `-p` isn't a valid flag — execFile would
+    // fail with ENOENT. `recursive: true` is the cross-platform equivalent.
+    mkdirSync(dumpDir, { recursive: true });
     const dumpFile = join(dumpDir, `portos-${backend}-${label}.sql`);
     // Use -f flag to write output directly — no shell redirect needed, avoids shell injection.
     // Resolve a pg_dump whose major is >= the TARGET backend's server (probed
