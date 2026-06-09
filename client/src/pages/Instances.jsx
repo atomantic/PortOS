@@ -565,7 +565,13 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
             sync the same back automatically.
           </p>
           <div className="flex items-center justify-end gap-2 mb-1.5">
-            {peer.instanceId && enabledCount > 0 && (
+            {/* Available whenever we know the peer's identity — NOT gated on
+                enabledCount. The worst stale case is disabling the LAST category
+                while the peer is offline: the peer keeps its now-stale enabled
+                set, and the reciprocate endpoint pushes our all-false map to
+                clear it. Gating on enabledCount>0 would hide the control exactly
+                when it's needed. */}
+            {peer.instanceId && (
               <button
                 onClick={makeMutual}
                 className="flex items-center gap-1 mr-auto text-[10px] text-gray-500 hover:text-port-accent transition-colors"

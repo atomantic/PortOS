@@ -577,6 +577,17 @@ describe('instances.js', () => {
       expect(changed).toBe(false);
     });
 
+    it('applies an all-false map to clear a stale enabled category (the offline-disable recovery path)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed, peer } = await applyReciprocalSync('inst-A', { brain: false });
+
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.brain).toBe(false);
+      expect(peer.syncEnabled).toBe(false); // nothing left enabled
+    });
+
     it('returns changed:false for an unknown peer instanceId', async () => {
       readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers: [] });
       const { changed, peer } = await applyReciprocalSync('nope', { brain: true });
