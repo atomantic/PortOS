@@ -2,7 +2,8 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
-import { CITY_COLORS, PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 // Floating neon street-level signs with animated glow
 
@@ -105,6 +106,7 @@ function NeonBar({ position, rotation, color, height = 2 }) {
 }
 
 export default function CityNeonSigns({ positions }) {
+  const { neonAccents } = useCityPalette();
   const signs = useMemo(() => {
     if (!positions || positions.size < 2) return [];
 
@@ -123,7 +125,7 @@ export default function CityNeonSigns({ positions }) {
       maxZ = Math.max(maxZ, p.z);
     });
 
-    const colors = CITY_COLORS.neonAccents;
+    const colors = neonAccents;
     const pad = 3;
     const result = [];
 
@@ -203,7 +205,7 @@ export default function CityNeonSigns({ positions }) {
     });
 
     return result;
-  }, [positions]);
+  }, [positions, neonAccents]);
 
   const bars = useMemo(() => {
     if (!positions || positions.size < 2) return [];
@@ -223,7 +225,7 @@ export default function CityNeonSigns({ positions }) {
       maxZ = Math.max(maxZ, p.z);
     });
 
-    const colors = CITY_COLORS.neonAccents;
+    const colors = neonAccents;
     const pad = 3;
     const result = [];
 
@@ -246,7 +248,7 @@ export default function CityNeonSigns({ positions }) {
     });
 
     return result;
-  }, [positions]);
+  }, [positions, neonAccents]);
 
   if (signs.length === 0) return null;
 

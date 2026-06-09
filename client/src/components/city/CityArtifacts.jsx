@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeArtifacts, ARTIFACTS } from '../../utils/cityArtifacts';
 
@@ -11,6 +12,7 @@ import { computeArtifacts, ARTIFACTS } from '../../utils/cityArtifacts';
 // goals. The emblems shimmer in unison via a single per-frame ref mutation, gated on the
 // quality dial. Mirrors CityGoalMonuments / CityProductivityDistrict.
 function Artifact({ artifact, dayMix = 0 }) {
+  const { tintStructure } = useCityPalette();
   const { color, intensity, label, position } = artifact;
   const { pedestalWidth: pw, pedestalHeight: ph, emblemSize } = ARTIFACTS;
   const emblemY = ph + emblemSize * 0.6;

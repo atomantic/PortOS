@@ -1,10 +1,12 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 
 function SignalBeacon({ position, color, label, sublabel, intensity = 1, dayMix = 0 }) {
+  const { tintStructure } = useCityPalette();
   const groupRef = useRef();
   const glowRef = useRef();
   const beamRef = useRef();

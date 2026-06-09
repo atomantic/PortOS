@@ -1,7 +1,8 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS, cityDayMix } from './cityConstants';
+import { cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 // Volumetric light cone shader
 const CONE_VERT = `
@@ -130,6 +131,7 @@ function ScanBeam({ start, end, color, speed = 0.2, delay = 0, intensityScale = 
 }
 
 export default function CityVolumetricLights({ positions, settings }) {
+  const { neonAccents } = useCityPalette();
   const nightFade = 1 - cityDayMix(settings);
   const beams = useMemo(() => {
     if (!positions || positions.size < 2) return { lights: [], scans: [] };
@@ -148,7 +150,7 @@ export default function CityVolumetricLights({ positions, settings }) {
     });
 
     const pad = 5;
-    const colors = CITY_COLORS.neonAccents;
+    const colors = neonAccents;
 
     // Spotlight beams at corners and edges of the city
     const lights = [
@@ -168,7 +170,7 @@ export default function CityVolumetricLights({ positions, settings }) {
     ];
 
     return { lights, scans };
-  }, [positions]);
+  }, [positions, neonAccents]);
 
   if (nightFade <= 0.05 || beams.lights.length === 0) return null;
 

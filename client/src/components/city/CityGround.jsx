@@ -2,7 +2,8 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid } from '@react-three/drei';
 import * as THREE from 'three';
-import { CITY_COLORS, getTimeOfDayPreset, cityDayMix, mixHex, seededRand } from './cityConstants';
+import { getTimeOfDayPreset, cityDayMix, mixHex, seededRand } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 // Reflective puddle/wet-ground patches
 function WetPatch({ position, size, color, dayMix = 0 }) {
@@ -32,6 +33,7 @@ function WetPatch({ position, size, color, dayMix = 0 }) {
 // Rolling fog layer with animated opacity
 function RollingFog({ dayMix = 0 }) {
   const ref = useRef();
+  const { ground } = useCityPalette();
 
   useFrame(({ clock }) => {
     if (!ref.current) return;
@@ -44,7 +46,7 @@ function RollingFog({ dayMix = 0 }) {
     <mesh ref={ref} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]}>
       <planeGeometry args={[100, 100]} />
       <meshBasicMaterial
-        color={CITY_COLORS.ground}
+        color={ground}
         transparent
         opacity={0.012}
         blending={THREE.AdditiveBlending}
@@ -55,6 +57,7 @@ function RollingFog({ dayMix = 0 }) {
 }
 
 export default function CityGround({ settings }) {
+  const { ground, neonAccents } = useCityPalette();
   const reflectionsEnabled = settings?.reflectionsEnabled ?? true;
   const groundMatRef = useRef();
 
@@ -67,10 +70,10 @@ export default function CityGround({ settings }) {
   const targetRoughness = preset.groundRoughness ?? 0.7;
   const targetMetalness = 0.4 * (1 - dayMix) + 0.04 * dayMix;
 
-  // The neon grid + additive fog follow the themed accent (CITY_COLORS.ground is
-  // recolored per theme by applyCityBrandColors). At night they read as accent neon;
-  // by day the grid mutes to faint pavement lines and the glow fog fades out.
-  const accent = CITY_COLORS.ground;
+  // The neon grid + additive fog follow the themed accent (palette.ground tracks the
+  // theme). At night they read as accent neon; by day the grid mutes to faint pavement
+  // lines and the glow fog fades out.
+  const accent = ground;
   const gridSectionColor = mixHex(accent, '#bcc4cc', dayMix);
   const gridCellColor = mixHex(mixHex(accent, '#0a1420', 0.5), '#a7afb8', dayMix);
   const groundFogOpacity = 0.045 * (1 - dayMix);
@@ -86,7 +89,7 @@ export default function CityGround({ settings }) {
   const puddles = useMemo(() => {
     const result = [];
     const rand = seededRand(137);
-    const colors = CITY_COLORS.neonAccents;
+    const colors = neonAccents;
     const count = reflectionsEnabled ? 40 : 20;
 
     for (let i = 0; i < count; i++) {
@@ -98,7 +101,7 @@ export default function CityGround({ settings }) {
       });
     }
     return result;
-  }, [reflectionsEnabled]);
+  }, [reflectionsEnabled, neonAccents]);
 
   return (
     <group>

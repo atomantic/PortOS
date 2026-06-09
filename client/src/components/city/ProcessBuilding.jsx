@@ -1,36 +1,37 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS, PROCESS_BUILDING_PARAMS, PIXEL_FONT_URL, mixHex } from './cityConstants';
+import { PROCESS_BUILDING_PARAMS, PIXEL_FONT_URL, mixHex } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 
-// Process status → color, unified with CITY_COLORS.building (read live so 'online'
-// follows the active theme accent and the semantic colors match a stopped/missing
-// *app*): 'stopped' is the same red as a stopped app (was amber), 'not_found' the
-// same purple (was indigo). PM2's hard-failure states ("errored"; some legacy
-// callers send "error") read as the same red as stopped — both mean "down".
-const getProcessColor = (status) => {
-  const b = CITY_COLORS.building;
+// Process status → color, unified with the themed building map (so 'online' follows
+// the active theme accent and the semantic colors match a stopped/missing *app*):
+// 'stopped' is the same red as a stopped app (was amber), 'not_found' the same purple
+// (was indigo). PM2's hard-failure states ("errored"; some legacy callers send "error")
+// read as the same red as stopped — both mean "down".
+const getProcessColor = (status, building) => {
   switch (status) {
-    case 'online': return b.online;
+    case 'online': return building.online;
     case 'stopped':
     case 'errored':
-    case 'error': return b.stopped;
+    case 'error': return building.stopped;
     case 'not_found':
-    default: return b.not_found;
+    default: return building.not_found;
   }
 };
 
 export default function ProcessBuilding({ process, pm2Status, position, seed, dimmed = false, dayMix = 0 }) {
+  const { building, buildingBody } = useCityPalette();
   const blinkRef = useRef();
   const glowRef = useRef();
 
   const status = pm2Status?.status || 'not_found';
-  const color = getProcessColor(status);
+  const color = getProcessColor(status, building);
   const { width, depth } = PROCESS_BUILDING_PARAMS;
   const dimMul = dimmed ? 0.25 : 1;
   // Match the main Building's daytime treatment — sheds neon, lightens to a lit solid.
-  const bodyColor = mixHex(CITY_COLORS.buildingBody, mixHex('#9aa0ac', color, 0.12), dayMix);
+  const bodyColor = mixHex(buildingBody, mixHex('#9aa0ac', color, 0.12), dayMix);
   const neonFade = 1 - dayMix;
 
   // Height based on status + seed variation

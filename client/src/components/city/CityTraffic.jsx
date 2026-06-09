@@ -1,6 +1,6 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { CITY_COLORS } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 // A single flying hover vehicle
 function HoverVehicle({ path, color, speed, offset, altitude }) {
@@ -70,6 +70,7 @@ function HoverVehicle({ path, color, speed, offset, altitude }) {
 }
 
 export default function CityTraffic({ positions }) {
+  const { neonAccents } = useCityPalette();
   // Generate traffic lanes based on building layout
   const vehicles = useMemo(() => {
     if (!positions || positions.size < 2) return [];
@@ -91,7 +92,7 @@ export default function CityTraffic({ positions }) {
     });
 
     const pad = 3;
-    const colors = CITY_COLORS.neonAccents;
+    const colors = neonAccents;
     const result = [];
 
     // Create traffic lanes around the perimeter
@@ -145,7 +146,7 @@ export default function CityTraffic({ positions }) {
     }
 
     return result;
-  }, [positions]);
+  }, [positions, neonAccents]);
 
   if (vehicles.length === 0) return null;
 

@@ -1,7 +1,8 @@
 import { useRef, useState, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { getBuildingColor, getBuildingHeight, getAccentColor, BUILDING_PARAMS, PIXEL_FONT_URL, mixHex, tintStructure, seededRand } from './cityConstants';
+import { getBuildingHeight, BUILDING_PARAMS, PIXEL_FONT_URL, mixHex, seededRand } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import HolographicPanel from './HolographicPanel';
 import BuildingHologram from './BuildingHologram';
@@ -90,8 +91,9 @@ const PIXEL_ICONS = [
   ],
 ];
 
-// Generate a pixel window texture with icon mural for a building face
-const createWindowTexture = (accentColor, width, height, seed) => {
+// Generate a pixel window texture with icon mural for a building face. `tintStructure`
+// is passed in (bound to the active palette accent) so the facade base tracks the theme.
+const createWindowTexture = (accentColor, width, height, seed, tintStructure) => {
   const canvas = document.createElement('canvas');
   const px = 8;
   const cols = 12;
@@ -363,6 +365,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   const displayedColorRef = useRef(null);
   const targetColorRef = useRef(null);
 
+  const { getBuildingColor, getAccentColor, tintStructure } = useCityPalette();
   const height = getBuildingHeight(app);
   const edgeColor = getBuildingColor(app.overallStatus, app.archived);
   const accentColor = getAccentColor(app);
@@ -401,8 +404,8 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
 
   // Window texture with pixel art icon
   const windowTexture = useMemo(
-    () => createWindowTexture(accentColor, width, height, seed),
-    [accentColor, width, height, seed]
+    () => createWindowTexture(accentColor, width, height, seed, tintStructure),
+    [accentColor, width, height, seed, tintStructure]
   );
 
   // Format name for building face

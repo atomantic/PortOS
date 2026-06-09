@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeBackupVault } from '../../utils/cityBackupVault';
 import { timeAgo } from '../../utils/formatters';
@@ -11,6 +12,7 @@ import { timeAgo } from '../../utils/formatters';
 // runs), it pulses on `backup:started/completed`, and the label shows time-since the
 // last snapshot — going red and reading "STALE" when a backup is overdue.
 export default function CityBackupVault({ backupStatus, settings }) {
+  const { tintStructure } = useCityPalette();
   const vault = useMemo(() => computeBackupVault(backupStatus), [backupStatus]);
   const sealRef = useRef();
 

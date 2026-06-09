@@ -2,7 +2,8 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
-import { CITY_COLORS, PIXEL_FONT_URL } from './cityConstants';
+import { PIXEL_FONT_URL } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 // Holographic scan line shader for billboard overlay
 const SCAN_VERT = `
@@ -205,6 +206,7 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
 }
 
 export default function CityBillboards({ positions, apps, cosStatus, reviewCounts, instances, productivityData }) {
+  const { neonAccents } = useCityPalette();
   // Build billboard messages from real system data
   const billboardConfig = useMemo(() => {
     if (!positions || positions.size < 2) return [];
@@ -212,7 +214,7 @@ export default function CityBillboards({ positions, apps, cosStatus, reviewCount
     const onlineApps = apps.filter(a => !a.archived && a.overallStatus === 'online');
     const stoppedApps = apps.filter(a => !a.archived && a.overallStatus === 'stopped');
     const totalActive = apps.filter(a => !a.archived).length;
-    const colors = CITY_COLORS.neonAccents;
+    const colors = neonAccents;
     const pendingReview = reviewCounts?.total || 0;
     const alertCount = reviewCounts?.alert || 0;
     const peers = instances?.peers || [];
@@ -317,7 +319,7 @@ export default function CityBillboards({ positions, apps, cosStatus, reviewCount
     }
 
     return billboards;
-  }, [positions, apps, cosStatus, reviewCounts, instances, productivityData]);
+  }, [positions, apps, cosStatus, reviewCounts, instances, productivityData, neonAccents]);
 
   if (billboardConfig.length === 0) return null;
 

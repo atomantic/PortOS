@@ -43,9 +43,10 @@ import CameraTransition from './CameraTransition';
 import CityPhotoCamera from './CityPhotoCamera';
 import CityDepthOfField from './CityDepthOfField';
 import { cityDayMix } from './cityConstants';
+import { CityPaletteProvider } from './CityPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -176,6 +177,10 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         // dashboard, which reads as a blank white scene.
         gl={{ antialias: true, preserveDrawingBuffer: Boolean(photoMode), alpha: false, powerPreference: 'high-performance' }}
       >
+      {/* Re-provide the themed palette INSIDE the Canvas — react-three-fiber runs its
+          own reconciler, so the provider in CyberCityInner doesn't reach these scene
+          components. Plain React Context.Provider works across the r3f tree. */}
+      <CityPaletteProvider palette={palette}>
       {/* By day, the solid clear color is the scene background. At night, the galaxy
           Environment below owns scene.background (the equirectangular spheremap), so we
           must NOT also drive <color attach="background"> — both write scene.background and
@@ -288,6 +293,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
           toggle would churn render-loop ownership and could strand a blurred frozen frame on screen
           when DoF flips off mid-freeze. */}
       {photoMode && <CityDepthOfField presetId={photoPresetId} enabled={photoDof} composerRef={photoComposerRef} />}
+      </CityPaletteProvider>
       </Canvas>
     </div>
   );

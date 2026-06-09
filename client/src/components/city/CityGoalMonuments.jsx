@@ -1,7 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import CityTubeLine from './CityTubeLine';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeGoalMonuments, computeGoalForest, MONUMENTS, FOREST } from '../../utils/cityGoalMonuments';
 
@@ -20,6 +21,7 @@ import { computeGoalMonuments, computeGoalForest, MONUMENTS, FOREST } from '../.
 // or the plain built/scaffold split. `shimmerRef`/`isShimmer` wires the completed-monument
 // pulse onto whichever mesh carries the topmost built portion.
 function MonumentBody({ monument, shimmerRef, isShimmer }) {
+  const { tintStructure } = useCityPalette();
   const { height, width, color, opacity, intensity, built, completeness, segments } = monument;
 
   // Milestone floors: one box per milestone, solid+emissive when done, wireframe scaffold
@@ -86,6 +88,7 @@ function MonumentBody({ monument, shimmerRef, isShimmer }) {
 }
 
 function Monument({ monument, shimmerRef, isShimmer, dayMix = 0 }) {
+  const { tintStructure } = useCityPalette();
   const { height, width, color, opacity, intensity, position, milestoneTotal, milestoneDone, isSpire } = monument;
 
   return (
@@ -170,6 +173,7 @@ function GoalForest({ forest, shimmerRef, shimmerId, dayMix = 0 }) {
 }
 
 export default function CityGoalMonuments({ goals, settings }) {
+  const { tintStructure } = useCityPalette();
   // The API returns `{ goals: [...] }`; accept either the wrapper or a bare array.
   const list = Array.isArray(goals) ? goals : goals?.goals;
   const district = useMemo(() => computeGoalMonuments(list), [list]);
