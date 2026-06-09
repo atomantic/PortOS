@@ -11,3 +11,4 @@
 - **[issue-1027] Songs: vocal takes remember their pitch analysis** — a recorded take now saves its tuner trace and color-match score so your accuracy isn't recomputed every time you reopen the song.
 - **[issue-1060] Cleaner test runs** — browser-dependent tests now run only under their own test environment, so the server test run no longer reports spurious failures from double-running them.
 - **[issue-1050] More reliable database exports** — manual database exports now pick a PostgreSQL dump tool that matches the database being exported, so an export no longer fails on machines with several Postgres versions installed.
+- **[issue-909] CyberCity theme colors** — internal refactor of how the 3D city picks up your theme accent, replacing a fragile shared-state mechanism with a cleaner one; no change to how the city looks.
