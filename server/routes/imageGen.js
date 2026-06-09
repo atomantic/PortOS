@@ -689,7 +689,20 @@ router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
   const createdAt = new Date().toISOString();
   // Strip hidden/filename/id so listGallery's `...metadata` spread doesn't
   // overwrite the disk-derived filename or re-hide the deliberate variant.
-  const { hidden: _hidden, filename: _srcFilename, id: _srcId, ...sourceMetaForVariant } = sourceMeta;
+  // Also strip the PRIOR operation's lineage discriminators + their stale
+  // metadata: when the source is itself an auto-cleaned or regenerated variant,
+  // carrying `autoCleaned`/`regenerated` (and the regen-specific fields) into
+  // this de-sparkle sidecar would make the lightbox/variant code — which checks
+  // those flags BEFORE `watermarkRemoved` — mislabel the result as
+  // "Auto-cleaned"/"Regenerated" and surface stale regen fidelity. Same
+  // defensive strip `runLightRegen` does for its own pass.
+  const {
+    hidden: _hidden, filename: _srcFilename, id: _srcId,
+    autoCleaned: _ac, regenerated: _rg,
+    regenStrength: _rs, regenSteps: _rst, regenModelId: _rm, regenMethod: _rmeth,
+    regenPixelDeltaPct: _rpd, regenPsnr: _rp,
+    ...sourceMetaForVariant
+  } = sourceMeta;
   const variantMeta = {
     ...sourceMetaForVariant,
     createdAt,

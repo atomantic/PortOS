@@ -936,5 +936,34 @@ describe('Image Gen Routes', () => {
       expect(response.body.cleanedFrom).toBe('root.png');
       expect(response.body.filename).toBe('root_clean-aggressive_no-watermark.png');
     });
+
+    it('strips inherited operation discriminators so a de-sparkled regen variant is not mislabeled', async () => {
+      // Source is itself a regen variant. The new de-sparkle sidecar must NOT
+      // carry `regenerated`/`autoCleaned` or stale regen metadata, or the
+      // lightbox (which checks those before `watermarkRemoved`) mislabels it.
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({
+        path: '',
+        metadata: { cleanedFrom: 'root.png', regenerated: true, autoCleaned: true, regenStrength: 0.4, regenPsnr: 31.2, regenMethod: 'flux' },
+      });
+      mockReadFile.mockImplementation(async () => Buffer.from('png-bytes'));
+      mockRemoveGeminiSparkle.mockResolvedValue({
+        removed: true,
+        data: Buffer.from('clean-bytes'),
+        width: 800,
+        height: 1200,
+        bbox: { left: 730, top: 1140, width: 48, height: 48 },
+      });
+      const response = await request(app)
+        .post('/api/image-gen/root_regen_no-watermark-src.png/remove-watermark')
+        .send({});
+      expect(response.status).toBe(200);
+      expect(response.body.watermarkRemoved).toBe(true);
+      expect(response.body.cleanedFrom).toBe('root.png');
+      expect(response.body.regenerated).toBeUndefined();
+      expect(response.body.autoCleaned).toBeUndefined();
+      expect(response.body.regenStrength).toBeUndefined();
+      expect(response.body.regenPsnr).toBeUndefined();
+      expect(response.body.regenMethod).toBeUndefined();
+    });
   });
 });
