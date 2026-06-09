@@ -39,8 +39,8 @@ log ""
 
 # Wipe a workspace's installed deps so the next `npm install` resolves the tree
 # from scratch. node_modules is always removed; the lockfile is removed ONLY
-# when it's gitignored (the per-install client/server/autofixer locks) — a
-# tracked root lock was just pulled and is already consistent with the new
+# when it's gitignored (the per-install client/server locks) — a tracked root
+# or autofixer lock was just pulled and is already consistent with the new
 # package.json, so keep it for reproducible resolution.
 clean_workspace_deps() {
   local dir="$1"
