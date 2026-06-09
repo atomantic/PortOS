@@ -37,6 +37,35 @@ log "  PortOS Update"
 log "==================================="
 log ""
 
+# Wipe a workspace's installed deps so the next `npm install` resolves the tree
+# from scratch. node_modules is always removed; the lockfile is removed ONLY
+# when it's gitignored (the per-install client/server locks) — a tracked root
+# or autofixer lock was just pulled and is already consistent with the new
+# package.json, so keep it for reproducible resolution.
+clean_workspace_deps() {
+  local dir="$1"
+  rm -rf "$dir/node_modules"
+  if git check-ignore -q "$dir/package-lock.json" 2>/dev/null; then
+    rm -f "$dir/package-lock.json"
+  fi
+}
+
+# Whether the pulled update changed this workspace's package.json. When it did,
+# an in-place `npm install` over a node_modules tree resolved for the PREVIOUS
+# major versions can leave a duplicated/stale tree (e.g. a stray react@18 copy
+# beside react@19) — which builds fine but throws "Invalid hook call" at
+# runtime. A from-scratch reinstall is the only reliable fix for a major bump.
+# DEPS_CHANGED_FILES / DEPS_CHANGED_UNKNOWN are populated after the pull below.
+DEPS_CHANGED_FILES=""
+DEPS_CHANGED_UNKNOWN=0
+workspace_deps_changed() {
+  local dir="$1"
+  [ "$DEPS_CHANGED_UNKNOWN" = "1" ] && return 0
+  local rel="package.json"
+  [ "$dir" != "." ] && rel="${dir#./}/package.json"
+  printf '%s\n' "$DEPS_CHANGED_FILES" | grep -qx "$rel"
+}
+
 # Resilient npm install — retries once after cleaning node_modules on failure
 # Handles ENOTEMPTY and other transient npm bugs
 safe_install() {
@@ -44,14 +73,20 @@ safe_install() {
   local label="${dir}"
   [ "$dir" = "." ] && label="root"
 
+  # Force a clean reinstall when this update changed the workspace's deps —
+  # never trust an in-place install across a dependency-manifest change.
+  if workspace_deps_changed "$dir"; then
+    log "🧹 $label package.json changed in this update — clean reinstall (wiping node_modules)"
+    clean_workspace_deps "$dir"
+  fi
+
   log "📦 Installing deps ($label)..."
   if (cd "$dir" && run npm install); then
     return 0
   fi
 
   log "⚠️  npm install failed for $label — cleaning node_modules + package-lock.json and retrying..."
-  rm -rf "$dir/node_modules"
-  rm -f "$dir/package-lock.json"
+  clean_workspace_deps "$dir"
   if (cd "$dir" && run npm install); then
     return 0
   fi
@@ -95,8 +130,24 @@ if [ "$current_branch" != "main" ]; then
   log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
   run git checkout main
 fi
+# Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
+# the installed node_modules was built from (main, which the rest of this script
+# installs/builds), not a feature branch we just left. Diffing this against
+# post-pull HEAD yields exactly the pull's delta on main, so a manifest change
+# the update brings is detected even when launched from another branch.
+pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 run git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
+
+# Determine which workspaces' package.json this update touched, so safe_install
+# can force a clean reinstall for them (see workspace_deps_changed). If the
+# from-revision is unknown/unreachable (fresh clone, unrelated history), treat
+# deps as changed everywhere — a clean reinstall is the conservative default.
+if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
+  DEPS_CHANGED_FILES=$(git diff --name-only "$pre_pull_sha" HEAD 2>/dev/null || echo "")
+else
+  DEPS_CHANGED_UNKNOWN=1
+fi
 log ""
 
 # Update submodules (slash-do and any others)
