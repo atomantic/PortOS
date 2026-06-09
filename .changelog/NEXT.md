@@ -12,6 +12,7 @@
 - **Docs:** Split the AI Toolkit and Dashboard Widgets sections out of the root `CLAUDE.md` into directory-scoped `server/lib/aiToolkit/CLAUDE.md` and `client/src/components/dashboard/CLAUDE.md` files (load on demand when working in those subtrees), leaving discovery pointers at root. Trims root context with no loss of guidance.
 - **[issue-1082] Maintenance:** Decomposed the Chief-of-Staff task-evaluation engine's monolithic spawn loop into one named function per priority tier — no behavior change, making each tier independently testable.
 - **[issue-1083] Maintenance:** Split the 2,600-line task-prompt module into a pure data leaf (the default-prompt catalog) and a thin getter layer, removing a circular import between the prompt and schedule services — no behavior change.
+- **[issue-1084] Maintenance:** AI provider/run/prompt API errors now report the same structured shape (with an error code and timestamp) as the rest of PortOS, so error-handling UI behaves consistently across every API.
 
 ## Fixed
 

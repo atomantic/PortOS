@@ -1,8 +1,12 @@
 import { Router } from 'express';
+import { ToolkitHttpError } from '../internal/httpError.js';
 
 export function createPromptsRoutes(promptsService, options = {}) {
   const router = Router();
-  const { asyncHandler = (fn) => fn } = options;
+  // `ServerError` is injected by the host (PortOS passes its real ServerError
+  // so thrown errors normalize into `{ error, code, timestamp, context? }`).
+  // Defaults to the toolkit's own error class for standalone use.
+  const { asyncHandler = (fn) => fn, ServerError = ToolkitHttpError } = options;
 
   router.get('/stages', asyncHandler(async (req, res) => {
     const stages = promptsService.getStages();
@@ -13,7 +17,7 @@ export function createPromptsRoutes(promptsService, options = {}) {
     const stage = promptsService.getStage(req.params.name);
 
     if (!stage) {
-      return res.status(404).json({ error: 'Stage not found' });
+      throw new ServerError('Stage not found', { status: 404 });
     }
 
     const template = await promptsService.getStageTemplate(req.params.name);
@@ -51,7 +55,7 @@ export function createPromptsRoutes(promptsService, options = {}) {
     const variable = promptsService.getVariable(req.params.key);
 
     if (!variable) {
-      return res.status(404).json({ error: 'Variable not found' });
+      throw new ServerError('Variable not found', { status: 404 });
     }
 
     res.json(variable);
@@ -61,7 +65,7 @@ export function createPromptsRoutes(promptsService, options = {}) {
     const { key, ...data } = req.body;
 
     if (!key) {
-      return res.status(400).json({ error: 'Variable key is required' });
+      throw new ServerError('Variable key is required', { status: 400 });
     }
 
     await promptsService.createVariable(key, data);

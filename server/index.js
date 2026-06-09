@@ -127,7 +127,7 @@ import { initSyncLog } from './services/brainSyncLog.js';
 import { backfillOriginInstanceId } from './services/brainStorage.js';
 import { initSyncOrchestrator } from './services/syncOrchestrator.js';
 import { initSocket } from './services/socket.js';
-import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
+import { errorMiddleware, setupProcessErrorHandlers, asyncHandler, ServerError } from './lib/errorHandler.js';
 import { initAutoFixer } from './services/autoFixer.js';
 import { initCertRenewer } from './services/certRenewer.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
@@ -287,6 +287,9 @@ const aiToolkit = createAIToolkit({
   sampleProvidersFile: join(DATA_REFERENCE_DIR, 'providers.json'),
   io,
   asyncHandler,
+  // Inject PortOS's ServerError so toolkit route errors normalize into the
+  // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
+  ServerError,
   hooks: aiToolkitHooks
 });
 

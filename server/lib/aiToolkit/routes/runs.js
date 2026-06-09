@@ -1,9 +1,13 @@
 import { Router } from 'express';
 import { runSchema, validate } from '../validation.js';
+import { ToolkitHttpError } from '../internal/httpError.js';
 
 export function createRunsRoutes(runnerService, options = {}) {
   const router = Router();
-  const { asyncHandler = (fn) => fn, io = null } = options;
+  // `ServerError` is injected by the host (PortOS passes its real ServerError
+  // so thrown errors normalize into `{ error, code, timestamp, context? }`).
+  // Defaults to the toolkit's own error class for standalone use.
+  const { asyncHandler = (fn) => fn, io = null, ServerError = ToolkitHttpError } = options;
 
   router.get('/', asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
@@ -21,16 +25,16 @@ export function createRunsRoutes(runnerService, options = {}) {
     // characters as individual paths.
     const result = validate(runSchema, req.body);
     if (!result.success) {
-      return res.status(400).json({ error: 'Invalid run data', details: result.errors });
+      throw new ServerError('Invalid run data', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
     }
     const { providerId, model, prompt, workspacePath, workspaceName, timeout, screenshots } = result.data;
     console.log(`🚀 POST /runs - provider: ${providerId}, model: ${model}, workspace: ${workspaceName}`);
 
     if (!providerId) {
-      return res.status(400).json({ error: 'providerId is required' });
+      throw new ServerError('providerId is required', { status: 400 });
     }
     if (!prompt) {
-      return res.status(400).json({ error: 'prompt is required' });
+      throw new ServerError('prompt is required', { status: 400 });
     }
 
     const runData = await runnerService.createRun({
@@ -119,11 +123,13 @@ export function createRunsRoutes(runnerService, options = {}) {
         effectiveTimeout
       );
     } else {
-      return res.status(400).json({
-        error: `Unsupported provider type: ${provider.type}`,
-        details: provider.type === 'tui'
-          ? 'TUI executor not attached to runner — check that executeTuiRun is patched in index.js'
-          : `Known types: cli, api, tui (received: ${provider.type})`,
+      throw new ServerError(`Unsupported provider type: ${provider.type}`, {
+        status: 400,
+        context: {
+          details: provider.type === 'tui'
+            ? 'TUI executor not attached to runner — check that executeTuiRun is patched in index.js'
+            : `Known types: cli, api, tui (received: ${provider.type})`,
+        },
       });
     }
 
@@ -138,7 +144,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     const metadata = await runnerService.getRun(req.params.id);
 
     if (!metadata) {
-      return res.status(404).json({ error: 'Run not found' });
+      throw new ServerError('Run not found', { status: 404 });
     }
 
     const isActive = await runnerService.isRunActive(req.params.id);
@@ -152,7 +158,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     const output = await runnerService.getRunOutput(req.params.id);
 
     if (output === null) {
-      return res.status(404).json({ error: 'Run not found' });
+      throw new ServerError('Run not found', { status: 404 });
     }
 
     res.type('text/plain').send(output);
@@ -162,7 +168,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     const prompt = await runnerService.getRunPrompt(req.params.id);
 
     if (prompt === null) {
-      return res.status(404).json({ error: 'Run not found' });
+      throw new ServerError('Run not found', { status: 404 });
     }
 
     res.type('text/plain').send(prompt);
@@ -172,7 +178,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     const stopped = await runnerService.stopRun(req.params.id);
 
     if (!stopped) {
-      return res.status(404).json({ error: 'Run not found or not active' });
+      throw new ServerError('Run not found or not active', { status: 404 });
     }
 
     res.json({ success: true });
@@ -182,7 +188,7 @@ export function createRunsRoutes(runnerService, options = {}) {
     const deleted = await runnerService.deleteRun(req.params.id);
 
     if (!deleted) {
-      return res.status(404).json({ error: 'Run not found' });
+      throw new ServerError('Run not found', { status: 404 });
     }
 
     res.status(204).send();
@@ -190,7 +196,7 @@ export function createRunsRoutes(runnerService, options = {}) {
 
   router.delete('/', asyncHandler(async (req, res) => {
     if (req.query.filter !== 'failed') {
-      return res.status(400).json({ error: 'Only filter=failed is supported for bulk delete' });
+      throw new ServerError('Only filter=failed is supported for bulk delete', { status: 400 });
     }
 
     const deletedCount = await runnerService.deleteFailedRuns();
