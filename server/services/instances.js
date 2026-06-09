@@ -461,12 +461,20 @@ export async function probePeer(peer) {
   // opposed to an unreachable one. The Instances UI reads this to prompt for a
   // credential instead of showing a generic offline state.
   let authRequired = false;
+  // Pass our own instanceId as `forPeer` so the peer also returns ITS cursor
+  // into our data (`cursorForYou`) — our push-frontier toward it. Best-effort:
+  // an unresolved/unknown id just omits the param and we get the inbound-only
+  // shape (push count renders "unknown" client-side, never a misleading 0).
+  const ourInstanceId = await getInstanceId().catch(() => null);
+  const forPeerQs = typeof ourInstanceId === 'string' && ourInstanceId && ourInstanceId !== UNKNOWN_INSTANCE_ID
+    ? `?forPeer=${encodeURIComponent(ourInstanceId)}`
+    : '';
   try {
     // Fetch health details, apps, and sync status in parallel
     const [healthRes, appsRes, syncRes] = await Promise.all([
       peerFetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }, peer),
       peerFetch(`${baseUrl}/api/apps`, { signal: controller.signal }, peer).catch(() => null),
-      peerFetch(`${baseUrl}/api/instances/sync-status`, { signal: controller.signal }, peer).catch(() => null)
+      peerFetch(`${baseUrl}/api/instances/sync-status${forPeerQs}`, { signal: controller.signal }, peer).catch(() => null)
     ]);
     if (!healthRes.ok) {
       const err = new Error(`HTTP ${healthRes.status}`);
