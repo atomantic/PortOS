@@ -12,3 +12,4 @@
 - **[issue-1060] Cleaner test runs** — browser-dependent tests now run only under their own test environment, so the server test run no longer reports spurious failures from double-running them.
 - **[issue-1050] More reliable database exports** — manual database exports now pick a PostgreSQL dump tool that matches the database being exported, so an export no longer fails on machines with several Postgres versions installed.
 - **[issue-909] CyberCity theme colors** — internal refactor of how the 3D city picks up your theme accent, replacing a fragile shared-state mechanism with a cleaner one; no change to how the city looks.
+- **[issue-1064] Smoother CyberCity theme switching** — changing your theme now recolors the 3D city in place instead of rebuilding the whole scene, so the switch is seamless with no rebuild flash or blank frame.
