@@ -253,5 +253,23 @@ describe('brainJournal', () => {
 
       expect(obsidian.deleteNote).not.toHaveBeenCalled();
     });
+
+    it('does not resurrect an Obsidian-location sidecar entry for a day deleted before a deferred sync lands', async () => {
+      obsidian.getVaultById.mockResolvedValue({ id: 'v1', path: '/' });
+      obsidian.updateNote.mockResolvedValue({ path: 'Daily Log/2026-04-17.md' });
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: true, obsidianFolder: 'Daily Log' });
+
+      // Create the day, then delete it (tombstone + clear sidecar).
+      await journal.appendJournal('2026-04-17', 'content');
+      await journal.deleteJournal('2026-04-17');
+
+      // A deferred sync for the now-deleted day must NOT re-create the sidecar
+      // entry (which would reattach if the date were recreated).
+      await journal.syncToObsidian({ id: 'j1', date: '2026-04-17', content: 'content', segments: [] });
+
+      const { records } = await journal.listJournals();
+      const revived = records.find((r) => r.date === '2026-04-17');
+      expect(revived).toBeUndefined();
+    });
   });
 });

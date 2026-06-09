@@ -397,6 +397,12 @@ export async function syncToObsidian(entry, { force = false } = {}) {
 // guard skips a redundant sidecar write on every sync of an unchanged day.
 async function persistObsidianLocation(date, notePath, vaultId) {
   return storeMutex(async () => {
+    // Re-check the live record under the lock: a fire-and-forget syncToObsidian()
+    // can land AFTER the user deleted the day (deleteJournal tombstones it and
+    // clears the sidecar). Without this guard we'd resurrect an orphan sidecar
+    // entry for a tombstoned day, which would reattach if the date is recreated.
+    // brainStorage.getById returns null for a tombstone, so this skips correctly.
+    if (!(await brainStorage.getById('journals', date))) return;
     const loc = await getObsidianLocation(date);
     if (loc.obsidianPath !== notePath || loc.obsidianVaultId !== vaultId) {
       await saveObsidianLocation(date, { obsidianPath: notePath, obsidianVaultId: vaultId });

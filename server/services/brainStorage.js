@@ -507,26 +507,37 @@ export async function getInboxLogById(id) {
   return getById('inbox', id);
 }
 
+// Serialize every inbox write (create/update/delete). create/update/remove are
+// each a whole-file read-modify-write of inbox.json, and the inbox has genuinely
+// concurrent same-file write paths in normal single-user operation: a capture
+// (create) immediately followed by background classification (update) on the
+// same entry, plus the boot recovery sweep. Without a lock, two such writes can
+// read the same baseline and the last save wins, dropping an entry — exactly the
+// lost-update the old JSONL appendFile path couldn't suffer. This is the
+// CLAUDE.md-sanctioned "serialize two write paths that mutate the same record"
+// case (mirrors brainJournal's storeMutex), NOT a competing-humans defense.
+const withInboxLock = createMutex();
+
 /**
  * Create inbox log entry. `capturedAt` is the user-facing capture time (kept
  * distinct from the sync `createdAt`/`updatedAt` clocks stamped by create()).
  */
 export async function createInboxLog(entry) {
-  return create('inbox', { ...entry, capturedAt: entry.capturedAt || now() });
+  return withInboxLock(() => create('inbox', { ...entry, capturedAt: entry.capturedAt || now() }));
 }
 
 /**
  * Update inbox log entry (partial merge — returns null if absent/tombstoned).
  */
 export async function updateInboxLog(id, updates) {
-  return update('inbox', id, updates);
+  return withInboxLock(() => update('inbox', id, updates));
 }
 
 /**
  * Delete inbox log entry (tombstones in place for sync convergence).
  */
 export async function deleteInboxLog(id) {
-  return remove('inbox', id);
+  return withInboxLock(() => remove('inbox', id));
 }
 
 /**
