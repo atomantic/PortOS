@@ -7,6 +7,7 @@ import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
+import { formatCooldown } from '../../../utils/formatters';
 
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const navigate = useNavigate();
@@ -271,13 +272,6 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const getCooldownMs = (action) => {
     const end = cooldownEnds[action];
     return end ? Math.max(0, end - Date.now()) : 0;
-  };
-
-  const formatCooldown = (ms) => {
-    const totalSeconds = Math.ceil(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
   if (!formData) {

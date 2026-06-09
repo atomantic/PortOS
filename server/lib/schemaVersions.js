@@ -28,9 +28,8 @@
  * add an entry here.
  */
 
-import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS } from './fileUtils.js';
+import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
@@ -217,9 +216,9 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  */
 export async function getPortosVersion() {
   const pkgPath = join(PATHS.root, 'package.json');
-  const raw = await readFile(pkgPath, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(pkgPath);
   if (!raw) return '0.0.0';
-  const parsed = (() => { try { return JSON.parse(raw); } catch { return null; } })();
+  const parsed = safeJSONParse(raw, null);
   return typeof parsed?.version === 'string' && parsed.version ? parsed.version : '0.0.0';
 }
 

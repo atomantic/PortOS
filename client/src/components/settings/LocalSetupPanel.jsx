@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import { usePrevious } from '../../hooks/usePrevious.js';
+import { safeParseJSON } from '../../lib/genUtils.js';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
@@ -109,7 +110,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
     installEsRef.current = es;
 
     es.onmessage = (e) => {
-      const event = (() => { try { return JSON.parse(e.data); } catch { return null; } })();
+      const event = safeParseJSON(e.data);
       if (!event) return;
       setInstallLog(prev => [...prev.slice(-200), event]);
       if (event.type === 'complete') {

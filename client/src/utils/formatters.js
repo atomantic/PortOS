@@ -313,3 +313,42 @@ export function getAppName(appId, apps, fallback = null) {
   const app = apps?.find(a => a.id === appId);
   return app?.name || fallback;
 }
+
+/**
+ * Format a cooldown countdown in milliseconds as "M:SS" (e.g., "1:05", "0:09").
+ * @param {number} ms - Remaining milliseconds (negative values clamp to 0:00)
+ * @returns {string} Minutes:seconds countdown string
+ */
+export function formatCooldown(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Parse a human size string ("4.7 GB", "512 MB") to GB.
+ * @param {string|null|undefined} sizeStr - Human-readable size string
+ * @returns {number|null} Size in GB, or null when unparseable
+ */
+export function parseSizeGb(sizeStr) {
+  const match = /([\d.]+)\s*(TB|GB|MB|KB)/i.exec(String(sizeStr || ''));
+  if (!match) return null;
+  const val = parseFloat(match[1]);
+  if (!Number.isFinite(val)) return null;
+  return val * ({ TB: 1024, GB: 1, MB: 1 / 1024, KB: 1 / (1024 * 1024) }[match[2].toUpperCase()]);
+}
+
+/**
+ * Rough RAM/VRAM needed to run a local model: weights + ~20% overhead
+ * (KV cache/runtime), rounded up to whole GB with a 1 GB floor.
+ * Prefers exact bytes when known, falling back to a human size string.
+ * @param {number|null|undefined} sizeBytes - Exact model size in bytes
+ * @param {string|null|undefined} sizeStr - Human size string fallback ("4.7 GB")
+ * @returns {number|null} Whole GB recommendation, or null when size is unknown
+ */
+export function recommendedRamGb(sizeBytes, sizeStr) {
+  const gb = Number.isFinite(sizeBytes) ? sizeBytes / 1024 ** 3 : parseSizeGb(sizeStr);
+  if (!gb || gb <= 0) return null;
+  return Math.max(1, Math.ceil(gb * 1.2));
+}

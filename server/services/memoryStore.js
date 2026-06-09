@@ -8,10 +8,10 @@
  * CRUD/search logic and events on top of these primitives.
  */
 
-import { writeFile, rm } from 'fs/promises';
+import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { ensureDir, ensureDirs, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, readJSONFile, atomicWrite, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 
 const MEMORY_DIR = PATHS.memory;
@@ -53,7 +53,7 @@ export async function saveIndex(index) {
   await ensureDirectories();
   index.lastUpdated = new Date().toISOString();
   indexCache = index;
-  await writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
+  await atomicWrite(INDEX_FILE, index);
 }
 
 /**
@@ -75,7 +75,9 @@ export async function loadEmbeddings() {
 export async function saveEmbeddings(embeddings) {
   await ensureDirectories();
   embeddingsCache = embeddings;
-  await writeFile(EMBEDDINGS_FILE, JSON.stringify(embeddings));
+  // Pre-stringify compactly: atomicWrite pretty-prints plain objects, which
+  // would inflate the largest file in the memory store on every save.
+  await atomicWrite(EMBEDDINGS_FILE, JSON.stringify(embeddings));
 }
 
 /**
@@ -91,10 +93,8 @@ export async function loadMemory(id) {
  */
 export async function saveMemory(memory) {
   const memoryDir = join(MEMORIES_DIR, memory.id);
-  if (!existsSync(memoryDir)) {
-    await ensureDir(memoryDir);
-  }
-  await writeFile(join(memoryDir, 'memory.json'), JSON.stringify(memory, null, 2));
+  await ensureDir(memoryDir);
+  await atomicWrite(join(memoryDir, 'memory.json'), memory);
 }
 
 /**

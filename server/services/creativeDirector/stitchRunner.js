@@ -26,7 +26,7 @@ import { getProject, updateProject } from './local.js';
 import { getIssue, sanitizeAudioMode } from '../pipeline/issues.js';
 import { muxMusicBed, muxVoLines, muxCueBed, muxStripAudio, resolveMusicTrackPath, selectPlacedVoLines, selectPlacedCues } from '../pipeline/audioMux.js';
 import { placeCuesOnTimeline } from '../pipeline/audioCuePlacement.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, sleep } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 
 const FINAL_RENDER_POLL_MS = 3000;
@@ -129,10 +129,6 @@ export async function runStitch(projectId) {
     console.log(`❌ CD stitch error for ${projectId}: ${reason}`);
     await updateProject(projectId, { status: 'failed', failureReason: reason }).catch(() => {});
   }
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function maybeMuxPipelineAudio(project, finalEntry) {

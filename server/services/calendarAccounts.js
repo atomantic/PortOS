@@ -1,7 +1,6 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 
 const ACCOUNTS_FILE = join(PATHS.calendar, 'accounts.json');
@@ -14,7 +13,7 @@ async function loadAccounts() {
 
 async function saveAccounts(accounts) {
   await ensureDir(PATHS.calendar);
-  await writeFile(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2));
+  await atomicWrite(ACCOUNTS_FILE, accounts);
 }
 
 export async function listAccounts() {

@@ -6,7 +6,7 @@ import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
-import { formatBytes } from '../utils/formatters';
+import { formatBytes, parseSizeGb, recommendedRamGb } from '../utils/formatters';
 import { compareLocalLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
@@ -40,20 +40,6 @@ function formatMs(ms) {
 function formatRate(value) {
   if (!Number.isFinite(value)) return 'n/a';
   return `${value.toFixed(value >= 10 ? 1 : 2)} chars/s`;
-}
-
-function parseSizeGb(sizeStr) {
-  const match = /([\d.]+)\s*(TB|GB|MB|KB)/i.exec(String(sizeStr || ''));
-  if (!match) return null;
-  const val = parseFloat(match[1]);
-  if (!Number.isFinite(val)) return null;
-  return val * ({ TB: 1024, GB: 1, MB: 1 / 1024, KB: 1 / (1024 * 1024) }[match[2].toUpperCase()]);
-}
-
-function recommendedRamGb(model) {
-  const gb = Number.isFinite(model?.size) ? model.size / 1024 ** 3 : parseSizeGb(model?.catalog?.size);
-  if (!gb || gb <= 0) return null;
-  return Math.max(1, Math.ceil(gb * 1.2));
 }
 
 function modelSizeLabel(model) {
@@ -450,7 +436,7 @@ export default function LocalLlmPlayground() {
                       {models.map((target) => {
                         const selected = selectedKeys.has(localLlmTargetKey(target));
                         const size = modelSizeLabel(target);
-                        const ram = recommendedRamGb(target);
+                        const ram = recommendedRamGb(target?.size, target?.catalog?.size);
                         const tags = getUseCaseTags(target);
                         const detailParts = [
                           target.catalog?.params || target.params,
