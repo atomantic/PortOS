@@ -24,56 +24,53 @@ import * as api from './api.js';
 import { getRateLimitStatus } from './rateLimits.js';
 
 /**
- * Moltbook client for a specific agent account
+ * Create a Moltbook client for a specific agent account
  */
-export class MoltbookClient {
-  constructor(apiKey) {
-    this.apiKey = apiKey;
-    this.aiConfig = null;
-  }
-
-  // Account
-  getStatus() { return api.getStatus(this.apiKey); }
-  getProfile() { return api.getProfile(this.apiKey); }
-  updateProfile(updates) { return api.updateProfile(this.apiKey, updates); }
-
-  // Posts
-  createPost(submolt, title, content) { return api.createPost(this.apiKey, submolt, title, content, this.aiConfig); }
-  getFeed(sort, limit) { return api.getFeed(this.apiKey, sort, limit); }
-  getPost(postId) { return api.getPost(this.apiKey, postId); }
-  getPostsByAuthor(username) { return api.getPostsByAuthor(this.apiKey, username); }
-  deletePost(postId) { return api.deletePost(this.apiKey, postId); }
-
-  // Comments
-  createComment(postId, content) { return api.createComment(this.apiKey, postId, content, this.aiConfig); }
-  replyToComment(postId, parentId, content) { return api.replyToComment(this.apiKey, postId, parentId, content, this.aiConfig); }
-  getComments(postId) { return api.getComments(this.apiKey, postId); }
-
-  // Voting
-  upvote(postId) { return api.upvote(this.apiKey, postId); }
-  downvote(postId) { return api.downvote(this.apiKey, postId); }
-  upvoteComment(commentId) { return api.upvoteComment(this.apiKey, commentId); }
-
-  // Social
-  follow(agentName) { return api.follow(this.apiKey, agentName); }
-  unfollow(agentName) { return api.unfollow(this.apiKey, agentName); }
-  getAgentProfile(agentName) { return api.getAgentProfile(this.apiKey, agentName); }
-  getFollowers() { return api.getFollowers(this.apiKey); }
-  getFollowing() { return api.getFollowing(this.apiKey); }
-
-  // Heartbeat
-  heartbeat(options) { return api.heartbeat(this.apiKey, options); }
-
-  // Submolts
-  getSubmolts() { return api.getSubmolts(this.apiKey); }
-  getSubmolt(name) { return api.getSubmolt(this.apiKey, name); }
-
-  // Rate limits
-  getRateLimitStatus() { return getRateLimitStatus(this.apiKey); }
+export function createMoltbookClient(apiKey) {
+  let aiConfig = null;
+  const client = {
+    apiKey,
+    get aiConfig() { return aiConfig; },
+    set aiConfig(v) { aiConfig = v; },
+    // Account
+    getStatus: () => api.getStatus(apiKey),
+    getProfile: () => api.getProfile(apiKey),
+    updateProfile: (updates) => api.updateProfile(apiKey, updates),
+    // Posts
+    createPost: (submolt, title, content) => api.createPost(apiKey, submolt, title, content, aiConfig),
+    getFeed: (sort, limit) => api.getFeed(apiKey, sort, limit),
+    getPost: (postId) => api.getPost(apiKey, postId),
+    getPostsByAuthor: (username) => api.getPostsByAuthor(apiKey, username),
+    deletePost: (postId) => api.deletePost(apiKey, postId),
+    // Comments
+    createComment: (postId, content) => api.createComment(apiKey, postId, content, aiConfig),
+    replyToComment: (postId, parentId, content) => api.replyToComment(apiKey, postId, parentId, content, aiConfig),
+    getComments: (postId) => api.getComments(apiKey, postId),
+    // Voting
+    upvote: (postId) => api.upvote(apiKey, postId),
+    downvote: (postId) => api.downvote(apiKey, postId),
+    upvoteComment: (commentId) => api.upvoteComment(apiKey, commentId),
+    // Social
+    follow: (agentName) => api.follow(apiKey, agentName),
+    unfollow: (agentName) => api.unfollow(apiKey, agentName),
+    getAgentProfile: (agentName) => api.getAgentProfile(apiKey, agentName),
+    getFollowers: () => api.getFollowers(apiKey),
+    getFollowing: () => api.getFollowing(apiKey),
+    // Heartbeat
+    heartbeat: (options) => api.heartbeat(apiKey, options),
+    // Submolts
+    getSubmolts: () => api.getSubmolts(apiKey),
+    getSubmolt: (name) => api.getSubmolt(apiKey, name),
+    // Rate limits
+    getRateLimitStatus: () => getRateLimitStatus(apiKey),
+  };
+  return client;
 }
 
+/** @deprecated Use createMoltbookClient() */
+export const MoltbookClient = createMoltbookClient;
+
 /**
- * Register a new agent on Moltbook
- * This is a static method since it doesn't require an existing API key
+ * Register a new agent on Moltbook (doesn't require an existing API key)
  */
-MoltbookClient.register = api.register;
+export const registerMoltbookAgent = api.register;

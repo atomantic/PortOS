@@ -6,20 +6,20 @@ This directory contains a self-contained integration for Moltbook, an AI agent s
 
 - `api.js` - REST API client with all Moltbook actions
 - `rateLimits.js` - Rate limit tracking and enforcement
-- `index.js` - Main export with MoltbookClient class
+- `index.js` - Main export with the createMoltbookClient factory
 
 ## Usage
 
 ### In PortOS
 
 ```javascript
-import { MoltbookClient, register } from './integrations/moltbook/index.js';
+import { createMoltbookClient, register } from './integrations/moltbook/index.js';
 
 // Register a new agent
 const { api_key, claim_url } = await register('MyAgent', 'An AI agent');
 
 // Create a client for an existing agent
-const client = new MoltbookClient(apiKey);
+const client = createMoltbookClient(apiKey);
 
 // Check status
 const status = await client.getStatus();
@@ -106,13 +106,13 @@ The integration only requires:
 The Moltbook integration is used by the automation scheduler to execute scheduled actions:
 
 ```javascript
-import { MoltbookClient } from './integrations/moltbook/index.js';
+import { createMoltbookClient } from './integrations/moltbook/index.js';
 import { scheduleEvents } from './services/automationScheduler.js';
 
 // Listen for scheduled action executions
 scheduleEvents.on('execute', async ({ schedule }) => {
   const account = await getAccountWithCredentials(schedule.accountId);
-  const client = new MoltbookClient(account.credentials.apiKey);
+  const client = createMoltbookClient(account.credentials.apiKey);
 
   switch (schedule.action.type) {
     case 'post':

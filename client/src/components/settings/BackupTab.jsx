@@ -7,6 +7,7 @@ import FolderPicker from '../FolderPicker';
 import useAsyncAction from '../../hooks/useAsyncAction';
 import Modal from '../ui/Modal';
 import { getSettings, updateSettings, getBackupStatus, triggerBackup, getBackupSnapshots, restoreDatabase } from '../../services/api';
+import { formatBytes } from '../../utils/formatters';
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.
@@ -132,7 +133,7 @@ export function BackupTab() {
       } else {
         toast.success(`Backup complete — ${filesChanged} files changed`, { icon: '💾' });
       }
-      getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch(() => {});
+      getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); });
     }
     return result;
   }, { errorMessage: 'Backup failed' });
@@ -175,7 +176,7 @@ export function BackupTab() {
   const renderPgStatus = () => {
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
     if (pgBackup.status === 'ok') {
-      return <span className="text-port-success">✅ {Math.round((pgBackup.sizeBytes || 0) / 1024)} KB · {pgBackup.tableCount} tables</span>;
+      return <span className="text-port-success">✅ {formatBytes(pgBackup.sizeBytes || 0)} · {pgBackup.tableCount} tables</span>;
     }
     if (pgBackup.status === 'skipped') {
       return <span className="text-gray-400">⏭️ Not configured (file mode)</span>;
@@ -228,7 +229,7 @@ export function BackupTab() {
       )}
 
       <div className="space-y-1">
-        <label className="block text-sm text-gray-400">Database Backup (last run)</label>
+        <p className="block text-sm text-gray-400">Database Backup (last run)</p>
         <div className="text-sm">{renderPgStatus()}</div>
       </div>
 
@@ -248,9 +249,11 @@ export function BackupTab() {
       </div>
 
       <div className="flex items-center gap-3">
-        <label className="text-sm text-gray-400">Enabled</label>
+        <span className="text-sm text-gray-400">Enabled</span>
         <button
           onClick={() => setEnabled(!enabled)}
+          aria-label={enabled ? 'Disable scheduled backups' : 'Enable scheduled backups'}
+          aria-pressed={enabled}
           className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
         >
           <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : ''}`} />
@@ -274,7 +277,7 @@ export function BackupTab() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <ShieldOff size={14} className="text-gray-500" />
-            <label className="block text-sm text-gray-400">Default Exclusions</label>
+            <span className="block text-sm text-gray-400">Default Exclusions</span>
           </div>
           <p className="text-xs text-gray-500">Built-in paths skipped by default to keep snapshots small. Overridable entries (large re-downloadable assets) can be re-enabled below; fixed entries hold ephemeral data and stay off.</p>
           <ul className="space-y-1.5 mt-1">
@@ -354,7 +357,7 @@ export function BackupTab() {
 
       {snapshots.length > 0 && (
         <div className="space-y-2">
-          <label className="block text-sm text-gray-400">Snapshots</label>
+          <p className="block text-sm text-gray-400">Snapshots</p>
           <ul className="space-y-1.5">
             {snapshots.slice(0, 10).map((snap) => (
               <li key={snap.id} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
@@ -382,7 +385,7 @@ export function BackupTab() {
           <h3 className="text-white text-sm font-medium">Restore database?</h3>
           <p className="text-sm text-gray-400">
             This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget}</code>
-            {restorePreview && <> ({Math.round((restorePreview.sizeBytes || 0) / 1024)} KB · {restorePreview.tableCount} tables)</>}
+            {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
             {' '}into the live PostgreSQL database. Existing rows may be overwritten.
           </p>
           <div className="flex justify-end gap-2">
