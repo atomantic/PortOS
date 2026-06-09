@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { formatBytes } from '../../../utils/formatters';
 
 const SOURCE_ICONS = {
   goodreads: BookOpen,
@@ -228,7 +229,7 @@ export default function ImportTab() {
             {fileContent && (
               <div className="mt-2 flex items-center gap-2 text-sm text-green-400">
                 <Check className="w-4 h-4" />
-                File loaded ({Math.round(fileContent.length / 1024)} KB)
+                File loaded ({formatBytes(fileContent.length, 0)})
               </div>
             )}
           </div>

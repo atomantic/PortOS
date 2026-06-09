@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import historyRoutes from './history.js';
 
 // Mock the history service
@@ -15,13 +16,19 @@ vi.mock('../services/history.js', () => ({
 // Import mocked modules
 import * as history from '../services/history.js';
 
+const buildApp = () => {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/history', historyRoutes);
+  app.use(errorMiddleware);
+  return app;
+};
+
 describe('History Routes', () => {
   let app;
 
   beforeEach(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api/history', historyRoutes);
+    app = buildApp();
 
     // Reset all mocks
     vi.clearAllMocks();
@@ -97,6 +104,14 @@ describe('History Routes', () => {
         offset: 0
       }));
     });
+
+    it('should propagate service errors as 500', async () => {
+      history.getHistory.mockRejectedValue(new Error('DB unavailable'));
+
+      const response = await request(app).get('/api/history');
+
+      expect(response.status).toBe(500);
+    });
   });
 
   describe('GET /api/history/stats', () => {
@@ -121,7 +136,7 @@ describe('History Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.totalEntries).toBe(150);
       expect(response.body.successRate).toBe(0.95);
-      expect(response.body.byAction).toBeDefined();
+      expect(response.body.byAction).toMatchObject({ start: 50, stop: 40, restart: 60 });
     });
   });
 
@@ -160,12 +175,21 @@ describe('History Routes', () => {
     });
 
     it('should handle deletion of non-existent entry', async () => {
-      history.deleteEntry.mockResolvedValue({ success: false, error: 'Entry not found' });
+      history.deleteEntry.mockResolvedValue(null);
 
       const response = await request(app).delete('/api/history/h-nonexistent');
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(404);
+      expect(response.body.error).toMatch(/not found/i);
       expect(history.deleteEntry).toHaveBeenCalledWith('h-nonexistent');
+    });
+
+    it('should propagate service errors as 500', async () => {
+      history.deleteEntry.mockRejectedValue(new Error('DB connection lost'));
+
+      const response = await request(app).delete('/api/history/h-err');
+
+      expect(response.status).toBe(500);
     });
   });
 

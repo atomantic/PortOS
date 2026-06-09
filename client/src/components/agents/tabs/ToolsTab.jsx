@@ -3,6 +3,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
+import { formatCooldown } from '../../../utils/formatters';
 
 export default function ToolsTab({ agentId, agent }) {
   const [selectedAccountId, setSelectedAccountId] = useState('');
@@ -308,13 +309,6 @@ export default function ToolsTab({ agentId, agent }) {
   const getCooldownMs = (action) => {
     const end = cooldownEnds[action];
     return end ? Math.max(0, end - Date.now()) : 0;
-  };
-
-  const formatCooldown = (ms) => {
-    const totalSeconds = Math.ceil(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
   if (loading) {

@@ -14,8 +14,7 @@ import { MoltbookClient, checkRateLimit, isAccountSuspended } from '../integrati
 import { MoltworldClient } from '../integrations/moltworld/index.js';
 import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+import { sleep as delay } from '../lib/fileUtils.js';
 
 // Throttle between successive platform writes (votes/comments/replies) so a
 // single agent run doesn't burst the platform API.

@@ -5,7 +5,7 @@ import * as history from '../services/history.js';
 const router = Router();
 
 // GET /api/history - Get history entries
-router.get('/', async (req, res, next) => {
+router.get('/', asyncHandler(async (req, res) => {
   const options = {
     limit: parseInt(req.query.limit, 10) || 100,
     offset: parseInt(req.query.offset, 10) || 0,
@@ -14,33 +14,30 @@ router.get('/', async (req, res, next) => {
     success: req.query.success !== undefined ? req.query.success === 'true' : undefined
   };
 
-  const result = await history.getHistory(options).catch(next);
-  if (result) res.json(result);
-});
+  res.json(await history.getHistory(options));
+}));
 
 // GET /api/history/stats - Get history statistics
-router.get('/stats', async (req, res, next) => {
-  const stats = await history.getHistoryStats().catch(next);
-  if (stats) res.json(stats);
-});
+router.get('/stats', asyncHandler(async (req, res) => {
+  res.json(await history.getHistoryStats());
+}));
 
 // GET /api/history/actions - Get unique action types
-router.get('/actions', async (req, res, next) => {
-  const actions = await history.getActionTypes().catch(next);
-  if (actions) res.json(actions);
-});
+router.get('/actions', asyncHandler(async (req, res) => {
+  res.json(await history.getActionTypes());
+}));
 
 // DELETE /api/history/:id - Delete single entry
-router.delete('/:id', async (req, res, next) => {
-  const result = await history.deleteEntry(req.params.id).catch(next);
-  if (result) res.json(result);
-});
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const result = await history.deleteEntry(req.params.id);
+  if (!result) throw new ServerError('Entry not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(result);
+}));
 
 // DELETE /api/history - Clear history
-router.delete('/', async (req, res, next) => {
+router.delete('/', asyncHandler(async (req, res) => {
   const olderThanDays = req.query.olderThanDays ? parseInt(req.query.olderThanDays, 10) : null;
-  const result = await history.clearHistory(olderThanDays).catch(next);
-  if (result) res.json(result);
-});
+  res.json(await history.clearHistory(olderThanDays));
+}));
 
 export default router;

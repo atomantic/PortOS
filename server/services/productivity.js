@@ -5,11 +5,10 @@
  * insights about optimal working times.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { getAgents } from './cosAgents.js';
-import { ensureDir, getDateString, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, getDateString, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.cos;
 const PRODUCTIVITY_FILE = join(DATA_DIR, 'productivity.json');
@@ -61,7 +60,7 @@ export async function loadProductivity() {
 async function saveProductivity(data) {
   await ensureDir(DATA_DIR);
   data.lastUpdated = new Date().toISOString();
-  await writeFile(PRODUCTIVITY_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(PRODUCTIVITY_FILE, data);
   return data;
 }
 

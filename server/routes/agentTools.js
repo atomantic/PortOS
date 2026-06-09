@@ -26,6 +26,11 @@ import { generatePost, generateComment, generateReply } from '../services/agentC
 import { findRelevantPosts } from '../services/agentFeedFilter.js';
 import { MoltbookClient } from '../integrations/moltbook/index.js';
 import { collectPublishedPosts } from '../services/agentPublished.js';
+import { sleep } from '../lib/fileUtils.js';
+
+// Throttle between successive platform writes (votes/comments/replies) so a
+// single agent run doesn't burst the platform API.
+const MOLTBOOK_ACTION_DELAY_MS = 1500;
 
 const router = Router();
 
@@ -166,7 +171,6 @@ router.post('/engage', asyncHandler(async (req, res) => {
 
   const votes = [];
   const comments = [];
-  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   // Vote on relevant posts
   for (const post of relevantPosts) {
@@ -177,7 +181,7 @@ router.post('/engage', asyncHandler(async (req, res) => {
 
     await client.upvote(post.id);
     votes.push({ postId: post.id, title: post.title });
-    await delay(1500);
+    await sleep(MOLTBOOK_ACTION_DELAY_MS);
   }
 
   // Comment on best matches
@@ -205,7 +209,7 @@ router.post('/engage', asyncHandler(async (req, res) => {
         content: generated.content,
         reason: opportunity.reason
       });
-      await delay(1500);
+      await sleep(MOLTBOOK_ACTION_DELAY_MS);
     }
   }
 
@@ -415,7 +419,6 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
   let totalComments = 0;
   let newComments = 0;
   let suspended = false;
-  const delayMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   for (const post of posts) {
     if (suspended) break;
@@ -458,7 +461,7 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
               snippet: (comment.content || '').substring(0, 80)
             });
           }
-          await delayMs(1500);
+          await sleep(MOLTBOOK_ACTION_DELAY_MS);
         }
       }
 
@@ -484,7 +487,7 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
               reply: generated.content
             });
           }
-          await delayMs(1500);
+          await sleep(MOLTBOOK_ACTION_DELAY_MS);
         }
       }
 

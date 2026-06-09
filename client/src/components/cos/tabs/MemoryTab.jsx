@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -7,7 +7,8 @@ import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
-import MemoryGraph from './MemoryGraph';
+// Lazy: MemoryGraph pulls the three.js stack; load it only when rendered.
+const MemoryGraph = lazy(() => import('./MemoryGraph'));
 import MemoryEditModal from './MemoryEditModal';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
@@ -183,6 +184,7 @@ export default function MemoryTab({ apps = [] }) {
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           placeholder="Search memories semantically..."
+          aria-label="Search memories"
           className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-port-accent outline-hidden"
         />
         <button
@@ -293,6 +295,7 @@ export default function MemoryTab({ apps = [] }) {
                     disabled={actionInFlight === memory.id}
                     className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 active:bg-port-accent/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Edit before approving"
+                    aria-label="Edit before approving"
                   >
                     <Pencil size={20} />
                   </button>
@@ -301,6 +304,7 @@ export default function MemoryTab({ apps = [] }) {
                     disabled={!!actionInFlight}
                     className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-green-500/20 text-green-400 hover:bg-green-500/30 active:bg-green-500/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Approve"
+                    aria-label="Approve memory"
                   >
                     {actionInFlight === memory.id ? <BrailleSpinner /> : <Check size={20} />}
                   </button>
@@ -309,6 +313,7 @@ export default function MemoryTab({ apps = [] }) {
                     disabled={!!actionInFlight}
                     className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 active:bg-red-500/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Reject"
+                    aria-label="Reject memory"
                   >
                     {actionInFlight === memory.id ? <BrailleSpinner /> : <XCircle size={20} />}
                   </button>
@@ -432,6 +437,7 @@ export default function MemoryTab({ apps = [] }) {
                       onClick={() => setEditingMemory(memory)}
                       className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
                       title="Edit memory"
+                      aria-label="Edit memory"
                     >
                       <Pencil size={18} />
                     </button>
@@ -439,6 +445,7 @@ export default function MemoryTab({ apps = [] }) {
                       onClick={() => handleDelete(memory.id)}
                       className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                       title="Archive memory"
+                      aria-label="Archive memory"
                     >
                       <Trash2 size={18} />
                     </button>
@@ -451,7 +458,9 @@ export default function MemoryTab({ apps = [] }) {
       ) : view === 'timeline' ? (
         <MemoryTimeline memories={memories} />
       ) : (
-        <MemoryGraph />
+        <Suspense fallback={<BrailleSpinner text="Loading graph" />}>
+          <MemoryGraph />
+        </Suspense>
       )}
 
       {/* Edit Modal */}

@@ -74,7 +74,8 @@ export function MortalLoomTab() {
     toast.success(`Imported ${totalAdded} new records (${totalSkipped} already present)`);
     const now = new Date().toISOString();
     setLastImport(now);
-    await updateSettings({ mortalloom: { enabled, path: path.trim(), lastImportAt: now } }).catch(() => {});
+    await updateSettings({ mortalloom: { enabled, path: path.trim(), lastImportAt: now } })
+      .catch((err) => { console.warn(`⚠️ Failed to persist import timestamp: ${err?.message || err}`); });
     await refreshStatus();
   };
 

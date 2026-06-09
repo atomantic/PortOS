@@ -223,17 +223,22 @@ export const registerVoiceHandlers = (socket) => {
   // dictation off and surface the error instead. Disabling is always
   // allowed — it's a clean-up path that can run regardless of config.
   socket.on('voice:dictation:set', async (payload) => {
-    const { enabled, date } = payload && typeof payload === 'object' ? payload : {};
-    if (enabled && !(await ensureEnabled('dictation'))) {
-      // Ensure UI and server agree that dictation is off after a blocked
-      // enable, otherwise the UI can silently drift into "dictating" state.
-      state.dictation = { enabled: false, date: null };
-      socket.emit('voice:dictation', { enabled: false });
-      return;
+    try {
+      const { enabled, date } = payload && typeof payload === 'object' ? payload : {};
+      if (enabled && !(await ensureEnabled('dictation'))) {
+        // Ensure UI and server agree that dictation is off after a blocked
+        // enable, otherwise the UI can silently drift into "dictating" state.
+        state.dictation = { enabled: false, date: null };
+        socket.emit('voice:dictation', { enabled: false });
+        return;
+      }
+      const normalizedDate = isIsoDate(date) ? date : (state.dictation.date || null);
+      state.dictation = { enabled: !!enabled, date: enabled ? normalizedDate : null };
+      socket.emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
+    } catch (err) {
+      console.error(`❌ voice:dictation:set failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'dictation', message: err.message });
     }
-    const normalizedDate = isIsoDate(date) ? date : (state.dictation.date || null);
-    state.dictation = { enabled: !!enabled, date: enabled ? normalizedDate : null };
-    socket.emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
   });
 
   // Client pushes the current page's DOM index whenever voice is enabled

@@ -364,7 +364,8 @@ async function upgradeOllamaMacApp(emit) {
 
   emit('Looking up the latest Ollama release on GitHub…')
   const release = await fetch('https://api.github.com/repos/ollama/ollama/releases/latest', {
-    headers: { 'User-Agent': 'PortOS', Accept: 'application/vnd.github+json' }
+    headers: { 'User-Agent': 'PortOS', Accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(15000),
   }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
   if (!release) return { success: false, error: 'Could not reach GitHub to look up the latest Ollama release.' }
 
@@ -384,16 +385,19 @@ async function upgradeOllamaMacApp(emit) {
   await mkdir(tmpDir, { recursive: true })
 
   emit(`Downloading Ollama ${release.tag_name} (${Math.round(asset.size / 1024 / 1024)} MB)…`)
+  // No timeout signal here: it would cover the entire multi-hundred-MB body
+  // stream, turning slow links into mid-download aborts. User-triggered and
+  // recoverable, so an unbounded stream is the lesser evil.
   const dl = await fetch(asset.browser_download_url).catch((err) => ({ _err: err.message }))
   if (dl._err || !dl?.ok || !dl.body) {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     return { success: false, error: `Download failed: ${dl?._err || dl?.statusText || 'no response body'}` }
   }
-  await pipeline(Readable.fromWeb(dl.body), createWriteStream(zipPath))
-    .catch(async (err) => {
-      await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-      throw err
-    })
+  const pipeErr = await pipeline(Readable.fromWeb(dl.body), createWriteStream(zipPath)).then(() => null, (err) => err)
+  if (pipeErr) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: `Download failed: ${pipeErr.message}` }
+  }
 
   emit('Stopping running Ollama…')
   await ollamaManager.stopServer().catch(() => null)

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { formatContextLength, formatDurationMin, formatEventDateTime, timeAgo } from './formatters.js';
+import {
+  formatContextLength, formatDurationMin, formatEventDateTime, timeAgo,
+  formatCooldown, parseSizeGb, recommendedRamGb, parseTimeoutMs,
+} from './formatters.js';
 
 describe('formatContextLength', () => {
   it('formats common context windows compactly', () => {
@@ -98,5 +101,113 @@ describe('timeAgo', () => {
   it('formats a recent past date in days', () => {
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
     expect(timeAgo(threeDaysAgo)).toBe('3d ago');
+  });
+});
+
+describe('formatCooldown', () => {
+  it('formats 0 ms as 0:00', () => {
+    expect(formatCooldown(0)).toBe('0:00');
+  });
+
+  it('clamps negative values to 0:00', () => {
+    expect(formatCooldown(-5000)).toBe('0:00');
+    expect(formatCooldown(-1)).toBe('0:00');
+  });
+
+  it('formats 65000 ms (1 min 5 sec) as 1:05', () => {
+    expect(formatCooldown(65000)).toBe('1:05');
+  });
+
+  it('formats exactly 60000 ms as 1:00', () => {
+    expect(formatCooldown(60000)).toBe('1:00');
+  });
+
+  it('formats sub-minute values with leading zero seconds', () => {
+    expect(formatCooldown(9000)).toBe('0:09');
+    expect(formatCooldown(59000)).toBe('0:59');
+  });
+});
+
+describe('parseSizeGb', () => {
+  it('parses GB strings', () => {
+    expect(parseSizeGb('4.7 GB')).toBeCloseTo(4.7);
+    expect(parseSizeGb('1GB')).toBe(1);
+  });
+
+  it('parses MB strings (converts to fractional GB)', () => {
+    const result = parseSizeGb('512 MB');
+    expect(result).toBeCloseTo(0.5);
+  });
+
+  it('parses TB strings (converts to large GB)', () => {
+    const result = parseSizeGb('2 TB');
+    expect(result).toBeCloseTo(2048);
+  });
+
+  it('returns null for garbage input', () => {
+    expect(parseSizeGb('not a size')).toBeNull();
+    expect(parseSizeGb('')).toBeNull();
+    expect(parseSizeGb(null)).toBeNull();
+    expect(parseSizeGb(undefined)).toBeNull();
+  });
+});
+
+describe('recommendedRamGb', () => {
+  it('uses exact bytes when provided', () => {
+    // 4 GB in bytes: 4 * 1024^3 = 4294967296; + 20% overhead = 4.8 → ceil = 5
+    expect(recommendedRamGb(4 * 1024 ** 3, null)).toBe(5);
+  });
+
+  it('falls back to size string when bytes are null', () => {
+    // 4.7 GB string: 4.7 * 1.2 = 5.64 → ceil = 6
+    expect(recommendedRamGb(null, '4.7 GB')).toBe(6);
+  });
+
+  it('returns null when both inputs are absent', () => {
+    expect(recommendedRamGb(null, null)).toBeNull();
+    expect(recommendedRamGb(undefined, undefined)).toBeNull();
+  });
+
+  it('enforces a 1 GB floor for tiny models', () => {
+    // 10 MB: 10/1024 GB * 1.2 < 1 → floor to 1
+    expect(recommendedRamGb(10 * 1024 * 1024, null)).toBe(1);
+  });
+});
+
+describe('parseTimeoutMs', () => {
+  it('returns null for null/empty/blank', () => {
+    expect(parseTimeoutMs(null)).toBeNull();
+    expect(parseTimeoutMs(undefined)).toBeNull();
+    expect(parseTimeoutMs('')).toBeNull();
+    expect(parseTimeoutMs('   ')).toBeNull();
+  });
+
+  it('returns null for values below the 1000ms floor', () => {
+    expect(parseTimeoutMs('999')).toBeNull();
+    expect(parseTimeoutMs('0')).toBeNull();
+  });
+
+  it('accepts the minimum boundary (1000)', () => {
+    expect(parseTimeoutMs('1000')).toBe(1000);
+  });
+
+  it('accepts the maximum boundary (1800000)', () => {
+    expect(parseTimeoutMs('1800000')).toBe(1800000);
+  });
+
+  it('returns null for values above the 1800000ms ceiling', () => {
+    expect(parseTimeoutMs('1800001')).toBeNull();
+  });
+
+  it('rejects scientific notation ("1e3") — digit-only gate', () => {
+    expect(parseTimeoutMs('1e3')).toBeNull();
+  });
+
+  it('rejects decimal strings ("1.5") — must be integer digit-only', () => {
+    expect(parseTimeoutMs('1.5')).toBeNull();
+  });
+
+  it('accepts a mid-range valid value', () => {
+    expect(parseTimeoutMs('30000')).toBe(30000);
   });
 });

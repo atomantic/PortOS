@@ -939,6 +939,84 @@ describe('pipeline issues service', () => {
       });
     });
 
+    describe('mergeIssuesFromSync — changed-only persistence and multi-series correctness', () => {
+      it('merges issues from two different series correctly', async () => {
+        const a = await svc.createIssue({ seriesId: 'ser-multi-1', title: 'A1' });
+        const b = await svc.createIssue({ seriesId: 'ser-multi-2', title: 'B1' });
+
+        const laterTs = new Date(Date.now() + 60_000).toISOString();
+        const result = await svc.mergeIssuesFromSync([
+          { ...a, title: 'A1 updated', updatedAt: laterTs },
+          { ...b, title: 'B1 updated', updatedAt: laterTs },
+        ]);
+
+        expect(result).toEqual({ applied: true, count: 2 });
+        const updatedA = await svc.getIssue(a.id);
+        const updatedB = await svc.getIssue(b.id);
+        expect(updatedA.title).toBe('A1 updated');
+        expect(updatedB.title).toBe('B1 updated');
+      });
+
+      it('persists only changed issues — unchanged ones are not written', async () => {
+        const changed = await svc.createIssue({ seriesId: 'ser-persist-check', title: 'Changed' });
+        const unchanged = await svc.createIssue({ seriesId: 'ser-persist-check', title: 'Unchanged' });
+
+        const { atomicWrite } = await import('../../lib/fileUtils.js');
+        const writesBefore = atomicWrite.mock.calls.length;
+
+        const laterTs = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeIssuesFromSync([
+          { ...changed, title: 'Changed - remote edit', updatedAt: laterTs },
+          // unchanged issue: same updatedAt → LWW skips it
+        ]);
+
+        const issueWritesAfter = atomicWrite.mock.calls
+          .slice(writesBefore)
+          .map(([path]) => path)
+          .filter((p) => p.includes('pipeline-issues'));
+
+        // The changed issue must have been written.
+        expect(issueWritesAfter.some((p) => p.includes(changed.id))).toBe(true);
+        // The unchanged issue must NOT have been written (B8 fix: only changed subset).
+        expect(issueWritesAfter.some((p) => p.includes(unchanged.id))).toBe(false);
+        // Only 1 issue-record write (the changed one), not 2.
+        expect(issueWritesAfter.length).toBe(1);
+      });
+
+      it('includes renumbered siblings in the persisted set after a delete-transition merge', async () => {
+        const x = await svc.createIssue({ seriesId: 'ser-renum-persist', title: 'X' });
+        const y = await svc.createIssue({ seriesId: 'ser-renum-persist', title: 'Y' });
+        const z = await svc.createIssue({ seriesId: 'ser-renum-persist', title: 'Z' });
+        expect([x.number, y.number, z.number]).toEqual([1, 2, 3]);
+
+        const { atomicWrite } = await import('../../lib/fileUtils.js');
+        const writesBefore = atomicWrite.mock.calls.length;
+
+        const laterTs = new Date(Date.now() + 60_000).toISOString();
+        // Delete Y via sync — should renumber Z from #3 to #2.
+        await svc.mergeIssuesFromSync([{ ...y, deleted: true, deletedAt: laterTs, updatedAt: laterTs }]);
+
+        const issueWritesAfter = atomicWrite.mock.calls
+          .slice(writesBefore)
+          .map(([path]) => path)
+          .filter((p) => p.includes('pipeline-issues'));
+
+        // Y (the changed issue) must be persisted.
+        expect(issueWritesAfter.some((p) => p.includes(y.id))).toBe(true);
+        // Z was renumbered from #3 to #2 — its record must also be persisted.
+        expect(issueWritesAfter.some((p) => p.includes(z.id))).toBe(true);
+        // X was not renumbered (number=1 doesn't change) — must NOT be written.
+        expect(issueWritesAfter.some((p) => p.includes(x.id))).toBe(false);
+        // Total issue-record writes: Y + Z = 2, not 3 (all issues).
+        expect(issueWritesAfter.length).toBe(2);
+
+        // Verify final state.
+        const live = await svc.listIssues({ seriesId: 'ser-renum-persist' });
+        expect(live.map((i) => i.title).sort()).toEqual(['X', 'Z']);
+        expect(live.map((i) => i.number).sort((a, b) => a - b)).toEqual([1, 2]);
+      });
+    });
+
     describe('pruneTombstonedIssues', () => {
       it('removes tombstones older than the cutoff and leaves newer ones + live records', async () => {
         const live = await svc.createIssue({ seriesId: 'ser-prune', title: 'Live' });

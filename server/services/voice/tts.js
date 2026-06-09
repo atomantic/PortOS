@@ -7,7 +7,7 @@ import { findPiperVoice } from './piper-voices.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 // Single source of truth for the supported TTS engine names. Imported by
-// routes/voice.js, routes/pipeline.js, and services/pipeline/audio.js so a
+// routes/voice.js, routes/pipeline/audio.js, and services/pipeline/audio.js so a
 // new engine (e.g. ElevenLabs) shows up in every consumer with one edit.
 export const VALID_ENGINES = new Set(['kokoro', 'piper']);
 

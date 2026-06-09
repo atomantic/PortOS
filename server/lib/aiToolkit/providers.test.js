@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -453,6 +453,118 @@ describe('Provider Service', () => {
       expect(antigravity.envVars).toEqual({ KEEP_ME: '1' });
       expect(antigravityTui.command).toBe('agy');
       expect(antigravityTui.args).toEqual(['--dangerously-skip-permissions']);
+    });
+  });
+
+  describe('testProvider — network layer (api type)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('returns success shape when the api endpoint responds ok', async () => {
+      const models = { data: [{ id: 'gpt-5' }, { id: 'gpt-4' }] };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => models,
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Test API',
+        type: 'api',
+        endpoint: 'https://api.example.com/v1',
+        apiKey: 'sk-test',
+      });
+
+      const result = await providerService.testProvider(p.id);
+      expect(result.success).toBe(true);
+      expect(result.models).toEqual(['gpt-5', 'gpt-4']);
+      expect(result.endpoint).toBe('https://api.example.com/v1');
+    });
+
+    it('returns failure shape when fetch rejects (e.g. timeout / network error)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'TimeoutError')));
+
+      const p = await providerService.createProvider({
+        name: 'Stalled API',
+        type: 'api',
+        endpoint: 'https://stalled.example.com/v1',
+      });
+
+      const result = await providerService.testProvider(p.id);
+      expect(result.success).toBe(false);
+      expect(typeof result.error).toBe('string');
+      expect(result.error).toMatch(/API not reachable/);
+    });
+
+    it('returns failure shape when server responds with non-ok status', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Unauthorized API',
+        type: 'api',
+        endpoint: 'https://auth.example.com/v1',
+      });
+
+      const result = await providerService.testProvider(p.id);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/API not reachable/);
+    });
+  });
+
+  describe('_refreshAPIProviderModels — network layer', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('uses data.models shape for Ollama endpoint', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ models: [{ name: 'llama3.2' }, { name: 'mistral' }] }),
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Ollama',
+        type: 'api',
+        endpoint: 'http://localhost:11434',
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).not.toBeNull();
+      expect(updated.models).toEqual(['llama3.2', 'mistral']);
+    });
+
+    it('uses data.data shape for generic OpenAI-compatible endpoint', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: [{ id: 'model-a' }, { id: 'model-b' }] }),
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Generic API',
+        type: 'api',
+        endpoint: 'https://api.generic.com/v1',
+        apiKey: 'sk-key',
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).not.toBeNull();
+      expect(updated.models).toEqual(['model-a', 'model-b']);
+    });
+
+    it('returns null when the generic endpoint rejects (timeout / unreachable)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'TimeoutError')));
+
+      const p = await providerService.createProvider({
+        name: 'Unreachable API',
+        type: 'api',
+        endpoint: 'https://dead.example.com/v1',
+      });
+
+      const result = await providerService.refreshProviderModels(p.id);
+      expect(result).toBeNull();
     });
   });
 });

@@ -335,7 +335,7 @@ vi.mock('../services/pipeline/editorialAnalysisRunner.js', () => ({
   isSeriesAnalysisActive: vi.fn(() => false),
 }));
 
-const pipelineRouter = (await import('./pipeline.js')).default;
+const pipelineRouter = (await import('./pipeline/index.js')).default;
 const universeSvc = await import('../services/universeBuilder.js');
 
 function makeApp() {

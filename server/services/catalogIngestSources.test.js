@@ -38,6 +38,7 @@ vi.mock('dns/promises', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { audio: '/tmp/data/audio' },
   ensureDir: vi.fn(),
+  sleep: vi.fn(() => Promise.resolve()),
 }));
 
 const catalogDB = await import('./catalogDB.js');

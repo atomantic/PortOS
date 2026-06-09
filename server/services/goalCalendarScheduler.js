@@ -1,8 +1,7 @@
-import { google } from 'googleapis';
-import { writeFile } from 'fs/promises';
+import { calendar } from '@googleapis/calendar';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { join } from 'path';
-import { PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient, needsScopeUpgrade, getTokens } from './googleAuth.js';
 
@@ -34,7 +33,7 @@ async function loadGoals() {
 
 async function saveGoals(data) {
   await ensureDir(PATHS.digitalTwin);
-  await writeFile(GOALS_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(GOALS_FILE, data);
 }
 
 export async function scheduleTimeBlocks(goalId) {
@@ -55,7 +54,7 @@ export async function scheduleTimeBlocks(goalId) {
   const milestones = [...(goal.milestones || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   if (!milestones.length) throw new ServerError('No milestones/phases to schedule', { status: 400, code: 'NO_MILESTONES' });
 
-  const calendar = google.calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth });
   const { preferredDays, timeSlot, sessionDurationMinutes, subcalendarId } = goal.timeBlockConfig;
   const calendarId = subcalendarId || 'primary';
   const preferredDayNums = new Set(preferredDays.map(d => DAY_MAP[d]));
@@ -104,7 +103,7 @@ export async function scheduleTimeBlocks(goalId) {
   for (let i = 0; i < eventDefs.length; i += BATCH_SIZE) {
     const batch = eventDefs.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(batch.map(def =>
-      calendar.events.insert({ calendarId, requestBody: def.requestBody })
+      cal.events.insert({ calendarId, requestBody: def.requestBody })
     ));
     for (let j = 0; j < results.length; j++) {
       scheduledEvents.push({
@@ -135,12 +134,12 @@ export async function removeScheduledEvents(goalId) {
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
 
-  const calendar = google.calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth });
   const events = goal.scheduledEvents || [];
 
   // Delete events in parallel
   await Promise.all(events.map(evt =>
-    calendar.events.delete({
+    cal.events.delete({
       calendarId: evt.calendarId || 'primary',
       eventId: evt.googleEventId
     }).catch(err => {

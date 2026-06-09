@@ -32,7 +32,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
-import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFile, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
 import {
   broadcastSse,
   attachSseClient as attachSse,
@@ -960,10 +960,6 @@ export function attachSseClient(jobId, res) {
   res.write(`data: ${JSON.stringify(terminal)}\n\n`);
   res.end();
   return true;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Test-only reset hook. Real callers go through enqueueJob/cancelJob.

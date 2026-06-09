@@ -43,7 +43,7 @@ const router = Router();
  * the right status here.
  *
  * Pattern mirrors `server/routes/mediaCollections.js` and
- * `server/routes/pipeline.js`: the mapper returns the (possibly-rewrapped)
+ * `server/routes/pipeline/shared.js`: the mapper returns the (possibly-rewrapped)
  * error and the call site re-throws it, so control flow reads like a normal
  * `.catch(mapAndRethrow)`.
  */

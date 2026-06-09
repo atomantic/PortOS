@@ -12,7 +12,6 @@
 // honest about that distinction.
 
 import sharp from 'sharp';
-import { readFile } from 'fs/promises';
 import { basename } from 'node:path';
 import { ServerError } from './errorHandler.js';
 import { tryReadFile, safeJSONParse, atomicWrite } from './fileUtils.js';
@@ -271,7 +270,7 @@ export async function autoCleanGeneratedImage({ cleanC2PA = false, denoise = fal
   // before the readFile so the two disk ops overlap.
   const sidecarReadP = sidecarPath ? tryReadFile(sidecarPath) : Promise.resolve(null);
 
-  const buffer = await readFile(pngPath).catch(() => null);
+  const buffer = await tryReadFile(pngPath, null);
   if (!buffer) {
     console.warn(`⚠️ Auto-clean skipped (source missing): ${pngPath}`);
     return { cleaned: false };

@@ -447,10 +447,14 @@ export async function spawnDirectly({
 
   // If no output after 3 seconds, transition from initializing to working to show progress
   const initializationTimeout = setTimeout(async () => {
-    if (!hasStartedWorking && activeAgents.has(agentId)) {
-      hasStartedWorking = true;
-      await updateAgent(agentId, { metadata: { phase: 'working' } });
-      emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+    try {
+      if (!hasStartedWorking && activeAgents.has(agentId)) {
+        hasStartedWorking = true;
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+      }
+    } catch (err) {
+      console.error(`❌ agentCliSpawning init timeout failed for ${agentId}: ${err.message}`);
     }
   }, 3000);
 

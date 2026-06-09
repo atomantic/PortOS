@@ -157,7 +157,7 @@ router.post('/', asyncHandler(async (req, res) => {
     id,
     filename: fname,
     originalName: filename,
-    path: filepath,
+    path: `/api/uploads/${encodeURIComponent(fname)}`,
     size: buffer.length,
     sizeFormatted: formatSize(buffer.length),
     mimeType,
@@ -182,7 +182,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
     return {
       filename,
-      path: filepath,
+      path: `/api/uploads/${encodeURIComponent(filename)}`,
       size: stats.size,
       sizeFormatted: formatSize(stats.size),
       mimeType: getMimeType(ext),

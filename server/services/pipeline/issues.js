@@ -1222,6 +1222,10 @@ export async function mergeIssuesFromSync(remoteIssues, { source = { via: 'sync'
     const state = await readState();
     const localById = new Map(state.issues.map((i) => [i.id, i]));
     let changed = 0;
+    // Track only the issue IDs that were inserted or overwritten so we persist
+    // the changed subset rather than every issue in the store (avoids unbounded
+    // Promise.all / EMFILE on large catalogs).
+    const changedIds = new Set();
     for (const remote of remoteIssues) {
       if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
       // Drop issues whose parent series is locally ephemeral, BEFORE any
@@ -1251,6 +1255,7 @@ export async function mergeIssuesFromSync(remoteIssues, { source = { via: 'sync'
         // subscription, so peerSync never seeds an `issue`-keyed base hash —
         // this merge path (and the importer) own it.
         await setSyncBaseHash('issue', sanitized.id, contentHashForRecord('issue', sanitized));
+        changedIds.add(sanitized.id);
         changed++;
       } else if (local.ephemeral === true) {
         // Local-ephemeral issues are immune to inbound merges. See
@@ -1265,6 +1270,7 @@ export async function mergeIssuesFromSync(remoteIssues, { source = { via: 'sync'
           // throws into the merge (convergence wins).
           await maybeJournalBeforeOverwrite({ kind: 'issue', id: sanitized.id, local, remote: sanitized, source });
           localById.set(sanitized.id, sanitized);
+          changedIds.add(sanitized.id);
           // Renumber on EITHER direction of the transition: a delete leaves
           // a gap, a resurrection (deleted→live) reintroduces a previously-
           // compacted number and can collide with live siblings until some
@@ -1287,10 +1293,21 @@ export async function mergeIssuesFromSync(remoteIssues, { source = { via: 'sync'
     // tombstoned (gap) or resurrected (collision) an issue. renumberInline
     // skips tombstones, so the resulting numbering is always contiguous
     // across live issues. Single renumber per series, all inside the queue.
+    // renumberInline updates state.issues in-place; collect the renumbered
+    // issue ids so they are also persisted.
     for (const seriesId of seriesNeedingRenumber) {
+      const before = new Map(state.issues.map((i) => [i.id, i.number]));
       await renumberInline(state, seriesId, null);
+      for (const i of state.issues) {
+        if (i.seriesId === seriesId && i.number !== before.get(i.id)) {
+          changedIds.add(i.id);
+        }
+      }
     }
-    await saveIssuesNow(state.issues);
+    // Persist only the issues that were actually changed/renumbered, not the
+    // entire catalog — avoids EMFILE + write-amplification on large stores.
+    const changedIssues = state.issues.filter((i) => changedIds.has(i.id));
+    await saveIssuesNow(changedIssues);
     // Re-emit a series-updated for each touched series so any active share
     // subscription re-exports the post-merge issue set.
     for (const seriesId of seriesNeedingRenumber) {
