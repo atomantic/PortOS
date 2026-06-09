@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./brainStorage.js', () => ({
   applyRemoteRecord: vi.fn(),
-  BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets'],
+  BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets', 'journals', 'inbox'],
 }));
 
 vi.mock('./brainSyncLog.js', () => ({

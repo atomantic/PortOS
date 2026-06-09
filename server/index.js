@@ -539,8 +539,11 @@ try {
   console.error(`❌ agentActionExecutor init failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-// Recover any inbox entries stuck in 'classifying' from a previous crash/restart
-recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
+// Inbox recovery is deferred until after initSyncLog() (see the ensureSelf chain
+// below) — it mutates inbox entries, which are now synced brain records, so its
+// updateInboxLog() calls append to sync_log.jsonl and MUST run after the log's
+// currentSeq is loaded, or they'd write low/duplicate sequence numbers and
+// corrupt peer cursors.
 recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
 recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
@@ -706,6 +709,13 @@ app.use(errorMiddleware);
 // race conditions where brain mutations arrive before the sync log is ready
 ensureSelf()
   .then(() => initSyncLog())
+  .then(() => {
+    // Recover inbox entries stuck in 'classifying' from a previous crash. Runs
+    // AFTER initSyncLog() because updateInboxLog() now appends to the brain sync
+    // log — running it before currentSeq is loaded would mint colliding seqs and
+    // corrupt peer cursors. Fire-and-forget; failures are logged.
+    recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
+  })
   .then(() => initMediaJobQueue())
   .then(() => {
     // Universe Builder needs the media job queue running before it can listen

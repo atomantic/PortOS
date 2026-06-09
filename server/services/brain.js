@@ -10,6 +10,7 @@
 
 import * as storage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
+import { getInstanceId } from './instances.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
@@ -706,15 +707,29 @@ export async function deleteInboxEntry(inboxLogId) {
 /**
  * Recover inbox entries stuck in 'classifying' status from a previous server restart.
  * Resets them to 'needs_review' so the user can retry.
+ *
+ * Only touches entries THIS instance originated. Now that inbox rows are synced
+ * brain records, a peer's entry can be legitimately mid-classification (status
+ * 'classifying') on ITS machine while we hold a synced copy. Flipping that to
+ * 'needs_review' here would stamp a fresh updatedAt and, as the LWW winner,
+ * clobber the origin's real classification on the next sync. Classification only
+ * ever runs on the capturing (origin) machine, so a stuck 'classifying' entry is
+ * only ours to recover when we created it. (Pre-091 records with no
+ * originInstanceId are treated as local — backfillOriginInstanceId stamps them
+ * with our id at boot anyway, so they ARE ours.)
  */
 export async function recoverStuckClassifications() {
+  const instanceId = await getInstanceId();
   const entries = await storage.getInboxLog({ status: 'classifying', limit: 100 });
+  let recovered = 0;
   for (const entry of entries) {
+    if (entry.originInstanceId && entry.originInstanceId !== instanceId) continue;
     await storage.updateInboxLog(entry.id, { status: 'needs_review' });
+    recovered++;
     console.log(`🧠 Recovered stuck classification: ${entry.id}`);
   }
-  if (entries.length > 0) {
-    console.log(`🧠 Recovered ${entries.length} stuck classification(s)`);
+  if (recovered > 0) {
+    console.log(`🧠 Recovered ${recovered} stuck classification(s)`);
   }
 }
 
