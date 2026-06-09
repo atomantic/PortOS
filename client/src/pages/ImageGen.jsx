@@ -48,7 +48,7 @@ import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
   getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
-  buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability,
+  buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability, removeImageWatermark,
 } from '../services/api';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
@@ -929,6 +929,23 @@ export default function ImageGen() {
     toast.success(`Cleaned → ${cleaned.filename}`);
   };
 
+  // De-sparkle: remove the VISIBLE Gemini / nano-banana corner star (CPU
+  // detect-and-inpaint). Synchronous like Clean — returns the new variant, or
+  // `{ removed: false }` when no sparkle is found (source left unchanged).
+  const handleRemoveWatermark = async (img) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    const result = await removeImageWatermark(img.filename).catch((err) => {
+      toast.error(err.message || 'Failed to remove watermark');
+      throw err;
+    });
+    if (!result?.removed) {
+      toast('No Gemini sparkle found — image left unchanged');
+      return;
+    }
+    setGallery((g) => [result, ...g.filter((x) => x.filename !== result.filename)]);
+    toast.success(`Watermark removed → ${result.filename}`);
+  };
+
   // SynthID-defeat regen (issue #912) — unlike clean, this is a queued local
   // FLUX render: it returns a job ack, and the finished variant lands in the
   // gallery via the queue-completion refresh (useMediaCompletionRefresh /
@@ -1470,6 +1487,7 @@ export default function ImageGen() {
         onSendToImage={(item) => item?.raw?.filename && handleSendToImage(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
         onClean={(item) => handleClean(item?.raw)}
+        onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}
         onRegenerate={(item, opts) => handleRegenerate(item?.raw, opts)}
         regenAvailable={regenAvailable}
         regenBounds={regenInfo}

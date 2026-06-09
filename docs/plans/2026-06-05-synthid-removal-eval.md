@@ -51,6 +51,11 @@ fidelity (PSNR-gating) and verify against a detector; (5) LSB-only is a dead end
   denoise *low* (simpler, reuses the GPU lane, no heavy deps). Right trade-off for minimal mutation.
 - **Visible-watermark removal** (Gemini sparkle, Doubao/Jimeng text, Samsung) via reverse-alpha +
   NCC + inpainting — a real compatibility gap, but a substantial separate feature. → future `PLAN.md`.
+  - **UPDATE (2026-06-09):** the Gemini / "nano-banana" sparkle case shipped as `server/lib/geminiSparkle.js`
+    (`removeGeminiSparkle`) + the `POST /image-gen/:filename/remove-watermark` route + the lightbox
+    "De-sparkle" action. It's a sharp-only detect-and-inpaint (background-blur residual → connected-
+    component star pick → diffusion inpaint), CPU-only and model-free, separate from the SynthID regen
+    path. Doubao/Jimeng text + Samsung marks remain unaddressed (different shapes/positions).
 - **Automated detector verification loop** — Google's SynthID Detector is limited-access, no broad
   public API; full automation isn't feasible today. The manual sweep-down workflow stands; the new
   fidelity metric gives an objective in-tool signal in its absence.

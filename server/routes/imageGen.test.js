@@ -77,10 +77,35 @@ vi.mock('../lib/pythonSetup.js', () => ({
 // Stat the python binary to key the cache. Override per-test for mtime
 // changes; default to a stable mtime so the cache HIT path works.
 const mockStat = vi.fn(async () => ({ mtimeMs: 1_700_000_000_000 }));
+// readFile/writeFile are overridable so the de-watermark route tests can
+// simulate a present source + capture the written variant without touching disk.
+const mockReadFile = vi.fn();
+const mockWriteFile = vi.fn(async () => undefined);
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, stat: (path) => mockStat(path) };
+  return {
+    ...actual,
+    stat: (path) => mockStat(path),
+    readFile: (...args) => (mockReadFile.getMockImplementation() ? mockReadFile(...args) : actual.readFile(...args)),
+    writeFile: (...args) => mockWriteFile(...args),
+  };
 });
+
+// The visible-sparkle remover is unit-tested in lib/geminiSparkle.test.js; here
+// we mock it so the route tests exercise only the route's branching (no-op vs.
+// variant write) deterministically.
+const mockRemoveGeminiSparkle = vi.fn();
+vi.mock('../lib/geminiSparkle.js', () => ({
+  removeGeminiSparkle: (...args) => mockRemoveGeminiSparkle(...args),
+}));
+
+// The de-watermark route auto-files the new variant into source collections;
+// stub those out so the test stays filesystem-free.
+vi.mock('../services/mediaCollections.js', () => ({
+  listCollections: vi.fn(async () => []),
+  addItem: vi.fn(async () => ({})),
+  ERR_DUPLICATE: 'ERR_DUPLICATE',
+}));
 
 import * as imageGen from '../services/imageGen/index.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
@@ -845,6 +870,49 @@ describe('Image Gen Routes', () => {
         .send({});
       expect(response.status).toBe(404);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/image-gen/:filename/remove-watermark', () => {
+    afterEach(() => {
+      mockReadFile.mockReset();
+      mockWriteFile.mockClear();
+      mockRemoveGeminiSparkle.mockReset();
+    });
+
+    it('404s when the source image is missing', async () => {
+      mockReadFile.mockImplementation(async () => { const e = new Error('nope'); e.code = 'ENOENT'; throw e; });
+      const response = await request(app).post('/api/image-gen/gone.png/remove-watermark').send({});
+      expect(response.status).toBe(404);
+      expect(mockRemoveGeminiSparkle).not.toHaveBeenCalled();
+    });
+
+    it('returns { removed: false } and writes nothing when no sparkle is found', async () => {
+      mockReadFile.mockImplementation(async () => Buffer.from('png-bytes'));
+      mockRemoveGeminiSparkle.mockResolvedValue({ removed: false, data: Buffer.from('png-bytes'), bbox: null });
+      const response = await request(app).post('/api/image-gen/clean.png/remove-watermark').send({});
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ removed: false });
+      expect(mockWriteFile).not.toHaveBeenCalled();
+    });
+
+    it('writes a _no-watermark variant + sidecar and returns it when a sparkle is removed', async () => {
+      mockReadFile.mockImplementation(async () => Buffer.from('png-bytes'));
+      mockRemoveGeminiSparkle.mockResolvedValue({
+        removed: true,
+        data: Buffer.from('clean-bytes'),
+        width: 800,
+        height: 1200,
+        bbox: { left: 730, top: 1140, width: 48, height: 48 },
+      });
+      const response = await request(app).post('/api/image-gen/render.png/remove-watermark').send({});
+      expect(response.status).toBe(200);
+      expect(response.body.removed).toBe(true);
+      expect(response.body.filename).toBe('render_no-watermark.png');
+      expect(response.body.watermarkRemoved).toBe(true);
+      expect(response.body.cleanedFrom).toBe('render.png');
+      // The variant PNG and its sidecar are both written.
+      expect(mockWriteFile).toHaveBeenCalledTimes(2);
     });
   });
 });

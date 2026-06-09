@@ -269,7 +269,7 @@ export default function MediaCollectionDetail() {
   // the cleaned image to THIS collection + seed imagesByName so hydrate()
   // renders it immediately, no refresh round-trip) is wired through
   // `onCleanComplete`.
-  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
+  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
     onCleanComplete: async (cleaned) => {
       // The server's clean route auto-files the cleaned filename into every
       // collection that contained the source — including this one — so this
@@ -559,6 +559,7 @@ export default function MediaCollectionDetail() {
         onSendToVideo={handleSendToVideo}
         onContinue={(i) => handleContinue(i.raw || i)}
         onClean={(i) => handleClean(i?.raw || i)}
+        onRemoveWatermark={(i) => handleRemoveWatermark(i?.raw || i)}
       />
     </div>
   );

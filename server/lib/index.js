@@ -92,6 +92,7 @@ export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';
 export * from './imageClean.js';
+export * from './geminiSparkle.js';
 export * from './multipart.js';
 export * from './safetensors.js';
 export * from './assetHash.js';

@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from '../components/ui/Toast';
-import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
+import { cleanGalleryImage, removeImageWatermark, extractLastFrame } from '../services/apiImageVideo';
 import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
 // Common image render-setting params shared by the image branch of Remix and by
@@ -40,11 +40,14 @@ function buildImageGenParams(item) {
  *
  * @param {object} [options]
  * @param {(cleaned: object) => any | Promise<any>} [options.onCleanComplete]
- *   Fires AFTER `cleanGalleryImage` resolves. Use it to splice the cleaned
- *   image into the consumer's local state (collection items, gallery list,
- *   variation imageRefs, etc.). Errors thrown from the callback bubble.
+ *   Fires AFTER `cleanGalleryImage` (and `removeImageWatermark`) resolve with a
+ *   new gallery variant. Use it to splice the variant into the consumer's local
+ *   state (collection items, gallery list, variation imageRefs, etc.). Errors
+ *   thrown from the callback bubble. Shared by Clean and De-sparkle since both
+ *   produce a new gallery image the surface needs to show.
  *
- * Returns the four handlers shaped for direct use as MediaPreview props.
+ * Returns the handlers shaped for direct use as MediaPreview / MediaLightbox
+ * props (including `handleRemoveWatermark`).
  */
 export default function useMediaPreviewActions({ onCleanComplete = null } = {}) {
   const navigate = useNavigate();
@@ -160,5 +163,26 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     return cleaned;
   }, [onCleanComplete]);
 
-  return { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean };
+  // De-sparkle: remove the VISIBLE Gemini / nano-banana corner star via the
+  // CPU detect-and-inpaint endpoint. Returns the new gallery variant so the
+  // surface can splice it in (reuses `onCleanComplete` — same "a new image
+  // appeared" shape as Clean). The server 200s with `{ removed: false }` when
+  // no sparkle is found; surface that as an info toast rather than treating it
+  // as a success/failure — the source is unchanged so there's nothing to splice.
+  const handleRemoveWatermark = useCallback(async (img) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    const result = await removeImageWatermark(img.filename).catch((err) => {
+      toast.error(err.message || 'Failed to remove watermark');
+      throw err;
+    });
+    if (!result?.removed) {
+      toast('No Gemini sparkle found — image left unchanged');
+      return null;
+    }
+    toast.success(`Watermark removed → ${result.filename}`);
+    if (onCleanComplete) await onCleanComplete(result);
+    return result;
+  }, [onCleanComplete]);
+
+  return { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark };
 }

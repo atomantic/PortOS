@@ -15,3 +15,14 @@ This file no longer tracks individual tasks (so it stops generating merge
 conflicts as work proceeds). Speculative ideas now live as `future`-labeled
 issues rather than a list here, so they can each be promoted, refined, or closed
 independently.
+
+## Deferred cleanups
+
+- [ ] Extract the shared gallery variant-write shape from the three routes in
+  `server/routes/imageGen.js` — `/clean` (~`router.post('/:filename/clean'`),
+  `runLightRegen`, and `/remove-watermark`. All three resolve a group-root
+  `cleanedFrom`, strip `hidden`/`filename`/`id` off the source sidecar, write a
+  `<base>_<suffix>.png` + matching `.metadata.json`, then
+  `autoFileCleanedToSourceCollections`. Now a rule-of-three candidate; skipped
+  here because folding it in would refactor two pre-existing routes outside the
+  visible-watermark task's scope.

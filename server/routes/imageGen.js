@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer } from '../lib/imageClean.js';
+import { removeGeminiSparkle } from '../lib/geminiSparkle.js';
 import {
   resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
   REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX,
@@ -643,6 +644,76 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     cleanedFrom: filename,
     cleanLevel: 'aggressive',
     c2paStripped: result.c2paStripped,
+  });
+}));
+
+// Remove the VISIBLE Gemini / "nano-banana" sparkle (the four-pointed white
+// star Gemini 2.5 Flash Image stamps in the bottom-right corner). Distinct from
+// `/regenerate` (which defeats the INVISIBLE SynthID signal) and `/clean`
+// (which strips C2PA metadata): this is a sharp-only detect-and-inpaint pass,
+// no GPU/model required. Synchronous like Clean — writes a `_no-watermark.png`
+// variant + sidecar and returns it. When no sparkle is found the source is
+// untouched and the route 200s with `{ removed: false }` so the UI can say so
+// rather than surfacing an error. Mirrors the clean route's file/sidecar/
+// collection shape so the variant groups under the same original.
+router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  local.assertGalleryFilename(filename);
+
+  const sourcePath = join(PATHS.images, filename);
+  const [buffer, { metadata: sourceMeta }] = await Promise.all([
+    readFile(sourcePath).catch((err) => {
+      if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
+      throw err;
+    }),
+    local.readImageSidecar(filename),
+  ]);
+
+  const result = await removeGeminiSparkle(buffer);
+  if (!result.removed) {
+    // No sparkle detected — leave the gallery untouched and tell the UI.
+    console.log(`🌟 No Gemini sparkle found in ${filename} — left unchanged`);
+    return res.json({ removed: false });
+  }
+
+  const base = filename.slice(0, -'.png'.length);
+  const outFilename = `${base}_no-watermark.png`;
+  const outPath = join(PATHS.images, outFilename);
+  const sidecarPath = join(PATHS.images, `${base}_no-watermark.metadata.json`);
+
+  // Anchor the variant group at the root original (same rule as the clean /
+  // regen routes): de-watermarking a cleaned/regenerated variant must group
+  // under the root, not orphan from the family's variant switch.
+  const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
+    ? sourceMeta.cleanedFrom : filename;
+  const createdAt = new Date().toISOString();
+  // Strip hidden/filename/id so listGallery's `...metadata` spread doesn't
+  // overwrite the disk-derived filename or re-hide the deliberate variant.
+  const { hidden: _hidden, filename: _srcFilename, id: _srcId, ...sourceMetaForVariant } = sourceMeta;
+  const variantMeta = {
+    ...sourceMetaForVariant,
+    createdAt,
+    cleanedFrom: groupRoot,
+    watermarkRemoved: true,
+  };
+  await Promise.all([
+    writeFile(outPath, result.data),
+    writeFile(sidecarPath, JSON.stringify(variantMeta, null, 2)),
+  ]);
+
+  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
+    console.warn(`⚠️ Auto-file no-watermark ${outFilename} → collections failed: ${err?.message || err}`);
+    return [];
+  });
+  console.log(`🌟 Removed Gemini sparkle from ${filename} → ${outFilename} (bbox ${result.bbox.width}×${result.bbox.height} @ ${result.bbox.left},${result.bbox.top}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
+
+  return res.json({
+    ...variantMeta,
+    removed: true,
+    filename: outFilename,
+    path: `/data/images/${outFilename}`,
+    width: result.width,
+    height: result.height,
   });
 }));
 

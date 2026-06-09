@@ -43,13 +43,20 @@ const isEditableTarget = (e) => {
 
 const CLEAN_TOOLTIP = 'Re-encode and denoise: removes the C2PA metadata chunk (when present) and reduces visible AI-generation artifacts. Does NOT defeat SynthID — gpt-image / Imagen / Gemini renders remain detectable by their vendor watermark checkers. Saves a new image alongside the original.';
 
-// Three lineage cases:
+// Lineage cases:
 //   - auto-cleaned (replaced in place): "Auto-cleaned (aggressive)"
-//   - manually cleaned (sidecar copy):  "Cleaned (aggressive) from <orig>"
+//   - de-sparkled (visible Gemini mark): "Watermark removed from <orig>"
+//   - SynthID-defeat regen:              "Regenerated from <orig> · …"
+//   - manually cleaned (sidecar copy):   "Cleaned (aggressive) from <orig>"
 //   - neither: returns null and the meta row is dropped by the null-filter
 function describeCleanedLineage(item) {
   if (item.autoCleaned) {
     return `Auto-cleaned (${item.cleanLevel || 'aggressive'})${item.c2paStripped ? ' · C2PA stripped' : ''}`;
+  }
+  // De-sparkle reuses `cleanedFrom` for variant grouping but it's a visible-
+  // watermark inpaint, not a clean — describe it as such.
+  if (item.watermarkRemoved && item.cleanedFrom) {
+    return `Watermark removed from ${item.cleanedFrom}`;
   }
   // SynthID-defeat regen reuses `cleanedFrom` for grouping but is a generative
   // round-trip, not a clean — describe it honestly (issue #912).
@@ -84,6 +91,7 @@ export default function MediaLightbox({
   onContinue,
   onClean,
   onRegenerate,
+  onRemoveWatermark,
   regenAvailable = false,
   regenBounds = null,
   onPrevious,
@@ -329,6 +337,7 @@ export default function MediaLightbox({
             onContinue={onContinue}
             onClean={onClean}
             onRegenerate={onRegenerate}
+            onRemoveWatermark={onRemoveWatermark}
             regenAvailable={regenAvailable}
             regenBounds={regenBounds}
             copy={copy}
@@ -372,7 +381,7 @@ function PeerNotes({ others }) {
 
 function SettingsPane({
   item, meta, isVideo,
-  onClose, onRemix, onSendToImage, onSendToVideo, onContinue, onClean, onRegenerate, regenAvailable, regenBounds,
+  onClose, onRemix, onSendToImage, onSendToVideo, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine,
   annotation, onAnnotationChange,
   variantGroup, onSelectVariant,
@@ -381,6 +390,7 @@ function SettingsPane({
   const [cleaning, setCleaning] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [lightRegenerating, setLightRegenerating] = useState(false);
+  const [removingWatermark, setRemovingWatermark] = useState(false);
   // Regen controls: the button toggles an inline panel (strength slider +
   // optional prompt) so a watermark-defeat pass can be tuned without leaving the
   // lightbox. Slider bounds come from the server (`regenBounds`) so the floor
@@ -656,6 +666,18 @@ function SettingsPane({
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Eraser className="w-3.5 h-3.5" /> {cleaning ? 'Cleaning…' : 'Clean'}
+          </button>
+        )}
+        {!isVideo && onRemoveWatermark && (
+          <button
+            type="button"
+            disabled={removingWatermark}
+            onClick={runBusyAction(removingWatermark, setRemovingWatermark, onRemoveWatermark)}
+            title="Remove the visible Gemini / nano-banana corner sparkle via a CPU detect-and-inpaint pass (no GPU). Creates a new variant; the original is kept. Does nothing if no sparkle is found."
+            aria-label="Remove visible Gemini watermark sparkle"
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> {removingWatermark ? 'Removing…' : 'De-sparkle'}
           </button>
         )}
         {!isVideo && onRegenerate && regenAvailable && (

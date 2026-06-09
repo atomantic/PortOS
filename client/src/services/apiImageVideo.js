@@ -26,6 +26,16 @@ export const cleanGalleryImage = (filename) => request(`/image-gen/${encodeURICo
   method: 'POST',
   body: JSON.stringify({}),
 });
+// Remove the VISIBLE Gemini / "nano-banana" corner sparkle via a CPU
+// detect-and-inpaint pass (no GPU/model). Synchronous — returns the new
+// `_no-watermark.png` variant on success, or `{ removed: false }` when no
+// sparkle was detected (source left unchanged). `silent` so the lightbox owns
+// its own toast (single-layer rule).
+export const removeImageWatermark = (filename) => request(`/image-gen/${encodeURIComponent(filename)}/remove-watermark`, {
+  method: 'POST',
+  body: JSON.stringify({}),
+  silent: true,
+});
 // SynthID-defeat regen (issue #912). Enqueues a local-FLUX img2img round-trip
 // of a gallery image; returns the queue ack ({ jobId, position, ... }) — the
 // finished render lands in the gallery via the normal queue-completion refresh.
