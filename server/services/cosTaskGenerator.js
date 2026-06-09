@@ -232,40 +232,12 @@ export function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
 }
 
 /**
- * Evaluate tasks and decide what to spawn
- *
- * Priority order:
- * 1. User tasks (not on cooldown)
- * 2. Auto-approved system tasks (not on cooldown)
- * 3. Generate idle review task if no other work
+ * Unblock tasks whose orphan-retry cooldown has expired. Walks the blocked
+ * groups of both task stores and flips any `orphan-cooldown` task back to
+ * pending once its `cooldownUntil` has passed. Extracted from `evaluateTasks`
+ * so the cooldown-unblock pass is independently testable.
  */
-export async function evaluateTasks(options) {
-  // `initialStartup` is passed by cos.js's start() (true on the boot-time eval)
-  // so the self-improvement queue is skipped on fresh installs; all other
-  // callers omit it. Destructured from a plain options arg (not a destructuring
-  // param) so the signature carries no leading brace.
-  const { initialStartup = false } = options || {};
-  if (!isDaemonRunning()) return;
-
-  // Check if paused - skip evaluation if so
-  const paused = (await loadState()).paused || false;
-  if (paused) {
-    emitLog('debug', 'CoS is paused - skipping evaluation');
-    return;
-  }
-
-  // Update evaluation timestamp with lock to prevent race conditions
-  const state = await withStateLock(async () => {
-    const s = await loadState();
-    s.stats.lastEvaluation = new Date().toISOString();
-    await saveState(s);
-    return s;
-  });
-
-  // Get both user and CoS tasks
-  const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
-
-  // Unblock tasks whose orphan-retry cooldown has expired
+async function unblockExpiredOrphanCooldowns(userTaskData, cosTaskData) {
   const allBlocked = [
     ...(userTaskData.grouped?.blocked || []),
     ...(cosTaskData.grouped?.blocked || [])
@@ -288,34 +260,22 @@ export async function evaluateTasks(options) {
       }
     }
   }
+}
 
-  // Count running agents and available slots (global + per-project)
-  const runningAgentEntries = Object.values(state.agents).filter(a => a.status === 'running');
-  const runningAgents = runningAgentEntries.length;
-  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
-
-  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
-  const agentsByProject = countRunningAgentsByProject(state.agents);
-
-  if (availableSlots <= 0) {
-    emitLog('warn', `Max concurrent agents reached (${runningAgents}/${state.config.maxConcurrentAgents})`);
-    await recordDecision(
-      DECISION_TYPES.CAPACITY_FULL,
-      `All ${state.config.maxConcurrentAgents} agent slots occupied`,
-      { running: runningAgents, max: state.config.maxConcurrentAgents }
-    );
-    cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
-    return;
-  }
-
-  const tasksToSpawn = [];
-  // Track per-project counts including tasks we're about to spawn in this batch
-  const spawnProjectCounts = { ...agentsByProject };
-
-  // Per-domain CoS auto-run gate. Off/dry-run withhold all AUTOMATIC internal
-  // spawns (auto-approved system tasks, mission, feature-agent, idle-review);
-  // user and on-demand tasks are unaffected. dry-run logs the concrete already-
-  // queued auto-approved tasks it would have spawned without emitting them.
+/**
+ * Resolve the per-domain CoS auto-run mode and the remaining autonomous-action
+ * budget for this cycle (#711). The mode starts from `getDomainMode` and is
+ * forced to `off` when the daily minutes cap is hit; the action budget caps how
+ * many autonomous admissions the autonomous tiers may add this cycle.
+ *
+ * Off/dry-run withhold all AUTOMATIC internal spawns (auto-approved system
+ * tasks, mission, feature-agent, idle-review); user and on-demand tasks are
+ * unaffected. Usage is tallied in completeAgent for autonomous runs only, so a
+ * pure dry-run never accrues; user/on-demand spawns are already past this gate.
+ *
+ * @returns {Promise<{ cosAutonomyMode: string, autonomousActionsRemaining: number }>}
+ */
+async function resolveAutonomyBudget(state, runningAgentEntries) {
   let cosAutonomyMode = getDomainMode(state.config, 'cos');
 
   // Daily CoS budget (#711). Two dimensions, handled differently so a single
@@ -325,9 +285,7 @@ export async function evaluateTasks(options) {
   //    (treat as `off`); a single in-flight run's overshoot is unavoidable.
   //  - actions: precise — cap THIS cycle's autonomous admissions to the remaining
   //    daily allowance, counting both completed (ledger) and in-flight autonomous
-  //    runs. `autonomousActionsRemaining` flows into `autonomousSlotCeiling` below.
-  // Usage is tallied in completeAgent for autonomous runs only, so a pure dry-run
-  // never accrues; user/on-demand spawns above are already past this gate.
+  //    runs. `autonomousActionsRemaining` flows into `autonomousSlotCeiling`.
   const cosBudget = await getDomainBudgetStatus('cos');
   let autonomousActionsRemaining = Infinity;
   if (cosAutonomyMode !== 'off') {
@@ -346,21 +304,19 @@ export async function evaluateTasks(options) {
     }
   }
 
-  // Helper: check if a task can spawn (within both global and per-project limits).
-  // `ceiling` defaults to the global slot count; autonomous sections pass the
-  // lower `autonomousSlotCeiling` so the CoS action budget (#711) caps them.
-  const canSpawnTask = (task, ceiling = availableSlots) => {
-    if (tasksToSpawn.length >= ceiling) return false;
-    const project = task.metadata?.app || '_self';
-    return (spawnProjectCounts[project] || 0) < perProjectLimit;
-  };
-  // Helper: track a spawned task's project
-  const trackSpawn = (task) => {
-    const project = task.metadata?.app || '_self';
-    spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
-  };
+  return { cosAutonomyMode, autonomousActionsRemaining };
+}
 
-  // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
+/**
+ * Priority 0: On-demand task requests (highest priority — user explicitly
+ * requested these). Reads the live schedule's `onDemandRequests`, clears each
+ * as it is processed, and pushes any produced task (deduped) into the spawn set.
+ * Runs against the global slot cap — on-demand work never counts against the
+ * autonomous action budget.
+ */
+async function spawnPriority0OnDemand(ctx) {
+  const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+
   const taskSchedule = await import('./taskSchedule.js');
   const liveSchedule = await taskSchedule.loadSchedule();
   const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
@@ -436,9 +392,15 @@ export async function evaluateTasks(options) {
       }
     }
   }
+}
 
-  // Priority 1: User tasks (always run - cooldown only applies to system tasks)
-  const pendingUserTasks = userTaskData.grouped?.pending || [];
+/**
+ * Priority 1: User tasks (always run — cooldown only applies to system tasks).
+ * Runs against the global slot cap; user work never counts against the
+ * autonomous action budget.
+ */
+async function spawnPriority1UserTasks(ctx) {
+  const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
   for (const task of pendingUserTasks) {
     if (tasksToSpawn.length >= availableSlots) break;
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
@@ -456,17 +418,17 @@ export async function evaluateTasks(options) {
     tasksToSpawn.push(userTask);
     trackSpawn(userTask);
   }
+}
 
-  // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
-  // are already in `tasksToSpawn` and never count against the CoS action budget,
-  // so the autonomous sections below may add at most `autonomousActionsRemaining`
-  // more. With no action cap this equals `availableSlots`, so the default path is
-  // unchanged. The autonomous sections use this in place of `availableSlots`.
-  const autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+/**
+ * Priority 2: Auto-approved system tasks (if slots available) — gated by the
+ * CoS auto-run domain. off/dry-run withhold the unattended spawn; dry-run logs
+ * what would have run so the user can see the plan without it executing. Capped
+ * by `autonomousSlotCeiling` (the CoS action budget, #711).
+ */
+async function spawnPriority2AutoApproved(ctx) {
+  const { state, cosTaskData, cosAutonomyMode, autonomousSlotCeiling, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  // Priority 2: Auto-approved system tasks (if slots available) — gated by the
-  // CoS auto-run domain. off/dry-run withhold the unattended spawn; dry-run logs
-  // what would have run so the user can see the plan without it executing.
   if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists && cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode === 'dry-run') {
       // Log only the tasks execute mode would ACTUALLY spawn — applying the same
@@ -522,21 +484,29 @@ export async function evaluateTasks(options) {
       trackSpawn(sysTask);
     }
   }
+}
 
-  // Check if there are pending user tasks (even if on cooldown)
-  // If user tasks exist, don't run self-improvement - wait for user tasks to be ready
-  const hasPendingUserTasks = pendingUserTasks.length > 0;
-
-  // Background: Queue eligible self-improvement tasks as system tasks
-  // Only queue if there are NO pending user tasks (user tasks always take priority)
-  // Skip on initial startup to avoid auto-spawning agents on fresh installs.
-  // Also skip when CoS auto-run isn't `execute` — queueing creates autonomous work.
+/**
+ * Background: Queue eligible self-improvement tasks as system tasks. Only queue
+ * if there are NO pending user tasks (user tasks always take priority). Skip on
+ * initial startup to avoid auto-spawning agents on fresh installs. Also skip
+ * when CoS auto-run isn't `execute` — queueing creates autonomous work.
+ */
+async function maybeQueueImprovementTasks(ctx) {
+  const { state, cosTaskData, hasPendingUserTasks, initialStartup, cosAutonomyMode } = ctx;
   if (state.config.idleReviewEnabled && !hasPendingUserTasks && !initialStartup && cosAutonomyMode === 'execute') {
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
+}
 
-  // Priority 3: Mission-driven proactive tasks (if no user tasks). Autonomous —
-  // gated by the CoS auto-run domain (off/dry-run skip generation entirely).
+/**
+ * Priority 3: Mission-driven proactive tasks (if no user tasks). Autonomous —
+ * gated by the CoS auto-run domain (off/dry-run skip generation entirely) and
+ * capped by `autonomousSlotCeiling`.
+ */
+async function spawnPriority3Missions(ctx) {
+  const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+
   if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
     const missionTasks = await generateMissionTasks({ maxTasks: autonomousSlotCeiling - tasksToSpawn.length }).catch(err => {
       emitLog('debug', `Mission task generation failed: ${err.message}`);
@@ -564,15 +534,22 @@ export async function evaluateTasks(options) {
       });
     }
   }
+}
 
-  // Priority 3.5: Autonomous jobs are handled by registerJobSchedules() which
-  // sets up individual one-shot timers per job via executeScheduledJob().
-  // Previously this section also checked getDueJobs() and spawned tasks here,
-  // which caused duplicate agent spawns on startup when both paths fired
-  // for the same past-due job within seconds of each other.
+/**
+ * Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks).
+ * Autonomous — gated by the CoS auto-run domain and capped by
+ * `autonomousSlotCeiling`.
+ *
+ * Priority 3.5 (autonomous jobs) has no inline tier: those are handled by
+ * registerJobSchedules(), which sets up individual one-shot timers per job via
+ * executeScheduledJob(). It used to also check getDueJobs() and spawn here,
+ * which caused duplicate agent spawns on startup when both paths fired for the
+ * same past-due job within seconds of each other.
+ */
+async function spawnPriority36FeatureAgents(ctx) {
+  const { hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  // Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks).
-  // Autonomous — gated by the CoS auto-run domain.
   if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
     const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
     const dueAgents = await getDueFeatureAgents().catch(err => {
@@ -590,11 +567,18 @@ export async function evaluateTasks(options) {
       emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
     }
   }
+}
 
-  // Priority 4: Only generate direct idle task if:
-  // 1. Nothing to spawn
-  // 2. No pending user tasks (even on cooldown)
-  // 3. No system tasks queued
+/**
+ * Priority 4: Generate a direct idle-review task ONLY when:
+ * 1. Nothing else is queued to spawn
+ * 2. No pending user tasks (even on cooldown)
+ * 3. No system tasks queued
+ * Autonomous — gated by the CoS auto-run domain.
+ */
+async function spawnPriority4IdleReview(ctx) {
+  const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+
   if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
@@ -606,6 +590,140 @@ export async function evaluateTasks(options) {
       }
     }
   }
+}
+
+/**
+ * Evaluate tasks and decide what to spawn.
+ *
+ * Orchestrates the spawn-priority tiers in sequence, each extracted into a named
+ * private function that mutates a shared spawn context (`ctx`):
+ *   - Priority 0 — on-demand requests       (`spawnPriority0OnDemand`)
+ *   - Priority 1 — pending user tasks        (`spawnPriority1UserTasks`)
+ *   - Priority 2 — auto-approved system tasks (`spawnPriority2AutoApproved`)
+ *   - Priority 3 — mission-driven tasks      (`spawnPriority3Missions`)
+ *   - Priority 3.6 — due feature agents      (`spawnPriority36FeatureAgents`)
+ *   - Priority 4 — idle review               (`spawnPriority4IdleReview`)
+ *
+ * Cross-cutting gates live here so they cover every tier uniformly: the
+ * paused/daemon guard, the global slot cap, orphan-cooldown unblocking, and the
+ * CoS auto-run + daily-budget gate (`resolveAutonomyBudget`). Priorities 0–1
+ * spend against the global `availableSlots`; the autonomous tiers (2, 3, 3.6, 4)
+ * spend against the lower `autonomousSlotCeiling` so the CoS action budget caps
+ * them. `evaluateTasks` emits `task:ready` per pick; the spawn-side scheduler
+ * (`dequeueNextTask`/`tryImmediateSpawn`) stays in cos.js.
+ */
+export async function evaluateTasks(options) {
+  // `initialStartup` is passed by cos.js's start() (true on the boot-time eval)
+  // so the self-improvement queue is skipped on fresh installs; all other
+  // callers omit it. Destructured from a plain options arg (not a destructuring
+  // param) so the signature carries no leading brace.
+  const { initialStartup = false } = options || {};
+  if (!isDaemonRunning()) return;
+
+  // Check if paused - skip evaluation if so
+  const paused = (await loadState()).paused || false;
+  if (paused) {
+    emitLog('debug', 'CoS is paused - skipping evaluation');
+    return;
+  }
+
+  // Update evaluation timestamp with lock to prevent race conditions
+  const state = await withStateLock(async () => {
+    const s = await loadState();
+    s.stats.lastEvaluation = new Date().toISOString();
+    await saveState(s);
+    return s;
+  });
+
+  // Get both user and CoS tasks
+  const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
+
+  // Unblock tasks whose orphan-retry cooldown has expired
+  await unblockExpiredOrphanCooldowns(userTaskData, cosTaskData);
+
+  // Count running agents and available slots (global + per-project)
+  const runningAgentEntries = Object.values(state.agents).filter(a => a.status === 'running');
+  const runningAgents = runningAgentEntries.length;
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
+  const agentsByProject = countRunningAgentsByProject(state.agents);
+
+  if (availableSlots <= 0) {
+    emitLog('warn', `Max concurrent agents reached (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    await recordDecision(
+      DECISION_TYPES.CAPACITY_FULL,
+      `All ${state.config.maxConcurrentAgents} agent slots occupied`,
+      { running: runningAgents, max: state.config.maxConcurrentAgents }
+    );
+    cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
+    return;
+  }
+
+  const tasksToSpawn = [];
+  // Track per-project counts including tasks we're about to spawn in this batch
+  const spawnProjectCounts = { ...agentsByProject };
+
+  // Resolve the CoS auto-run mode + daily-budget ceiling for this cycle (#711).
+  const { cosAutonomyMode, autonomousActionsRemaining } = await resolveAutonomyBudget(state, runningAgentEntries);
+
+  // Helper: check if a task can spawn (within both global and per-project limits).
+  // `ceiling` defaults to the global slot count; autonomous sections pass the
+  // lower `autonomousSlotCeiling` so the CoS action budget (#711) caps them.
+  const canSpawnTask = (task, ceiling = availableSlots) => {
+    if (tasksToSpawn.length >= ceiling) return false;
+    const project = task.metadata?.app || '_self';
+    return (spawnProjectCounts[project] || 0) < perProjectLimit;
+  };
+  // Helper: track a spawned task's project
+  const trackSpawn = (task) => {
+    const project = task.metadata?.app || '_self';
+    spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
+  };
+
+  // Check if there are pending user tasks (even if on cooldown). If user tasks
+  // exist, don't run self-improvement — wait for user tasks to be ready.
+  const pendingUserTasks = userTaskData.grouped?.pending || [];
+  const hasPendingUserTasks = pendingUserTasks.length > 0;
+
+  // Shared spawn context threaded through each priority tier. The tiers mutate
+  // `tasksToSpawn` / `spawnProjectCounts` through the helpers; `canSpawnTask`
+  // and `trackSpawn` close over those same references so the running totals stay
+  // consistent across tiers. `autonomousSlotCeiling` is filled in after the
+  // global-slot tiers (0–1) settle, below.
+  const ctx = {
+    state,
+    cosTaskData,
+    availableSlots,
+    perProjectLimit,
+    tasksToSpawn,
+    spawnProjectCounts,
+    cosAutonomyMode,
+    initialStartup,
+    pendingUserTasks,
+    hasPendingUserTasks,
+    canSpawnTask,
+    trackSpawn,
+    autonomousSlotCeiling: availableSlots
+  };
+
+  // Priorities 0–1 spend against the global slot cap.
+  await spawnPriority0OnDemand(ctx);
+  await spawnPriority1UserTasks(ctx);
+
+  // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
+  // are already in `tasksToSpawn` and never count against the CoS action budget,
+  // so the autonomous sections below may add at most `autonomousActionsRemaining`
+  // more. With no action cap this equals `availableSlots`, so the default path is
+  // unchanged. The autonomous tiers use this in place of `availableSlots`.
+  ctx.autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+
+  // Priorities 2, 3, 3.6, 4 spend against the lower autonomous ceiling.
+  await spawnPriority2AutoApproved(ctx);
+  await maybeQueueImprovementTasks(ctx);
+  await spawnPriority3Missions(ctx);
+  await spawnPriority36FeatureAgents(ctx);
+  await spawnPriority4IdleReview(ctx);
 
   // Emit evaluation status
   const pendingUserCount = userTaskData.grouped?.pending?.length || 0;
