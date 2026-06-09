@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as instances from '../services/instances.js';
-import { getSyncStatus } from '../services/syncOrchestrator.js';
+import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
@@ -120,12 +120,22 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/instances/sync-status — local sync sequences + checksums (used by peers during probe)
+// A probing peer may pass `?forPeer=<its instanceId>` to also receive OUR cursor
+// into its data (`cursorForYou`) — how far we've pulled from it. That cursor is
+// the peer's push-frontier toward us, so it can render an outbound "N to push"
+// count. Older peers omit the param and get the legacy (inbound-only) shape.
+const syncStatusQuerySchema = z.object({
+  forPeer: z.string().guid().optional()
+});
 router.get('/sync-status', asyncHandler(async (req, res) => {
-  const status = await getSyncStatus({ includeChecksums: true });
+  const { forPeer } = syncStatusQuerySchema.parse(req.query);
+  const status = await getSyncStatus({ includeChecksums: true, forPeer });
   res.json({
     brainSeq: status.local.brainSeq,
     memorySeq: status.local.memorySeq,
-    checksums: status.local.checksums
+    checksums: status.local.checksums,
+    // Present only when `forPeer` was supplied and we've synced it before.
+    ...(status.cursorForYou ? { cursorForYou: status.cursorForYou } : {})
   });
 }));
 
@@ -288,6 +298,22 @@ router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
   const result = await instances.probePeer(peer);
   res.json(instances.sanitizePeerForClient(result));
+}));
+
+// POST /api/instances/peers/:id/sync — force an immediate sync with this peer.
+// Probe first so the cursor-reset detection has fresh remoteSyncSeqs, then run
+// the full sync. syncWithPeer emits `sync:progress` events so the card animates
+// live and settles to the new directional summary without a manual refresh.
+router.post('/peers/:id/sync', asyncHandler(async (req, res) => {
+  const peers = await instances.getPeers();
+  const peer = peers.find(p => p.id === req.params.id);
+  if (!peer) throw new ServerError('Peer not found', { status: 404 });
+  const probed = await instances.probePeer(peer);
+  if (probed?.status !== 'online') {
+    throw new ServerError('Peer is offline — cannot sync', { status: 409, code: 'PEER_OFFLINE' });
+  }
+  const result = await syncWithPeer(probed);
+  res.json({ ok: true, result });
 }));
 
 // GET /api/instances/peers/:id/query — proxy GET to peer

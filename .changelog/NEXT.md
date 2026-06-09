@@ -23,6 +23,7 @@
 - **[issue-1050] More reliable database exports** — manual database exports now pick a PostgreSQL dump tool that matches the database being exported, so an export no longer fails on machines with several Postgres versions installed.
 - **[issue-909] CyberCity theme colors** — internal refactor of how the 3D city picks up your theme accent, replacing a fragile shared-state mechanism with a cleaner one; no change to how the city looks.
 - **[issue-1064] Smoother CyberCity theme switching** — changing your theme now recolors the 3D city in place instead of rebuilding the whole scene, so the switch is seamless with no rebuild flash or blank frame.
+- **[issue-1072] Federation cards show what's pending in each direction, live** — each peer's sync card now reads in plain language — "in sync", "3 to pull", "12 to push" — for every category, instead of the cryptic `0/54` sequence numbers (those move to a hover tooltip for debugging). For the first time the card shows both directions: how many of the peer's items you still need to pull *and* how many of your own items the peer hasn't pulled yet. A new **Sync now** button on the card kicks off an immediate sync with that peer, and the card animates live while a sync runs — each category flips to "syncing…" as work lands and settles to the new summary the moment it finishes, no manual refresh needed.
 
 ## Fixed
 

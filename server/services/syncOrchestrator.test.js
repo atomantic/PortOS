@@ -16,6 +16,7 @@ vi.mock('./instances.js', () => ({
 }));
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
+  getCurrentSeq: vi.fn(() => 0),
   compactLog: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./brainSync.js', () => ({
@@ -56,7 +57,7 @@ vi.mock('./sharing/peerSync.js', () => ({
   }),
 }));
 vi.mock('./instanceEvents.js', () => ({
-  instanceEvents: { on: vi.fn(), removeListener: vi.fn() }
+  instanceEvents: { on: vi.fn(), removeListener: vi.fn(), emit: vi.fn() }
 }));
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
@@ -84,7 +85,9 @@ import { applyRemoteChanges as applyBrainChanges } from './brainSync.js';
 import { applyRemoteChanges as applyMemoryChanges } from './memorySync.js';
 import { applyRemoteChanges as applyCatalogChanges } from './catalogSync.js';
 import { instanceEvents } from './instanceEvents.js';
-import { syncWithPeer, syncAllPeers, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
+import { getCurrentSeq } from './brainSyncLog.js';
+import { getMaxSequence } from './memorySync.js';
+import { syncWithPeer, syncAllPeers, getSyncStatus, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
 
 const mockFetch = vi.fn();
 
@@ -565,6 +568,94 @@ describe('syncOrchestrator', () => {
       expect(inbound.universe.size).toBe(0);
       expect(inbound.pipeline.size).toBe(0);
       expect(inbound.mediaCollections.size).toBe(0);
+    });
+  });
+
+  describe('getSyncStatus forPeer / cursorForYou', () => {
+    it('returns our cursor into the requesting peer as cursorForYou', async () => {
+      getCurrentSeq.mockReturnValue(120);
+      getMaxSequence.mockResolvedValue('45');
+      // Our stored cursors: how far we've pulled from each peer. The requesting
+      // peer ('peer-A') wants its own entry back as its push-frontier toward us.
+      readJSONFile.mockImplementation(async () => ({
+        'peer-A': { brainSeq: 88, memorySeq: '30', lastSyncAt: '2026-01-01T00:00:00.000Z' },
+        'peer-B': { brainSeq: 5 },
+      }));
+
+      const status = await getSyncStatus({ forPeer: 'peer-A' });
+      expect(status.cursorForYou).toEqual({ brainSeq: 88, memorySeq: '30', lastSyncAt: '2026-01-01T00:00:00.000Z' });
+      // Our own local maxes are reported under `local`.
+      expect(status.local.brainSeq).toBe(120);
+    });
+
+    it('returns null cursorForYou when we have never synced the requesting peer', async () => {
+      readJSONFile.mockImplementation(async () => ({ 'peer-B': { brainSeq: 5 } }));
+      const status = await getSyncStatus({ forPeer: 'peer-A' });
+      expect(status.cursorForYou).toBeNull();
+    });
+
+    it('omits cursorForYou entirely when no forPeer is supplied (legacy shape)', async () => {
+      readJSONFile.mockImplementation(async () => ({ 'peer-A': { brainSeq: 88 } }));
+      const status = await getSyncStatus({});
+      expect(status).not.toHaveProperty('cursorForYou');
+    });
+  });
+
+  describe('sync:progress events', () => {
+    it('emits start → applied → complete around a sync that moves records', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ changes: [{ id: 'b1' }], maxSeq: 1, hasMore: false }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ changes: [], maxSeq: 1, hasMore: false }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ memories: [], maxSequence: '0', hasMore: false }) });
+      applyBrainChanges.mockResolvedValue({ inserted: 1, updated: 0, deleted: 0, skipped: 0 });
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: true, memory: true } });
+
+      const progressCalls = instanceEvents.emit.mock.calls
+        .filter(([event]) => event === 'sync:progress')
+        .map(([, payload]) => payload);
+      expect(progressCalls[0]).toEqual({ phase: 'start', peerId: 'peer-inst-1' });
+      expect(progressCalls).toContainEqual({ phase: 'applied', peerId: 'peer-inst-1', category: 'brain', applied: 1 });
+      const complete = progressCalls.find(p => p.phase === 'complete');
+      expect(complete).toMatchObject({ phase: 'complete', peerId: 'peer-inst-1' });
+      expect(complete.totalApplied).toBeGreaterThanOrEqual(1);
+    });
+
+    it('releases the per-peer lock and still emits complete when the cursor read throws', async () => {
+      // readCursors → loadCursors → readJSONFile. A throw here (corrupt cursor
+      // file, disk error) happens AFTER the lock is acquired and the `start`
+      // emit fires — the finally must release the lock and emit a terminal
+      // `complete`, or the peer is wedged "syncing" until restart.
+      readJSONFile.mockRejectedValueOnce(new Error('cursor file corrupt'));
+      await expect(syncWithPeer({ ...mockPeer, syncCategories: { brain: true } })).rejects.toThrow('cursor file corrupt');
+
+      const progress = instanceEvents.emit.mock.calls
+        .filter(([event]) => event === 'sync:progress')
+        .map(([, payload]) => payload);
+      expect(progress).toContainEqual({ phase: 'start', peerId: 'peer-inst-1' });
+      expect(progress).toContainEqual({ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0 });
+
+      // Lock released: a subsequent sync is NOT short-circuited by syncingPeers.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) });
+      instanceEvents.emit.mockClear();
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: true } });
+      const reran = instanceEvents.emit.mock.calls.some(([event, p]) => event === 'sync:progress' && p.phase === 'start');
+      expect(reran).toBe(true);
+    });
+
+    it('emits exactly one complete (totalApplied 0) for a no-op sync — card never sticks on "syncing"', async () => {
+      // A category enabled but no changes available: lifecycle still settles.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) });
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: true } });
+
+      const progress = instanceEvents.emit.mock.calls
+        .filter(([event]) => event === 'sync:progress')
+        .map(([, payload]) => payload);
+      const completes = progress.filter(p => p.phase === 'complete');
+      // Exactly one complete, and no spurious second one from the finally guard.
+      expect(completes).toEqual([{ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0 }]);
+      // No `applied` events when nothing moved.
+      expect(progress.some(p => p.phase === 'applied')).toBe(false);
     });
   });
 

@@ -14,7 +14,7 @@ import Pill from '../components/ui/Pill';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
-  removePeer, connectPeer, reciprocatePeer, probePeer, getTailnetInfo, provisionTailnetCert,
+  removePeer, connectPeer, reciprocatePeer, probePeer, syncPeer, getTailnetInfo, provisionTailnetCert,
   getNetworkExposure,
   listPeerSubscriptions,
 } from '../services/api';
@@ -23,6 +23,7 @@ import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
 import { timeAgo } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
+import { directionalCounts, describeDirectional } from '../lib/syncCounts';
 
 const STATUS_COLORS = {
   online: 'text-port-success',
@@ -447,40 +448,46 @@ function DirectionBadge({ directions = [] }) {
   return null;
 }
 
-function SyncStatusBadge({ label, icon: Icon, localSeq: _localSeq, peerSeq, cursorSeq }) {
-  // cursorSeq = how far we've pulled from them (our cursor for their data)
-  // localSeq = our local max seq for this data type
-  // peerSeq = their max seq for this data type (from their sync-status endpoint)
+function SyncStatusBadge({ label, icon: Icon, localSeq, peerSeq, cursorSeq, peerCursorForUs, syncing }) {
+  // cursorSeq        = how far we've pulled from them (our cursor for their data)
+  // localSeq         = our local max seq for this data type
+  // peerSeq          = their max seq for this data type (their sync-status endpoint)
+  // peerCursorForUs  = how far THEY've pulled from us (their cursor into our data)
+  //
+  // Two directions, both in plain language (raw seqs live in the tooltip):
+  //   toPull = peerSeq - cursorSeq         (their items we haven't pulled)
+  //   toPush = localSeq - peerCursorForUs  (our items they haven't pulled)
+  const { toPull, toPush } = directionalCounts({
+    localMax: localSeq,
+    peerMax: peerSeq,
+    ourCursor: cursorSeq,
+    peerCursorForUs,
+  });
+  const { state, text } = describeDirectional({ toPull, toPush });
 
-  // "Inbound" = are we caught up with them? (our cursor vs their max)
-  const inboundSynced = peerSeq != null && cursorSeq != null && String(cursorSeq) === String(peerSeq);
-  const inboundBehind = peerSeq != null && cursorSeq != null && String(cursorSeq) !== String(peerSeq);
+  // Nothing known at all (no probe yet, no cursor) → render nothing.
+  if (peerSeq == null && cursorSeq == null && peerCursorForUs == null && localSeq == null) return null;
 
-  if (peerSeq == null && cursorSeq == null) return null;
+  const StateIcon = syncing ? RefreshCw : state === 'synced' ? CheckCircle2 : state === 'behind' ? AlertCircle : Clock;
+  const iconClass = syncing
+    ? 'text-port-accent animate-spin'
+    : state === 'synced' ? 'text-port-success' : state === 'behind' ? 'text-port-warning' : 'text-gray-500';
+  const textClass = syncing
+    ? 'text-port-accent'
+    : state === 'synced' ? 'text-port-success' : state === 'behind' ? 'text-port-warning' : 'text-gray-400';
+
+  // Raw sequences retained for debugging in the tooltip.
+  const tooltip = `Pulled ${cursorSeq ?? 0} of their ${peerSeq ?? '?'} · `
+    + `they pulled ${peerCursorForUs ?? '?'} of our ${localSeq ?? '?'}`;
 
   return (
     <div className="flex items-center gap-1.5 text-xs">
       <Icon size={12} className="text-gray-500" />
       <span className="text-gray-500">{label}:</span>
-      {peerSeq != null ? (
-        <span className="flex items-center gap-0.5" title={`Our cursor: ${cursorSeq ?? 0} / Their max: ${peerSeq}`}>
-          {inboundSynced ? (
-            <CheckCircle2 size={11} className="text-port-success" />
-          ) : inboundBehind ? (
-            <AlertCircle size={11} className="text-port-warning" />
-          ) : (
-            <Clock size={11} className="text-gray-500" />
-          )}
-          <span className={inboundSynced ? 'text-port-success' : inboundBehind ? 'text-port-warning' : 'text-gray-400'}>
-            {cursorSeq ?? 0}/{peerSeq}
-          </span>
-        </span>
-      ) : (
-        <span className="flex items-center gap-0.5" title="Waiting for peer sync status">
-          <Clock size={11} className="text-gray-500" />
-          <span className="text-gray-500">{cursorSeq ?? 0}/?</span>
-        </span>
-      )}
+      <span className="flex items-center gap-1" title={tooltip}>
+        <StateIcon size={11} className={iconClass} />
+        <span className={textClass}>{syncing ? 'syncing…' : text}</span>
+      </span>
     </div>
   );
 }
@@ -620,7 +627,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
-function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered, subsLoaded = true }) {
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered, subsLoaded = true, syncing = false }) {
   // `livePushCovered` is true when this peer has at least one per-record
   // peer-sync subscription for a record kind that maps to this category
   // (universe-subs → 'universe', series-subs → 'pipeline'). The orchestrator
@@ -639,7 +646,12 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
     <div className="flex items-center gap-1.5 text-xs">
       <Icon size={12} className="text-gray-500" />
       <span className="text-gray-500">{label}:</span>
-      {livePushCovered ? (
+      {syncing ? (
+        <>
+          <RefreshCw size={11} className="text-port-accent animate-spin" />
+          <span className="text-port-accent">syncing…</span>
+        </>
+      ) : livePushCovered ? (
         <>
           <ArrowLeftRight size={11} className="text-port-accent" />
           <span className="text-port-accent" title="Per-record push pipeline owns this category; snapshot cursor is intentionally stale">
@@ -666,12 +678,16 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   );
 }
 
-function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = true }) {
+function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = true, syncing = false }) {
   if (!syncStatus || !peer.instanceId) return null;
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
   const remoteSyncSeqs = peer.remoteSyncSeqs;
   const categories = peer.syncCategories || {};
+  // The peer's cursor into OUR data (how far it has pulled from us) — the
+  // push-frontier toward this peer. Present only when our probe passed `forPeer`
+  // and the peer is new enough to report it; absent → push count is "unknown".
+  const peerCursorForUs = remoteSyncSeqs?.cursorForYou ?? null;
 
   // No sync data available at all
   if (!cursor && !remoteSyncSeqs) return null;
@@ -720,6 +736,8 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
             localSeq={syncStatus.local?.brainSeq}
             peerSeq={remoteSyncSeqs?.brainSeq}
             cursorSeq={cursor?.brainSeq}
+            peerCursorForUs={peerCursorForUs?.brainSeq}
+            syncing={syncing}
           />
         )}
         {showMemory && (
@@ -729,6 +747,8 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
             localSeq={syncStatus.local?.memorySeq}
             peerSeq={remoteSyncSeqs?.memorySeq}
             cursorSeq={cursor?.memorySeq}
+            peerCursorForUs={peerCursorForUs?.memorySeq}
+            syncing={syncing}
           />
         )}
         {enabledSnapshots.map(cat => {
@@ -743,6 +763,7 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
               remoteChecksum={remoteChecksums[cat]}
               livePushCovered={livePushCovered.has(cat)}
               subsLoaded={peerSubsLoaded}
+              syncing={syncing}
             />
           );
         })}
@@ -961,6 +982,36 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
   // is [] and SyncStatusSection can't tell a live-push category from a behind
   // one, so it would flash "behind". Gates the snapshot badges' "behind" state.
   const [peerSubsLoaded, setPeerSubsLoaded] = useState(false);
+  // Live sync activity, driven by the `sync:progress` socket event. `syncing`
+  // is true between this peer's `start` and `complete`; while it's true every
+  // enabled category badge shows "syncing…". On `complete` it clears and the
+  // parent's peers refetch settles the card to the new directional summary.
+  const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    if (!peer.instanceId) return;
+    const handleProgress = (payload) => {
+      if (payload?.peerId !== peer.instanceId) return;
+      if (payload.phase === 'start') {
+        setSyncing(true);
+      } else if (payload.phase === 'complete') {
+        setSyncing(false);
+        // Pull the freshest cursors/seqs so the card settles to the new
+        // directional summary. Only when records actually moved — otherwise the
+        // 60s background `syncAllPeers` cycle would fire a full page refetch per
+        // peer on every idle tick (a refetch herd). The manual "Sync now" path
+        // (`handleSync`) does its own authoritative refetch on the awaited POST,
+        // so a no-op manual sync still settles; this branch covers the
+        // records-moved case for both manual and background syncs.
+        if (payload.totalApplied > 0) onRefresh();
+      }
+      // `applied` events are informational (and drive the server-side log) —
+      // the global `syncing` flag already animates every badge, so the client
+      // needn't track per-category granularity.
+    };
+    socket.on('sync:progress', handleProgress);
+    return () => socket.off('sync:progress', handleProgress);
+  }, [peer.instanceId, onRefresh]);
 
   useEffect(() => {
     if (!peer.instanceId) {
@@ -1033,6 +1084,25 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
     setProbing(false);
   };
 
+  const handleSync = async () => {
+    // Optimistically flip the card into its syncing state — the server's
+    // `sync:progress` start event will confirm it, but this gives instant
+    // feedback even before the socket round-trips. The custom catch owns the
+    // error UI, so request() must stay silent to avoid a double toast.
+    setSyncing(true);
+    const result = await syncPeer(peer.id, { silent: true }).catch(() => null);
+    // The POST awaits the full sync server-side, so its resolution IS the
+    // authoritative completion for a manual sync — clear the spinner here
+    // rather than relying solely on the fire-and-forget `complete` socket
+    // event, which a transient socket disconnect could drop and leave the card
+    // stuck. The refetch itself is owned by the `complete` handler (gated on
+    // records-moved); a no-op manual sync changes nothing worth refetching.
+    setSyncing(false);
+    if (!result) {
+      toast.error(`Couldn't sync with ${peer.name} — is it online?`);
+    }
+  };
+
   const handleRemove = async () => {
     const result = await removePeer(peer.id).catch(() => null);
     if (!result) return;
@@ -1080,6 +1150,16 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={syncing || peer.status !== 'online'}
+            className="p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40 disabled:hover:text-gray-500"
+            title={peer.status === 'online' ? 'Sync now' : 'Peer offline — cannot sync'}
+            aria-label={peer.status === 'online' ? 'Sync now' : 'Peer offline — cannot sync'}
+          >
+            <RefreshCcw size={14} className={syncing ? 'animate-spin text-port-accent' : ''} />
+          </button>
           <button
             onClick={handleProbe}
             disabled={probing}
@@ -1152,7 +1232,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
 
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
-      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} />
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} syncing={syncing} />
 
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (

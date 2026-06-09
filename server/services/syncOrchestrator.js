@@ -32,6 +32,19 @@ let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
 
+// --- Realtime sync progress ---
+//
+// Emit per-peer sync lifecycle events so the Instances UI can animate a card
+// while a sync is actively churning (vs. only updating after a manual probe).
+// `socket.js` forwards `sync:progress` to instance subscribers. Phases:
+//   { phase: 'start',    peerId }
+//   { phase: 'applied',  peerId, category, applied }   // one per category with changes
+//   { phase: 'complete', peerId, totalApplied }
+// Fire-and-forget; a missing/uninitialized emitter must never break a sync.
+function emitSyncProgress(payload) {
+  if (typeof instanceEvents?.emit === 'function') instanceEvents.emit('sync:progress', payload);
+}
+
 // --- Cursor persistence ---
 
 async function loadCursors() {
@@ -105,7 +118,7 @@ async function syncImageFromPeer(peer, avatarPath) {
 /**
  * Get sync status: local sequences + per-peer cursors + optional local checksums
  */
-export async function getSyncStatus({ includeChecksums = false } = {}) {
+export async function getSyncStatus({ includeChecksums = false, forPeer = null } = {}) {
   const isPostgres = getBackendName() === 'postgres';
   const snapshotCategories = includeChecksums ? dataSync.getSupportedCategories() : [];
   const [brainSeq, memorySeq, catalogSeqs, cursors, ...checksumResults] = await Promise.all([
@@ -122,7 +135,16 @@ export async function getSyncStatus({ includeChecksums = false } = {}) {
       local.checksums[snapshotCategories[i]] = checksumResults[i]?.checksum ?? null;
     }
   }
-  return { local, cursors };
+  const result = { local, cursors };
+  // When a peer asks "how much of MY data have you pulled?" (it passes its own
+  // instanceId as `forPeer`), return OUR cursor into that peer's data — i.e. how
+  // far we've consumed from it. That cursor IS the peer's push-frontier toward
+  // us, so the requesting peer can render an outbound "N to push" count without
+  // us tracking its local max. Null when we've never synced that peer.
+  if (isNonEmptyStr(forPeer)) {
+    result.cursorForYou = cursors[forPeer] ?? null;
+  }
+  return result;
 }
 
 // --- Sync logic ---
@@ -565,31 +587,48 @@ export async function syncWithPeer(peer) {
   if (syncingPeers.has(peerId)) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
   syncingPeers.add(peerId);
 
-  // Our own instanceId — sent as `forPeer` so the SOURCE peer can scope each
-  // snapshot it serves us (excludes records it already pushes to us
-  // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
-  // scoping (full snapshots, legacy behavior).
-  const ourInstanceId = await getInstanceId().catch(() => null);
-  const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
-    ? ourInstanceId
-    : null;
+  // Emit an `applied` progress event for a category when it actually moved
+  // records — keeps the per-category emits DRY across the delta + snapshot legs.
+  const reportApplied = (category, applied) => {
+    if (applied > 0) emitSyncProgress({ phase: 'applied', peerId, category, applied });
+  };
 
-  const categories = getEffectiveCategories(peer);
-  const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
-  console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
+  // Track whether the normal `complete` emit fired, so the `finally` can settle
+  // a card whose sync threw mid-flight instead of leaving it spinning forever.
+  let completed = false;
 
-  // Read cursor snapshot outside lock so network I/O doesn't block other peers
-  // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
-  const cursor = await readCursors((cursors) => {
-    const raw = { ...(cursors[peerId] || {}) };
-    return detectCursorReset(raw, peer);
-  });
-
+  // Everything after acquiring the lock runs inside the try so the `finally`
+  // ALWAYS releases `syncingPeers` and emits a terminal `complete` — even if
+  // `getInstanceId`/`readCursors` throws before the sync body. Otherwise a
+  // throw here would both leak the per-peer lock (permanent until restart) and
+  // strand the card spinning with no `complete`.
   try {
+    // Our own instanceId — sent as `forPeer` so the SOURCE peer can scope each
+    // snapshot it serves us (excludes records it already pushes to us
+    // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
+    // scoping (full snapshots, legacy behavior).
+    const ourInstanceId = await getInstanceId().catch(() => null);
+    const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
+      ? ourInstanceId
+      : null;
+
+    const categories = getEffectiveCategories(peer);
+    const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
+    console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
+    emitSyncProgress({ phase: 'start', peerId });
+
+    // Read cursor snapshot outside lock so network I/O doesn't block other peers
+    // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
+    const cursor = await readCursors((cursors) => {
+      const raw = { ...(cursors[peerId] || {}) };
+      return detectCursorReset(raw, peer);
+    });
+
     // --- Brain sync (delta-based) ---
     let brainResult = { brainSeq: cursor.brainSeq ?? 0, totalApplied: 0 };
     if (categories.brain) {
       brainResult = await syncBrainFromPeer(peer, cursor);
+      reportApplied('brain', brainResult.totalApplied);
     }
 
     // --- Memory sync (delta-based, PostgreSQL only) ---
@@ -598,6 +637,7 @@ export async function syncWithPeer(peer) {
       const isPostgres = getBackendName() === 'postgres';
       if (isPostgres) {
         memoryResult = await syncMemoryFromPeer(peer, cursor);
+        reportApplied('memory', memoryResult.totalApplied);
       }
     }
 
@@ -607,6 +647,7 @@ export async function syncWithPeer(peer) {
       const isPostgres = getBackendName() === 'postgres';
       if (isPostgres) {
         catalogResult = await syncCatalogFromPeer(peer, peerId, cursor);
+        reportApplied('catalog', catalogResult.totalApplied);
       }
     }
 
@@ -644,6 +685,7 @@ export async function syncWithPeer(peer) {
       for (let i = 0; i < enabledDataCats.length; i++) {
         const result = settled[i].status === 'fulfilled' ? settled[i].value : { totalApplied: 0, checksum: null };
         dataCategoryResults[enabledDataCats[i]] = result;
+        reportApplied(enabledDataCats[i], result.totalApplied);
       }
     }
 
@@ -677,9 +719,18 @@ export async function syncWithPeer(peer) {
       console.log(`🔄 Synced with ${peer.name}: ${parts.join(', ')} changes`);
     }
 
+    const totalApplied = brainResult.totalApplied + memoryResult.totalApplied
+      + catalogResult.totalApplied
+      + Object.values(dataCategoryResults).reduce((sum, r) => sum + (r?.totalApplied || 0), 0);
+    completed = true;
+    emitSyncProgress({ phase: 'complete', peerId, totalApplied });
+
     return { brain: brainResult, memory: memoryResult, catalog: catalogResult, ...dataCategoryResults };
   } finally {
     syncingPeers.delete(peerId);
+    // If the sync threw before the normal complete emit, still settle the card
+    // out of its "syncing" state (a stuck spinner is worse than a silent stop).
+    if (!completed) emitSyncProgress({ phase: 'complete', peerId, totalApplied: 0 });
   }
 }
 

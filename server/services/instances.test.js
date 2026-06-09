@@ -455,8 +455,10 @@ describe('instances.js', () => {
       // Relay pins the Basic header at connect time, so a credential change
       // must tear it down to reconnect with the new extraHeaders.
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
-      // Immediate re-probe fired (bypasses the nextProbeAt backoff gate).
-      expect(fetch).toHaveBeenCalled();
+      // Immediate re-probe fired (bypasses the nextProbeAt backoff gate). The
+      // probe is fire-and-forget and now resolves our instanceId (one extra
+      // microtask) before fetching sync-status, so wait for the fetch.
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     });
 
     it('should NOT reconnect or re-probe on a no-op credential write', async () => {
