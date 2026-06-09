@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeVoiceMarker } from '../../utils/cityVoiceMarker';
 
@@ -10,6 +11,7 @@ import { computeVoiceMarker } from '../../utils/cityVoiceMarker';
 // while listening, green while dictating, red on error, and barely-lit when voice mode is
 // off. Keeps to a small footprint so it reads as a district marker, not a landmark.
 export default function CityVoiceMarker({ voiceState, settings }) {
+  const { tintStructure } = useCityPalette();
   const marker = useMemo(() => computeVoiceMarker(voiceState), [voiceState]);
   const orbRef = useRef();
 

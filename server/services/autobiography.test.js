@@ -27,6 +27,21 @@ vi.mock('../lib/uuid.js', () => ({
   v4: () => `test-uuid-${++uuidCounter}`
 }));
 
+// Mock providers + AI provider (LLM calls in generateFollowUps / weaveChainNarrative)
+const mockGetActiveProvider = vi.fn();
+const mockGetProviderById = vi.fn();
+vi.mock('./providers.js', () => ({
+  getActiveProvider: (...args) => mockGetActiveProvider(...args),
+  getProviderById: (...args) => mockGetProviderById(...args)
+}));
+
+const mockCallProviderAISimple = vi.fn();
+vi.mock('../lib/aiProvider.js', () => ({
+  callProviderAISimple: (...args) => mockCallProviderAISimple(...args),
+  // Real-ish JSON extractor good enough for tests
+  parseLLMJSON: (raw) => JSON.parse(raw)
+}));
+
 // Mock fileUtils.js
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const fsPromises = await import('fs/promises');
@@ -55,7 +70,11 @@ import {
   getStats,
   getConfig,
   updateConfig,
-  checkAndPrompt
+  checkAndPrompt,
+  depthGuidanceForChain,
+  generateFollowUps,
+  getStoryChain,
+  weaveChainNarrative
 } from './autobiography.js';
 
 // Helper: build stories data
@@ -605,5 +624,174 @@ describe('Autobiography - checkAndPrompt', () => {
 
     expect(result.prompted).toBe(false);
     expect(result.reason).toBe('not_due');
+  });
+});
+
+// =============================================================================
+// FOLLOW-UP CHAINS — depth-aware questions, chain walking, narrative weaving
+// =============================================================================
+
+describe('Autobiography - depthGuidanceForChain', () => {
+  it('keeps shallow chains close to the scene', () => {
+    expect(depthGuidanceForChain(1)).toMatch(/concrete|sensory|scene/i);
+  });
+
+  it('shifts to emotion at depth 2', () => {
+    expect(depthGuidanceForChain(2)).toMatch(/emotion|motivation|relationship/i);
+  });
+
+  it('shifts to cause-and-effect at depth 3', () => {
+    expect(depthGuidanceForChain(3)).toMatch(/shaped|choices|became/i);
+  });
+
+  it('invites reflection and meaning at deep chains', () => {
+    const deep = depthGuidanceForChain(5);
+    expect(deep).toMatch(/reflection|meaning|larger arc|looking back/i);
+    // Progression must differ from the shallow guidance
+    expect(deep).not.toBe(depthGuidanceForChain(1));
+  });
+});
+
+describe('Autobiography - generateFollowUps (depth-aware)', () => {
+  const provider = { id: 'p1', name: 'Test', type: 'api', defaultModel: 'm1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetActiveProvider.mockResolvedValue(provider);
+    mockCallProviderAISimple.mockResolvedValue({ text: '["Q1?","Q2?","Q3?"]' });
+    writeFile.mockImplementation(async () => {});
+  });
+
+  it('returns an error when the story is missing', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+    const result = await generateFollowUps('nope');
+    expect(result.error).toBe('Story not found');
+  });
+
+  it('returns an error when no provider is available', async () => {
+    mockGetActiveProvider.mockResolvedValue(null);
+    setupMocks(makeStoriesData({ stories: [{ id: 's1', content: 'x', promptText: 'p', themeLabel: 'Childhood' }] }), makeConfigData());
+    const result = await generateFollowUps('s1');
+    expect(result.error).toBe('No AI provider available');
+  });
+
+  it('generates and stores exactly 3 follow-ups for a root story', async () => {
+    let saved = null;
+    writeFile.mockImplementation(async (_p, content) => { saved = JSON.parse(content); });
+    setupMocks(makeStoriesData({ stories: [{ id: 's1', content: 'A vivid childhood memory.', promptText: 'Describe it', themeLabel: 'Childhood' }] }), makeConfigData());
+
+    const result = await generateFollowUps('s1');
+
+    expect(result.followUps).toHaveLength(3);
+    expect(saved.stories[0].followUpPrompts).toEqual(['Q1?', 'Q2?', 'Q3?']);
+    expect(saved.stories[0].followUpsGeneratedAt).toBeTruthy();
+  });
+
+  it('passes shallow (depth-1) guidance for a root story', async () => {
+    setupMocks(makeStoriesData({ stories: [{ id: 's1', content: 'x', promptText: 'p', themeLabel: 'Childhood' }] }), makeConfigData());
+
+    await generateFollowUps('s1');
+
+    const promptArg = mockCallProviderAISimple.mock.calls[0][2];
+    expect(promptArg).toContain('This is depth 1 in the story chain.');
+    expect(promptArg).toContain(depthGuidanceForChain(1));
+  });
+
+  it('passes deeper guidance as the chain grows', async () => {
+    // s1 (root) -> s2 -> s3 ; generating for s3 is depth 3
+    const stories = [
+      { id: 's1', content: 'root', promptText: 'p1', themeLabel: 'Childhood' },
+      { id: 's2', content: 'mid', promptText: 'p2', themeLabel: 'Childhood', parentStoryId: 's1' },
+      { id: 's3', content: 'leaf', promptText: 'p3', themeLabel: 'Childhood', parentStoryId: 's2' }
+    ];
+    setupMocks(makeStoriesData({ stories }), makeConfigData());
+
+    await generateFollowUps('s3');
+
+    const promptArg = mockCallProviderAISimple.mock.calls[0][2];
+    expect(promptArg).toContain('This is depth 3 in the story chain.');
+    expect(promptArg).toContain(depthGuidanceForChain(3));
+    // Earlier responses must be present so questions can build on prior answers
+    expect(promptArg).toContain('root');
+    expect(promptArg).toContain('mid');
+  });
+
+  it('returns an error when the AI response is unparseable', async () => {
+    mockCallProviderAISimple.mockResolvedValue({ text: 'not json' });
+    setupMocks(makeStoriesData({ stories: [{ id: 's1', content: 'x', promptText: 'p', themeLabel: 'Childhood' }] }), makeConfigData());
+
+    const result = await generateFollowUps('s1');
+    expect(result.error).toMatch(/Failed to parse/);
+  });
+});
+
+describe('Autobiography - getStoryChain', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns empty array when story is missing', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+    expect(await getStoryChain('nope')).toEqual([]);
+  });
+
+  it('returns ancestors, the story, and descendants in order', async () => {
+    const stories = [
+      { id: 's1', content: 'root', promptText: 'p1', themeLabel: 'Childhood', createdAt: '2026-01-01' },
+      { id: 's2', content: 'mid', promptText: 'p2', themeLabel: 'Childhood', parentStoryId: 's1', createdAt: '2026-01-02' },
+      { id: 's3', content: 'leaf', promptText: 'p3', themeLabel: 'Childhood', parentStoryId: 's2', createdAt: '2026-01-03' }
+    ];
+    setupMocks(makeStoriesData({ stories }), makeConfigData());
+
+    const chain = await getStoryChain('s2');
+    expect(chain.map(s => s.id)).toEqual(['s1', 's2', 's3']);
+  });
+});
+
+describe('Autobiography - weaveChainNarrative', () => {
+  const provider = { id: 'p1', name: 'Test', type: 'api', defaultModel: 'm1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetActiveProvider.mockResolvedValue(provider);
+    mockCallProviderAISimple.mockResolvedValue({ text: '  A flowing memoir passage.  ' });
+  });
+
+  it('returns an error when the story is missing', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+    const result = await weaveChainNarrative('nope');
+    expect(result.error).toBe('Story not found');
+  });
+
+  it('returns an error when no provider is available', async () => {
+    mockGetActiveProvider.mockResolvedValue(null);
+    setupMocks(makeStoriesData({ stories: [{ id: 's1', content: 'x', promptText: 'p', themeLabel: 'Childhood' }] }), makeConfigData());
+    const result = await weaveChainNarrative('s1');
+    expect(result.error).toBe('No AI provider available');
+  });
+
+  it('weaves the full chain into a trimmed narrative and reports the story count', async () => {
+    const stories = [
+      { id: 's1', content: 'root memory', promptText: 'p1', themeLabel: 'Childhood', createdAt: '2026-01-01' },
+      { id: 's2', content: 'deeper memory', promptText: 'p2', themeLabel: 'Childhood', parentStoryId: 's1', createdAt: '2026-01-02' }
+    ];
+    setupMocks(makeStoriesData({ stories }), makeConfigData());
+
+    const result = await weaveChainNarrative('s1');
+
+    expect(result.narrative).toBe('A flowing memoir passage.');
+    expect(result.storyCount).toBe(2);
+    // Both responses must be fed to the weaver
+    const promptArg = mockCallProviderAISimple.mock.calls[0][2];
+    expect(promptArg).toContain('root memory');
+    expect(promptArg).toContain('deeper memory');
+  });
+
+  it('returns an error when the AI returns an empty narrative', async () => {
+    mockCallProviderAISimple.mockResolvedValue({ text: '   ' });
+    setupMocks(makeStoriesData({ stories: [{ id: 's1', content: 'x', promptText: 'p', themeLabel: 'Childhood' }] }), makeConfigData());
+
+    const result = await weaveChainNarrative('s1');
+    expect(result.error).toMatch(/empty narrative/);
   });
 });

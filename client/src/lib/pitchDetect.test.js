@@ -4,6 +4,9 @@ import {
   frequencyToNote,
   noteToFrequency,
   createPitchTracker,
+  tuningQuality,
+  IN_TUNE_CENTS,
+  CLOSE_CENTS,
 } from './pitchDetect.js';
 
 const SAMPLE_RATE = 44100;
@@ -94,6 +97,34 @@ describe('noteToFrequency', () => {
       const recon = noteToFrequency(note) * Math.pow(2, note.cents / 1200);
       expect(recon).toBeCloseTo(hz, 0); // within ~0.5 cent (cents are integer-rounded)
     }
+  });
+});
+
+describe('tuningQuality', () => {
+  it('returns the neutral bucket for a non-finite cents (no pitch)', () => {
+    expect(tuningQuality(null)).toEqual({ level: 'none', label: '—' });
+    expect(tuningQuality(NaN)).toEqual({ level: 'none', label: '—' });
+    expect(tuningQuality(undefined)).toEqual({ level: 'none', label: '—' });
+  });
+
+  it('buckets dead-center and within the in-tune band as in-tune', () => {
+    expect(tuningQuality(0).level).toBe('in-tune');
+    expect(tuningQuality(IN_TUNE_CENTS).level).toBe('in-tune');
+    expect(tuningQuality(-IN_TUNE_CENTS).level).toBe('in-tune');
+  });
+
+  it('buckets just past the in-tune band as close, with a direction label', () => {
+    expect(tuningQuality(IN_TUNE_CENTS + 1).level).toBe('close');
+    expect(tuningQuality(IN_TUNE_CENTS + 1).label).toMatch(/sharp/i);
+    expect(tuningQuality(-(IN_TUNE_CENTS + 1)).label).toMatch(/flat/i);
+    expect(tuningQuality(CLOSE_CENTS).level).toBe('close');
+  });
+
+  it('buckets beyond the close band as off, with a direction label', () => {
+    expect(tuningQuality(CLOSE_CENTS + 1).level).toBe('off');
+    expect(tuningQuality(CLOSE_CENTS + 1).label).toBe('Sharp');
+    expect(tuningQuality(-(CLOSE_CENTS + 1)).level).toBe('off');
+    expect(tuningQuality(-(CLOSE_CENTS + 1)).label).toBe('Flat');
   });
 });
 

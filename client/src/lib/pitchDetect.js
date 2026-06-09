@@ -77,6 +77,28 @@ export const noteToFrequency = (note, { a4 = 440 } = {}) => {
   return a4 * Math.pow(2, (midi - 69) / 12);
 };
 
+// === Tuning quality (cents → bucket) ===================================
+
+// Cents-deviation thresholds the tuner UI colors by. Within ±IN_TUNE_CENTS the
+// note is "in tune" (green); within ±CLOSE_CENTS it's "close" (yellow);
+// anything wider is "off" (red). Exported so the thresholds are a single shared
+// constant the UI and its tests agree on, not magic numbers in a component.
+export const IN_TUNE_CENTS = 5;
+export const CLOSE_CENTS = 20;
+
+// Classify a cents deviation into a tuning-quality bucket for the tuner readout.
+// Pure + side-effect-free (no colors here — the component maps `level` to a
+// `--port-*` token) so the thresholds are unit-testable. `label` carries the
+// sharp/flat direction so the UI doesn't re-derive the sign. A non-finite cents
+// (no pitch detected) returns the neutral `none` bucket.
+export const tuningQuality = (cents) => {
+  if (!Number.isFinite(cents)) return { level: 'none', label: '—' };
+  const abs = Math.abs(cents);
+  if (abs <= IN_TUNE_CENTS) return { level: 'in-tune', label: 'In tune' };
+  if (abs <= CLOSE_CENTS) return { level: 'close', label: cents > 0 ? 'A little sharp' : 'A little flat' };
+  return { level: 'off', label: cents > 0 ? 'Sharp' : 'Flat' };
+};
+
 // === Fundamental-frequency estimation ==================================
 
 // Estimate the fundamental frequency of a Float32 PCM frame via the McLeod

@@ -129,6 +129,40 @@ describe('songs route', () => {
     expect(mocks.updateSong).not.toHaveBeenCalled();
   });
 
+  it('PUT /:id accepts a recording with pitchTrack + accuracy analysis (#1027)', async () => {
+    mocks.updateSong.mockResolvedValue({ id: 'song-1' });
+    const res = await request(makeApp()).put('/api/songs/song-1').send({
+      recordings: [{
+        filename: 'take.wav',
+        pitchTrack: [{ tMs: 0, hz: 220, cents: -3, clarity: 0.9 }, { tMs: 50, hz: null }],
+        accuracy: { percentInTune: 80, graded: 5, counts: { 'in-tune': 4, close: 1 }, perNote: ['in-tune', 'close'] },
+      }],
+    });
+    expect(res.status).toBe(200);
+    const [, patch] = mocks.updateSong.mock.calls[0];
+    expect(patch.recordings[0].pitchTrack).toHaveLength(2);
+    expect(patch.recordings[0].accuracy.percentInTune).toBe(80);
+  });
+
+  it('PUT /:id accepts a legacy recording with no pitch analysis (absent-tolerant)', async () => {
+    mocks.updateSong.mockResolvedValue({ id: 'song-1' });
+    const res = await request(makeApp()).put('/api/songs/song-1').send({
+      recordings: [{ filename: 'legacy.wav', durationMs: 500 }],
+    });
+    expect(res.status).toBe(200);
+    const [, patch] = mocks.updateSong.mock.calls[0];
+    expect(patch.recordings[0]).not.toHaveProperty('pitchTrack');
+  });
+
+  it('PUT /:id rejects a pitchTrack exceeding the bound', async () => {
+    const tooMany = Array.from({ length: 4001 }, (_, i) => ({ tMs: i }));
+    const res = await request(makeApp()).put('/api/songs/song-1').send({
+      recordings: [{ filename: 'x.wav', pitchTrack: tooMany }],
+    });
+    expect(res.status).toBe(400);
+    expect(mocks.updateSong).not.toHaveBeenCalled();
+  });
+
   it('PUT /:id accepts a references array', async () => {
     mocks.updateSong.mockResolvedValue({ id: 'song-1' });
     const res = await request(makeApp()).put('/api/songs/song-1').send({

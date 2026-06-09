@@ -342,6 +342,44 @@ describe('agentLifecycle source — spawningTasks delete placement', () => {
   });
 });
 
+// Source-level assertion (issue #989): the synthetic app-review marker bound by
+// `bindAppReviewAgent` before this spawn MUST be released on every
+// pre-completion `return null` path, or the app reads "in review" until the next
+// daemon restart. The shared `cleanupOnError` closure owns the release for the
+// four detected-error paths (provider resolution, prep deferred/blocked,
+// updateTask failure) + the pre-spawn catch arm; the two earliest returns
+// (max-spawns block, lane-acquire failure) release inline because they fire
+// before `cleanupOnError` is defined.
+
+describe('agentLifecycle source — app-review marker release (issue #989)', () => {
+  it('cleanupOnError releases the synthetic app-review marker', () => {
+    const start = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError =');
+    expect(start, 'cleanupOnError must exist').toBeGreaterThan(-1);
+    const body = AGENT_LIFECYCLE_SRC.slice(start, start + 800);
+    expect(body, 'cleanupOnError must release the app-review marker').toMatch(/releaseAppReviewMarker\(task\.metadata\?\.app\)/);
+  });
+
+  it('every cleanupOnError call is awaited so the release persists before return null', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    // No bare `cleanupOnError(` call may exist — only `await cleanupOnError(`
+    // (and the `const cleanupOnError =` definition). A bare call would fire the
+    // async marker release without awaiting it, racing the `return null`.
+    const bareCalls = fnBody.match(/(?<!await )(?<!const )cleanupOnError\(/g) || [];
+    expect(bareCalls, 'all cleanupOnError calls must be awaited').toEqual([]);
+  });
+
+  it('the max-spawns and lane-acquire early returns release the marker inline', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    // Slice from the function start up to where cleanupOnError is defined —
+    // the two earliest `return null` paths live in this prefix.
+    const defIdx = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError =', fnStart);
+    const prefix = AGENT_LIFECYCLE_SRC.slice(fnStart, defIdx);
+    const inlineReleases = prefix.match(/await releaseAppReviewMarker\(task\.metadata\?\.app\)/g) || [];
+    expect(inlineReleases.length, 'max-spawns + lane-acquire returns must each release inline').toBe(2);
+  });
+});
+
 // ─── spawnAgentForTask — cleanupOnError ────────────────────────────────────
 //
 // `spawnAgentForTask` has ~400 LOC of async work between

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset } from './cityConstants';
+import { describe, it, expect } from 'vitest';
+import { deriveCityPalette, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, getAccentColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset } from './cityConstants';
 
 const hexLum = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -146,15 +146,10 @@ describe('cityLabelColors', () => {
 });
 
 describe('tintTowardAccent / tintStructure', () => {
-  // These read the live CITY_COLORS.ground accent; set/restore it per test.
-  let savedGround;
-  beforeEach(() => { savedGround = CITY_COLORS.ground; });
-  afterEach(() => { CITY_COLORS.ground = savedGround; });
-
+  // These are now pure: the accent is passed in explicitly (no shared-singleton read).
   it('shifts hue toward the accent while preserving luminance', () => {
-    CITY_COLORS.ground = '#ff0000'; // pure red accent
     const base = '#0a0e16'; // a dark blue-dominant structural base
-    const out = tintStructure(base);
+    const out = tintStructure(base, '#ff0000'); // pure red accent
     // Luminance preserved within rounding — the base stays just as dark.
     expect(hexLum(out)).toBeCloseTo(hexLum(base), 0);
     // Hue pulled toward red: the red channel rises relative to the original.
@@ -162,68 +157,84 @@ describe('tintTowardAccent / tintStructure', () => {
   });
 
   it('leaves pure black untouched (no hue to tint)', () => {
-    CITY_COLORS.ground = '#22c55e';
-    expect(tintTowardAccent('#000000')).toBe('#000000');
+    expect(tintTowardAccent('#000000', 0.2, '#22c55e')).toBe('#000000');
   });
 
   it('is a no-op-ish identity when the accent equals the base hue direction', () => {
-    CITY_COLORS.ground = '#0a0e16';
     // Tinting toward itself preserves the color (luminance + channels unchanged).
-    expect(hexLum(tintStructure('#0a0e16'))).toBeCloseTo(hexLum('#0a0e16'), 0);
+    expect(hexLum(tintStructure('#0a0e16', '#0a0e16'))).toBeCloseTo(hexLum('#0a0e16'), 0);
   });
 
   it('returns the input unchanged for an unparseable color', () => {
-    CITY_COLORS.ground = '#22c55e';
-    expect(tintTowardAccent('not-a-hex')).toBe('not-a-hex');
+    expect(tintTowardAccent('not-a-hex', 0.2, '#22c55e')).toBe('not-a-hex');
+  });
+
+  it('defaults to the static cyan brand accent when none is passed', () => {
+    // The bare helper (no accent arg) tints toward the cyan brand default, so a
+    // consumer that hasn't wired the palette still gets a sensible result.
+    const out = tintStructure('#0a0e16');
+    expect(out).toMatch(/^#[0-9a-f]{6}$/);
+    expect(hexLum(out)).toBeCloseTo(hexLum('#0a0e16'), 0);
   });
 });
 
-describe('applyCityBrandColors', () => {
-  // Restore the cyan baseline after each test so mutation doesn't leak across the suite.
-  beforeEach(() => applyCityBrandColors(deriveCityPalette(undefined)));
-
-  it('recolors brand surfaces to the theme accent', () => {
-    applyCityBrandColors(deriveCityPalette(getTheme('black-ice-terminal-day')));
-    expect(CITY_COLORS.ground).toBe('#0a7a4a');
-    expect(CITY_COLORS.particles).toBe('#0a7a4a');
-    expect(CITY_COLORS.building.online).toBe('#0a7a4a');
-    expect(CITY_COLORS.neonAccents[0]).toBe('#0a7a4a');
-    // online buildings follow the recolor through the shared helper
-    expect(getBuildingColor('online')).toBe('#0a7a4a');
+describe('deriveCityPalette brand surfaces', () => {
+  it('carries themed brand surfaces derived from the accent', () => {
+    const p = deriveCityPalette(getTheme('black-ice-terminal-day'));
+    expect(p.ground).toBe('#0a7a4a');
+    expect(p.particles).toBe('#0a7a4a');
+    expect(p.building.online).toBe('#0a7a4a');
+    expect(p.neonAccents[0]).toBe('#0a7a4a');
+    // online buildings follow the recolor through the palette-bound helper
+    expect(p.getBuildingColor('online')).toBe('#0a7a4a');
   });
 
   it('leaves status colors untouched', () => {
-    applyCityBrandColors(deriveCityPalette(getTheme('black-ice-terminal-day')));
-    expect(CITY_COLORS.building.stopped).toBe('#ef4444');
-    expect(getBuildingColor('stopped')).toBe('#ef4444');
+    const p = deriveCityPalette(getTheme('black-ice-terminal-day'));
+    expect(p.building.stopped).toBe('#ef4444');
+    expect(p.getBuildingColor('stopped')).toBe('#ef4444');
     // not_found stays the canonical purple — the value ProcessBuilding now unifies to.
-    expect(CITY_COLORS.building.not_found).toBe('#8b5cf6');
+    expect(p.building.not_found).toBe('#8b5cf6');
   });
 
   it('re-tints the building body toward the accent, preserving its darkness', () => {
     const ORIGINAL_BODY = '#0c0c24';
-    applyCityBrandColors(deriveCityPalette(getTheme('black-ice-terminal-day'))); // green accent
-    const themed = CITY_COLORS.buildingBody;
-    expect(themed).not.toBe(ORIGINAL_BODY); // picked up the theme
-    expect(hexLum(themed)).toBeCloseTo(hexLum(ORIGINAL_BODY), 0); // still a dark body
+    const p = deriveCityPalette(getTheme('black-ice-terminal-day')); // green accent
+    expect(p.buildingBody).not.toBe(ORIGINAL_BODY); // picked up the theme
+    expect(hexLum(p.buildingBody)).toBeCloseTo(hexLum(ORIGINAL_BODY), 0); // still a dark body
   });
 
-  it('recomputes the building body from the original, not compounding across switches', () => {
-    applyCityBrandColors(deriveCityPalette(getTheme('black-ice-terminal-day')));
-    const greenBody = CITY_COLORS.buildingBody;
-    applyCityBrandColors(deriveCityPalette(getTheme('classic-midnight')));
-    const blueBody = CITY_COLORS.buildingBody;
-    // Switching back yields the same value — proof it recomputes from ORIGINAL_BUILDING_BODY.
-    applyCityBrandColors(deriveCityPalette(getTheme('black-ice-terminal-day')));
-    expect(CITY_COLORS.buildingBody).toBe(greenBody);
-    expect(blueBody).not.toBe(greenBody);
+  it('is pure — never mutates the shared CITY_COLORS singleton', () => {
+    deriveCityPalette(getTheme('black-ice-terminal-day'));
+    // The static table keeps its cyan baseline; only the returned palette is themed.
+    expect(CITY_COLORS.ground).toBe('#06b6d4');
+    expect(CITY_COLORS.building.online).toBe('#06b6d4');
+    expect(CITY_COLORS.neonAccents[0]).toBe('#06b6d4');
+    expect(CITY_COLORS.buildingBody).toBe('#0c0c24');
+    // The bare helper, reading no palette, still reports the static brand.
+    expect(getBuildingColor('online')).toBe('#06b6d4');
   });
 
-  it('recomputes from the cyan baseline rather than compounding across switches', () => {
-    applyCityBrandColors(deriveCityPalette(getTheme('black-ice-terminal-day')));
-    applyCityBrandColors(deriveCityPalette(getTheme('classic-midnight')));
-    // classic-midnight accent is 59 130 246 -> #3b82f6, not a blend of green+blue
-    expect(CITY_COLORS.ground).toBe('#3b82f6');
+  it('does not compound across repeated derivations — each is recomputed from the accent', () => {
+    const green = deriveCityPalette(getTheme('black-ice-terminal-day'));
+    deriveCityPalette(getTheme('classic-midnight'));
+    const greenAgain = deriveCityPalette(getTheme('black-ice-terminal-day'));
+    // classic-midnight accent is 59 130 246 -> #3b82f6, never a blend of green+blue.
+    expect(deriveCityPalette(getTheme('classic-midnight')).ground).toBe('#3b82f6');
+    // Re-deriving the green theme yields an identical body — proof it's recomputed
+    // from ORIGINAL_BUILDING_BODY, not from a previously-tinted value.
+    expect(greenAgain.buildingBody).toBe(green.buildingBody);
+  });
+
+  it('binds getAccentColor to the themed neon list', () => {
+    const p = deriveCityPalette(getTheme('black-ice-terminal-day'));
+    // The lead neon accent tracks the theme, so an app hashing to index 0 gets it.
+    expect(p.neonAccents[0]).toBe('#0a7a4a');
+    // Bound helper picks from the palette's list; the bare helper picks from the
+    // static list. Both are deterministic for a given app and stay in their list.
+    const app = { name: 'anything' };
+    expect(p.neonAccents).toContain(p.getAccentColor(app));
+    expect(CITY_COLORS.neonAccents).toContain(getAccentColor(app));
   });
 });
 

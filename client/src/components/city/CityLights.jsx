@@ -1,7 +1,8 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 // Animated accent light that slowly shifts color, with reactive brightness
 function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef, neonScaleRef }) {
@@ -80,6 +81,7 @@ function ReactivePointLight({ position, baseIntensity, color, distance, brightne
 }
 
 export default function CityLights({ settings }) {
+  const { ground } = useCityPalette();
   const brightnessRef = useRef(settings?.ambientBrightness ?? 1.2);
   brightnessRef.current = settings?.ambientBrightness ?? 1.2;
 
@@ -138,7 +140,7 @@ export default function CityLights({ settings }) {
       {/* Secondary overhead fill - broad white/blue */}
       <ReactivePointLight position={[0, 20, 10]} baseIntensity={0.5} color="#4488cc" distance={90} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Broad nighttime city glow — signage bounce + moonlit haze, faded in daylight */}
-      <ReactivePointLight position={[0, 16, 0]} baseIntensity={1.8 * nightGlow} color={CITY_COLORS.ground} distance={150} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+      <ReactivePointLight position={[0, 16, 0]} baseIntensity={1.8 * nightGlow} color={ground} distance={150} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       <ReactivePointLight position={[-28, 10, 24]} baseIntensity={1.05 * nightGlow} color="#ec4899" distance={118} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       <ReactivePointLight position={[30, 12, -22]} baseIntensity={1.1 * nightGlow} color="#60a5fa" distance={120} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Magenta accent from left - animated color shift */}

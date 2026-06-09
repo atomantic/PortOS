@@ -1,0 +1,205 @@
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+// Allocate the temp dir lazily on first PATHS read — brainStorage's module
+// graph (brainSyncLog) reads PATHS.brain at import time, before any top-level
+// test assignment would run, so the dataRoot getter must self-initialize.
+// `var` + a function declaration are both hoisted (no TDZ), so they're safe to
+// reference from the hoisted vi.mock factory / import side-effects.
+var tempRoot; // eslint-disable-line no-var
+function getTempRoot() {
+  if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'brainstorage-test-'));
+  return tempRoot;
+}
+
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return makePathsProxy(actual, {
+    dataRoot: () => getTempRoot(),
+    extraOverrides: (dataRoot) => ({ brain: join(dataRoot, 'brain') }),
+  });
+});
+
+// getInstanceId is used by create()/backfill; stub to a stable id.
+vi.mock('./instances.js', () => ({
+  getInstanceId: () => Promise.resolve('local-instance'),
+}));
+
+import * as brainStorage from './brainStorage.js';
+
+afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
+
+// Each test uses a fresh entity type slice by resetting caches; use distinct
+// ids to avoid cross-test bleed within the shared temp store files.
+beforeEach(() => {
+  brainStorage.invalidateAllCaches();
+});
+
+const ISO = (s) => new Date(s).toISOString();
+
+describe('brainStorage tombstones', () => {
+  it('remove() writes a tombstone instead of hard-deleting, and hides it from reads', async () => {
+    const created = await brainStorage.create('people', { name: 'Alice' });
+    expect(await brainStorage.getById('people', created.id)).toMatchObject({ name: 'Alice' });
+
+    const ok = await brainStorage.remove('people', created.id);
+    expect(ok).toBe(true);
+
+    // Hidden from reads
+    expect(await brainStorage.getById('people', created.id)).toBeNull();
+    const all = await brainStorage.getAll('people');
+    expect(all.find((r) => r.id === created.id)).toBeUndefined();
+
+    // But the tombstone is physically present in the store (not hard-deleted)
+    brainStorage.invalidateAllCaches();
+    const second = await brainStorage.remove('people', created.id);
+    expect(second).toBe(false); // already tombstoned → no-op, no extra sync entry
+  });
+
+  it('serializes a local write against a concurrent remote apply on the same store (no lost update)', async () => {
+    // A local create and a peer apply both do whole-file read-modify-write on
+    // buckets.json. The shared withStoreWriteLock must serialize them so neither
+    // overwrites the other's record. Fire both without awaiting in between.
+    const localP = brainStorage.create('buckets', { name: 'LocalBucket' });
+    const remoteP = brainStorage.applyRemoteRecord(
+      'buckets', 'remote-bucket-1',
+      { name: 'RemoteBucket', updatedAt: ISO('2026-06-09'), originInstanceId: 'peer-x' },
+      'create',
+    );
+    const [local] = await Promise.all([localP, remoteP]);
+
+    brainStorage.invalidateAllCaches();
+    const all = await brainStorage.getAll('buckets');
+    // Both records must survive — a lost update would drop one.
+    expect(all.find((r) => r.id === local.id)?.name).toBe('LocalBucket');
+    expect(all.find((r) => r.id === 'remote-bucket-1')?.name).toBe('RemoteBucket');
+  });
+
+  it('getRawRecords surfaces tombstones that getAll hides (sync reconcile path #1077)', async () => {
+    const created = await brainStorage.create('ideas', { title: 'RawIdea', oneLiner: 'x' });
+    await brainStorage.remove('ideas', created.id);
+
+    // getAll strips the tombstone…
+    const visible = await brainStorage.getAll('ideas');
+    expect(visible.find((r) => r.id === created.id)).toBeUndefined();
+
+    // …but getRawRecords keeps it (with its LWW clock) for snapshot reconcile.
+    const raw = await brainStorage.getRawRecords('ideas');
+    expect(raw[created.id]).toBeDefined();
+    expect(raw[created.id]._deleted).toBe(true);
+    expect(raw[created.id].updatedAt).toBeTruthy();
+  });
+
+  it('applyRemoteRecord delete tombstones an unknown id (delete-before-create)', async () => {
+    const res = await brainStorage.applyRemoteRecord(
+      'projects', 'ghost-1', { updatedAt: ISO('2026-01-02') }, 'delete'
+    );
+    expect(res.applied).toBe(true);
+
+    // A stale create (older updatedAt) must be rejected by the tombstone guard
+    const stale = await brainStorage.applyRemoteRecord(
+      'projects', 'ghost-1', { name: 'X', updatedAt: ISO('2026-01-01') }, 'create'
+    );
+    expect(stale.applied).toBe(false);
+    expect(stale.reason).toBe('local_newer');
+    expect(await brainStorage.getById('projects', 'ghost-1')).toBeNull();
+  });
+
+  it('rejects a stale create against an existing tombstone (the loop-breaker)', async () => {
+    const created = await brainStorage.create('ideas', { title: 'T' });
+    // Local delete at a known time
+    await brainStorage.remove('ideas', created.id);
+    const tombstoneTime = (await rawRecord('ideas', created.id)).updatedAt;
+
+    // Peer echoes the original create with an OLDER updatedAt → must be rejected
+    const echo = await brainStorage.applyRemoteRecord(
+      'ideas', created.id, { title: 'T', updatedAt: ISO('2000-01-01') }, 'create'
+    );
+    expect(echo.applied).toBe(false);
+    expect(echo.reason).toBe('local_newer');
+    // Still a tombstone, unchanged
+    const rec = await rawRecord('ideas', created.id);
+    expect(rec._deleted).toBe(true);
+    expect(rec.updatedAt).toBe(tombstoneTime);
+  });
+
+  it('rejects a create with no updatedAt (cannot defeat the tombstone guard)', async () => {
+    await brainStorage.applyRemoteRecord('people', 'no-ts', { updatedAt: ISO('2026-01-01') }, 'delete');
+    const res = await brainStorage.applyRemoteRecord('people', 'no-ts', { name: 'X' }, 'create');
+    expect(res.applied).toBe(false);
+    expect(res.reason).toBe('missing_timestamp');
+    expect(await brainStorage.getById('people', 'no-ts')).toBeNull();
+  });
+
+  it('persists a _deleted create as a proper tombstone (defense-in-depth)', async () => {
+    const res = await brainStorage.applyRemoteRecord(
+      'projects', 'fwd-1',
+      { _deleted: true, updatedAt: ISO('2026-04-01'), originInstanceId: 'peer-z' },
+      'create'
+    );
+    expect(res.applied).toBe(true);
+    const rec = await rawRecord('projects', 'fwd-1');
+    expect(rec._deleted).toBe(true);
+    expect(rec.deletedAt).toBe(ISO('2026-04-01')); // not a malformed live record
+    expect(await brainStorage.getById('projects', 'fwd-1')).toBeNull();
+  });
+
+  it('allows a genuinely newer create to resurrect a tombstone', async () => {
+    await brainStorage.applyRemoteRecord(
+      'admin', 'r1', { updatedAt: ISO('2026-01-01') }, 'delete'
+    );
+    const revive = await brainStorage.applyRemoteRecord(
+      'admin', 'r1', { task: 'revived', updatedAt: ISO('2026-02-01') }, 'create'
+    );
+    expect(revive.applied).toBe(true);
+    expect(await brainStorage.getById('admin', 'r1')).toMatchObject({ task: 'revived' });
+  });
+
+  it('delete is idempotent: re-applying the same delete is rejected (no relay)', async () => {
+    const first = await brainStorage.applyRemoteRecord(
+      'links', 'l1', { updatedAt: ISO('2026-01-01') }, 'delete'
+    );
+    expect(first.applied).toBe(true);
+    const again = await brainStorage.applyRemoteRecord(
+      'links', 'l1', { updatedAt: ISO('2026-01-01') }, 'delete'
+    );
+    expect(again.applied).toBe(false);
+    expect(again.reason).toBe('local_newer');
+  });
+
+  it('update() treats a tombstone as not-found', async () => {
+    const created = await brainStorage.create('buckets', { label: 'B' });
+    await brainStorage.remove('buckets', created.id);
+    const updated = await brainStorage.update('buckets', created.id, { label: 'B2' });
+    expect(updated).toBeNull();
+  });
+
+  it('pruneTombstones removes only tombstones older than the cutoff', async () => {
+    // Old tombstone
+    await brainStorage.applyRemoteRecord('memories', 'old', { updatedAt: ISO('2020-01-01') }, 'delete');
+    // Fresh tombstone (now)
+    const freshCreated = await brainStorage.create('memories', { content: 'keep' });
+    await brainStorage.remove('memories', freshCreated.id);
+    // A live record that must survive
+    const live = await brainStorage.create('memories', { content: 'alive' });
+
+    const cutoff = Date.parse(ISO('2021-01-01'));
+    const pruned = await brainStorage.pruneTombstones('memories', cutoff);
+    expect(pruned).toBe(1); // only the 2020 tombstone
+
+    expect(await rawRecord('memories', 'old')).toBeUndefined();
+    expect((await rawRecord('memories', freshCreated.id))._deleted).toBe(true);
+    expect(await brainStorage.getById('memories', live.id)).toMatchObject({ content: 'alive' });
+  });
+});
+
+// Read the raw stored record (including tombstones) by bypassing the read filter.
+async function rawRecord(type, id) {
+  const { readFile } = await import('fs/promises');
+  const file = join(getTempRoot(), 'brain', `${type}.json`);
+  const data = JSON.parse(await readFile(file, 'utf-8'));
+  return data.records[id];
+}

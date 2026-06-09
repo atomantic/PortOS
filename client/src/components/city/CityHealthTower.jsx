@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeHealthTower } from '../../utils/cityHealthTower';
 
@@ -11,6 +12,7 @@ import { computeHealthTower } from '../../utils/cityHealthTower';
 // a present-but-zero value, which keeps its lit color. The heart-rate tier pulses like a
 // heartbeat, faster as the rate climbs. Mirrors CityBackupVault / CityTaskQueue.
 function Segment({ segment, baseRadius, isHeart, heartRef }) {
+  const { tintStructure } = useCityPalette();
   const { height, color, intensity } = segment;
   return (
     <mesh ref={isHeart ? heartRef : undefined} position={[0, segment.y, 0]}>
@@ -28,6 +30,7 @@ function Segment({ segment, baseRadius, isHeart, heartRef }) {
 }
 
 export default function CityHealthTower({ healthMetrics, settings }) {
+  const { tintStructure } = useCityPalette();
   const tower = useMemo(() => computeHealthTower(healthMetrics), [healthMetrics]);
   const heartRef = useRef();
 

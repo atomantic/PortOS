@@ -38,9 +38,35 @@ const layerSchema = z.object({
   notes: str(svc.FIELD_MAX_LENGTH).optional().default(''),
 });
 
+// One downsampled tuner sample from a take's pitch trace (#1027). hz/cents/
+// clarity are nullable so a silent frame round-trips; the service clamps tMs.
+const pitchSampleSchema = z.object({
+  tMs: z.number().optional(),
+  hz: z.number().nullable().optional(),
+  cents: z.number().nullable().optional(),
+  clarity: z.number().nullable().optional(),
+});
+
+// Per-take color-match accuracy summary (#1027), mirroring colorMatch's
+// summarizeAccuracy output. All fields optional/absent-tolerant; the service
+// clamps the percentage and drops unrecognized grades.
+const accuracySchema = z.object({
+  percentInTune: z.number().optional(),
+  graded: z.number().optional(),
+  counts: z.object({
+    'in-tune': z.number().optional(),
+    close: z.number().optional(),
+    off: z.number().optional(),
+    missed: z.number().optional(),
+  }).optional(),
+  perNote: z.array(z.string()).max(svc.PER_NOTE_GRADES_MAX).optional(),
+});
+
 // A saved vocal take. `filename` is the /api/uploads file the audio is served
 // from (the client uploads the WAV first, then PUTs the song with the returned
 // filename). Numbers are accepted for the mixer; the service clamps them.
+// `pitchTrack`/`accuracy` are optional per-take pitch analysis (#1027) — absent
+// on legacy/unscored takes, persisted so the tuner history isn't recomputed.
 const recordingSchema = z.object({
   id: str(svc.ID_MAX_LENGTH).optional(),
   layerId: str(svc.ID_MAX_LENGTH).optional().default(''),
@@ -50,7 +76,26 @@ const recordingSchema = z.object({
   peak: z.number().min(0).max(1).optional(),
   muted: z.boolean().optional(),
   createdAt: z.string().optional(),
+  pitchTrack: z.array(pitchSampleSchema).max(svc.PITCH_TRACK_MAX).optional(),
+  accuracy: accuracySchema.optional(),
 });
+
+// One training attempt — a graded take of one scope (#1028). The service clamps
+// the percent and drops zero-note attempts; the schema only types the fields.
+const attemptSchema = z.object({
+  percentInTune: z.number().optional(),
+  graded: z.number().optional(),
+  at: z.string().optional(),
+});
+
+// Training progress (#1028): `{ history: { <scope>: [attempt…] } }`. A record
+// of the scope → recent graded attempts; the service bounds both the per-scope
+// history and the number of scopes, and recomputes derived stats client-side.
+// `.passthrough()` is NOT used — only `history` is meaningful, and the service
+// re-sanitizes regardless, but typing it keeps the contract explicit.
+const progressSchema = z.object({
+  history: z.record(z.string(), z.array(attemptSchema).max(svc.PROGRESS_HISTORY_MAX)).optional(),
+}).optional();
 
 // A sheet-music part — a harmony variation of the base score, in the same
 // lead-sheet DSL. `score` is required (a part without notation is meaningless);
@@ -92,6 +137,9 @@ const songInputSchema = z.object({
   scoreParts: z.array(scorePartSchema).max(svc.SCORE_PARTS_MAX).optional(),
   notes: str(svc.FIELD_MAX_LENGTH).optional(),
   learned: z.boolean().optional(),
+  // Training progress (#1028) — per-scope rolling accuracy history. Optional and
+  // absent-tolerant: a legacy/untrained song omits it; the service bounds + clamps.
+  progress: progressSchema,
   sections: z.array(sectionSchema).max(svc.SECTIONS_MAX).optional(),
   layers: z.array(layerSchema).max(svc.LAYERS_MAX).optional(),
   recordings: z.array(recordingSchema).max(svc.RECORDINGS_MAX).optional(),

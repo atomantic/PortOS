@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./brainStorage.js', () => ({
-  applyRemoteRecord: vi.fn()
+  applyRemoteRecord: vi.fn(),
+  BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets', 'journals', 'inbox'],
 }));
 
 vi.mock('./brainSyncLog.js', () => ({
@@ -109,6 +110,30 @@ describe('brainSync', () => {
     ]);
 
     expect(appendChanges).not.toHaveBeenCalled();
+  });
+
+  it('routes a forward-compat create carrying a tombstone (_deleted) through the delete path', async () => {
+    applyRemoteRecord.mockResolvedValue({ applied: true });
+
+    const result = await applyRemoteChanges([
+      {
+        op: 'create',
+        type: 'people',
+        id: 'p9',
+        record: { _deleted: true, updatedAt: '2026-03-01T00:00:00.000Z', originInstanceId: 'peer-2' },
+        originInstanceId: 'peer-2',
+      },
+    ]);
+
+    // Applied as a DELETE with the wire-shape delete record (no _deleted leaks
+    // into a live store write).
+    expect(applyRemoteRecord).toHaveBeenCalledWith(
+      'people', 'p9',
+      { updatedAt: '2026-03-01T00:00:00.000Z', originInstanceId: 'peer-2' },
+      'delete'
+    );
+    expect(result.deleted).toBe(1);
+    expect(result.inserted).toBe(0);
   });
 
   it('handles mixed operations correctly', async () => {

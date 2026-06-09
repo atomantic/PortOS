@@ -16,10 +16,16 @@ vi.mock('./instances.js', () => ({
 }));
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
+  getCurrentSeq: vi.fn(() => 0),
   compactLog: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
+}));
+vi.mock('./brainReconcile.js', () => ({
+  getBrainChecksum: vi.fn().mockResolvedValue('local-cksum'),
+  getBrainSnapshot: vi.fn(),
+  applyBrainSnapshot: vi.fn().mockResolvedValue({ inserted: 0, updated: 0, deleted: 0, skipped: 0 }),
 }));
 vi.mock('./memorySync.js', () => ({
   applyRemoteChanges: vi.fn(),
@@ -46,6 +52,7 @@ vi.mock('./memoryBackend.js', () => ({
 }));
 vi.mock('./dataSync.js', () => ({
   getSnapshot: vi.fn().mockResolvedValue({ data: {}, checksum: 'abc' }),
+  getChecksum: vi.fn().mockResolvedValue({ checksum: 'abc' }),
   applyRemote: vi.fn().mockResolvedValue({ applied: false, count: 0 }),
   getSupportedCategories: vi.fn(() => ['goals', 'character', 'digitalTwin', 'meatspace'])
 }));
@@ -56,7 +63,7 @@ vi.mock('./sharing/peerSync.js', () => ({
   }),
 }));
 vi.mock('./instanceEvents.js', () => ({
-  instanceEvents: { on: vi.fn(), removeListener: vi.fn() }
+  instanceEvents: { on: vi.fn(), removeListener: vi.fn(), emit: vi.fn() }
 }));
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
@@ -84,7 +91,10 @@ import { applyRemoteChanges as applyBrainChanges } from './brainSync.js';
 import { applyRemoteChanges as applyMemoryChanges } from './memorySync.js';
 import { applyRemoteChanges as applyCatalogChanges } from './catalogSync.js';
 import { instanceEvents } from './instanceEvents.js';
-import { syncWithPeer, syncAllPeers, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
+import { getCurrentSeq, compactLog } from './brainSyncLog.js';
+import { getBrainChecksum, applyBrainSnapshot } from './brainReconcile.js';
+import { getMaxSequence } from './memorySync.js';
+import { syncWithPeer, syncAllPeers, getSyncStatus, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
 
 const mockFetch = vi.fn();
 
@@ -124,25 +134,14 @@ describe('syncOrchestrator', () => {
     });
 
     it('fetches brain and memory changes from peer', async () => {
-      // Brain sync: single batch, no more
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            changes: [{ seq: 1, op: 'create', type: 'people', id: 'p1', record: {} }],
-            maxSeq: 1,
-            hasMore: false
-          })
-        })
-        // Memory sync: single batch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            memories: [{ id: 'm1', content: 'test' }],
-            maxSequence: '5',
-            hasMore: false
-          })
-        });
+      // URL-routed (resilient to the #1077 reconcile checksum fetch between
+      // brain and memory). Brain + memory each return a single batch.
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => ({ checksum: 'local-cksum' }) };
+        if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [{ seq: 1, op: 'create', type: 'people', id: 'p1', record: {} }], maxSeq: 1, hasMore: false }) };
+        if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [{ id: 'm1', content: 'test' }], maxSequence: '5', hasMore: false }) };
+        return { ok: true, json: async () => ({}) };
+      });
 
       applyBrainChanges.mockResolvedValue({ inserted: 1, updated: 0, deleted: 0, skipped: 0 });
       applyMemoryChanges.mockResolvedValue({ inserted: 1, updated: 0 });
@@ -151,7 +150,8 @@ describe('syncOrchestrator', () => {
 
       expect(result.brain.totalApplied).toBe(1);
       expect(result.memory.totalApplied).toBe(1);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      // brain delta + reconcile checksum + memory = 3 fetches
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
     it('handles pagination loop with hasMore=true', async () => {
@@ -207,21 +207,14 @@ describe('syncOrchestrator', () => {
       };
       readJSONFile.mockResolvedValue(cursorData);
 
-      // Brain: no changes
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ changes: [], maxSeq: 0, hasMore: false })
-        })
-        // Memory: returns data from seq 0 (after cursor reset)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            memories: [{ id: 'm1', content: 'new' }],
-            maxSequence: '2',
-            hasMore: false
-          })
-        });
+      // URL-routed so the test is resilient to the order/number of fetches
+      // (the anti-entropy reconcile adds a /reconcile/checksum fetch — #1077).
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) };
+        if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => ({ checksum: 'local-cksum' }) };
+        if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [{ id: 'm1', content: 'new' }], maxSequence: '2', hasMore: false }) };
+        return { ok: true, json: async () => ({}) };
+      });
 
       applyMemoryChanges.mockResolvedValue({ inserted: 1, updated: 0 });
 
@@ -245,27 +238,20 @@ describe('syncOrchestrator', () => {
       };
       readJSONFile.mockResolvedValue(cursorData);
 
-      // Brain: returns data from seq 0 (after cursor reset)
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            changes: [{ seq: 1, op: 'create', type: 'people', id: 'p1', record: {} }],
-            maxSeq: 1,
-            hasMore: false
-          })
-        })
-        // Memory: no changes
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ memories: [], maxSequence: '10', hasMore: false })
-        });
+      // URL-routed (resilient to the reconcile fetch added in #1077). Brain
+      // returns data from seq 0 (after cursor reset); memory + reconcile quiet.
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [{ seq: 1, op: 'create', type: 'people', id: 'p1', record: {} }], maxSeq: 1, hasMore: false }) };
+        if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => ({ checksum: 'local-cksum' }) };
+        if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [], maxSequence: '10', hasMore: false }) };
+        return { ok: true, json: async () => ({}) };
+      });
 
       applyBrainChanges.mockResolvedValue({ inserted: 1, updated: 0, deleted: 0, skipped: 0 });
 
       const result = await syncWithPeer(peerWithReset);
 
-      const brainCall = mockFetch.mock.calls.find(c => c[0].includes('/api/brain/sync'));
+      const brainCall = mockFetch.mock.calls.find(c => c[0].includes('/api/brain/sync') && !c[0].includes('reconcile'));
       expect(brainCall[0]).toContain('since=0');
       expect(result.brain.totalApplied).toBe(1);
     });
@@ -568,6 +554,188 @@ describe('syncOrchestrator', () => {
     });
   });
 
+  describe('getSyncStatus forPeer / cursorForYou', () => {
+    it('returns our cursor into the requesting peer as cursorForYou', async () => {
+      getCurrentSeq.mockReturnValue(120);
+      getMaxSequence.mockResolvedValue('45');
+      // Our stored cursors: how far we've pulled from each peer. The requesting
+      // peer ('peer-A') wants its own entry back as its push-frontier toward us.
+      readJSONFile.mockImplementation(async () => ({
+        'peer-A': { brainSeq: 88, memorySeq: '30', lastSyncAt: '2026-01-01T00:00:00.000Z' },
+        'peer-B': { brainSeq: 5 },
+      }));
+
+      const status = await getSyncStatus({ forPeer: 'peer-A' });
+      expect(status.cursorForYou).toEqual({ brainSeq: 88, memorySeq: '30', lastSyncAt: '2026-01-01T00:00:00.000Z' });
+      // Our own local maxes are reported under `local`.
+      expect(status.local.brainSeq).toBe(120);
+    });
+
+    it('returns null cursorForYou when we have never synced the requesting peer', async () => {
+      readJSONFile.mockImplementation(async () => ({ 'peer-B': { brainSeq: 5 } }));
+      const status = await getSyncStatus({ forPeer: 'peer-A' });
+      expect(status.cursorForYou).toBeNull();
+    });
+
+    it('omits cursorForYou entirely when no forPeer is supplied (legacy shape)', async () => {
+      readJSONFile.mockImplementation(async () => ({ 'peer-A': { brainSeq: 88 } }));
+      const status = await getSyncStatus({});
+      expect(status).not.toHaveProperty('cursorForYou');
+    });
+
+    // Regression (#1077, Bug 3): the served local.checksums must be SCOPED to the
+    // requesting peer (forPeerId === forPeer) so they match the scoped checksum
+    // the peer's cursor cached during sync. Computing them unscoped (global) made
+    // every per-record-subscribable category (universe/pipeline/mediaCollections)
+    // read "behind" forever — including the both-empty case.
+    it('computes local.checksums scoped to the requesting peer (forPeerId === forPeer)', async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['mediaCollections']);
+      dataSync.getChecksum.mockResolvedValue({ checksum: 'scoped-xyz' });
+      readJSONFile.mockImplementation(async () => ({ 'peer-A': { brainSeq: 88 } }));
+
+      const status = await getSyncStatus({ includeChecksums: true, forPeer: 'peer-A' });
+
+      expect(dataSync.getChecksum).toHaveBeenCalledWith('mediaCollections', { forPeerId: 'peer-A' });
+      expect(status.local.checksums.mediaCollections).toBe('scoped-xyz');
+    });
+
+    it('computes UNscoped local.checksums when no forPeer is supplied (self-view)', async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['mediaCollections']);
+      dataSync.getChecksum.mockResolvedValue({ checksum: 'global-abc' });
+      readJSONFile.mockImplementation(async () => ({}));
+
+      await getSyncStatus({ includeChecksums: true });
+
+      expect(dataSync.getChecksum).toHaveBeenCalledWith('mediaCollections', { forPeerId: undefined });
+    });
+  });
+
+  describe('sync:progress events', () => {
+    it('emits start → applied → complete around a sync that moves records', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ changes: [{ id: 'b1' }], maxSeq: 1, hasMore: false }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ changes: [], maxSeq: 1, hasMore: false }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ memories: [], maxSequence: '0', hasMore: false }) });
+      applyBrainChanges.mockResolvedValue({ inserted: 1, updated: 0, deleted: 0, skipped: 0 });
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: true, memory: true } });
+
+      const progressCalls = instanceEvents.emit.mock.calls
+        .filter(([event]) => event === 'sync:progress')
+        .map(([, payload]) => payload);
+      expect(progressCalls[0]).toEqual({ phase: 'start', peerId: 'peer-inst-1' });
+      expect(progressCalls).toContainEqual({ phase: 'applied', peerId: 'peer-inst-1', category: 'brain', applied: 1 });
+      const complete = progressCalls.find(p => p.phase === 'complete');
+      expect(complete).toMatchObject({ phase: 'complete', peerId: 'peer-inst-1' });
+      expect(complete.totalApplied).toBeGreaterThanOrEqual(1);
+    });
+
+    it('releases the per-peer lock and still emits complete when the cursor read throws', async () => {
+      // readCursors → loadCursors → readJSONFile. A throw here (corrupt cursor
+      // file, disk error) happens AFTER the lock is acquired and the `start`
+      // emit fires — the finally must release the lock and emit a terminal
+      // `complete`, or the peer is wedged "syncing" until restart.
+      readJSONFile.mockRejectedValueOnce(new Error('cursor file corrupt'));
+      await expect(syncWithPeer({ ...mockPeer, syncCategories: { brain: true } })).rejects.toThrow('cursor file corrupt');
+
+      const progress = instanceEvents.emit.mock.calls
+        .filter(([event]) => event === 'sync:progress')
+        .map(([, payload]) => payload);
+      expect(progress).toContainEqual({ phase: 'start', peerId: 'peer-inst-1' });
+      expect(progress).toContainEqual({ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0 });
+
+      // Lock released: a subsequent sync is NOT short-circuited by syncingPeers.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) });
+      instanceEvents.emit.mockClear();
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: true } });
+      const reran = instanceEvents.emit.mock.calls.some(([event, p]) => event === 'sync:progress' && p.phase === 'start');
+      expect(reran).toBe(true);
+    });
+
+    it('emits exactly one complete (totalApplied 0) for a no-op sync — card never sticks on "syncing"', async () => {
+      // A category enabled but no changes available: lifecycle still settles.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) });
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: true } });
+
+      const progress = instanceEvents.emit.mock.calls
+        .filter(([event]) => event === 'sync:progress')
+        .map(([, payload]) => payload);
+      const completes = progress.filter(p => p.phase === 'complete');
+      // Exactly one complete, and no spurious second one from the finally guard.
+      expect(completes).toEqual([{ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0 }]);
+      // No `applied` events when nothing moved.
+      expect(progress.some(p => p.phase === 'applied')).toBe(false);
+    });
+  });
+
+  // #1077 Part 1: anti-entropy reconcile. After draining the delta log, brain
+  // sync compares a whole-brain checksum with the peer and pulls+merges the
+  // snapshot on a mismatch — the only path that re-converges a peer that missed
+  // compacted entries.
+  describe('brain anti-entropy reconcile (#1077)', () => {
+    // Brain delta drain is always empty here; we exercise the reconcile leg.
+    const routeFetch = (handlers) => mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) };
+      if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => handlers.checksum };
+      if (url.includes('/api/brain/reconcile/snapshot')) return { ok: true, json: async () => handlers.snapshot };
+      if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [], maxSequence: '0', hasMore: false }) };
+      return { ok: true, json: async () => ({}) };
+    });
+
+    it('pulls + merges the snapshot when peer checksum differs from local', async () => {
+      getBrainChecksum.mockResolvedValue('local-AAA');
+      applyBrainSnapshot.mockResolvedValue({ inserted: 0, updated: 3, deleted: 1, skipped: 0 });
+      routeFetch({
+        checksum: { checksum: 'peer-BBB' },
+        snapshot: { records: { links: { x: { id: 'x', updatedAt: '2026-02-02T00:00:00.000Z' } } }, checksum: 'peer-BBB' },
+      });
+
+      const result = await syncWithPeer(mockPeer);
+
+      expect(applyBrainSnapshot).toHaveBeenCalledTimes(1);
+      // delta(0) + reconcile merge(3 upd + 1 del) = 4
+      expect(result.brain.totalApplied).toBe(4);
+    });
+
+    it('SKIPS the snapshot fetch when peer checksum equals our local checksum', async () => {
+      getBrainChecksum.mockResolvedValue('same-CCC');
+      routeFetch({ checksum: { checksum: 'same-CCC' }, snapshot: { records: {} } });
+
+      await syncWithPeer(mockPeer);
+
+      expect(applyBrainSnapshot).not.toHaveBeenCalled();
+      const snapshotFetches = mockFetch.mock.calls.filter(c => c[0].includes('/api/brain/reconcile/snapshot'));
+      expect(snapshotFetches).toHaveLength(0);
+    });
+
+    it('SKIPS reconcile entirely when peer checksum matches the cached cursor checksum', async () => {
+      readJSONFile.mockImplementation(async () => ({ [mockPeer.instanceId]: { brainSeq: 0, brainChecksum: 'cached-DDD' } }));
+      routeFetch({ checksum: { checksum: 'cached-DDD' }, snapshot: { records: {} } });
+
+      await syncWithPeer(mockPeer);
+
+      // Cached match → never even computes local checksum or fetches snapshot.
+      expect(getBrainChecksum).not.toHaveBeenCalled();
+      expect(applyBrainSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('falls back to delta-only when peer is too old to expose /reconcile/checksum', async () => {
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) };
+        if (url.includes('/api/brain/reconcile/checksum')) return { ok: false, status: 404, json: async () => ({}) };
+        if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [], maxSequence: '0', hasMore: false }) };
+        return { ok: true, json: async () => ({}) };
+      });
+
+      const result = await syncWithPeer(mockPeer);
+
+      expect(applyBrainSnapshot).not.toHaveBeenCalled();
+      expect(result.brain.totalApplied).toBe(0);
+    });
+  });
+
   describe('syncAllPeers', () => {
     it('iterates online peers with instanceId', async () => {
       const onlinePeer = { ...mockPeer };
@@ -577,16 +745,64 @@ describe('syncOrchestrator', () => {
 
       getPeers.mockResolvedValue([onlinePeer, offlinePeer, disabledPeer, noIdPeer]);
 
-      // For the single qualifying peer: brain + memory fetch
-      mockFetch
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ memories: [], maxSequence: '0', hasMore: false }) });
+      // For the single qualifying peer: brain delta + reconcile checksum (#1077)
+      // + memory fetch. URL-routed so it doesn't depend on call order.
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => ({ checksum: 'local-cksum' }) };
+        if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) };
+        if (url.includes('/api/memory/sync')) return { ok: true, json: async () => ({ memories: [], maxSequence: '0', hasMore: false }) };
+        return { ok: true, json: async () => ({}) };
+      });
 
       await syncAllPeers();
 
-      // Only 1 peer qualifies (online + enabled + has instanceId)
-      // fetchPeer should be called for brain + memory
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      // Only 1 peer qualifies (online + enabled + has instanceId): brain delta +
+      // reconcile checksum + memory. Match by URL so unrelated fetches don't skew.
+      const brainSyncCalls = mockFetch.mock.calls.filter(c => c[0].includes('/api/brain/sync'));
+      const reconcileCalls = mockFetch.mock.calls.filter(c => c[0].includes('/api/brain/reconcile/checksum'));
+      const memoryCalls = mockFetch.mock.calls.filter(c => c[0].includes('/api/memory/sync'));
+      expect(brainSyncCalls).toHaveLength(1);
+      expect(reconcileCalls).toHaveLength(1);
+      expect(memoryCalls).toHaveLength(1);
+    });
+  });
+
+  // #1077 Bug 1: compaction must floor on how much each brain-enabled peer has
+  // pulled FROM us (peer.remoteSyncSeqs.cursorForYou.brainSeq), NOT our outbound
+  // pull cursor into them (cursors[peerId].brainSeq). Flooring on the wrong
+  // cursor drops log entries a peer hasn't consumed → that peer can never learn
+  // those records (the divergence this issue fixes).
+  describe('brain log compaction floor (#1077)', () => {
+    beforeEach(() => {
+      getCurrentSeq.mockReturnValue(200);
+      // No changes to pull, so each peer's sync is a no-op drain.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) });
+    });
+
+    it('floors on the MIN of peers consumption of our log (cursorForYou.brainSeq)', async () => {
+      const peerA = { ...mockPeer, instanceId: 'A', remoteSyncSeqs: { cursorForYou: { brainSeq: 150 } } };
+      const peerB = { ...mockPeer, name: 'B', instanceId: 'B', remoteSyncSeqs: { cursorForYou: { brainSeq: 90 } } };
+      getPeers.mockResolvedValue([peerA, peerB]);
+      // Our OUTBOUND pull cursors are high — the old (buggy) floor would use these.
+      readJSONFile.mockImplementation(async () => ({ A: { brainSeq: 199 }, B: { brainSeq: 199 } }));
+
+      await syncAllPeers();
+
+      // Floor = min(150, 90) = 90 — NOT min(199,199), and NOT our pull cursors.
+      expect(compactLog).toHaveBeenCalledWith(90);
+    });
+
+    it('floors at 0 when a brain-enabled peer has not reported its cursor into us', async () => {
+      const reported = { ...mockPeer, instanceId: 'A', remoteSyncSeqs: { cursorForYou: { brainSeq: 150 } } };
+      // peer B is brain-enabled but never told us how far it pulled — must NOT
+      // assume it caught up. Floor drops to 0 so we keep everything for it.
+      const unreported = { ...mockPeer, name: 'B', instanceId: 'B', remoteSyncSeqs: null };
+      getPeers.mockResolvedValue([reported, unreported]);
+      readJSONFile.mockImplementation(async () => ({}));
+
+      await syncAllPeers();
+
+      expect(compactLog).toHaveBeenCalledWith(0);
     });
   });
 

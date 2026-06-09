@@ -1,7 +1,8 @@
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, mixHex, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix, mixHex } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeAiCore, computeAiCoreBeams, AI_CORE } from '../../utils/cityAiCore';
 
@@ -100,6 +101,7 @@ function SpireLightRings({ height, color, dayMix }) {
 }
 
 export default function CityAiCore({ aiActivity, positions, apps, settings }) {
+  const { tintStructure } = useCityPalette();
   const core = useMemo(
     () => computeAiCore(aiActivity?.ops, aiActivity?.lastStartTs ?? 0),
     [aiActivity],

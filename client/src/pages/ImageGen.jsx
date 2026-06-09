@@ -48,7 +48,7 @@ import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
   getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
-  buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability,
+  buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability, removeImageWatermark,
 } from '../services/api';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
@@ -929,6 +929,19 @@ export default function ImageGen() {
     toast.success(`Cleaned → ${cleaned.filename}`);
   };
 
+  // Visible-watermark removal — erases the Gemini/Nano-Banana ✦. Synchronous
+  // like Clean: returns the new `_nowatermark.png` variant directly, so insert
+  // it into the gallery rather than waiting on the render queue.
+  const handleRemoveWatermark = async (img) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    const variant = await removeImageWatermark(img.filename).catch((err) => {
+      toast.error(err.message || 'Failed to remove watermark');
+      throw err;
+    });
+    setGallery((g) => [variant, ...g.filter((x) => x.filename !== variant.filename)]);
+    toast.success(`Watermark removed → ${variant.filename}`);
+  };
+
   // SynthID-defeat regen (issue #912) — unlike clean, this is a queued local
   // FLUX render: it returns a job ack, and the finished variant lands in the
   // gallery via the queue-completion refresh (useMediaCompletionRefresh /
@@ -1471,6 +1484,7 @@ export default function ImageGen() {
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
         onClean={(item) => handleClean(item?.raw)}
         onRegenerate={(item, opts) => handleRegenerate(item?.raw, opts)}
+        onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}
         regenAvailable={regenAvailable}
         regenBounds={regenInfo}
       />

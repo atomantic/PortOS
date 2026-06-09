@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from '../components/ui/Toast';
-import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
+import { cleanGalleryImage, extractLastFrame, removeImageWatermark } from '../services/apiImageVideo';
 import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
 // Common image render-setting params shared by the image branch of Remix and by
@@ -160,5 +160,20 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     return cleaned;
   }, [onCleanComplete]);
 
-  return { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean };
+  // Remove watermark: erase the visible Gemini/Nano-Banana ✦ from the
+  // bottom-right corner via a localized inpaint. Like Clean, it returns a new
+  // `_nowatermark.png` gallery variant — reuse the same `onCleanComplete`
+  // splice callback so the variant lands in the consumer's local state.
+  const handleRemoveWatermark = useCallback(async (img) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    const variant = await removeImageWatermark(img.filename).catch((err) => {
+      toast.error(err.message || 'Failed to remove watermark');
+      throw err;
+    });
+    toast.success(`Watermark removed → ${variant.filename}`);
+    if (onCleanComplete) await onCleanComplete(variant);
+    return variant;
+  }, [onCleanComplete]);
+
+  return { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark };
 }

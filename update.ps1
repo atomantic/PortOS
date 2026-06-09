@@ -71,9 +71,48 @@ Write-SafeHost "  PortOS Update" -ForegroundColor Cyan
 Write-SafeHost "===================================" -ForegroundColor Cyan
 Write-SafeHost ""
 
+# Which workspaces' package.json this update touched (populated after the pull
+# below). When the pulled update changed a workspace's manifest, an in-place
+# `npm install` over a node_modules tree resolved for the PREVIOUS major
+# versions can leave a duplicated/stale tree (e.g. a stray react@18 copy beside
+# react@19) — which builds fine but throws "Invalid hook call" at runtime. A
+# from-scratch reinstall is the only reliable fix for a major dependency bump.
+$script:DepsChangedFiles = @()
+$script:DepsChangedUnknown = $false
+
+function Test-WorkspaceDepsChanged {
+    param([string]$Dir)
+    if ($script:DepsChangedUnknown) { return $true }
+    $rel = if ($Dir -eq ".") { "package.json" } else { ($Dir -replace '^\./', '') + "/package.json" }
+    return $script:DepsChangedFiles -contains $rel
+}
+
+# Wipe a workspace's installed deps so the next `npm install` resolves the tree
+# from scratch. node_modules is always removed; the lockfile is removed ONLY
+# when it's gitignored (the per-install client/server locks) — a tracked root
+# or autofixer lock was just pulled and is already consistent with the new
+# package.json, so keep it for reproducible resolution.
+function Clear-WorkspaceDeps {
+    param([string]$Dir)
+    if (Test-Path "$Dir/node_modules") {
+        Remove-Item -Recurse -Force "$Dir/node_modules" -ErrorAction SilentlyContinue
+    }
+    git check-ignore -q "$Dir/package-lock.json" 2>$null
+    if ($LASTEXITCODE -eq 0 -and (Test-Path "$Dir/package-lock.json")) {
+        Remove-Item -Force "$Dir/package-lock.json" -ErrorAction SilentlyContinue
+    }
+}
+
 # Resilient npm install — retries once after cleaning node_modules on failure
 function Safe-Install {
     param([string]$Dir = ".", [string]$Label = "root")
+
+    # Force a clean reinstall when this update changed the workspace's deps —
+    # never trust an in-place install across a dependency-manifest change.
+    if (Test-WorkspaceDepsChanged -Dir $Dir) {
+        Write-SafeHost "🧹 $Label package.json changed in this update — clean reinstall (wiping node_modules)" -ForegroundColor Yellow
+        Clear-WorkspaceDeps -Dir $Dir
+    }
 
     Write-SafeHost "📦 Installing deps ($Label)..." -ForegroundColor Yellow
     Push-Location $Dir
@@ -82,12 +121,7 @@ function Safe-Install {
 
     Write-SafeHost "⚠️  npm install failed for $Label — cleaning node_modules + package-lock.json and retrying..." -ForegroundColor Yellow
     Pop-Location
-    if (Test-Path "$Dir/node_modules") {
-        Remove-Item -Recurse -Force "$Dir/node_modules" -ErrorAction SilentlyContinue
-    }
-    if (Test-Path "$Dir/package-lock.json") {
-        Remove-Item -Force "$Dir/package-lock.json" -ErrorAction SilentlyContinue
-    }
+    Clear-WorkspaceDeps -Dir $Dir
     Push-Location $Dir
     Invoke-Logged npm install
     if ($LASTEXITCODE -eq 0) { Pop-Location; return }
@@ -152,9 +186,32 @@ if ($currentBranch -ne "main") {
     Invoke-Logged git checkout main
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+# Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
+# the installed node_modules was built from (main, which the rest of this script
+# installs/builds), not a feature branch we just left. Diffing this against
+# post-pull HEAD yields exactly the pull's delta on main, so a manifest change
+# the update brings is detected even when launched from another branch.
+$prePullSha = git rev-parse HEAD 2>$null
 Invoke-Logged git pull --rebase --autostash
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Step "git-pull" "done" "Latest changes pulled"
+
+# Determine which workspaces' package.json this update touched, so Safe-Install
+# can force a clean reinstall for them (see Test-WorkspaceDepsChanged). If the
+# from-revision is unknown/unreachable (fresh clone, unrelated history), treat
+# deps as changed everywhere — a clean reinstall is the conservative default.
+if ($prePullSha) {
+    git cat-file -e "$prePullSha^{commit}" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $diff = git diff --name-only $prePullSha HEAD 2>$null
+        if ($diff) { $script:DepsChangedFiles = @($diff) }
+    } else {
+        $script:DepsChangedUnknown = $true
+    }
+} else {
+    $script:DepsChangedUnknown = $true
+}
+$global:LASTEXITCODE = 0
 Write-SafeHost ""
 
 # Update submodules (slash-do and any others)

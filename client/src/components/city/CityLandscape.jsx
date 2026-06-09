@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { CITY_COLORS, cityDayMix, mixHex, seededRand, smoothstepRange } from './cityConstants';
+import { cityDayMix, mixHex, seededRand, smoothstepRange } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 const TERRAIN_SIZE = 2400;
 const MOUNTAIN_INNER_RADIUS = 560;
@@ -60,7 +61,7 @@ const TERRAIN_FRAG = `
   }
 `;
 
-function TerrainPlane({ dayMix }) {
+function TerrainPlane({ dayMix, accent }) {
   const material = useMemo(() => new THREE.ShaderMaterial({
     vertexShader: TERRAIN_VERT,
     fragmentShader: TERRAIN_FRAG,
@@ -68,12 +69,18 @@ function TerrainPlane({ dayMix }) {
       uInner: { value: new THREE.Color(mixHex('#202426', '#686d68', dayMix)) },
       uMeadow: { value: new THREE.Color(mixHex('#172719', '#6f8758', dayMix)) },
       uRidge: { value: new THREE.Color(mixHex('#111827', '#8d937f', dayMix)) },
-      uAccent: { value: new THREE.Color(CITY_COLORS.ground) },
+      uAccent: { value: new THREE.Color(accent) },
       uDayMix: { value: dayMix },
     },
     side: THREE.DoubleSide,
     depthWrite: true,
-  }), [dayMix]);
+    // accent intentionally NOT a dep — a theme switch updates the uniform in
+    // place (effect below) rather than recompiling the GLSL program. Matches the
+    // imperative-uniform pattern in CitySky / CityBillboards / CityVolumetricLights.
+  }), [dayMix]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Push the accent into the existing material on theme change — no rebuild.
+  useEffect(() => { material.uniforms.uAccent.value.set(accent); }, [material, accent]);
 
   // R3F doesn't dispose a material handed in via the `material` prop, so free the
   // prior one when dayMix flips (Day/Night toggle) and on unmount.
@@ -135,6 +142,7 @@ function Mountain({ mountain, dayMix }) {
 }
 
 export default function CityLandscape({ settings }) {
+  const { accent } = useCityPalette();
   const dayMix = cityDayMix(settings);
 
   const mountains = useMemo(() => {
@@ -165,7 +173,7 @@ export default function CityLandscape({ settings }) {
 
   return (
     <group>
-      <TerrainPlane dayMix={dayMix} />
+      <TerrainPlane dayMix={dayMix} accent={accent} />
       <group>
         {mountains.map((mountain) => (
           <Mountain key={mountain.id} mountain={mountain} dayMix={dayMix} />

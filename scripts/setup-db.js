@@ -14,6 +14,7 @@ import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { parseEnvFile, upsertEnvKey } from './lib/envFile.js';
+import { resolveBashBinary } from '../server/lib/bashResolver.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -268,7 +269,7 @@ function setupNativePostgres() {
     // Pass resolved PG_* settings via env so db.sh provisions the same
     // role/db/port that isPortOSDbReady() probes. db.sh itself doesn't
     // source .env — without this, customized creds in .env would mismatch.
-    execFileSync('bash', [dbScript, 'setup-native'], {
+    execFileSync(resolveBashBinary(), [dbScript, 'setup-native'], {
       stdio: 'inherit',
       cwd: rootDir,
       env: PG_CHILD_ENV

@@ -161,6 +161,24 @@ describe('normalizeImage - regen lineage (issue #912)', () => {
   });
 });
 
+describe('normalizeImage - visible watermark-removal lineage', () => {
+  it('carries watermarkRemoved through normalization', () => {
+    // The server stamps watermarkRemoved on the _nowatermark sidecar; both
+    // describeCleanedLineage (lightbox) and computeImageVariantGroup read it
+    // off the NORMALIZED item to label the sibling "Watermark removed" rather
+    // than falling through to "Cleaned". Without the passthrough the label
+    // never fires through the real gallery path (ImageGen/History/Collections
+    // all map images through normalizeImage before the lightbox).
+    const n = normalizeImage({ filename: 'r_nowatermark.png', cleanedFrom: 'src.png', watermarkRemoved: true });
+    expect(n.watermarkRemoved).toBe(true);
+    expect(n.cleanedFrom).toBe('src.png');
+  });
+
+  it('defaults watermarkRemoved off for a normal image', () => {
+    expect(normalizeImage({ filename: 'a.png' }).watermarkRemoved).toBe(false);
+  });
+});
+
 describe('normalize loraNames - snake_case sidecar coverage', () => {
   // MediaCard chips/search read `item.loraNames`; these must surface for
   // sidecars written in any of the four supported field shapes so the UI

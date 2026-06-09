@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { computeCityLayout } from './cityLayout';
-import { getBuildingColor } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import { computeMiniMap } from '../../utils/cityMiniMap';
 
 // CyberCity mini-map overlay (roadmap 2.8). A compact top-down map in a HUD corner showing
@@ -21,6 +21,9 @@ import { computeMiniMap } from '../../utils/cityMiniMap';
 const MAP_SIZE = 132;
 
 export default function CityMiniMap({ apps, onSelectApp }) {
+  // Status colors track the theme accent for 'online' (the rest stay semantic), so a
+  // dot matches its building exactly. Read from the palette the city page provides.
+  const { getBuildingColor } = useCityPalette();
   const view = useMemo(() => {
     const positions = computeCityLayout(Array.isArray(apps) ? apps : []);
     return computeMiniMap(apps, positions);

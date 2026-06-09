@@ -17,7 +17,8 @@ import CitySettingsPanel from '../components/city/CitySettingsPanel';
 import { computeFilterResult } from '../utils/cityFilter';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
-import { CITY_COLORS, deriveCityPalette, applyCityBrandColors, resolveCityTimeOfDay } from '../components/city/cityConstants';
+import { CITY_COLORS, deriveCityPalette, resolveCityTimeOfDay } from '../components/city/cityConstants';
+import { CityPaletteProvider } from '../components/city/CityPaletteContext';
 import { useThemeContext } from '../components/ThemeContext';
 
 function CyberCityInner() {
@@ -42,14 +43,10 @@ function CyberCityInner() {
   // `cybercity-themed` CSS scope (see index.css) and the 3D scene's brand colors
   // + surround are derived from the same theme here.
   const { theme: cityTheme } = useThemeContext();
-  const cityPalette = useMemo(() => {
-    const palette = deriveCityPalette(cityTheme);
-    // Recolor the shared CITY_COLORS singleton during render — before the scene
-    // children render — so the keyed remount below (key={cityPalette.themeId})
-    // reads fresh brand colors on a theme switch.
-    applyCityBrandColors(palette);
-    return palette;
-  }, [cityTheme]);
+  // Pure: derive the themed palette and hand it down through CityPaletteContext (and,
+  // inside <Canvas>, a second provider in CityScene since r3f's reconciler doesn't
+  // bridge context). No more during-render mutation of a shared singleton.
+  const cityPalette = useMemo(() => deriveCityPalette(cityTheme), [cityTheme]);
 
   // The city renders day or night, following the theme mode by default (see
   // resolveCityTimeOfDay). The resolved preset key is handed to the scene via a
@@ -321,9 +318,19 @@ function CyberCityInner() {
   }
 
   return (
+    <CityPaletteProvider palette={cityPalette}>
     <div className="relative w-full h-full cybercity-themed" style={{ background: sceneBackground, isolation: 'isolate' }}>
       <CityScene
-        key={cityPalette.themeId}
+        // A theme switch recolors the live scene in place — NO full-scene remount.
+        // Every themed surface either reads the palette fresh each render (declarative
+        // `color=` props, palette helper fns) or carries the palette value in its
+        // useMemo deps so it rebuilds on a new palette object (CityGround, CityLandscape,
+        // CityTraffic, CityNeonSigns, …). The two persistent GPU shader materials whose
+        // uniforms are set once at construction (CityBillboards scan overlay,
+        // CityVolumetricLights cones) push the new accent into their uColor uniform
+        // imperatively, mirroring CitySky's per-frame uniform updates. Dropping the old
+        // `key={cityPalette.themeId}` avoids the jarring full-scene rebuild flash.
+        palette={cityPalette}
         background={sceneBackground}
         apps={v('apps', apps)}
         agentMap={v('agentMap', agentMap)}
@@ -410,6 +417,7 @@ function CyberCityInner() {
       <CityScanlines settings={settings} crt={cityPalette.crt} />
       {showSettings && <CitySettingsPanel />}
     </div>
+    </CityPaletteProvider>
   );
 }
 

@@ -63,6 +63,16 @@ const INK = 'rgb(var(--port-text))';
 // The currently-sounding note (playhead) is painted in the theme accent so it
 // reads as the foreground against the neutral-ink staff, in both day and dark.
 const ACTIVE = 'rgb(var(--port-accent))';
+// Color-match grade → notehead ink (theme tokens only). The grading lib
+// (colorMatch.js) emits these level strings; the renderer stays pure by just
+// mapping a passed grade to its color. Absent / `pending` grades fall through to
+// the default ink so an un-sung note looks normal.
+const GRADE_INK = {
+  'in-tune': 'rgb(var(--port-success))',
+  close: 'rgb(var(--port-warning))',
+  off: 'rgb(var(--port-error))',
+  missed: 'rgb(var(--port-error))',
+};
 const STAFF = 'rgb(var(--port-text-muted) / 0.55)';
 const CHORD = 'rgb(var(--port-accent))';
 const LYRIC = 'rgb(var(--port-text-muted))';
@@ -135,7 +145,7 @@ const rowLyricOffset = (row, bottomLineStep) => {
   return Math.max(LYRIC_MIN_BELOW_STAFF, belowStaffPx + LYRIC_BELOW_NOTE);
 };
 
-export default function ScoreSheet({ text, className = '', controls = true, activeNoteIndex = null }) {
+export default function ScoreSheet({ text, className = '', controls = true, activeNoteIndex = null, noteColors = null, hideLyrics = false }) {
   const score = useMemo(() => parseScore(text), [text]);
 
   // --- Reference-tone playback (synthesize the written melody) ---------------
@@ -285,7 +295,13 @@ export default function ScoreSheet({ text, className = '', controls = true, acti
         const cx = cursor + slot / 2;
         cursor += slot;
         const key = `m${index}-n${ni}`;
-        const ink = noteCounter === highlight ? ACTIVE : INK;
+        // Ink precedence: the live playhead (accent) wins on the active note;
+        // otherwise a color-match grade (green/yellow/red) paints the head; else
+        // default ink. `noteColors` is keyed by the same global note index.
+        const grade = noteColors?.[noteCounter];
+        const ink = noteCounter === highlight
+          ? ACTIVE
+          : (GRADE_INK[grade] || INK);
         noteCounter += 1;
         if (note.rest) {
           els.push(...renderRest(note, cx, yForStep, bottomLineStep, key, ink));
@@ -295,7 +311,9 @@ export default function ScoreSheet({ text, className = '', controls = true, acti
         if (note.chord) {
           els.push(<text key={`${key}-ch`} x={cx} y={chordY} fontSize={12} fontWeight="600" style={fillStyle(CHORD)} textAnchor="middle" fontFamily="ui-sans-serif, system-ui, sans-serif">{note.chord}</text>);
         }
-        if (note.lyric) {
+        // `hideLyrics` lets training mode obscure the words (sing from memory)
+        // without stripping them from the score text the editor still owns.
+        if (note.lyric && !hideLyrics) {
           els.push(<text key={`${key}-ly`} x={cx} y={lyricY} fontSize={11} style={fillStyle(LYRIC)} textAnchor="middle" fontFamily="ui-sans-serif, system-ui, sans-serif">{note.lyric}</text>);
         }
       });

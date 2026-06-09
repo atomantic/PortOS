@@ -1,7 +1,9 @@
 import { Sparkles } from '@react-three/drei';
-import { cityDayMix, CITY_COLORS } from './cityConstants';
+import { cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 export default function CityParticles({ settings }) {
+  const { particles } = useCityPalette();
   const density = settings?.particleDensity ?? 1.0;
   const scale = (base) => Math.max(1, Math.round(base * density));
   // Neon atmosphere dust is a night look — fade it out in daylight.
@@ -9,15 +11,14 @@ export default function CityParticles({ settings }) {
 
   return (
     <>
-      {/* Primary ambient sparkles — follow the themed accent (CITY_COLORS.particles
-          is recolored per theme by applyCityBrandColors) */}
+      {/* Primary ambient sparkles — follow the themed accent (palette.particles). */}
       <Sparkles
         count={scale(120)}
         scale={[50, 20, 50]}
         size={1.8}
         speed={0.3}
         opacity={0.3 * dayFade}
-        color={CITY_COLORS.particles}
+        color={particles}
       />
       {/* Pink/magenta secondary sparkles */}
       <Sparkles

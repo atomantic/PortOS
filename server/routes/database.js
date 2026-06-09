@@ -1,13 +1,25 @@
 import { Router } from 'express';
 import { execFile } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { resolveBashBinary } from '../lib/bashResolver.js';
 
 const rootDir = PATHS.root;
-const dbScript = join(rootDir, 'scripts', 'db.sh');
+// Pass the script path to bash with forward slashes. On Windows the native
+// path is `H:\...\db.sh`; bash treats each backslash as an escape character
+// and collapses it to `H:...db.sh` (exit 127, "No such file or directory").
+// Git Bash accepts drive paths with forward slashes (`H:/.../db.sh`), so
+// normalize separators here. POSIX paths are unaffected (no backslashes).
+const dbScript = join(rootDir, 'scripts', 'db.sh').replace(/\\/g, '/');
+// Resolve the interpreter explicitly. A bare `bash` on Windows often resolves
+// (via PM2's PATH) to WSL, which mounts drives at /mnt/h and can't see the
+// `H:/...` drive path above — exit 127. resolveBashBinary() prefers Git Bash,
+// which both accepts drive paths and runs db.sh against the Windows toolchain.
+const bashBinary = resolveBashBinary();
 
 const router = Router();
 
@@ -33,7 +45,7 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env) {
   });
 }
 
-const runDbScript = (args) => runCmd('bash', [dbScript, ...args]);
+const runDbScript = (args) => runCmd(bashBinary, [dbScript, ...args]);
 
 function parseDbMode(stdout) {
   const match = stdout.match(/Current mode:\s*(\w+)/);
@@ -94,7 +106,7 @@ async function getDockerDiskUsage() {
  * Get native PostgreSQL process stats via ps.
  */
 async function getNativeStats() {
-  const result = await runCmd('bash', ['-c',
+  const result = await runCmd(bashBinary, ['-c',
     'ps aux | grep "[p]ostgres.*-D" | head -1'
   ], 5_000);
   if (result.exitCode !== 0 || !result.stdout.trim()) return null;
@@ -105,7 +117,7 @@ async function getNativeStats() {
   if (!Number.isInteger(pidRaw) || pidRaw <= 0) return null;
   const pid = String(pidRaw);
   // Get all postgres child processes
-  const childResult = await runCmd('bash', ['-c',
+  const childResult = await runCmd(bashBinary, ['-c',
     `ps -o pid=,pcpu=,pmem=,rss= -p $(pgrep -P ${pid} | tr '\\n' ',')${pid} 2>/dev/null`
   ], 5_000);
   let totalCpu = 0, totalMem = 0, totalRss = 0, pids = 0;
@@ -289,6 +301,23 @@ const pgEnv = (port) => ({
   PGDATABASE: pgDb
 });
 
+/**
+ * Read a specific backend's PostgreSQL major version by probing it on its own
+ * port (native 5432 / Docker 5561 can run different majors, so the connection
+ * pool's version isn't authoritative for the export target). `server_version_num`
+ * is an integer like 170010 → major = floor(n / 10000). Returns null when the
+ * probe fails — the shared resolver then falls back to bare `pg_dump`.
+ */
+async function probeServerMajor(port, env) {
+  const result = await runCmd('psql', [
+    '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
+    '-tAc', 'SHOW server_version_num'
+  ], 5_000, env);
+  const num = parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(num)) return null;
+  return Math.floor(num / 10000);
+}
+
 // POST /api/database/sync — copy data from active to non-active backend
 // Since native (5432) and Docker (5561) use different ports, both can be
 // running simultaneously. No need to stop the active backend.
@@ -349,7 +378,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
   // Step 3: Import into target (active backend untouched — different port)
   // Strip pg17-only features for compat with older psql: \restrict/\unrestrict, transaction_timeout
   emit('start', { message: `Importing into ${targetMode} (port ${targetPort})...` });
-  const importResult = await runCmd('bash', ['-c',
+  const importResult = await runCmd(bashBinary, ['-c',
     `sed -e '/^\\\\restrict /d' -e '/^\\\\unrestrict /d' -e '/^SET transaction_timeout/d' "${dumpFile}" | psql -h localhost -p ${targetPort} -U ${pgUser} -d ${pgDb} -v ON_ERROR_STOP=1 --single-transaction`
   ], 120_000, pgEnv(targetPort));
 
@@ -375,7 +404,7 @@ router.post('/start', asyncHandler(async (req, res) => {
   }
 
   // Native: use db.sh which handles brew services / pg_ctl
-  const result = await runCmd('bash', [dbScript, 'start'], 30_000);
+  const result = await runCmd(bashBinary, [dbScript, 'start'], 30_000);
   res.json({ success: result.exitCode === 0, output: result.stdout });
 }));
 
@@ -392,7 +421,7 @@ router.post('/stop', asyncHandler(async (req, res) => {
   }
 
   // Native stop
-  const result = await runCmd('bash', [dbScript, 'stop'], 15_000);
+  const result = await runCmd(bashBinary, [dbScript, 'stop'], 15_000);
   res.json({ success: result.exitCode === 0, output: result.stdout });
 }));
 
@@ -466,10 +495,21 @@ router.post('/export', asyncHandler(async (req, res) => {
       throw new ServerError(`${backend} database not running on port ${port}`, { status: 400 });
     }
     const dumpDir = join(rootDir, 'data', 'db-dumps');
-    await runCmd('mkdir', ['-p', dumpDir], 5_000);
+    // Use Node's fs (not `mkdir -p`): on Windows `mkdir` is a cmd.exe builtin,
+    // not a spawnable executable, and `-p` isn't a valid flag — execFile would
+    // fail with ENOENT. `recursive: true` is the cross-platform equivalent.
+    mkdirSync(dumpDir, { recursive: true });
     const dumpFile = join(dumpDir, `portos-${backend}-${label}.sql`);
-    // Use -f flag to write output directly — no shell redirect needed, avoids shell injection
-    const pgDumpBin = pg17Bin ? `${pg17Bin}/pg_dump` : 'pg_dump';
+    // Use -f flag to write output directly — no shell redirect needed, avoids shell injection.
+    // Resolve a pg_dump whose major is >= the TARGET backend's server (probed
+    // against this port, not the pool's 5432) via the shared resolver, which
+    // also honors PORTOS_PGDUMP. Falls back to bare `pg_dump` when the probe
+    // can't determine the version. (Shared with backup.js — server/lib/pgTools.js.)
+    const targetMajor = await probeServerMajor(port, env);
+    const { binary: pgDumpBin, satisfies } = await resolvePgDumpBinary(targetMajor);
+    if (!satisfies) {
+      console.warn(`🗄️ No installed pg_dump satisfies ${backend} server major ${targetMajor} (using ${pgDumpBin})`);
+    }
     const result = await runCmd(pgDumpBin, [
       '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
       '--no-owner', '--no-privileges', '--if-exists', '--clean', '-f', dumpFile

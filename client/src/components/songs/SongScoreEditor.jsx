@@ -12,9 +12,10 @@
  * blocks rendering the rest.
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Music, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 import ScoreSheet from './ScoreSheet.jsx';
+import SingToScore from './SingToScore.jsx';
 import { parseScore } from '../../lib/scoreNotation.js';
 
 const PLACEHOLDER = `clef: treble
@@ -37,6 +38,31 @@ const LEGEND = [
 export default function SongScoreEditor({ value, onChange }) {
   const [showLegend, setShowLegend] = useState(false);
   const score = useMemo(() => parseScore(value || ''), [value]);
+  const textareaRef = useRef(null);
+  // Track the textarea's current selection so "Replace selection" knows whether
+  // any text is selected and where. Updated on select/keyup/mouseup/blur.
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+
+  const syncSelection = useCallback(() => {
+    const el = textareaRef.current;
+    if (el) setSelection({ start: el.selectionStart, end: el.selectionEnd });
+  }, []);
+
+  // Insert transcribed notation from Sing-to-score: either append a new line of
+  // measures to the end of the score, or replace the current selection in place.
+  const insertNotation = useCallback((text, mode) => {
+    const current = value || '';
+    if (mode === 'replace' && selection.end > selection.start) {
+      const next = current.slice(0, selection.start) + text + current.slice(selection.end);
+      onChange(next);
+      return;
+    }
+    // Append: ensure a newline before the new measures unless the score is empty.
+    const sep = current.trim() ? `${current.replace(/\s+$/, '')}\n` : current;
+    onChange(`${sep}${text}`);
+  }, [value, selection, onChange]);
+
+  const hasSelection = selection.end > selection.start;
 
   // Measures whose beat total doesn't match the time signature — a gentle nudge,
   // not an error (a pickup bar or a deliberate free bar is legitimate).
@@ -77,13 +103,29 @@ export default function SongScoreEditor({ value, onChange }) {
       </label>
       <textarea
         id="score"
+        ref={textareaRef}
         value={value || ''}
         onChange={(e) => onChange(e.target.value)}
+        onSelect={syncSelection}
+        onKeyUp={syncSelection}
+        onMouseUp={syncSelection}
+        onBlur={syncSelection}
         placeholder={PLACEHOLDER}
         rows={8}
         spellCheck={false}
         className={`${inputCls} font-mono leading-relaxed`}
       />
+
+      {/* Sing a melody → transcribe it into the notation above. */}
+      <div className="mt-3">
+        <SingToScore
+          value={value || ''}
+          tempo={score.tempo}
+          musicKey={score.key}
+          hasSelection={hasSelection}
+          onInsert={insertNotation}
+        />
+      </div>
 
       {/* Parse feedback — beat mismatches and unrecognized tokens. */}
       {(beatWarnings.length > 0 || score.errors.length > 0) && (

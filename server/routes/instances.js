@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as instances from '../services/instances.js';
-import { getSyncStatus } from '../services/syncOrchestrator.js';
+import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
@@ -95,6 +95,18 @@ const querySchema = z.object({
   path: z.string().startsWith('/api/', 'Path must start with /api/')
 });
 
+// Reciprocal sync request from a peer: it enabled `syncCategories` toward us
+// and asks us to mirror them so the sync is bidirectional. instanceId is the
+// announcing peer's identity (matched against our peer record).
+const reciprocalSyncSchema = z.object({
+  instanceId: z.string().guid(),
+  // `.unwrap()` strips the `.optional()` from the shared schema so the
+  // syncCategories KEY is required. An empty `{}` still parses (all fields are
+  // optional) and simply no-ops downstream in applyReciprocalSync
+  // (sanitizeSyncCategories returns null → changed:false).
+  syncCategories: syncCategoriesSchema.unwrap()
+});
+
 // GET /api/instances — list self + all peers
 router.get('/', asyncHandler(async (req, res) => {
   const [self, peers, syncStatus] = await Promise.all([
@@ -108,12 +120,22 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/instances/sync-status — local sync sequences + checksums (used by peers during probe)
+// A probing peer may pass `?forPeer=<its instanceId>` to also receive OUR cursor
+// into its data (`cursorForYou`) — how far we've pulled from it. That cursor is
+// the peer's push-frontier toward us, so it can render an outbound "N to push"
+// count. Older peers omit the param and get the legacy (inbound-only) shape.
+const syncStatusQuerySchema = z.object({
+  forPeer: z.string().guid().optional()
+});
 router.get('/sync-status', asyncHandler(async (req, res) => {
-  const status = await getSyncStatus({ includeChecksums: true });
+  const { forPeer } = syncStatusQuerySchema.parse(req.query);
+  const status = await getSyncStatus({ includeChecksums: true, forPeer });
   res.json({
     brainSeq: status.local.brainSeq,
     memorySeq: status.local.memorySeq,
-    checksums: status.local.checksums
+    checksums: status.local.checksums,
+    // Present only when `forPeer` was supplied and we've synced it before.
+    ...(status.cursorForYou ? { cursorForYou: status.cursorForYou } : {})
   });
 }));
 
@@ -239,6 +261,36 @@ router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
   res.json(instances.sanitizePeerForClient(result));
 }));
 
+// POST /api/instances/peers/sync-categories — reciprocal-sync callback from a
+// peer. The peer enabled some categories toward us and is asking us to mirror
+// them so the sync is bidirectional. No :id — the peer is identified by the
+// instanceId in the body (we may not know its local-peer-id mapping).
+router.post('/peers/sync-categories', asyncHandler(async (req, res) => {
+  const data = reciprocalSyncSchema.parse(req.body);
+  const { changed } = await instances.applyReciprocalSync(data.instanceId, data.syncCategories);
+  // 200 even when the peer is unknown to us / nothing changed — this is a
+  // best-effort convergence signal, not a command that must succeed. We return
+  // only `applied` (not the peer record) — the remote caller doesn't consume it,
+  // and echoing our peer entry would leak our stored proxy-credential metadata
+  // (username + hasPassword) for reaching them across the peer boundary, the
+  // same leak the /announce route guards against with redactPeerForWire.
+  res.json({ applied: changed });
+}));
+
+// POST /api/instances/peers/:id/reciprocate — explicit "make all enabled
+// categories mutual" for an existing (likely one-directional) peer. Pushes our
+// current category map to the peer so it enables the same toward us.
+router.post('/peers/:id/reciprocate', asyncHandler(async (req, res) => {
+  const peers = await instances.getPeers();
+  const peer = peers.find(p => p.id === req.params.id);
+  if (!peer) throw new ServerError('Peer not found', { status: 404 });
+  // Go through the per-peer serialized queue (same path as the auto-reciprocate
+  // on toggle) so a manual "Make mutual" can't race an in-flight toggle send and
+  // land a stale map. The queue re-reads the freshest persisted categories.
+  const result = await instances.enqueueReciprocalSync(peer.id);
+  res.json(result ?? { ok: false, reason: 'no-result' });
+}));
+
 // POST /api/instances/peers/:id/probe — force immediate probe
 router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   const peers = await instances.getPeers();
@@ -246,6 +298,22 @@ router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
   const result = await instances.probePeer(peer);
   res.json(instances.sanitizePeerForClient(result));
+}));
+
+// POST /api/instances/peers/:id/sync — force an immediate sync with this peer.
+// Probe first so the cursor-reset detection has fresh remoteSyncSeqs, then run
+// the full sync. syncWithPeer emits `sync:progress` events so the card animates
+// live and settles to the new directional summary without a manual refresh.
+router.post('/peers/:id/sync', asyncHandler(async (req, res) => {
+  const peers = await instances.getPeers();
+  const peer = peers.find(p => p.id === req.params.id);
+  if (!peer) throw new ServerError('Peer not found', { status: 404 });
+  const probed = await instances.probePeer(peer);
+  if (probed?.status !== 'online') {
+    throw new ServerError('Peer is offline — cannot sync', { status: 409, code: 'PEER_OFFLINE' });
+  }
+  const result = await syncWithPeer(probed);
+  res.json({ ok: true, result });
 }));
 
 // GET /api/instances/peers/:id/query — proxy GET to peer

@@ -165,9 +165,12 @@ export const DISTRICT_PARAMS = {
   gap: 4,
 };
 
-export const getBuildingColor = (status, archived) => {
-  if (archived) return CITY_COLORS.building.archived;
-  return CITY_COLORS.building[status] || CITY_COLORS.building.not_started;
+// Resolve a building's color from a status against a building-color map. The map
+// defaults to the static CITY_COLORS table; pass a themed palette's `building` map
+// (where `online` tracks the theme accent) to follow a theme switch.
+export const getBuildingColor = (status, archived, building = CITY_COLORS.building) => {
+  if (archived) return building.archived;
+  return building[status] || building.not_started;
 };
 
 export const getBuildingHeight = (app) => {
@@ -235,25 +238,24 @@ export const cityLabelColors = (neonColor, dayMix = 0) => {
   };
 };
 
-// Get a deterministic neon accent color per app (for windows/decorations)
-export const getAccentColor = (app) => {
+// Get a deterministic neon accent color per app (for windows/decorations). The accent
+// list defaults to the static palette; pass a themed palette's `neonAccents` to follow
+// a theme switch (its lead entry tracks the theme accent).
+export const getAccentColor = (app, neonAccents = CITY_COLORS.neonAccents) => {
   const hash = hashString(app.name || app.id);
-  return CITY_COLORS.neonAccents[hash % CITY_COLORS.neonAccents.length];
+  return neonAccents[hash % neonAccents.length];
 };
 
 // --- Theme integration -------------------------------------------------------
 // CyberCity's "brand" surfaces (ground grid, particles, online buildings, the
-// lead neon accent) default to cyan. When the user picks a PortOS theme we
-// recolor those surfaces to the theme accent so the 3D scene tracks the rest of
-// the UI. Status colors (stopped=red, etc.) stay semantic. Every brand surface
-// is recomputed from the theme accent (not from the previous theme), so repeated
-// switches don't compound; ORIGINAL_GROUND is only the fallback for a theme that
-// somehow has no accent.
+// lead neon accent, the dark structural bases) default to cyan. When the user picks
+// a PortOS theme, deriveCityPalette recolors those surfaces toward the theme accent
+// so the 3D scene tracks the rest of the UI; status colors (stopped=red, etc.) stay
+// semantic. The palette is a fresh immutable object per theme — every brand surface
+// is recomputed from the theme accent (never from a previous theme), so repeated
+// switches can't compound. ORIGINAL_GROUND is the fallback accent for a theme with no
+// --port-accent; the cyan-era brand defaults are captured up front to recompute from.
 const ORIGINAL_GROUND = CITY_COLORS.ground;
-// The dark building body + window-grid bases default to a cyber near-black. We
-// re-tint them toward the theme accent on a theme switch (see applyCityBrandColors
-// / tintStructure), so capture the cyan-era originals to recompute from — never
-// from the already-tinted value, or repeated switches compound.
 const ORIGINAL_BUILDING_BODY = CITY_COLORS.buildingBody;
 
 // Shared color primitives. parseHex: "#0a7a4a" -> [10, 122, 74] (null on bad input).
@@ -295,14 +297,14 @@ export const mixHex = (a, b, t) => {
   return ca && cb ? toHex(...ca.map((c, i) => c + (cb[i] - c) * t)) : a;
 };
 
-// Tint a color toward the active theme accent (the live CITY_COLORS.ground) by
-// `amount`, then rescale to the original luminance so ONLY hue/saturation shift —
-// the scene's brightness hierarchy (dark structural bases stay dark, bright sky
-// bands stay bright) is preserved while every surface picks up the theme. Reads the
-// live accent so it tracks theme switches. Pure aside from that read; null-safe.
-export const tintTowardAccent = (hex, amount = 0.2) => {
+// Tint a color toward the theme accent by `amount`, then rescale to the original
+// luminance so ONLY hue/saturation shift — the scene's brightness hierarchy (dark
+// structural bases stay dark, bright sky bands stay bright) is preserved while every
+// surface picks up the theme. The accent defaults to the static cyan brand; pass a
+// themed palette's accent to track a theme switch. Pure; null-safe.
+export const tintTowardAccent = (hex, amount = 0.2, accentHex = CITY_COLORS.ground) => {
   const base = parseHex(hex);
-  const accent = parseHex(CITY_COLORS.ground);
+  const accent = parseHex(accentHex);
   if (!base || !accent) return hex;
   const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
   const lb = lum(base);
@@ -314,8 +316,9 @@ export const tintTowardAccent = (hex, amount = 0.2) => {
 };
 
 // Convenience for the dark structural bases (building bodies, district plinths,
-// monument footings) — a slightly stronger tint than the default.
-export const tintStructure = (hex) => tintTowardAccent(hex, 0.22);
+// monument footings) — a slightly stronger tint than the default. The accent defaults
+// to the static brand; pass a themed accent (from useCityPalette().accent) to theme.
+export const tintStructure = (hex, accentHex = CITY_COLORS.ground) => tintTowardAccent(hex, 0.22, accentHex);
 
 // GLSL-style smoothstep with an edge remap (distinct from the plain Hermite
 // smoothstep(t) in utils/easing.js — different arity, kept local on purpose).
@@ -372,6 +375,16 @@ export const deriveCityPalette = (theme) => {
   // panels follow the light/dark theme independently (see .cybercity-themed CSS).
   const nightBackground = darkenHex(accent, 0.1);
   const dayBackground = lightenHex(accent, 0.72);
+
+  // Themed brand surfaces — recomputed from the theme accent each time, so switching
+  // back and forth never compounds. The lead neonAccents entry tracks the accent;
+  // the rest of the palette is the static decorative spread. The dark building body
+  // is re-tinted toward the accent (luminance preserved) so structures track the
+  // theme too, not just the neon surfaces. Status colors stay semantic.
+  const neonAccents = [accent, ...CITY_COLORS.neonAccents.slice(1)];
+  const building = { ...CITY_COLORS.building, online: accent };
+  const buildingBody = tintStructure(ORIGINAL_BUILDING_BODY, accent);
+
   return {
     themeId: theme?.id || 'classic-midnight',
     mode: theme?.mode || 'night',
@@ -382,22 +395,21 @@ export const deriveCityPalette = (theme) => {
     // Default surround by theme mode — used for the loading screen before settings resolve.
     background: isDay ? dayBackground : nightBackground,
     crt: deriveCrtProfile(theme?.family),
+    // Brand surfaces the 3D scene reads via useCityPalette() instead of the old
+    // mutated singleton. `ground`/`particles` are the accent; `building`/`buildingBody`/
+    // `neonAccents` carry the themed maps.
+    ground: accent,
+    particles: accent,
+    neonAccents,
+    building,
+    buildingBody,
+    // Helper functions pre-bound to this palette's accent/maps, so a consumer can call
+    // `palette.tintStructure(hex)` (no accent threading) and still track the theme. These
+    // are the themed equivalents of the bare module helpers, which default to the static
+    // cyan brand when called without a palette.
+    tintTowardAccent: (hex, amount = 0.2) => tintTowardAccent(hex, amount, accent),
+    tintStructure: (hex) => tintStructure(hex, accent),
+    getBuildingColor: (status, archived) => getBuildingColor(status, archived, building),
+    getAccentColor: (app) => getAccentColor(app, neonAccents),
   };
-};
-
-// Recolor the brand surfaces in-place from a derived palette. The city page calls
-// this when the theme changes and remounts the scene subtree (keyed on themeId)
-// so every component re-reads the singleton. Recomputes every brand surface from
-// the derived palette's accent (not from the previously-applied colors), so
-// repeated theme switches don't compound.
-export const applyCityBrandColors = (palette) => {
-  const accent = palette?.accent || ORIGINAL_GROUND;
-  CITY_COLORS.ground = accent;
-  CITY_COLORS.particles = accent;
-  CITY_COLORS.building.online = accent;
-  CITY_COLORS.neonAccents[0] = accent;
-  // Ground must be set first — tintStructure reads CITY_COLORS.ground. Re-tint the
-  // dark building body toward the accent (luminance preserved) so structures track
-  // the theme too, not just the neon brand surfaces.
-  CITY_COLORS.buildingBody = tintStructure(ORIGINAL_BUILDING_BODY);
 };

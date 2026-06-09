@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeJiraDistrict, JIRA_DISTRICT } from '../../utils/cityJiraDistrict';
 
@@ -13,6 +14,7 @@ import { computeJiraDistrict, JIRA_DISTRICT } from '../../utils/cityJiraDistrict
 // One ticket structure. The mesh form is chosen by workflow state so the yard reads as work
 // progressing from crates → scaffolds → finished buildings.
 function SprintStructure({ structure, pulseRef, isPulse }) {
+  const { tintStructure } = useCityPalette();
   const { position, color, height, state } = structure;
   const size = JIRA_DISTRICT.crateSize;
 

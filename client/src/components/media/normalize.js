@@ -85,6 +85,12 @@ export function normalizeImage(i) {
     // PSNR); surfaced in the lightbox lineage row, so it must be lifted here too.
     regenPixelDeltaPct: typeof i.regenPixelDeltaPct === 'number' ? i.regenPixelDeltaPct : null,
     regenPsnr: typeof i.regenPsnr === 'number' ? i.regenPsnr : null,
+    // Visible Gemini/Nano-Banana corner-watermark removal — stamped by
+    // /api/image-gen/:filename/remove-watermark. The discriminator
+    // computeImageVariantGroup + describeCleanedLineage use to label a
+    // `cleanedFrom` sibling "Watermark removed" rather than "Cleaned", so it
+    // MUST survive normalization (same contract as `regenerated` above).
+    watermarkRemoved: i.watermarkRemoved === true,
     raw: i,
   };
 }

@@ -1,7 +1,8 @@
 import { useMemo, useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeFederationHorizon, FEDERATION } from '../../utils/cityFederation';
 
@@ -48,6 +49,7 @@ function FederationBridge({ from, color, broken, intensity }) {
 
 // A distant peer (or the void marker) rendered as a neon-trimmed silhouette.
 function Monolith({ position, width, height, color, opacity, label, sublabel, online, animate, dayMix = 0 }) {
+  const { tintStructure } = useCityPalette();
   const capRef = useRef();
 
   useFrame(({ clock }) => {

@@ -852,6 +852,11 @@ function setupInstanceEventForwarding() {
     const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
     broadcastToInstances('instances:peers:updated', sanitized);
   });
+  // Realtime sync lifecycle for the Instances cards: { phase, peerId, ... }.
+  // No secrets — just a peer instanceId + counts — so forward as-is.
+  instanceEvents.on('sync:progress', (data) => {
+    broadcastToInstances('sync:progress', data);
+  });
 }
 
 // Set up peer agent event forwarding (remote agent streaming)

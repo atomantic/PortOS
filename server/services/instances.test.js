@@ -43,7 +43,7 @@ vi.mock('../lib/ports.js', () => ({
 
 // fetch is stubbed per-test in beforeEach and restored in afterEach
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import {
@@ -61,6 +61,9 @@ import {
   handleAnnounce,
   redactPeerForWire,
   sanitizePeerForClient,
+  applyReciprocalSync,
+  requestReciprocalSync,
+  enqueueReciprocalSync,
   startPolling,
   stopPolling
 } from './instances.js';
@@ -452,8 +455,10 @@ describe('instances.js', () => {
       // Relay pins the Basic header at connect time, so a credential change
       // must tear it down to reconnect with the new extraHeaders.
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
-      // Immediate re-probe fired (bypasses the nextProbeAt backoff gate).
-      expect(fetch).toHaveBeenCalled();
+      // Immediate re-probe fired (bypasses the nextProbeAt backoff gate). The
+      // probe is fire-and-forget and now resolves our instanceId (one extra
+      // microtask) before fetching sync-status, so wait for the fetch.
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     });
 
     it('should NOT reconnect or re-probe on a no-op credential write', async () => {
@@ -533,6 +538,180 @@ describe('instances.js', () => {
 
       await updatePeer('peer-1', { host: 'bad!!host' });
       expect(disconnectFromPeer).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- Bidirectional sync reciprocation ---
+
+  describe('applyReciprocalSync', () => {
+    it('mirrors a peer\'s enabled categories onto our local record for that peer', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: false, goals: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed, peer } = await applyReciprocalSync('inst-A', { brain: true });
+
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.brain).toBe(true);
+      expect(peer.syncEnabled).toBe(true); // recomputed from the resulting map
+      expect(peer._reciprocalChanged).toBeUndefined(); // no transient marker leaks onto the record
+      // And the persisted payload must not carry any transient marker either.
+      const written = atomicWrite.mock.calls.at(-1)?.[1];
+      expect(written.peers[0]._reciprocalChanged).toBeUndefined();
+    });
+
+    it('is a no-op (changed:false) when our record already matches — the echo guard', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed } = await applyReciprocalSync('inst-A', { brain: true });
+
+      expect(changed).toBe(false);
+    });
+
+    it('echo guard treats absent-vs-false alike: adding goals:false to a partial map is a no-op', async () => {
+      // prev is a partial map missing `goals`; incoming sets goals:false, which
+      // is already the effective state → must NOT report changed (the baseline
+      // is defaulted so `false !== undefined` can't spuriously trip the guard).
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed } = await applyReciprocalSync('inst-A', { goals: false });
+
+      expect(changed).toBe(false);
+    });
+
+    it('applies an all-false map to clear a stale enabled category (the offline-disable recovery path)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed, peer } = await applyReciprocalSync('inst-A', { brain: false });
+
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.brain).toBe(false);
+      expect(peer.syncEnabled).toBe(false); // nothing left enabled
+    });
+
+    it('returns changed:false for an unknown peer instanceId', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers: [] });
+      const { changed, peer } = await applyReciprocalSync('nope', { brain: true });
+      expect(changed).toBe(false);
+      expect(peer).toBeNull();
+    });
+
+    it('drops unknown/garbage category keys (only DEFAULT_SYNC_CATEGORIES keys applied)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { peer } = await applyReciprocalSync('inst-A', { brain: true, __proto__: true, bogus: true });
+
+      expect(peer.syncCategories.brain).toBe(true);
+      expect(peer.syncCategories.bogus).toBeUndefined();
+    });
+
+    it('ignores a non-object categories payload', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers: [] });
+      const { changed } = await applyReciprocalSync('inst-A', 'not-an-object');
+      expect(changed).toBe(false);
+    });
+  });
+
+  describe('requestReciprocalSync', () => {
+    it('POSTs our self instanceId + sanitized categories to the peer', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me-id', name: 'me' }, peers: [] });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await requestReciprocalSync(
+        { id: 'p1', address: '10.0.0.2', port: 5555, name: 'B' },
+        { brain: true, bogus: true }
+      );
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, opts] = fetchMock.mock.calls[0];
+      expect(url).toContain('/api/instances/peers/sync-categories');
+      const body = JSON.parse(opts.body);
+      expect(body.instanceId).toBe('me-id');
+      expect(body.syncCategories).toEqual({ brain: true }); // bogus dropped
+    });
+
+    it('returns ok:false (not throw) when the peer 404s the endpoint (older version)', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me-id' }, peers: [] });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+      const result = await requestReciprocalSync(
+        { id: 'p1', address: '10.0.0.2', port: 5555, name: 'B' },
+        { brain: true }
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('http-404');
+    });
+
+    it('returns ok:false when we have no self identity', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      const result = await requestReciprocalSync({ id: 'p1', address: '10.0.0.2', port: 5555 }, { brain: true });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('no-self-identity');
+    });
+  });
+
+  describe('enqueueReciprocalSync', () => {
+    it('reads the FRESHEST persisted categories at send time (last enqueue wins, not enqueue-time snapshot)', async () => {
+      // readJSONFile is re-read on each send; point it at the latest map so the
+      // serialized send carries final state regardless of when it was enqueued.
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true, goals: true } }]
+      });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await enqueueReciprocalSync('p1');
+
+      const body = JSON.parse(fetchMock.mock.calls.at(-1)[1].body);
+      expect(body.syncCategories).toEqual({ brain: true, goals: true });
+    });
+
+    it('serializes per peer so sends leave in enqueue order (no stale-map race)', async () => {
+      // Unique peer id so the module-level per-peer tail can't chain onto another
+      // test's queue. The second send resolves immediately; the first blocks on
+      // resolveFirst. If sends raced, order would be ['second', 'first']; ordered
+      // serialization yields ['first', 'second'].
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p-serial', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true } }]
+      });
+      const order = [];
+      let resolveFirst;
+      const fetchMock = vi.fn()
+        .mockImplementationOnce(() => new Promise(r => { resolveFirst = () => { order.push('first'); r({ ok: true, status: 200 }); }; }))
+        .mockImplementationOnce(async () => { order.push('second'); return { ok: true, status: 200 }; });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const p1 = enqueueReciprocalSync('p-serial');
+      const p2 = enqueueReciprocalSync('p-serial');
+      // The second send resolves immediately; the first blocks until we release
+      // it. If the two ran concurrently (unserialized), 'second' would land
+      // first. Flush microtasks until the first send reaches its (blocked)
+      // fetch, then release it — the recorded order proves serialization.
+      // (beforeEach installs fake timers, so we flush the microtask queue
+      // directly rather than waiting on a real-time setTimeout.)
+      for (let i = 0; i < 20 && !resolveFirst; i++) await Promise.resolve();
+      resolveFirst();
+      await Promise.all([p1, p2]);
+      expect(order).toEqual(['first', 'second']);
+    });
+
+    it('no-ops cleanly for a peer that lost its instanceId', async () => {
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p-noinst', name: 'A', syncCategories: { brain: true } }] // no instanceId
+      });
+      vi.stubGlobal('fetch', vi.fn());
+      const result = await enqueueReciprocalSync('p-noinst');
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('no-peer-identity');
     });
   });
 

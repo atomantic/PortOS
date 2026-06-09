@@ -127,4 +127,41 @@ describe('ScoreSheet renderer', () => {
     );
     expect(lit).toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-accent\)\)/);
   });
+
+  it('paints color-match grades on noteheads via theme success/warning/error tokens', () => {
+    // noteColors maps global note index → grade. Index 0 in tune (green),
+    // index 1 close (yellow), index 2 off (red).
+    const graded = renderToStaticMarkup(
+      <ScoreSheet
+        text={FIVE_HUNDRED_MILES}
+        controls={false}
+        noteColors={{ 0: 'in-tune', 1: 'close', 2: 'off' }}
+      />,
+    );
+    expect(graded).toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-success\)\)/);
+    expect(graded).toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-warning\)\)/);
+    expect(graded).toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-error\)\)/);
+    // Still only theme tokens — no hardcoded hex sneaks in via grading.
+    expect(graded).not.toMatch(/#[0-9a-fA-F]{6}/);
+  });
+
+  it('does not paint grade colours when noteColors is absent', () => {
+    const plain = renderToStaticMarkup(<ScoreSheet text={FIVE_HUNDRED_MILES} controls={false} />);
+    expect(plain).not.toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-success\)\)/);
+    expect(plain).not.toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-warning\)\)/);
+  });
+
+  it('lets the live playhead (accent) win over a grade on the active note', () => {
+    // Note 0 is both graded in-tune AND the active playhead — accent wins so the
+    // singer can still see where they are in the score.
+    const html = renderToStaticMarkup(
+      <ScoreSheet
+        text={FIVE_HUNDRED_MILES}
+        controls={false}
+        noteColors={{ 0: 'in-tune' }}
+        activeNoteIndex={0}
+      />,
+    );
+    expect(html).toMatch(/<ellipse[^>]*fill:rgb\(var\(--port-accent\)\)/);
+  });
 });

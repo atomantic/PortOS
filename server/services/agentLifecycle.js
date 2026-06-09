@@ -26,6 +26,7 @@ import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSetti
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { processAgentCompletion } from './agentCompletion.js';
+import { releaseAppReviewMarker } from './appActivity.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -129,6 +130,10 @@ export async function spawnAgentForTask(task) {
         blockedAt: new Date().toISOString()
       }
     }, task.taskType || 'user').catch(() => {});
+    // Give up on this task — release the synthetic app-review marker so the app
+    // doesn't read "in review" forever (issue #989). No-op without metadata.app
+    // or when a real agent holds the marker.
+    await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
     return null;
   }
 
@@ -143,6 +148,7 @@ export async function spawnAgentForTask(task) {
   if (!laneResult.success) {
     spawningTasks.delete(task.id);
     emitLog('warn', `Failed to tag lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
+    await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
     return null;
   }
 
@@ -154,12 +160,22 @@ export async function spawnAgentForTask(task) {
   });
   startExecution(toolExecution.id);
 
-  // Helper to cleanup on early exit
-  const cleanupOnError = (error) => {
+  // Helper to cleanup on early exit. Releases the dedup guard, the execution
+  // lane, and the tool-execution state — and the synthetic app-review marker
+  // bound by `bindAppReviewAgent` before this spawn. Without the marker
+  // release, a pre-completion `return null` (provider resolution, prep
+  // deferred/blocked, in_progress updateTask failure) strands the app reading
+  // "in review" until the next daemon restart (issue #989). The release is a
+  // no-op when the task carries no `metadata.app` or the marker is a real
+  // `agent-*` id from a different live agent.
+  const cleanupOnError = async (error) => {
     spawningTasks.delete(task.id);
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
+    await releaseAppReviewMarker(task.metadata?.app).catch(err => {
+      emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id });
+    });
   };
 
   // Single try wraps setup + the spawn handoff so all locals stay in
@@ -191,7 +207,7 @@ export async function spawnAgentForTask(task) {
     // spawn-local guard/lane/execution state lives.
     const resolution = await resolveAgentProviderAndModel(task);
     if (!resolution.ok) {
-      cleanupOnError(resolution.error);
+      await cleanupOnError(resolution.error);
       cosEvents.emit('agent:error', {
         taskId: task.id,
         error: resolution.error,
@@ -208,12 +224,12 @@ export async function spawnAgentForTask(task) {
     // dedup guard / lane / execution state are released consistently.
     const prep = await prepareAgentWorkspace({ agentId, task });
     if (prep.outcome === 'deferred') {
-      cleanupOnError(prep.reason);
+      await cleanupOnError(prep.reason);
       cosEvents.emit('agent:deferred', { taskId: task.id, reason: prep.deferReason, branch: prep.branch });
       return null;
     }
     if (prep.outcome === 'blocked') {
-      cleanupOnError(prep.reason);
+      await cleanupOnError(prep.reason);
       cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
       return null;
     }
@@ -298,7 +314,7 @@ export async function spawnAgentForTask(task) {
         return null;
       });
     if (!updateResult) {
-      cleanupOnError('Failed to update task status');
+      await cleanupOnError('Failed to update task status');
       return null;
     }
 
@@ -378,7 +394,7 @@ export async function spawnAgentForTask(task) {
       throw err;
     }
     emitLog('error', `Agent spawn setup failed: ${err.message}`, { taskId: task.id, error: err.message });
-    cleanupOnError(err.message);
+    await cleanupOnError(err.message);
     cosEvents.emit('agent:error', { taskId: task.id, error: err.message });
     // Preserve the autonomous-job retry contract. Pre-widening, an uncaught
     // throw here propagated to subAgentSpawner's `task:ready` listener,

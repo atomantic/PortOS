@@ -82,6 +82,18 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'qwen3.6:35b',
     lmstudio: 'unsloth/Qwen3.6-35B-A3B-GGUF'
   },
+  {
+    key: 'nex-n2-mini',
+    name: 'Nex-N2-mini 35B-A3B',
+    category: 'coding',
+    params: '35B / 3B active',
+    size: '22 GB',
+    family: 'nex-n2',
+    description: "Nex AGI's agentic MoE (3B active) on a Qwen3.5 base — strong at coding, tool calling, long-horizon agent tasks, and vision (75.3 Terminal-Bench 2.1). Apache-2.0; the Q4 build fits comfortably on 32GB+ and is easy on a 128GB Mac. Vision needs the repo's mmproj file. The 397B Nex-N2-Pro is the big sibling — it won't fit a 128GB Mac even at Q4.",
+    capabilities: ['chat', 'code', 'tools', 'reasoning', 'vision'],
+    ollama: 'hf.co/sjakek/Nex-N2-mini-GGUF:UD-Q4_K_M',
+    lmstudio: 'sjakek/Nex-N2-mini-GGUF'
+  },
   // ── Large narrative / long-context tier (workstation-class: 64–128GB unified memory) ──
   // Best suited for whole-manuscript editorial review, where prose quality and a
   // long context window matter most. To actually fit the manuscript, raise Ollama's

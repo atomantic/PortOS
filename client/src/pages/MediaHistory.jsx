@@ -132,7 +132,7 @@ export default function MediaHistory() {
   // the cleaned image to the top of the local list) is page-specific —
   // wired through `onCleanComplete` so the cleaned record lands in `items`
   // without a full gallery refetch.
-  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean } = useMediaPreviewActions({
+  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
     onCleanComplete: (cleaned) => {
       const normalized = normalizeImage(cleaned);
       setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
@@ -280,6 +280,7 @@ export default function MediaHistory() {
         onSendToVideo={handleSendToVideo}
         onContinue={handleContinue}
         onClean={(item) => handleClean(item?.raw)}
+        onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}
       />
     </div>
   );

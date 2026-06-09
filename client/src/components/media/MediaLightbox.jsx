@@ -61,6 +61,11 @@ function describeCleanedLineage(item) {
     const method = item.regenMethod === 'light-spatial' ? ' (light)' : '';
     return `Regenerated${method} from ${item.cleanedFrom}${denoise}${fidelity}`;
   }
+  // Visible-watermark removal (the Gemini ✦ corner inpaint) also reuses
+  // `cleanedFrom` for grouping — describe it as its own lineage, not a clean.
+  if (item.watermarkRemoved && item.cleanedFrom) {
+    return `Watermark removed from ${item.cleanedFrom}`;
+  }
   if (item.cleanedFrom) {
     return `${item.cleanLevel ? `Cleaned (${item.cleanLevel}) ` : 'Cleaned '}from ${item.cleanedFrom}`;
   }
@@ -84,6 +89,7 @@ export default function MediaLightbox({
   onContinue,
   onClean,
   onRegenerate,
+  onRemoveWatermark,
   regenAvailable = false,
   regenBounds = null,
   onPrevious,
@@ -329,6 +335,7 @@ export default function MediaLightbox({
             onContinue={onContinue}
             onClean={onClean}
             onRegenerate={onRegenerate}
+            onRemoveWatermark={onRemoveWatermark}
             regenAvailable={regenAvailable}
             regenBounds={regenBounds}
             copy={copy}
@@ -372,7 +379,7 @@ function PeerNotes({ others }) {
 
 function SettingsPane({
   item, meta, isVideo,
-  onClose, onRemix, onSendToImage, onSendToVideo, onContinue, onClean, onRegenerate, regenAvailable, regenBounds,
+  onClose, onRemix, onSendToImage, onSendToVideo, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine,
   annotation, onAnnotationChange,
   variantGroup, onSelectVariant,
@@ -381,6 +388,7 @@ function SettingsPane({
   const [cleaning, setCleaning] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [lightRegenerating, setLightRegenerating] = useState(false);
+  const [removingWatermark, setRemovingWatermark] = useState(false);
   // Regen controls: the button toggles an inline panel (strength slider +
   // optional prompt) so a watermark-defeat pass can be tuned without leaving the
   // lightbox. Slider bounds come from the server (`regenBounds`) so the floor
@@ -656,6 +664,18 @@ function SettingsPane({
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Eraser className="w-3.5 h-3.5" /> {cleaning ? 'Cleaning…' : 'Clean'}
+          </button>
+        )}
+        {!isVideo && onRemoveWatermark && (
+          <button
+            type="button"
+            disabled={removingWatermark}
+            onClick={runBusyAction(removingWatermark, setRemovingWatermark, onRemoveWatermark)}
+            title="Erase the visible Gemini / Nano-Banana ✦ sparkle from the bottom-right corner. Reconstructs just that corner from its surroundings — the rest of the image is untouched. Creates a new variant; the original is kept."
+            aria-label="Remove Gemini watermark sparkle"
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> {removingWatermark ? 'Removing…' : 'Remove ✦'}
           </button>
         )}
         {!isVideo && onRegenerate && regenAvailable && (

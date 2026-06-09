@@ -13,9 +13,11 @@ import {BookOpen,
   X,
   Sparkles,
   Link2,
-  MessageCircle} from 'lucide-react';
+  MessageCircle,
+  ScrollText} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
+import { copyToClipboard } from '../../../lib/clipboard';
 import toast from '../../ui/Toast';
 
 export default function AutobiographyTab({ onRefresh }) {
@@ -47,6 +49,10 @@ export default function AutobiographyTab({ onRefresh }) {
   const [followUps, setFollowUps] = useState(null); // { storyId, prompts[] }
   const [generatingFollowUps, setGeneratingFollowUps] = useState(false);
   const [parentStoryId, setParentStoryId] = useState(null); // when writing a follow-up
+
+  // Woven-narrative state
+  const [narrative, setNarrative] = useState(null); // { storyId, text, storyCount }
+  const [weavingStoryId, setWeavingStoryId] = useState(null);
 
   const loadData = useCallback(async () => {
     const [statsData, storiesData, themesData, configData] = await Promise.all([
@@ -148,6 +154,23 @@ export default function AutobiographyTab({ onRefresh }) {
     }
     setGeneratingFollowUps(false);
   };
+
+  const handleWeaveNarrative = async (storyId) => {
+    setWeavingStoryId(storyId);
+    // request() already toasts on failure; the catch only swallows so the
+    // loading state still resets (avoids the double-toast in CLAUDE.md).
+    const result = await api.weaveAutobiographyNarrative(storyId).catch(() => null);
+    if (result?.narrative) {
+      setNarrative({ storyId, text: result.narrative, storyCount: result.storyCount });
+    }
+    setWeavingStoryId(null);
+  };
+
+  // A story's chain is "weavable" once it links to at least one other story
+  // (it's part of a follow-up chain as either parent or child).
+  const isChainable = useCallback((story) => (
+    !!story.parentStoryId || stories.some(s => s.parentStoryId === story.id)
+  ), [stories]);
 
   const startFollowUp = (parentId, questionText, themeId, themeLabel) => {
     setParentStoryId(parentId);
@@ -510,7 +533,48 @@ export default function AutobiographyTab({ onRefresh }) {
                       </div>
                     )}
 
+                    {/* Woven narrative for this chain */}
+                    {narrative?.storyId === story.id && (
+                      <div className="mt-3 bg-port-bg border border-amber-500/30 rounded-lg p-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-amber-300 flex items-center gap-1">
+                            <ScrollText size={12} />
+                            Woven narrative ({narrative.storyCount} stories)
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => copyToClipboard(narrative.text, 'Narrative copied')}
+                              className="text-xs text-gray-400 hover:text-white transition-colors"
+                            >
+                              Copy
+                            </button>
+                            <button
+                              onClick={() => setNarrative(null)}
+                              className="p-0.5 text-gray-500 hover:text-white"
+                              aria-label="Dismiss narrative"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-sm text-white whitespace-pre-wrap leading-relaxed">
+                          {narrative.text}
+                        </p>
+                      </div>
+                    )}
+
                     <div className="flex items-center gap-2 justify-end pt-2 border-t border-port-border/50">
+                      {isChainable(story) && (
+                        <button
+                          onClick={() => handleWeaveNarrative(story.id)}
+                          disabled={weavingStoryId === story.id}
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-amber-400/70 hover:text-amber-400 transition-colors disabled:opacity-50"
+                          title="Weave this chain of stories into one cohesive narrative"
+                        >
+                          {weavingStoryId === story.id ? <BrailleSpinner /> : <ScrollText size={12} />}
+                          Weave
+                        </button>
+                      )}
                       {!story.followUpPrompts && (
                         <button
                           onClick={() => handleGenerateFollowUps(story.id)}

@@ -26,6 +26,20 @@ export const cleanGalleryImage = (filename) => request(`/image-gen/${encodeURICo
   method: 'POST',
   body: JSON.stringify({}),
 });
+// Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦
+// via a CPU-only localized inpaint. Synchronous (like Clean): returns the new
+// `_nowatermark.png` variant directly. `opts` may carry `{ size }` or an
+// explicit `{ region: { x, y, w, h } }` for off-spec placements; omit for the
+// auto-sized corner box. `silent` so the lightbox owns its own error toast.
+export const removeImageWatermark = (filename, opts = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/remove-watermark`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(opts.size != null ? { size: opts.size } : {}),
+      ...(opts.region != null ? { region: opts.region } : {}),
+    }),
+    silent: true,
+  });
 // SynthID-defeat regen (issue #912). Enqueues a local-FLUX img2img round-trip
 // of a gallery image; returns the queue ack ({ jobId, position, ... }) — the
 // finished render lands in the gallery via the normal queue-completion refresh.

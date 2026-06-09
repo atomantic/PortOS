@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeProductivityMonument } from '../../utils/cityProductivity';
 
@@ -11,6 +12,7 @@ import { computeProductivityMonument } from '../../utils/cityProductivity';
 // distinct from a real zero-day streak. The capstone pulses brighter the longer the streak,
 // faster while velocity is surging. Mirrors CityBackupVault / CityHealthTower.
 export default function CityProductivityDistrict({ productivityData, settings }) {
+  const { tintStructure } = useCityPalette();
   const monument = useMemo(() => computeProductivityMonument(productivityData), [productivityData]);
   const capRef = useRef();
 

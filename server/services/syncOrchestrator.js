@@ -16,6 +16,7 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerAuthHeaders } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
+import * as brainReconcile from './brainReconcile.js';
 import * as memorySync from './memorySync.js';
 import * as catalogSync from './catalogSync.js';
 import * as dataSync from './dataSync.js';
@@ -31,6 +32,19 @@ const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
+
+// --- Realtime sync progress ---
+//
+// Emit per-peer sync lifecycle events so the Instances UI can animate a card
+// while a sync is actively churning (vs. only updating after a manual probe).
+// `socket.js` forwards `sync:progress` to instance subscribers. Phases:
+//   { phase: 'start',    peerId }
+//   { phase: 'applied',  peerId, category, applied }   // one per category with changes
+//   { phase: 'complete', peerId, totalApplied }
+// Fire-and-forget; a missing/uninitialized emitter must never break a sync.
+function emitSyncProgress(payload) {
+  if (typeof instanceEvents?.emit === 'function') instanceEvents.emit('sync:progress', payload);
+}
 
 // --- Cursor persistence ---
 
@@ -105,15 +119,23 @@ async function syncImageFromPeer(peer, avatarPath) {
 /**
  * Get sync status: local sequences + per-peer cursors + optional local checksums
  */
-export async function getSyncStatus({ includeChecksums = false } = {}) {
+export async function getSyncStatus({ includeChecksums = false, forPeer = null } = {}) {
   const isPostgres = getBackendName() === 'postgres';
   const snapshotCategories = includeChecksums ? dataSync.getSupportedCategories() : [];
+  // Scope the served checksums to the REQUESTING peer (#1077 Bug 3). The peer's
+  // cursor caches the `forPeer`-scoped checksum it pulled (source excludes
+  // records it pushes per-record), so a self-view UNscoped (global) checksum
+  // here would never match the cursor for any per-record-subscribable category
+  // (universe/pipeline/mediaCollections) — making them read "behind" forever,
+  // even when both sides are empty. An absent `forPeer` (self-view, older peer)
+  // keeps the unscoped global checksum (forPeerId: undefined).
+  const forPeerId = isNonEmptyStr(forPeer) ? forPeer : undefined;
   const [brainSeq, memorySeq, catalogSeqs, cursors, ...checksumResults] = await Promise.all([
     Promise.resolve(brainSyncLog.getCurrentSeq()),
     isPostgres ? memorySync.getMaxSequence() : Promise.resolve(null),
     isPostgres ? catalogSync.getMaxSequences().catch(() => null) : Promise.resolve(null),
     loadCursors(),
-    ...snapshotCategories.map(cat => dataSync.getChecksum(cat).catch(() => null))
+    ...snapshotCategories.map(cat => dataSync.getChecksum(cat, { forPeerId }).catch(() => null))
   ]);
   const local = { brainSeq, memorySeq, catalogSeqs };
   if (includeChecksums) {
@@ -122,7 +144,16 @@ export async function getSyncStatus({ includeChecksums = false } = {}) {
       local.checksums[snapshotCategories[i]] = checksumResults[i]?.checksum ?? null;
     }
   }
-  return { local, cursors };
+  const result = { local, cursors };
+  // When a peer asks "how much of MY data have you pulled?" (it passes its own
+  // instanceId as `forPeer`), return OUR cursor into that peer's data — i.e. how
+  // far we've consumed from it. That cursor IS the peer's push-frontier toward
+  // us, so the requesting peer can render an outbound "N to push" count without
+  // us tracking its local max. Null when we've never synced that peer.
+  if (isNonEmptyStr(forPeer)) {
+    result.cursorForYou = cursors[forPeer] ?? null;
+  }
+  return result;
 }
 
 // --- Sync logic ---
@@ -146,7 +177,46 @@ async function syncBrainFromPeer(peer, cursor) {
     hasMore = data.hasMore;
   }
 
-  return { brainSeq, totalApplied };
+  // --- Anti-entropy reconcile (#1077) ---
+  // Delta sync alone diverges once log entries are compacted away. After
+  // draining the log, compare a whole-brain checksum with the peer; on a
+  // mismatch, pull the full snapshot and LWW-merge it (idempotent). This is the
+  // ONLY path that re-converges a peer that missed compacted entries. Scoped to
+  // brain (no per-record push pipeline), so the snapshot is always the full set.
+  //
+  // Cheap-path skips, in order:
+  //   1. peer too old to expose /reconcile/checksum → null → delta-only (legacy),
+  //      leaving the cached checksum untouched.
+  //   2. peer checksum === our cached checksum for this peer → nothing changed
+  //      on their side since we last reconciled → skip (the init value already
+  //      holds it; no work).
+  //   3. peer checksum === our CURRENT local checksum → already converged → just
+  //      cache the peer checksum so step 2 short-circuits next cycle.
+  // Returns `brainChecksum` so the caller caches the converged value on the
+  // cursor (cache key is the peer checksum we reconciled against).
+  let brainChecksum = cursor.brainChecksum ?? null;
+  const remote = await fetchPeer(peer, '/api/brain/reconcile/checksum');
+  const remoteChecksum = isNonEmptyStr(remote?.checksum) ? remote.checksum : null;
+  if (remoteChecksum && remoteChecksum !== cursor.brainChecksum) {
+    const localChecksum = await brainReconcile.getBrainChecksum().catch(() => null);
+    if (remoteChecksum === localChecksum) {
+      // Already converged — record the peer checksum so we skip next cycle.
+      brainChecksum = remoteChecksum;
+    } else {
+      const snapshot = await fetchPeer(peer, '/api/brain/reconcile/snapshot');
+      if (snapshot?.records) {
+        const result = await brainReconcile.applyBrainSnapshot(snapshot);
+        totalApplied += result.inserted + result.updated + result.deleted;
+        // Cache the peer's served checksum so an unchanged peer short-circuits
+        // at step 2 next cycle. (Our post-merge local checksum may differ from
+        // the peer's if WE hold records THEY lack — that asymmetry is fine; the
+        // peer reconciles those from us on its own cycle.)
+        brainChecksum = isNonEmptyStr(snapshot.checksum) ? snapshot.checksum : remoteChecksum;
+      }
+    }
+  }
+
+  return { brainSeq, totalApplied, brainChecksum };
 }
 
 /**
@@ -565,31 +635,48 @@ export async function syncWithPeer(peer) {
   if (syncingPeers.has(peerId)) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
   syncingPeers.add(peerId);
 
-  // Our own instanceId — sent as `forPeer` so the SOURCE peer can scope each
-  // snapshot it serves us (excludes records it already pushes to us
-  // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
-  // scoping (full snapshots, legacy behavior).
-  const ourInstanceId = await getInstanceId().catch(() => null);
-  const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
-    ? ourInstanceId
-    : null;
+  // Emit an `applied` progress event for a category when it actually moved
+  // records — keeps the per-category emits DRY across the delta + snapshot legs.
+  const reportApplied = (category, applied) => {
+    if (applied > 0) emitSyncProgress({ phase: 'applied', peerId, category, applied });
+  };
 
-  const categories = getEffectiveCategories(peer);
-  const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
-  console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
+  // Track whether the normal `complete` emit fired, so the `finally` can settle
+  // a card whose sync threw mid-flight instead of leaving it spinning forever.
+  let completed = false;
 
-  // Read cursor snapshot outside lock so network I/O doesn't block other peers
-  // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
-  const cursor = await readCursors((cursors) => {
-    const raw = { ...(cursors[peerId] || {}) };
-    return detectCursorReset(raw, peer);
-  });
-
+  // Everything after acquiring the lock runs inside the try so the `finally`
+  // ALWAYS releases `syncingPeers` and emits a terminal `complete` — even if
+  // `getInstanceId`/`readCursors` throws before the sync body. Otherwise a
+  // throw here would both leak the per-peer lock (permanent until restart) and
+  // strand the card spinning with no `complete`.
   try {
+    // Our own instanceId — sent as `forPeer` so the SOURCE peer can scope each
+    // snapshot it serves us (excludes records it already pushes to us
+    // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
+    // scoping (full snapshots, legacy behavior).
+    const ourInstanceId = await getInstanceId().catch(() => null);
+    const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
+      ? ourInstanceId
+      : null;
+
+    const categories = getEffectiveCategories(peer);
+    const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
+    console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
+    emitSyncProgress({ phase: 'start', peerId });
+
+    // Read cursor snapshot outside lock so network I/O doesn't block other peers
+    // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
+    const cursor = await readCursors((cursors) => {
+      const raw = { ...(cursors[peerId] || {}) };
+      return detectCursorReset(raw, peer);
+    });
+
     // --- Brain sync (delta-based) ---
     let brainResult = { brainSeq: cursor.brainSeq ?? 0, totalApplied: 0 };
     if (categories.brain) {
       brainResult = await syncBrainFromPeer(peer, cursor);
+      reportApplied('brain', brainResult.totalApplied);
     }
 
     // --- Memory sync (delta-based, PostgreSQL only) ---
@@ -598,6 +685,7 @@ export async function syncWithPeer(peer) {
       const isPostgres = getBackendName() === 'postgres';
       if (isPostgres) {
         memoryResult = await syncMemoryFromPeer(peer, cursor);
+        reportApplied('memory', memoryResult.totalApplied);
       }
     }
 
@@ -607,6 +695,7 @@ export async function syncWithPeer(peer) {
       const isPostgres = getBackendName() === 'postgres';
       if (isPostgres) {
         catalogResult = await syncCatalogFromPeer(peer, peerId, cursor);
+        reportApplied('catalog', catalogResult.totalApplied);
       }
     }
 
@@ -644,13 +733,23 @@ export async function syncWithPeer(peer) {
       for (let i = 0; i < enabledDataCats.length; i++) {
         const result = settled[i].status === 'fulfilled' ? settled[i].value : { totalApplied: 0, checksum: null };
         dataCategoryResults[enabledDataCats[i]] = result;
+        reportApplied(enabledDataCats[i], result.totalApplied);
       }
     }
 
     // --- Single consolidated cursor write ---
     await withCursors(async (cursors) => {
       if (!cursors[peerId]) cursors[peerId] = {};
-      if (categories.brain) cursors[peerId].brainSeq = brainResult.brainSeq;
+      if (categories.brain) {
+        cursors[peerId].brainSeq = brainResult.brainSeq;
+        // Cache the reconcile checksum we converged against so an unchanged peer
+        // short-circuits the snapshot fetch next cycle (#1077). Only overwrite
+        // when we actually resolved one — a failed/legacy probe (null) leaves
+        // the prior value so we don't lose the skip-optimization on a blip.
+        if (isNonEmptyStr(brainResult.brainChecksum)) {
+          cursors[peerId].brainChecksum = brainResult.brainChecksum;
+        }
+      }
       if (memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
       // Persist the per-kind catalog cursor only when the drain wasn't blocked
       // by a schema gap — a blocked cycle leaves the prior cursor so we re-try
@@ -677,9 +776,18 @@ export async function syncWithPeer(peer) {
       console.log(`🔄 Synced with ${peer.name}: ${parts.join(', ')} changes`);
     }
 
+    const totalApplied = brainResult.totalApplied + memoryResult.totalApplied
+      + catalogResult.totalApplied
+      + Object.values(dataCategoryResults).reduce((sum, r) => sum + (r?.totalApplied || 0), 0);
+    completed = true;
+    emitSyncProgress({ phase: 'complete', peerId, totalApplied });
+
     return { brain: brainResult, memory: memoryResult, catalog: catalogResult, ...dataCategoryResults };
   } finally {
     syncingPeers.delete(peerId);
+    // If the sync threw before the normal complete emit, still settle the card
+    // out of its "syncing" state (a stuck spinner is worse than a silent stop).
+    if (!completed) emitSyncProgress({ phase: 'complete', peerId, totalApplied: 0 });
   }
 }
 
@@ -721,19 +829,27 @@ export async function syncAllPeers() {
     console.log(`🔄 Sync cycle complete: ${cycleChanges} change${cycleChanges === 1 ? '' : 's'} applied across ${online.length} peer${online.length === 1 ? '' : 's'}`);
   }
 
-  // Compact sync log below the minimum peer cursor to bound log growth
-  // Include all enabled peers with brain sync (not just online) so offline peers don't lose unsynced entries
-  const cursors = await loadCursors();
-  const brainEnabledIds = new Set(
-    peers
-      .filter(p => p.enabled && p.instanceId && getEffectiveCategories(p).brain)
-      .map(p => p.instanceId)
-  );
-  const seqs = Object.entries(cursors)
-    .filter(([id]) => brainEnabledIds.has(id))
-    .map(([, c]) => c.brainSeq ?? 0);
-  if (seqs.length > 0) {
-    const minSeq = Math.min(...seqs);
+  // Compact the sync log below the point every brain-enabled peer has already
+  // consumed FROM US (#1077 Bug 1). The floor MUST be each peer's cursor into
+  // OUR log — `peer.remoteSyncSeqs.cursorForYou.brainSeq`, learned during the
+  // probe — NOT `cursors[peerId].brainSeq` (our OUTBOUND pull cursor into them).
+  // Flooring on the outbound cursor drops entries a peer hasn't pulled yet, so
+  // that peer can never learn those records once they're gone (the exact
+  // divergence this issue fixes). Include all ENABLED brain peers (not just
+  // online) so an offline peer's unconsumed entries are never dropped.
+  //
+  // A brain-enabled peer that hasn't reported its cursor into us (older peer,
+  // never probed with `forPeer`, or never synced) contributes a floor of 0 —
+  // we keep everything for it rather than assume it caught up. compactLog still
+  // runs (vs. the old skip-when-empty) so a 0 floor is an explicit "keep all",
+  // and the anti-entropy reconcile (Part 1) re-converges anyone genuinely behind.
+  const brainPeers = peers.filter(p => p.enabled && p.instanceId && getEffectiveCategories(p).brain);
+  if (brainPeers.length > 0) {
+    const consumedSeqs = brainPeers.map(p => {
+      const consumed = p.remoteSyncSeqs?.cursorForYou?.brainSeq;
+      return typeof consumed === 'number' && Number.isFinite(consumed) && consumed >= 0 ? consumed : 0;
+    });
+    const minSeq = Math.min(...consumedSeqs);
     await brainSyncLog.compactLog(minSeq);
   }
 }
@@ -766,6 +882,11 @@ export function initSyncOrchestrator() {
     runTombstoneSweep().catch(err => {
       console.error(`❌ Tombstone sweep tick failed: ${err.message}`);
     });
+    // Brain entity tombstones ride the same tick — same once-a-minute cadence,
+    // same rejection (a rejected dynamic import would otherwise crash the tick).
+    runBrainTombstoneSweep().catch(err => {
+      console.error(`❌ Brain tombstone sweep tick failed: ${err.message}`);
+    });
   }, SYNC_INTERVAL_MS);
 
   console.log(`🔄 Sync orchestrator started (${SYNC_INTERVAL_MS / 1000}s interval)`);
@@ -796,6 +917,23 @@ async function runTombstoneSweep() {
   }
   if (result && result.orphanSubscriptions > 0) {
     console.log(`🧹 Tombstone GC: swept ${result.orphanSubscriptions} orphaned peer subscription${result.orphanSubscriptions === 1 ? '' : 's'}`);
+  }
+}
+
+/**
+ * Run a single brain-tombstone GC sweep, fire-and-forget. Dynamic import keeps
+ * brainTombstoneGc (→ brainStorage) off the orchestrator's module-load path,
+ * matching runTombstoneSweep above. Logs a one-line summary only when something
+ * was actually pruned — quiet on no-op cycles.
+ */
+async function runBrainTombstoneSweep() {
+  const { sweepBrainTombstones } = await import('./brainTombstoneGc.js');
+  const result = await sweepBrainTombstones().catch((err) => {
+    console.error(`❌ Brain tombstone sweep failed: ${err.message}`);
+    return null;
+  });
+  if (result && result.pruned > 0) {
+    console.log(`🪦 Brain tombstone GC: pruned ${result.pruned} tombstone${result.pruned === 1 ? '' : 's'}`);
   }
 }
 

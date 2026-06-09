@@ -101,6 +101,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, `expandHome` (`~/foo` → absolute), JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
 | `imageClean.js` | `cleanImageBuffer` (sharp-based denoise + C2PA strip) + `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in `routes/imageClean.js` wraps `cleanImageBuffer`. |
+| `imageWatermark.js` | `removeCornerWatermark` (erases the visible Gemini/Nano-Banana bottom-right ✦ via dependency-free harmonic/Laplace inpaint) + pure helpers `resolveWatermarkRegion` / `inpaintRegion`. Distinct from SynthID regen — this targets the *visible* corner logo. |
 | `multipart.js` | Streaming multipart/form-data parser. |
 | `safetensors.js` | `readSafetensorsHeader(path)` reads only the JSON header of a `.safetensors` file (never the tensor payload). `detectFlux2VariantFromHeader(header)` / `detectFlux2Variant(path)` classify a LoRA as FLUX.2 Klein `'4b'` (hidden dim 3072) vs `'9b'` (4096) by transformer-block tensor shapes, so the LoRA picker can hide off-variant weights that would silently fail to load. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
@@ -111,6 +112,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `bashResolver.js` | `resolveBashBinary()` — resolves the POSIX `bash` for running bundled `*.sh` scripts (e.g. `scripts/db.sh`). On Windows a bare `bash` often resolves (via PM2's PATH) to WSL, which mounts drives at `/mnt/h` and can't see a `H:/...` drive path (exit 127); this prefers Git Bash (PORTOS_BASH override → standard install dirs → derived from `git` on PATH → bare `bash`). No-op (`bash`) on non-Windows. |
 | `bufferedSpawn.js` | `bufferedSpawn(cmd, args, opts)` (structured non-throwing result) + `bufferedSpawnOrThrow` (throwing adapter), plus `killProcessTree`, `needsShell`, `IS_WIN32`, `WIN_CMD_SHIMS`, `MAX_OUTPUT_BYTES` — shared buffered-spawn machinery with capped stdout/stderr, timeout-kill, and Windows `taskkill /T /F` tree-kill. Used by `appBuilder.js` and `appUpdater.js`. |
 | `commandSecurity.js` | Allowlist of safe shell commands. |
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
@@ -189,6 +191,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `browserConfig.js` | Shared custom browser path helpers for deriving macOS app bundles, detecting configured browser choices, normalizing browser config, and validating Chrome-compatible binary paths. |
 | `db.js` | PostgreSQL connection pool. |
 | `pgTimestamp.js` | `mirrorTimestamp(value, fallback)` — coerce a hand-editable timestamp into a value Postgres TIMESTAMPTZ always accepts (or fall back), guarding boot-time binds against `Date.parse` rollover + out-of-range years. |
+| `pgTools.js` | `pg_dump` binary resolution shared by the backup snapshot path and the native↔Docker export path: `resolvePgDumpBinary(serverMajor)` (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`), plus the lower-level `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. Picks the closest installed `pg_dump` whose major is ≥ the running server's. |
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
 | `platform.js` | Platform/OS detection helpers. |
 | `timezone.js` | Timezone utilities for scheduling. |

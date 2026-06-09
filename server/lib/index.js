@@ -92,6 +92,7 @@ export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';
 export * from './imageClean.js';
+export * from './imageWatermark.js';
 export * from './multipart.js';
 export * from './safetensors.js';
 export * from './assetHash.js';
@@ -99,6 +100,7 @@ export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
 
 // === Process execution ===
+export * from './bashResolver.js';
 export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
 export * from './execGit.js';
@@ -160,6 +162,7 @@ export * from './browserConfig.js';
 export * from './buildId.js';
 export * from './db.js';
 export * from './pgTimestamp.js';
+export * from './pgTools.js';
 export * from './platform.js';
 export * from './ports.js';
 export * from './timezone.js';

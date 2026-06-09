@@ -85,10 +85,40 @@ export function arrayBufferToBase64(buffer) {
 }
 
 /**
+ * Tap a live `AnalyserNode` off an existing `MediaStream` — for the live tuner,
+ * which must read the SAME mic the recorder already opened rather than calling
+ * getUserMedia a second time (a second stream prompts again / fights the first).
+ * Returns `{ analyser, context, close }`; `close()` tears down the analyser graph
+ * and AudioContext but leaves the stream alone (the recorder owns the stream's
+ * lifetime). Caller MUST call `close()` on stop/unmount (deferred-work cleanup).
+ */
+export function createStreamAnalyser(stream, { fftSize = 2048 } = {}) {
+  const context = new (window.AudioContext || window.webkitAudioContext)();
+  // A context created outside a user gesture (e.g. in a render-driven effect)
+  // can start `suspended`; resume so frame reads aren't browser-dependent.
+  if (context.state === 'suspended') context.resume().catch(() => {});
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = fftSize;
+  source.connect(analyser); // no connection to destination — we only read frames
+  return {
+    analyser,
+    context,
+    close: () => {
+      source.disconnect();
+      analyser.disconnect();
+      context.close().catch(() => {});
+    },
+  };
+}
+
+/**
  * Start recording from the default microphone. Returns a handle whose
  * `stop()` resolves to `{ audioBase64, peak, mimeType, durationMs }` — a
- * 16 kHz mono WAV base64 string ready to POST. The caller is responsible for
- * calling `stop()` (or `cancel()` to discard). Throws if mic access is denied.
+ * 16 kHz mono WAV base64 string ready to POST. The handle also exposes the live
+ * `stream` so an analyser (live tuner) can tap the same mic without opening a
+ * second one. The caller is responsible for calling `stop()` (or `cancel()` to
+ * discard). Throws if mic access is denied.
  */
 export async function startMemoRecording() {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -102,6 +132,7 @@ export async function startMemoRecording() {
   const teardown = () => stream.getTracks().forEach((t) => t.stop());
 
   return {
+    stream,
     stop: () => new Promise((resolve, reject) => {
       recorder.onstop = async () => {
         teardown();

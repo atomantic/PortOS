@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer } from '../lib/imageClean.js';
+import { removeCornerWatermark } from '../lib/imageWatermark.js';
 import {
   resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
   REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX,
@@ -170,6 +171,21 @@ const regenerateSchema = z.object({
   // 'flux' (default) = GPU img2img round-trip; 'light' = CPU-only spatial pass
   // for installs without a FLUX runner (strength/steps/prompt ignored).
   method: z.enum(['flux', 'light']).optional(),
+});
+
+// Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
+// Body is optional: with no fields the corner box is auto-sized to the
+// sparkle's typical footprint. `size` overrides the square side; `region`
+// pins an explicit box (each field clamped server-side into the image) for
+// off-spec placements. All ints in pixels.
+const removeWatermarkSchema = z.object({
+  size: z.number().int().min(1).max(4096).optional(),
+  region: z.object({
+    x: z.number().int().min(0).max(100000).optional(),
+    y: z.number().int().min(0).max(100000).optional(),
+    w: z.number().int().min(1).max(4096).optional(),
+    h: z.number().int().min(1).max(4096).optional(),
+  }).optional(),
 });
 
 router.get('/status', asyncHandler(async (req, res) => {
@@ -643,6 +659,83 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     cleanedFrom: filename,
     cleanLevel: 'aggressive',
     c2paStripped: result.c2paStripped,
+  });
+}));
+
+// Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
+// Unlike SynthID regen (which round-trips the WHOLE image to overwrite an
+// invisible per-pixel signal), this localizes the corner logo and reconstructs
+// only that box via a dependency-free harmonic inpaint — so it's a CPU-only
+// sharp pass that runs on every install, GPU or not, and leaves the rest of the
+// image byte-faithful. Synchronous like Clean: writes a `_nowatermark.png`
+// variant + sidecar, files it into the source's collections, and returns it.
+router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  local.assertGalleryFilename(filename);
+  const body = validateRequest(removeWatermarkSchema, req.body || {});
+
+  const sourcePath = join(PATHS.images, filename);
+  const [buffer, { metadata: sourceMeta }] = await Promise.all([
+    readFile(sourcePath).catch((err) => {
+      if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
+      throw err;
+    }),
+    local.readImageSidecar(filename),
+  ]);
+
+  const result = await removeCornerWatermark(buffer, { size: body.size, region: body.region });
+
+  const base = filename.slice(0, -'.png'.length);
+  const outFilename = `${base}_nowatermark.png`;
+  const outPath = join(PATHS.images, outFilename);
+  const sidecarPath = join(PATHS.images, `${base}_nowatermark.metadata.json`);
+  // Anchor the variant group at the root original (same rule as /clean):
+  // de-watermarking a cleaned/regenerated variant groups under the root.
+  const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
+    ? sourceMeta.cleanedFrom : filename;
+  const createdAt = new Date().toISOString();
+  // Strip hidden/filename/id so listGallery's `...metadata` spread doesn't
+  // overwrite the disk-derived filename or re-hide the deliberate variant. Also
+  // drop the regen lineage fields: de-watermarking a REGENERATED source would
+  // otherwise inherit `regenerated:true` + stale fidelity numbers, and both the
+  // lightbox lineage (`describeCleanedLineage`) and variant grouping check
+  // `regenerated` BEFORE `watermarkRemoved` — so the variant would mislabel as
+  // "Regenerated … % changed" instead of "Watermark removed from …".
+  const {
+    hidden: _hidden, filename: _srcFilename, id: _srcId,
+    regenerated: _regenerated, regenStrength: _regenStrength,
+    regenSteps: _regenSteps, regenModelId: _regenModelId,
+    regenPixelDeltaPct: _regenPixelDeltaPct, regenPsnr: _regenPsnr,
+    regenMethod: _regenMethod,
+    ...sourceMetaForVariant
+  } = sourceMeta;
+  const variantMeta = {
+    ...sourceMetaForVariant,
+    createdAt,
+    cleanedFrom: groupRoot,
+    watermarkRemoved: true,
+    watermarkRegion: result.region,
+  };
+  await Promise.all([
+    writeFile(outPath, result.data),
+    writeFile(sidecarPath, JSON.stringify(variantMeta, null, 2)),
+  ]);
+
+  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
+    console.warn(`⚠️ Auto-file de-watermarked ${outFilename} → collections failed: ${err?.message || err}`);
+    return [];
+  });
+  console.log(`✦ Removed watermark ${filename} → ${outFilename} (${result.region.w}×${result.region.h} @ ${result.region.x},${result.region.y}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
+
+  res.json({
+    ...variantMeta,
+    filename: outFilename,
+    path: `/data/images/${outFilename}`,
+    sizeBefore: result.sizeBefore,
+    sizeAfter: result.sizeAfter,
+    sizeBytes: result.sizeAfter,
+    width: result.width,
+    height: result.height,
   });
 }));
 

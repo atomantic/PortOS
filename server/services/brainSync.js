@@ -12,8 +12,7 @@
 import * as brainStorage from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
-// Entity types stored as JSON (have records with IDs)
-const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets'];
+const { BRAIN_ENTITY_TYPES } = brainStorage;
 
 /**
  * Apply remote changes from a peer instance.
@@ -26,17 +25,28 @@ export async function applyRemoteChanges(changes) {
   const relayBatch = [];
 
   for (const change of changes) {
-    const { op, type, id, record, originInstanceId } = change;
+    let { op, type, id, record, originInstanceId } = change;
 
-    if (!ENTITY_TYPES.includes(type)) {
+    if (!BRAIN_ENTITY_TYPES.includes(type)) {
       skipped++;
       continue;
+    }
+
+    // Forward-compat: a future peer might ship a tombstone record as a
+    // create/update (`record._deleted === true`). Route it through the delete
+    // path with the wire-shape delete record so we tombstone it locally rather
+    // than writing a resurrectable live record. Older peers never do this.
+    if ((op === 'create' || op === 'update') && record?._deleted === true) {
+      op = 'delete';
+      record = { updatedAt: record.updatedAt, originInstanceId: record.originInstanceId ?? originInstanceId };
     }
 
     if (op === 'delete') {
       const result = await brainStorage.applyRemoteRecord(type, id, record, 'delete');
       if (result.applied) {
         deleted++;
+        // Relay only APPLIED changes — a rejected (local_newer) op is NOT
+        // re-appended, which is what stops the cross-peer echo amplification.
         relayBatch.push({ op, type, id, record, originInstanceId });
       } else {
         skipped++;

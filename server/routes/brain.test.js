@@ -90,6 +90,13 @@ vi.mock('../services/brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
+// Mock the brain anti-entropy reconcile service (#1077). Only the two read
+// endpoints are exposed over HTTP; applyBrainSnapshot is orchestrator-only.
+vi.mock('../services/brainReconcile.js', () => ({
+  getBrainChecksum: vi.fn(),
+  getBrainSnapshot: vi.fn()
+}));
+
 // Mock the brain journal service
 vi.mock('../services/brainJournal.js', () => ({
   listJournals: vi.fn(),
@@ -119,6 +126,7 @@ import * as brainService from '../services/brain.js';
 import { getBrainGraphData } from '../services/brainGraph.js';
 import { syncAllBrainData } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
+import { getBrainChecksum, getBrainSnapshot } from '../services/brainReconcile.js';
 import { applyRemoteChanges } from '../services/brainSync.js';
 import * as journal from '../services/brainJournal.js';
 
@@ -1016,6 +1024,25 @@ describe('Brain Routes', () => {
       await request(app).get('/api/brain/sync?since=0&limit=50');
 
       expect(getChangesSince).toHaveBeenCalledWith(0, 50);
+    });
+  });
+
+  describe('GET /api/brain/reconcile/checksum (#1077)', () => {
+    it('returns the whole-brain reconcile checksum', async () => {
+      getBrainChecksum.mockResolvedValue('abc123');
+      const response = await request(app).get('/api/brain/reconcile/checksum');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ checksum: 'abc123' });
+    });
+  });
+
+  describe('GET /api/brain/reconcile/snapshot (#1077)', () => {
+    it('returns the raw record map + checksum', async () => {
+      const snap = { records: { links: { x: { id: 'x', updatedAt: '2026-01-01T00:00:00.000Z' } } }, checksum: 'abc123' };
+      getBrainSnapshot.mockResolvedValue(snap);
+      const response = await request(app).get('/api/brain/reconcile/snapshot');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(snap);
     });
   });
 

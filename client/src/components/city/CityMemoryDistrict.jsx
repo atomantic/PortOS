@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import CityTubeLine from './CityTubeLine';
 import { computeMemoryDistrict, MEMORY_DISTRICT } from '../../utils/cityMemoryDistrict';
@@ -70,6 +71,7 @@ function CrystalCluster({ cluster, glowRef, isGlow, dayMix = 0 }) {
 }
 
 export default function CityMemoryDistrict({ memoryGraph, inboxDepth = 0, settings }) {
+  const { tintStructure } = useCityPalette();
   const district = useMemo(() => computeMemoryDistrict(memoryGraph), [memoryGraph]);
   const glowRef = useRef();
   const wellRef = useRef();

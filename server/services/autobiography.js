@@ -406,8 +406,28 @@ export async function updateConfig(updates) {
 }
 
 /**
+ * Map a chain depth to follow-up question guidance. Early in a chain the
+ * questions broaden the scene (who/what/where/sensory); as the chain deepens
+ * they pivot toward emotion, cause-and-effect, and finally reflection and
+ * meaning — so each round builds a progressively richer narrative.
+ */
+export function depthGuidanceForChain(depth) {
+  if (depth <= 1) {
+    return 'Stay close to the scene: draw out concrete people, places, and sensory details they only touched on.';
+  }
+  if (depth === 2) {
+    return 'Go beneath the surface: ask about the emotions, motivations, and relationships behind what they described.';
+  }
+  if (depth === 3) {
+    return 'Probe cause and effect: ask how this moment shaped later choices, beliefs, or who they became.';
+  }
+  return 'Invite reflection and meaning: ask what this thread reveals about them now, looking back, and how it connects to the larger arc of their life.';
+}
+
+/**
  * Generate LLM-powered follow-up questions for a story.
- * Returns 2-3 deeper questions based on the story content.
+ * Returns 2-3 deeper questions based on the story content. Questions become
+ * progressively more reflective as the chain deepens (see depthGuidanceForChain).
  */
 export async function generateFollowUps(storyId, providerId) {
   const data = await loadStories();
@@ -435,18 +455,26 @@ export async function generateFollowUps(storyId, providerId) {
     `${i === 0 ? 'Original prompt' : `Follow-up #${i}`}: ${s.promptText}\nResponse: ${s.content}`
   ).join('\n\n');
 
+  // Depth-aware guidance: the deeper into a chain we are, the more the
+  // questions should shift from gathering new details toward reflection,
+  // meaning, and synthesis — so the narrative grows progressively richer
+  // rather than circling the same surface details.
+  const depth = chainStories.length; // 1 = original story, 2+ = nth follow-up
+  const depthGuidance = depthGuidanceForChain(depth);
+
   const prompt = `You are helping someone write their autobiography by asking thoughtful follow-up questions. Based on the story they just wrote, generate exactly 3 follow-up questions that dig deeper into specific details, emotions, or connections they mentioned.
 
 Theme: ${story.themeLabel}
+This is depth ${depth} in the story chain.
 
 ${chainContext}
 
 Rules:
 - Each question should reference a specific detail from their most recent response
 - Questions should invite rich storytelling, not yes/no answers
-- Go deeper into emotions, sensory details, or cause-and-effect
 - Keep questions under 30 words each
-- If this is a follow-up chain, avoid repeating ground already covered
+- Avoid repeating ground already covered earlier in the chain
+- ${depthGuidance}
 
 Return a JSON array of exactly 3 strings, nothing else. Example:
 ["Question 1?", "Question 2?", "Question 3?"]`;
@@ -507,6 +535,60 @@ export async function getStoryChain(storyId) {
   findChildren(storyId);
 
   return [...ancestors, story, ...descendants];
+}
+
+/**
+ * Weave a story chain into a single cohesive first-person narrative.
+ *
+ * Takes the full chain for a story (ancestors → story → descendants, the same
+ * ordering as getStoryChain) and asks the LLM to synthesize every prompt/answer
+ * turn into one flowing memoir passage — the "progressively richer narrative"
+ * the chained follow-ups were building toward. The result is returned to the
+ * caller (not persisted as a story) so the user can review or copy it.
+ */
+export async function weaveChainNarrative(storyId, providerId) {
+  const chain = await getStoryChain(storyId);
+  if (chain.length === 0) return { error: 'Story not found' };
+
+  const provider = providerId
+    ? await getProviderById(providerId)
+    : await getActiveProvider();
+  if (!provider) return { error: 'No AI provider available' };
+
+  const model = provider.defaultModel;
+
+  const chainContext = chain.map((s, i) =>
+    `${i === 0 ? 'Opening prompt' : `Follow-up #${i}`}: ${s.promptText}\nResponse: ${s.content}`
+  ).join('\n\n');
+
+  const themeLabel = chain[0]?.themeLabel || 'this period';
+
+  const prompt = `You are a memoir editor. Below is a chain of autobiography prompts and the person's own responses, written over several sittings about ${themeLabel}. Weave them into a single cohesive first-person narrative passage.
+
+${chainContext}
+
+Rules:
+- Write in the first person, in the person's own voice — preserve their phrasing, details, and tone
+- Merge the separate responses into one flowing passage; do not list them as Q&A
+- Keep every concrete detail they shared; do not invent facts, names, or events they did not mention
+- Smooth transitions so the deeper follow-up reflections feel like a natural progression
+- Return only the narrative prose, no preamble, headings, or commentary`;
+
+  const result = await callProviderAISimple(provider, model, prompt, {
+    temperature: 0.6,
+    max_tokens: 2000,
+    op: 'autobiography-weave',
+    opLabel: 'Weaving your story…'
+  });
+
+  if (result.error) return { error: result.error };
+
+  const narrative = (result.text || '').trim();
+  if (!narrative) return { error: 'AI returned an empty narrative' };
+
+  console.log(`📖 Autobiography narrative woven for chain of ${chain.length} stories (root ${chain[0]?.id})`);
+
+  return { narrative, storyCount: chain.length };
 }
 
 /**

@@ -1,7 +1,8 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { getTimeOfDayPreset, tintTowardAccent, CITY_COLORS } from './cityConstants';
+import { getTimeOfDayPreset, tintTowardAccent } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 
 const SUN_RADIUS = 100;
 
@@ -112,16 +113,15 @@ const lerpColor = (target, a, b, t) => {
 // tracks the theme; horizon haze + sun colors stay physical/untinted. The accent is
 // in the cache key so a theme switch re-derives instead of serving a stale tint.
 const presetColors = {};
-const getPresetColors = (name, skyTheme) => {
-  const accent = CITY_COLORS.ground;
+const getPresetColors = (name, skyTheme, accent) => {
   const cacheKey = `${skyTheme}:${name}:${accent}`;
   if (!presetColors[cacheKey]) {
     const p = getTimeOfDayPreset(name, skyTheme);
     const isBrightDay = (p.daylightFactor ?? 0) >= 0.75;
     const belowHorizon = isBrightDay ? p.horizonLow : '#03030a';
     presetColors[cacheKey] = {
-      zenith: new THREE.Color(tintTowardAccent(p.zenith, 0.16)),
-      midSky: new THREE.Color(tintTowardAccent(p.midSky, 0.12)),
+      zenith: new THREE.Color(tintTowardAccent(p.zenith, 0.16, accent)),
+      midSky: new THREE.Color(tintTowardAccent(p.midSky, 0.12, accent)),
       horizonHigh: new THREE.Color(p.horizonHigh),
       horizonLow: new THREE.Color(p.horizonLow),
       belowHorizon: new THREE.Color(belowHorizon),
@@ -182,6 +182,12 @@ function CelestialBody({ groupRef }) {
 }
 
 export default function CitySky({ settings }) {
+  // The upper sky bands are tinted toward the theme accent. Mirror it into a ref so
+  // the useFrame loop reads the current accent without re-subscribing each frame.
+  const { accent } = useCityPalette();
+  const accentRef = useRef(accent);
+  accentRef.current = accent;
+
   const brightnessRef = useRef(settings?.ambientBrightness ?? 1.2);
   brightnessRef.current = settings?.ambientBrightness ?? 1.2;
 
@@ -213,7 +219,7 @@ export default function CitySky({ settings }) {
     const initialTheme = skyThemeRef.current;
     const initialTod = timeOfDayRef.current;
     const initialHour = getTimeOfDayPreset(initialTod, initialTheme).hour ?? 18;
-    const preset = getPresetColors(initialTod, initialTheme);
+    const preset = getPresetColors(initialTod, initialTheme, accentRef.current);
     const initPos = getArcPosition(initialHour);
     return new THREE.ShaderMaterial({
       vertexShader: SkyDomeShader.vertexShader,
@@ -250,7 +256,7 @@ export default function CitySky({ settings }) {
     transitionRef.current = Math.min(1.0, transitionRef.current + delta * 1.5);
     const lerpFactor = transitionRef.current < 1 ? delta * 3 : 1;
 
-    const preset = getPresetColors(target, skyThemeRef.current);
+    const preset = getPresetColors(target, skyThemeRef.current, accentRef.current);
 
     // Lerp hour along shortest path on the 24h clock
     let hourDiff = preset.hour - currentHourRef.current;

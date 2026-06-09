@@ -122,6 +122,45 @@ export async function bindAppReviewAgent(appId, agentId) {
 }
 
 /**
+ * Synthetic review markers bound by `bindAppReviewAgent` before the real agent
+ * spawns: `idle-review-<ts>` (idle loop) and `on-demand-<ts>` (on-demand loop).
+ * A *real* agent marker is `agent-<id>` and must never be cleared by the
+ * spawn-failure release below.
+ */
+const SYNTHETIC_REVIEW_AGENT_RE = /^(idle-review|on-demand)-/;
+
+/**
+ * Release a *synthetic* app-review marker stranded by a spawn that failed before
+ * completion.
+ *
+ * `bindAppReviewAgent` writes a synthetic `activeAgentId` (`idle-review-*` /
+ * `on-demand-*`) the instant a review task is produced — but `spawnAgentForTask`
+ * has several `return null` failure paths *after* that bind (provider resolution
+ * fails, workspace prep deferred/blocked, the in_progress `updateTask` fails,
+ * max-spawns block). On any of those, no agent runs to completion, so
+ * `processAgentCompletion` never clears the marker via `markAppReviewCompleted` +
+ * `startAppCooldown` — the app reads "in review" until the next daemon restart's
+ * `clearStaleActiveAgents` sweep (the synthetic id is never in the live
+ * `agent-*` set). This is the same failure *class* as #978, one step later in the
+ * lifecycle. See issue #989.
+ *
+ * Releasing only clears `activeAgentId`: it does NOT bump `reviewCount` /
+ * `issuesFound` (no review actually ran) and it leaves the cooldown that
+ * `markAppReviewCooldown` already advanced intact — so the app is re-picked after
+ * its normal cooldown window, not immediately. The synthetic-id guard makes this
+ * safe to call on any failing task that carries `metadata.app`: a real `agent-*`
+ * marker (a different live agent) is left untouched, and a no-marker app is a
+ * no-op.
+ */
+export async function releaseAppReviewMarker(appId) {
+  if (!appId) return null;
+  const activity = await loadAppActivity();
+  const app = activity.apps?.[appId];
+  if (!SYNTHETIC_REVIEW_AGENT_RE.test(app?.activeAgentId || '')) return null;
+  return updateAppActivity(appId, { activeAgentId: null });
+}
+
+/**
  * Mark an app review as completed
  */
 export async function markAppReviewCompleted(appId, issuesFound = 0, issuesFixed = 0) {

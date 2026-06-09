@@ -2076,6 +2076,7 @@ export default function UniverseBuilder() {
         onSendToImage={preview?.key?.startsWith('canon-sheet:') ? undefined : previewActions.handleSendToImage}
         onSendToVideo={preview?.key?.startsWith('canon-sheet:') ? undefined : previewActions.handleSendToVideo}
         onClean={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleClean(item?.raw || item)}
+        onRemoveWatermark={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleRemoveWatermark(item?.raw || item)}
         onContinue={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleContinue(item?.raw || item)}
       />
     </div>

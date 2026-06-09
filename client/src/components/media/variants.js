@@ -53,6 +53,12 @@ export function computeImageVariantGroup(item, items) {
       group.push({ label: 'Regenerated', item: c });
       continue;
     }
+    // Visible-watermark removal (Gemini ✦ corner inpaint) also reuses
+    // `cleanedFrom` for grouping — label it distinctly from a clean.
+    if (c.watermarkRemoved) {
+      group.push({ label: 'Watermark removed', item: c });
+      continue;
+    }
     const levelTag = c.cleanLevel ? ` (${c.cleanLevel})` : '';
     group.push({ label: `Cleaned${levelTag}`, item: c });
   }

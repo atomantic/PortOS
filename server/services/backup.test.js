@@ -48,7 +48,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { getBackendName } from './memoryBackend.js';
 import * as fs from 'fs/promises';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, pickPgDump, listSnapshots } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots } from './backup.js';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
@@ -167,36 +167,6 @@ describe('computeEffectiveExcludes', () => {
     for (const p of mustNotExclude) {
       expect(paths, `${p} must NOT be a default exclude`).not.toContain(p);
     }
-  });
-});
-
-describe('pickPgDump', () => {
-  const c = (major, binary = `pg_dump@${major}`) => ({ binary, major });
-
-  it('returns null when no candidates were discovered', () => {
-    expect(pickPgDump(17, [])).toBeNull();
-    expect(pickPgDump(17, undefined)).toBeNull();
-  });
-
-  it('picks the exact-major binary when one is installed', () => {
-    const chosen = pickPgDump(17, [c(15), c(17), c(16)]);
-    expect(chosen).toBe('pg_dump@17');
-  });
-
-  it('picks the closest binary that is >= the server (newer is fine, never older)', () => {
-    // server 16: 15 is too old, choose 17 (smallest qualifying), not 18.
-    expect(pickPgDump(16, [c(15), c(17), c(18)])).toBe('pg_dump@17');
-  });
-
-  it('falls back to the newest available when nothing is new enough (forces a clear mismatch error)', () => {
-    // This is the reported bug: server 17, only pg_dump 15 installed.
-    expect(pickPgDump(17, [c(15)])).toBe('pg_dump@15');
-    expect(pickPgDump(17, [c(14), c(15)])).toBe('pg_dump@15');
-  });
-
-  it('trusts the first (PATH) candidate when the server version is unknown', () => {
-    expect(pickPgDump(null, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
-    expect(pickPgDump(NaN, [c(15, 'pg_dump'), c(17)])).toBe('pg_dump');
   });
 });
 

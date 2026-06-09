@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PIXEL_FONT_URL, cityDayMix, tintStructure } from './cityConstants';
+import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
+import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import { computeTaskQueue, TASK_QUEUE } from '../../utils/cityTaskQueue';
 
@@ -26,6 +27,7 @@ function Crate({ y, size, color, topGlow }) {
 }
 
 export default function CityTaskQueue({ cosTasks, settings }) {
+  const { tintStructure } = useCityPalette();
   const queue = useMemo(() => computeTaskQueue(cosTasks), [cosTasks]);
   const roofRef = useRef();
 

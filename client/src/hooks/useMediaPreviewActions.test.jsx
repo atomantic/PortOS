@@ -5,7 +5,13 @@ import useMediaPreviewActions from './useMediaPreviewActions';
 const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('../services/apiImageVideo', () => ({ cleanGalleryImage: vi.fn(), extractLastFrame: vi.fn() }));
+vi.mock('../services/apiImageVideo', () => ({
+  cleanGalleryImage: vi.fn(),
+  extractLastFrame: vi.fn(),
+  removeImageWatermark: vi.fn(),
+}));
+
+import { removeImageWatermark } from '../services/apiImageVideo';
 
 const parseNav = () => {
   const url = navigate.mock.calls.at(-1)?.[0] || '';
@@ -49,5 +55,26 @@ describe('useMediaPreviewActions.handleSendToImage', () => {
     result.current.handleSendToImage({ kind: 'video', filename: 'clip.mp4' });
     result.current.handleSendToImage({ kind: 'image' });
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMediaPreviewActions.handleRemoveWatermark', () => {
+  beforeEach(() => removeImageWatermark.mockReset());
+
+  it('calls the API and fires onCleanComplete with the returned variant', async () => {
+    const variant = { filename: 'cat_nowatermark.png', watermarkRemoved: true };
+    removeImageWatermark.mockResolvedValue(variant);
+    const onCleanComplete = vi.fn();
+    const { result } = renderHook(() => useMediaPreviewActions({ onCleanComplete }));
+    const returned = await result.current.handleRemoveWatermark({ filename: 'cat.png' });
+    expect(removeImageWatermark).toHaveBeenCalledWith('cat.png');
+    expect(onCleanComplete).toHaveBeenCalledWith(variant);
+    expect(returned).toBe(variant);
+  });
+
+  it('throws when the image has no filename', async () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await expect(result.current.handleRemoveWatermark({})).rejects.toThrow('Missing filename');
+    expect(removeImageWatermark).not.toHaveBeenCalled();
   });
 });

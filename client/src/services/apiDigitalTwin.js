@@ -246,6 +246,11 @@ export const generateAutobiographyFollowUps = (storyId, providerId) =>
   });
 export const getAutobiographyStoryChain = (storyId) =>
   request(`/digital-twin/autobiography/stories/${storyId}/chain`);
+export const weaveAutobiographyNarrative = (storyId, providerId) =>
+  request(`/digital-twin/autobiography/stories/${storyId}/weave`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId })
+  });
 
 // Digital Twin - Assessment Analyzer
 export const analyzeAssessment = (content, providerId, model) =>

@@ -90,6 +90,12 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDirs: vi.fn().mockResolvedValue(undefined)
 }));
 
+// recoverStuckClassifications() resolves this instance's id to skip peer-origin
+// entries; stub it to a stable id.
+vi.mock('./instances.js', () => ({
+  getInstanceId: () => Promise.resolve('local-instance'),
+}));
+
 // Mock the central LLM handler — brain.js used to spawn child_process
 // directly, but now delegates to runPromptThroughProvider. Tests stub it to
 // return canned responses; the runner-internal mechanics (spawn args, --model
@@ -619,6 +625,25 @@ describe('brain service', () => {
       await recoverStuckClassifications();
 
       expect(storage.updateInboxLog).not.toHaveBeenCalled();
+    });
+
+    it('skips peer-origin entries so recovery does not clobber a peer mid-classification', async () => {
+      // Now that inbox rows sync, flipping a peer's in-flight 'classifying' entry
+      // to 'needs_review' here would stamp a fresh updatedAt and win LWW,
+      // overwriting the origin's real classification. Recovery is local-only.
+      storage.getInboxLog.mockResolvedValue([
+        { id: 'mine', originInstanceId: 'local-instance' },
+        { id: 'peers', originInstanceId: 'peer-x' },
+        { id: 'legacy' }, // no origin → pre-backfill local record, treated as ours
+      ]);
+      storage.updateInboxLog.mockResolvedValue({});
+
+      await recoverStuckClassifications();
+
+      expect(storage.updateInboxLog).toHaveBeenCalledWith('mine', { status: 'needs_review' });
+      expect(storage.updateInboxLog).toHaveBeenCalledWith('legacy', { status: 'needs_review' });
+      expect(storage.updateInboxLog).not.toHaveBeenCalledWith('peers', expect.anything());
+      expect(storage.updateInboxLog).toHaveBeenCalledTimes(2);
     });
   });
 

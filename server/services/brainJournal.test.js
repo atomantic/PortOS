@@ -32,9 +32,39 @@ vi.mock('./obsidian.js', () => ({
   deleteNote: vi.fn(),
 }));
 
+// brainJournal now delegates entry storage to brainStorage's `journals` entity
+// store. Back it with an in-memory date→record map so the journal logic (segment
+// append, content replace, tombstone-on-delete, slim summaries) is exercised for
+// real while staying isolated from disk. Mirrors brainStorage semantics:
+// getById/getAll strip tombstones and re-attach the map key as `id`;
+// upsertWithId stores the record verbatim and stamps createdAt/updatedAt.
+const { journalRecords } = vi.hoisted(() => ({ journalRecords: new Map() }));
 vi.mock('./brainStorage.js', () => ({
   brainEvents: { emit: vi.fn() },
   now: () => '2026-04-17T12:00:00.000Z',
+  getById: vi.fn(async (_type, id) => {
+    const rec = journalRecords.get(id);
+    return rec && !rec._deleted ? { id, ...rec } : null;
+  }),
+  getAll: vi.fn(async () =>
+    [...journalRecords.entries()]
+      .filter(([, rec]) => !rec._deleted)
+      .map(([id, rec]) => ({ id, ...rec }))),
+  upsertWithId: vi.fn(async (_type, id, record) => {
+    const existing = journalRecords.get(id);
+    const stored = {
+      ...record,
+      createdAt: existing?.createdAt ?? '2026-04-17T12:00:00.000Z',
+      updatedAt: '2026-04-17T12:00:00.000Z',
+    };
+    journalRecords.set(id, stored);
+    return { id, ...stored };
+  }),
+  remove: vi.fn(async (_type, id) => {
+    if (!journalRecords.has(id)) return false;
+    journalRecords.set(id, { _deleted: true, updatedAt: '2026-04-17T12:00:00.000Z' });
+    return true;
+  }),
 }));
 
 import * as journal from './brainJournal.js';
@@ -52,6 +82,7 @@ describe('brainJournal', () => {
     // path silently creates sibling dirs, orphaning our mocked path.)
     rmSync(TEMP_ROOT, { recursive: true, force: true });
     mkdirSync(TEMP_ROOT, { recursive: true });
+    journalRecords.clear();
     vi.clearAllMocks();
   });
 
@@ -221,6 +252,24 @@ describe('brainJournal', () => {
       await journal.deleteJournal('2026-04-17');
 
       expect(obsidian.deleteNote).not.toHaveBeenCalled();
+    });
+
+    it('does not resurrect an Obsidian-location sidecar entry for a day deleted before a deferred sync lands', async () => {
+      obsidian.getVaultById.mockResolvedValue({ id: 'v1', path: '/' });
+      obsidian.updateNote.mockResolvedValue({ path: 'Daily Log/2026-04-17.md' });
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: true, obsidianFolder: 'Daily Log' });
+
+      // Create the day, then delete it (tombstone + clear sidecar).
+      await journal.appendJournal('2026-04-17', 'content');
+      await journal.deleteJournal('2026-04-17');
+
+      // A deferred sync for the now-deleted day must NOT re-create the sidecar
+      // entry (which would reattach if the date were recreated).
+      await journal.syncToObsidian({ id: 'j1', date: '2026-04-17', content: 'content', segments: [] });
+
+      const { records } = await journal.listJournals();
+      const revived = records.find((r) => r.date === '2026-04-17');
+      expect(revived).toBeUndefined();
     });
   });
 });

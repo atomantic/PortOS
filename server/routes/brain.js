@@ -44,6 +44,7 @@ import { getBrainGraphData } from '../services/brainGraph.js';
 import { syncAllBrainData } from '../services/brainMemoryBridge.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
 import * as brainSync from '../services/brainSync.js';
+import * as brainReconcile from '../services/brainReconcile.js';
 import * as journal from '../services/brainJournal.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import * as cos from '../services/cos.js';
@@ -989,6 +990,28 @@ router.post('/sync', asyncHandler(async (req, res) => {
   const { changes } = validateRequest(brainSyncPushSchema, req.body);
   const result = await brainSync.applyRemoteChanges(changes);
   res.json(result);
+}));
+
+/**
+ * GET /api/brain/reconcile/checksum
+ * Anti-entropy checksum over ALL brain records (incl. tombstones) — #1077.
+ * A peer fetches this after draining the delta log; on a mismatch it pulls the
+ * full snapshot below. Lightweight (one hash) so it's cheap to poll each cycle.
+ */
+router.get('/reconcile/checksum', asyncHandler(async (req, res) => {
+  const checksum = await brainReconcile.getBrainChecksum();
+  res.json({ checksum });
+}));
+
+/**
+ * GET /api/brain/reconcile/snapshot
+ * Full brain snapshot (raw record map incl. tombstones + checksum) for a peer
+ * to LWW-merge. Brain has no per-record push pipeline, so this is unscoped —
+ * the receiver applies it idempotently via applyRemoteRecord.
+ */
+router.get('/reconcile/snapshot', asyncHandler(async (req, res) => {
+  const snapshot = await brainReconcile.getBrainSnapshot();
+  res.json(snapshot);
 }));
 
 // =============================================================================
