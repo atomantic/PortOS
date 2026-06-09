@@ -53,7 +53,7 @@ async function loadScriptScenes(workId) {
 }
 
 function buildStoryboardScenes(canonicalScenes) {
-  // Mirror the adapter in routes/pipeline.js's /extract-scenes handler so the
+  // Mirror the adapter in routes/pipeline/issues.js's /extract-scenes handler so the
   // promoted issue's storyboards stage shape is byte-for-byte identical to
   // what the in-pipeline "Generate scenes from {prose|teleplay}" button
   // would produce. Rich fields (heading/summary/dialogue/...) ride along.

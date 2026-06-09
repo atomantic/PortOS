@@ -108,7 +108,7 @@ import { initUniverseBuilderCollectionHook } from './services/universeBuilderCol
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
-import pipelineRoutes from './routes/pipeline.js';
+import pipelineRoutes from './routes/pipeline/index.js';
 import importerRoutes from './routes/importer.js';
 import storyBuilderRoutes from './routes/storyBuilder.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
