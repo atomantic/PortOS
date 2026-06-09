@@ -124,7 +124,7 @@ function IssueRow({ entry, onAnalyze, analyzing }) {
             <div className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Loading…</div>
           ) : detail?.sections?.length ? (
             <ul className="space-y-1.5">
-              {detail.sections.map((s, i) => <SectionRow key={i} section={s} index={i} />)}
+              {detail.sections.map((s, i) => <SectionRow key={s.id ?? `${s.title ?? 'section'}-${i}`} section={s} index={i} />)}
             </ul>
           ) : (
             <p className="text-xs text-gray-500 italic">No section detail available.</p>

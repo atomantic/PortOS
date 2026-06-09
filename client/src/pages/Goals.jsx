@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {Target, TreePine, List} from 'lucide-react';
 import * as api from '../services/api';
-import GoalsTreeView from '../components/goals/GoalsTreeView';
 import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import BrailleSpinner from '../components/BrailleSpinner';
+
+const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
 
 // Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
 export const TABS = [
@@ -88,7 +89,9 @@ export default function Goals() {
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} />
         ) : (
-          <GoalsTreeView data={data} onRefresh={loadData} />
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><BrailleSpinner text="Loading" /></div>}>
+            <GoalsTreeView data={data} onRefresh={loadData} />
+          </Suspense>
         )}
       </div>
     </div>
