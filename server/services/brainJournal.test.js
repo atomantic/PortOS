@@ -32,9 +32,39 @@ vi.mock('./obsidian.js', () => ({
   deleteNote: vi.fn(),
 }));
 
+// brainJournal now delegates entry storage to brainStorage's `journals` entity
+// store. Back it with an in-memory date→record map so the journal logic (segment
+// append, content replace, tombstone-on-delete, slim summaries) is exercised for
+// real while staying isolated from disk. Mirrors brainStorage semantics:
+// getById/getAll strip tombstones and re-attach the map key as `id`;
+// upsertWithId stores the record verbatim and stamps createdAt/updatedAt.
+const { journalRecords } = vi.hoisted(() => ({ journalRecords: new Map() }));
 vi.mock('./brainStorage.js', () => ({
   brainEvents: { emit: vi.fn() },
   now: () => '2026-04-17T12:00:00.000Z',
+  getById: vi.fn(async (_type, id) => {
+    const rec = journalRecords.get(id);
+    return rec && !rec._deleted ? { id, ...rec } : null;
+  }),
+  getAll: vi.fn(async () =>
+    [...journalRecords.entries()]
+      .filter(([, rec]) => !rec._deleted)
+      .map(([id, rec]) => ({ id, ...rec }))),
+  upsertWithId: vi.fn(async (_type, id, record) => {
+    const existing = journalRecords.get(id);
+    const stored = {
+      ...record,
+      createdAt: existing?.createdAt ?? '2026-04-17T12:00:00.000Z',
+      updatedAt: '2026-04-17T12:00:00.000Z',
+    };
+    journalRecords.set(id, stored);
+    return { id, ...stored };
+  }),
+  remove: vi.fn(async (_type, id) => {
+    if (!journalRecords.has(id)) return false;
+    journalRecords.set(id, { _deleted: true, updatedAt: '2026-04-17T12:00:00.000Z' });
+    return true;
+  }),
 }));
 
 import * as journal from './brainJournal.js';
@@ -52,6 +82,7 @@ describe('brainJournal', () => {
     // path silently creates sibling dirs, orphaning our mocked path.)
     rmSync(TEMP_ROOT, { recursive: true, force: true });
     mkdirSync(TEMP_ROOT, { recursive: true });
+    journalRecords.clear();
     vi.clearAllMocks();
   });
 

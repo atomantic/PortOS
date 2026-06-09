@@ -2,8 +2,8 @@
  * Brain Storage Service
  *
  * Handles file-based persistence for the Brain feature.
- * - JSON for entity stores (people, projects, ideas, admin)
- * - JSONL for append-heavy logs (inbox_log, digests, reviews)
+ * - JSON for entity stores (people, projects, ideas, admin, …, journals, inbox)
+ * - JSONL for append-only generated logs (digests, reviews)
  * - In-memory caching with TTL for performance
  */
 
@@ -23,11 +23,20 @@ const DATA_DIR = PATHS.brain;
 
 // The JSON entity stores that participate in peer sync (have records with IDs).
 // Canonical list — sync, tombstone GC, and origin backfill all derive from it
-// so adding an 8th type can't silently drop out of one of those paths. (The
+// so adding a type can't silently drop out of one of those paths. (The
 // boot-time migration keeps its own copy by necessity — migrations run before
 // the service layer is wired up — see scripts/migrations/080-*.js.)
+//
+// `journals` (the Daily Log) and `inbox` were added in migration 081: both were
+// previously stored OUTSIDE this contract (journals in a separate brainJournal
+// store, inbox as an append-only JSONL) and so never entered the sync log —
+// they silently never federated. They are now `{ records: { id: record } }`
+// stores exactly like the others (journals keyed by date, inbox by uuid), so
+// the delta log, anti-entropy reconcile, tombstone GC, and originInstanceId
+// backfill all cover them with no per-type branching.
 export const BRAIN_ENTITY_TYPES = Object.freeze([
   'people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets',
+  'journals', 'inbox',
 ]);
 
 // A tombstone is a deleted-record marker kept IN PLACE in `data.records[id]`
@@ -59,7 +68,6 @@ export const BRAIN_TOMBSTONE_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
 // File paths
 const FILES = {
   meta: join(DATA_DIR, 'meta.json'),
-  inboxLog: join(DATA_DIR, 'inbox_log.jsonl'),
   people: join(DATA_DIR, 'people.json'),
   projects: join(DATA_DIR, 'projects.json'),
   ideas: join(DATA_DIR, 'ideas.json'),
@@ -67,6 +75,12 @@ const FILES = {
   memories: join(DATA_DIR, 'memories.json'),
   links: join(DATA_DIR, 'links.json'),
   buckets: join(DATA_DIR, 'buckets.json'),
+  // journals (Daily Log) and inbox are now id-keyed entity stores (see
+  // BRAIN_ENTITY_TYPES) so they ride the peer-sync pipeline. journals.json keeps
+  // its filename + { records: { 'YYYY-MM-DD': entry } } shape; inbox migrated
+  // from the old inbox_log.jsonl to inbox.json (migration 081).
+  journals: join(DATA_DIR, 'journals.json'),
+  inbox: join(DATA_DIR, 'inbox.json'),
   digests: join(DATA_DIR, 'digests.jsonl'),
   reviews: join(DATA_DIR, 'reviews.jsonl')
 };
@@ -84,7 +98,8 @@ const caches = {
   memories: { data: null, timestamp: 0 },
   links: { data: null, timestamp: 0 },
   buckets: { data: null, timestamp: 0 },
-  inboxLog: { data: null, timestamp: 0 },
+  journals: { data: null, timestamp: 0 },
+  inbox: { data: null, timestamp: 0 },
   digests: { data: null, timestamp: 0 },
   reviews: { data: null, timestamp: 0 }
 };
@@ -292,6 +307,46 @@ export async function update(type, id, updates) {
 }
 
 /**
+ * Upsert a record under a CALLER-PROVIDED id (full replace, create-if-missing).
+ *
+ * `create()` mints a uuid, which is wrong for stores whose identity is a natural
+ * key — the Daily Log keys entries by calendar date so the same day converges
+ * across peers instead of forking into per-machine uuids. This primitive lets
+ * such a store own its id while still riding the exact entity-store contract:
+ * it preserves `originInstanceId`/`createdAt` from an existing live record,
+ * stamps a fresh `updatedAt` (the LWW clock), appends a create/update entry to
+ * the sync log, and emits `${type}:upserted` unless the caller suppresses it.
+ *
+ * `recordData` is stored verbatim except for the three managed fields — callers
+ * pass the FULL desired record (this does not merge unknown fields the way
+ * `update()` does). `emitEvent:false` lets a caller (e.g. brainJournal) emit its
+ * own richer, bridge-shaped event instead of the generic one.
+ */
+export async function upsertWithId(type, id, recordData, { emitEvent = true } = {}) {
+  const data = await loadJsonStore(type);
+  const existing = data.records[id];
+  const live = existing && !isTombstone(existing) ? existing : null;
+  const timestamp = now();
+  const originInstanceId = live?.originInstanceId ?? await getInstanceId();
+
+  const record = {
+    ...recordData,
+    originInstanceId,
+    createdAt: live?.createdAt ?? timestamp,
+    updatedAt: timestamp
+  };
+
+  data.records[id] = record;
+  await saveJsonStore(type, data);
+  if (emitEvent) brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+  await brainSyncLog.appendChange(live ? 'update' : 'create', type, id, record, originInstanceId)
+    .catch(err => console.error(`⚠️ Sync log append failed for upsert ${type}/${id}: ${err.message}`));
+
+  console.log(`🧠 Upserted ${type} record: ${id}`);
+  return { id, ...record };
+}
+
+/**
  * Apply many record updates to one store in a single load-modify-save.
  *
  * A batch like a chip reorder must NOT fan out into N concurrent single-record
@@ -377,7 +432,7 @@ export async function query(type, filters = {}) {
 }
 
 // =============================================================================
-// JSONL APPEND LOGS (inbox_log, digests, reviews)
+// JSONL APPEND LOGS (digests, reviews)
 // =============================================================================
 
 /**
@@ -420,40 +475,28 @@ async function appendJsonl(type, record) {
   brainEvents.emit(`${type}:added`, record);
 }
 
-/**
- * Rewrite entire JSONL file (for updates/deletes)
- */
-async function rewriteJsonl(type, records) {
-  await ensureBrainDir();
-  const content = records.map(r => JSON.stringify(r)).join('\n') + (records.length > 0 ? '\n' : '');
-  await writeFile(FILES[type], content);
-
-  caches[type].data = records;
-  caches[type].timestamp = Date.now();
-
-  brainEvents.emit(`${type}:changed`, records);
-}
-
 // =============================================================================
 // INBOX LOG OPERATIONS
 // =============================================================================
 
+// The inbox is now an id-keyed entity store (see BRAIN_ENTITY_TYPES) so it
+// federates through the same delta-log + LWW + tombstone pipeline as every other
+// brain type. These wrappers keep the historical getInboxLog/createInboxLog/…
+// API (capturedAt sort, status counts) on top of the generic entity primitives.
+
 /**
- * Get all inbox log entries
+ * Get all inbox log entries (newest-first by capturedAt), optional status filter.
  */
 export async function getInboxLog(options = {}) {
   const { status, limit = 50, offset = 0 } = options;
-  let records = await loadJsonlStore('inboxLog');
+  let records = await getAll('inbox');
 
-  // Sort by capturedAt descending (newest first)
   records = records.sort((a, b) => new Date(b.capturedAt) - new Date(a.capturedAt));
 
-  // Filter by status if provided
   if (status) {
     records = records.filter(r => r.status === status);
   }
 
-  // Apply pagination
   return records.slice(offset, offset + limit);
 }
 
@@ -461,66 +504,36 @@ export async function getInboxLog(options = {}) {
  * Get inbox log entry by ID
  */
 export async function getInboxLogById(id) {
-  const records = await loadJsonlStore('inboxLog');
-  return records.find(r => r.id === id) || null;
+  return getById('inbox', id);
 }
 
 /**
- * Create inbox log entry
+ * Create inbox log entry. `capturedAt` is the user-facing capture time (kept
+ * distinct from the sync `createdAt`/`updatedAt` clocks stamped by create()).
  */
 export async function createInboxLog(entry) {
-  const record = {
-    id: generateId(),
-    ...entry,
-    capturedAt: entry.capturedAt || now()
-  };
-
-  await appendJsonl('inboxLog', record);
-  console.log(`🧠 Created inbox log: ${record.id}`);
-  return record;
+  return create('inbox', { ...entry, capturedAt: entry.capturedAt || now() });
 }
 
 /**
- * Update inbox log entry
+ * Update inbox log entry (partial merge — returns null if absent/tombstoned).
  */
 export async function updateInboxLog(id, updates) {
-  const records = await loadJsonlStore('inboxLog');
-  const index = records.findIndex(r => r.id === id);
-
-  if (index === -1) {
-    return null;
-  }
-
-  records[index] = { ...records[index], ...updates };
-  await rewriteJsonl('inboxLog', records);
-
-  console.log(`🧠 Updated inbox log: ${id}`);
-  return records[index];
+  return update('inbox', id, updates);
 }
 
 /**
- * Delete inbox log entry
+ * Delete inbox log entry (tombstones in place for sync convergence).
  */
 export async function deleteInboxLog(id) {
-  const records = await loadJsonlStore('inboxLog');
-  const index = records.findIndex(r => r.id === id);
-
-  if (index === -1) {
-    return false;
-  }
-
-  records.splice(index, 1);
-  await rewriteJsonl('inboxLog', records);
-
-  console.log(`🧠 Deleted inbox log: ${id}`);
-  return true;
+  return remove('inbox', id);
 }
 
 /**
  * Get inbox log count by status
  */
 export async function getInboxLogCounts() {
-  const records = await loadJsonlStore('inboxLog');
+  const records = await getAll('inbox');
 
   const counts = {
     total: records.length,

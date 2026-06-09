@@ -11,19 +11,27 @@
  * Storage files:
  *   data/brain/journals.json          — { records: { 'YYYY-MM-DD': entry } }
  *   data/brain/journal-settings.json  — { obsidianVaultId, obsidianFolder, autoSync }
+ *
+ * The journals.json store is OWNED by brainStorage (type `journals`, see
+ * BRAIN_ENTITY_TYPES): writes go through brainStorage.upsertWithId so every
+ * Daily Log edit lands in the brain sync log and federates to peers via the same
+ * delta-log + LWW + tombstone pipeline as every other brain entity. This module
+ * keeps the Daily-Log-specific concerns on top: date-keyed identity, segment
+ * append semantics, the Obsidian mirror, and the bridge events the memory
+ * vectorizer listens for. We must NOT write journals.json directly here anymore
+ * — that would bypass the sync log and silently diverge peers again.
  */
 
 import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import * as brainStorage from './brainStorage.js';
 import { brainEvents, now } from './brainStorage.js';
 import * as obsidian from './obsidian.js';
 import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 
-const JOURNALS_FILE = join(PATHS.brain, 'journals.json');
 const SETTINGS_FILE = join(PATHS.brain, 'journal-settings.json');
 
 const DEFAULT_SETTINGS = {
@@ -49,22 +57,45 @@ export async function updateSettings(partial) {
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 
-// Serialize every load→mutate→save of journals.json so a fire-and-forget
+// Serialize every read→mutate→write of a journal entry so a fire-and-forget
 // Obsidian path-persist can't interleave with an appendJournal() and clobber
 // newer segments. PortOS is single-user, but dictation bursts schedule
 // overlapping async tasks (appendJournal → fire-and-forget syncToObsidian →
-// persistObsidianPath) that all want to rewrite the same file. This mutex
+// persistObsidianLocation) that all want to rewrite the same entry. This mutex
 // guarantees at most one read-modify-write runs at a time.
+//
+// Entry storage is delegated to brainStorage (type `journals`): getById reads
+// the live record, upsertWithId(date, …) persists it AND appends to the brain
+// sync log so the edit federates. We never touch journals.json directly here.
 const storeMutex = createMutex();
 
-async function loadStore() {
-  await ensureDir(PATHS.brain);
-  return readJSONFile(JOURNALS_FILE, { records: {} });
-}
+// Daily Log entries are keyed by calendar date in the entity store, so the
+// record id IS the date — that's what lets two peers editing the same day
+// converge (LWW on one record) instead of forking into per-machine uuids.
+const getEntry = (date) => brainStorage.getById('journals', date);
 
-async function saveStore(store) {
-  await ensureDir(PATHS.brain);
-  await writeFile(JOURNALS_FILE, JSON.stringify(store, null, 2));
+// Persist a fully-formed entry under its date key. The inner `id` is stripped
+// before storage: the map key IS the id (matching every other entity store and
+// the 081 migration), and getById re-attaches it. Keeping an inner `id` would be
+// redundant and would pollute the synced record / reconcile checksum.
+// `emitEvent:false` because this module emits its own richer bridge-shaped events
+// (journals:upserted with the segment, journals:appended, etc.) right after, and
+// we don't want the generic brainStorage `journals:upserted` to double-fire.
+const putEntry = (date, entry) => {
+  // eslint-disable-next-line no-unused-vars
+  const { id: _id, ...rest } = entry;
+  return brainStorage.upsertWithId('journals', date, rest, { emitEvent: false });
+};
+
+// The legacy journals:changed event carried the full date→entry map. Rebuild it
+// from the store (tombstones stripped) so existing consumers keep working. The
+// brainStorage 2s cache absorbs dictation bursts so this isn't a hot re-read.
+async function rawRecords() {
+  const records = {};
+  for (const entry of await brainStorage.getAll('journals')) {
+    records[entry.date || entry.id] = entry;
+  }
+  return records;
 }
 
 // Accept YYYY-MM-DD only, and require a real calendar day so we can't create
@@ -106,8 +137,9 @@ function toJournalSummary(entry) {
 }
 
 export async function listJournals({ limit = 50, offset = 0, includeContent = false } = {}) {
-  const store = await loadStore();
-  const records = Object.values(store.records || {});
+  // getAll strips tombstones, so deleted days don't show in the sidebar even
+  // before the tombstone is GC'd.
+  const records = await brainStorage.getAll('journals');
   records.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const total = records.length;
   const page = records.slice(offset, offset + limit);
@@ -119,58 +151,52 @@ export async function listJournals({ limit = 50, offset = 0, includeContent = fa
 
 export async function getJournal(date) {
   if (!isIsoDate(date)) return null;
-  const store = await loadStore();
-  return store.records?.[date] || null;
+  return getEntry(date);
 }
 
 // ─── Writes ────────────────────────────────────────────────────────────────
 
-function ensureEntry(store, date) {
-  if (!store.records) store.records = {};
-  if (store.records[date]) return store.records[date];
-  const entry = {
-    id: uuidv4(),
+// Build a fresh entry skeleton for a date that has no record yet. createdAt/
+// updatedAt/originInstanceId are stamped by brainStorage.upsertWithId on write —
+// we only seed the Daily-Log-specific fields. `id` is the date (the entity-store
+// key) so it converges across peers; upsertWithId returns it as `id` too.
+function newEntry(date) {
+  return {
     date,
     content: '',
     segments: [],
-    createdAt: now(),
-    updatedAt: now(),
     obsidianPath: null,
     obsidianVaultId: null,
   };
-  store.records[date] = entry;
-  return entry;
 }
 
 // Fire-and-forget: Obsidian lives on iCloud and writes can stall for hundreds
 // of ms; callers shouldn't wait on it. The sync path persists any discovered
-// obsidianPath itself via persistObsidianPath() — callers must not assume
+// obsidianPath itself via persistObsidianLocation() — callers must not assume
 // this async work mutates the `entry` they passed in or that a later
-// saveStore() in their flow will pick up the path.
+// putEntry() in their flow will pick up the path.
 function scheduleObsidianSync(entry) {
   syncToObsidian(entry).catch((err) => console.error(`📓 Obsidian sync failed: ${err.message}`));
 }
 
 export async function setJournalContent(date, content) {
   if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
-  const { entry, records } = await storeMutex(async () => {
-    const store = await loadStore();
-    const entryLocal = ensureEntry(store, date);
+  const entry = await storeMutex(async () => {
+    const existing = await getEntry(date);
     const clean = content || '';
-    entryLocal.content = clean;
-    // Full replace invalidates the old segment history: the user rewrote the
-    // whole day, so segment metadata (counts, per-line sources, timestamps)
-    // would otherwise drift from what's actually stored in `content`. Collapse
-    // to a single 'edit' segment that represents the rewrite.
-    entryLocal.segments = clean
-      ? [{ text: clean, at: now(), source: 'edit' }]
-      : [];
-    entryLocal.updatedAt = now();
-    await saveStore(store);
-    return { entry: entryLocal, records: store.records };
+    const next = {
+      ...(existing || newEntry(date)),
+      content: clean,
+      // Full replace invalidates the old segment history: the user rewrote the
+      // whole day, so segment metadata (counts, per-line sources, timestamps)
+      // would otherwise drift from what's actually stored in `content`. Collapse
+      // to a single 'edit' segment that represents the rewrite.
+      segments: clean ? [{ text: clean, at: now(), source: 'edit' }] : [],
+    };
+    return putEntry(date, next);
   });
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records });
+  brainEvents.emit('journals:changed', { records: await rawRecords() });
   // Per-entry event so downstream syncers (memory bridge) can update the
   // single affected day without iterating the whole store.
   brainEvents.emit('journals:upserted', { entry });
@@ -194,20 +220,22 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
   if (!clean) return null;
   const segmentSource = normalizeSource(source);
 
-  const { entry, segment, records } = await storeMutex(async () => {
-    const store = await loadStore();
-    const entryLocal = ensureEntry(store, date);
+  const { entry, segment } = await storeMutex(async () => {
+    const existing = await getEntry(date);
+    const base = existing || newEntry(date);
     const segmentLocal = { text: clean, at: now(), source: segmentSource };
-    entryLocal.segments.push(segmentLocal);
-    entryLocal.content = entryLocal.content
-      ? `${entryLocal.content.trimEnd()}\n\n${clean}`
-      : clean;
-    entryLocal.updatedAt = now();
-    await saveStore(store);
-    return { entry: entryLocal, segment: segmentLocal, records: store.records };
+    const next = {
+      ...base,
+      segments: [...(Array.isArray(base.segments) ? base.segments : []), segmentLocal],
+      content: base.content
+        ? `${base.content.trimEnd()}\n\n${clean}`
+        : clean,
+    };
+    const saved = await putEntry(date, next);
+    return { entry: saved, segment: segmentLocal };
   });
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records });
+  brainEvents.emit('journals:changed', { records: await rawRecords() });
   brainEvents.emit('journals:appended', { entry, segment });
   // Per-entry event so the memory bridge re-embeds only this day, not all
   // of them. (Keep journals:appended separate — it carries the single new
@@ -218,20 +246,19 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
 
 export async function deleteJournal(date) {
   if (!isIsoDate(date)) return false;
-  const result = await storeMutex(async () => {
-    const store = await loadStore();
-    if (!store.records?.[date]) return null;
-    const entryLocal = store.records[date];
-    delete store.records[date];
-    await saveStore(store);
-    return { entry: entryLocal, records: store.records };
+  const entry = await storeMutex(async () => {
+    const existing = await getEntry(date);
+    if (!existing) return null;
+    // Tombstones in place (via brainStorage.remove) so the delete federates and
+    // a stale create echoed from a peer can't resurrect the day.
+    await brainStorage.remove('journals', date);
+    return existing;
   });
-  if (!result) return false;
-  const { entry, records } = result;
+  if (!entry) return false;
   if (entry.obsidianPath) {
     await removeFromObsidian(entry).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
   }
-  brainEvents.emit('journals:changed', { records });
+  brainEvents.emit('journals:changed', { records: await rawRecords() });
   // Explicit deletion signal so memory bridges / integrations can archive
   // the corresponding vector entry — the changed event alone doesn't tell
   // the bridge which record vanished.
@@ -303,16 +330,17 @@ export async function syncToObsidian(entry, { force = false } = {}) {
 
 // Record the note location (path + vault) on the store entry whenever it
 // changes. Serialized via storeMutex so a fire-and-forget Obsidian persist
-// can't clobber concurrent appendJournal writes.
+// can't clobber concurrent appendJournal writes. Goes through putEntry like
+// every other write, so the path stamp federates too — harmless: obsidianVaultId
+// is machine-local and removeFromObsidian refuses to unlink when a peer's vault
+// id doesn't match the locally-configured one. The `!==` guard keeps this from
+// minting a redundant sync-log entry on every Obsidian sync of an unchanged day.
 async function persistObsidianLocation(date, notePath, vaultId) {
   return storeMutex(async () => {
-    const store = await loadStore();
-    const entry = store.records?.[date];
+    const entry = await getEntry(date);
     if (!entry) return;
     if (entry.obsidianPath !== notePath || entry.obsidianVaultId !== vaultId) {
-      entry.obsidianPath = notePath;
-      entry.obsidianVaultId = vaultId;
-      await saveStore(store);
+      await putEntry(date, { ...entry, obsidianPath: notePath, obsidianVaultId: vaultId });
     }
   });
 }

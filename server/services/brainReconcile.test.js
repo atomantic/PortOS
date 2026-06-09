@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // brainStorage is the data layer; mock it so the reconcile logic is tested in
 // isolation (matching the inline-copy / mock style used across sync tests).
 vi.mock('./brainStorage.js', () => ({
-  BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets'],
+  BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets', 'journals', 'inbox'],
   getRawRecords: vi.fn(),
   applyRemoteRecord: vi.fn(),
 }));
