@@ -28,6 +28,10 @@ const generateFollowUpsSchema = z.object({
   providerId: z.string().optional()
 });
 
+const weaveNarrativeSchema = z.object({
+  providerId: z.string().optional()
+});
+
 const updateStorySchema = z.object({
   content: z.string().min(1).max(50000)
 });
@@ -180,6 +184,19 @@ router.post('/stories/:id/follow-ups', asyncHandler(async (req, res) => {
 router.get('/stories/:id/chain', asyncHandler(async (req, res) => {
   const chain = await autobiographyService.getStoryChain(req.params.id);
   res.json(chain);
+}));
+
+/**
+ * POST /api/digital-twin/autobiography/stories/:id/weave
+ * Weave the story's full chain into a single cohesive first-person narrative
+ */
+router.post('/stories/:id/weave', asyncHandler(async (req, res) => {
+  const validated = validateRequest(weaveNarrativeSchema, req.body);
+  const result = await autobiographyService.weaveChainNarrative(req.params.id, validated.providerId);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 400, code: 'WEAVE_ERROR' });
+  }
+  res.json(result);
 }));
 
 // =============================================================================
