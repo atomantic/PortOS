@@ -30,6 +30,7 @@ import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
+import { formatDurationMs } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 // Extract task type from description (matches server-side extractTaskType)
@@ -255,13 +256,6 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const duration = agent.completedAt
     ? new Date(agent.completedAt) - new Date(agent.startedAt)
     : now - new Date(agent.startedAt);
-
-  const formatDuration = (ms) => {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
-  };
 
   // Calculate duration estimate for running agents
   // Uses P80 (80th percentile approximation) for progress bars to prevent premature 100%
@@ -502,27 +496,27 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           {!inactive && durationEstimate ? (
             <span
               className="flex items-center gap-1.5 text-gray-500 whitespace-nowrap"
-              title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (avg: ${formatDuration(durationEstimate.avgMs)}, est: ${formatDuration(durationEstimate.estimatedMs)})`}
+              title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (avg: ${formatDurationMs(durationEstimate.avgMs)}, est: ${formatDurationMs(durationEstimate.estimatedMs)})`}
             >
               <Clock size={12} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">{formatDuration(duration)}</span>
+              <span className="font-mono">{formatDurationMs(duration)}</span>
               {remainingTime && !remainingTime.isOvertime && (
                 <>
                   <span className="text-gray-600">→</span>
-                  <span className="font-mono text-port-accent">~{formatDuration(remainingTime.remaining)} left</span>
+                  <span className="font-mono text-port-accent">~{formatDurationMs(remainingTime.remaining)} left</span>
                 </>
               )}
               {remainingTime?.isOvertime && (
                 <>
                   <span className="text-gray-600">→</span>
-                  <span className="font-mono text-yellow-500">+{formatDuration(remainingTime.overBy)}</span>
+                  <span className="font-mono text-yellow-500">+{formatDurationMs(remainingTime.overBy)}</span>
                 </>
               )}
             </span>
           ) : (
             <span className="flex items-center gap-1 text-gray-500 whitespace-nowrap">
               <Clock size={12} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">{formatDuration(duration)}</span>
+              <span className="font-mono">{formatDurationMs(duration)}</span>
             </span>
           )}
           {/* Completed timestamp */}
@@ -730,12 +724,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               </span>
               {remainingTime && !remainingTime.isOvertime && (
                 <span className="text-port-accent font-medium">
-                  ETA: ~{formatDuration(remainingTime.remaining)}
+                  ETA: ~{formatDurationMs(remainingTime.remaining)}
                 </span>
               )}
               {remainingTime?.isOvertime && (
                 <span className="text-yellow-500 font-medium animate-pulse">
-                  +{formatDuration(remainingTime.overBy)} over estimate
+                  +{formatDurationMs(remainingTime.overBy)} over estimate
                 </span>
               )}
             </div>

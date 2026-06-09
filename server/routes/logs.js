@@ -63,6 +63,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   let buffer = '';
 
   const sendLine = (line, type = 'log') => {
+    if (res.writableEnded || res.destroyed) return;
     if (line.trim()) {
       res.write(`event: ${type}\ndata: ${JSON.stringify({
         line,

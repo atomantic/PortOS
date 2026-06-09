@@ -163,7 +163,7 @@ export async function applyLegacySeriesCanonToUniverse(series, { dryRun = false,
     // diff against the frozen snapshot.
     const beforeJson = JSON.stringify(Array.isArray(universe[field]) ? universe[field] : []);
     // Mirror the live extract path's provenance (textStages.js +
-    // routes/pipeline.js): series-driven canon enters the universe as
+    // routes/pipeline/issues.js): series-driven canon enters the universe as
     // SERIES_EXTRACT with autoLock so a later AI refine/differentiate can't
     // silently rewrite it. Without these opts the migrated entries default
     // to source:'ai' + autoLock:false, leaving them one click away from

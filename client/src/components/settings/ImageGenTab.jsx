@@ -22,6 +22,7 @@ import {
 } from '../../services/api';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
+import { safeParseJSON } from '../../lib/genUtils';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -109,7 +110,7 @@ export function ImageGenTab() {
   useEffect(() => {
     getHfTokenStatus()
       .then((s) => { if (s) setHfTokenInfo({ hfTokenPresent: !!s.hfTokenPresent, source: s.source || null }); })
-      .catch(() => {});
+      .catch((err) => { console.warn(`⚠️ Failed to load HF token status: ${err?.message || err}`); });
   }, []);
 
   const handleSaveHfToken = async () => {
@@ -330,7 +331,7 @@ export function ImageGenTab() {
           renderEsRef.current = es;
           const closeEs = () => { es.close(); renderEsRef.current = null; };
           es.onmessage = (e) => {
-            const msg = (() => { try { return JSON.parse(e.data); } catch { return null; } })();
+            const msg = safeParseJSON(e.data);
             if (!msg) return;
             if (msg.type === 'complete') {
               closeEs();

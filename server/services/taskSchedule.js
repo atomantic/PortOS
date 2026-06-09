@@ -19,6 +19,7 @@ import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
@@ -1037,7 +1038,7 @@ export async function getScheduleStatus() {
     const isEnabledForApp = (override) => override?.enabled === true;
     const appOverrides = {};
     let enabledAppCount = 0;
-    const allOverrides = await Promise.all(activeApps.map(app => getAppTaskTypeOverrides(app.id)));
+    const allOverrides = await mapWithConcurrency(activeApps, 8, (app) => getAppTaskTypeOverrides(app.id));
     for (let i = 0; i < activeApps.length; i++) {
       const override = allOverrides[i][taskType];
       if (override) {

@@ -19,6 +19,10 @@ import {
   getLatestMetricValues
 } from '../services/appleHealthQuery.js';
 
+// Polling interval and timeout for XML write-stream completion (ms)
+const XML_WRITE_POLL_INTERVAL_MS = 50;
+const XML_WRITE_TIMEOUT_MS = 5000;
+
 const isZip = (file) =>
   file.mimetype === 'application/zip' ||
   file.mimetype === 'application/x-zip-compressed' ||
@@ -140,8 +144,8 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
           if (!foundXml) return settle(reject)(new ServerError('ZIP does not contain export.xml', { status: 400, code: 'BAD_REQUEST' }));
           // Wait briefly for XML write stream to finish if close fires first
           if (xmlWriteFinished) return settle(resolve)();
-          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); settle(resolve)(); } }, 50);
-          setTimeout(() => { clearInterval(check); settle(resolve)(); }, 5000);
+          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); settle(resolve)(); } }, XML_WRITE_POLL_INTERVAL_MS);
+          setTimeout(() => { clearInterval(check); settle(resolve)(); }, XML_WRITE_TIMEOUT_MS);
         })
         .on('error', settle(reject));
     });

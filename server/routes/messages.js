@@ -15,6 +15,11 @@ import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/
 
 const router = express.Router();
 
+// Maximum number of messages fetched for a full-body refresh pass.
+// When the result set hits this cap the response includes truncated:true so
+// callers know there may be un-refreshed messages beyond the limit.
+const FULL_BODY_REFRESH_LIMIT = 1000;
+
 // === Validation Schemas ===
 const createAccountSchema = z.object({
   name: z.string().min(1),
@@ -395,7 +400,8 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   if (account.type !== 'outlook') return res.json({ updated: 0, total: 0 });
 
   const force = req.body?.force === true;
-  const allResult = await messageSync.getMessages({ accountId, limit: 1000 });
+  const allResult = await messageSync.getMessages({ accountId, limit: FULL_BODY_REFRESH_LIMIT });
+  const truncated = allResult.messages.length >= FULL_BODY_REFRESH_LIMIT;
   const toRefresh = force ? allResult.messages : allResult.messages.filter(m => m.bodyFull === false);
   let updated = 0;
 
@@ -405,7 +411,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   }
 
   if (updated > 0) req.app.get('io')?.emit('messages:changed', {});
-  res.json({ updated, total: toRefresh.length });
+  res.json({ updated, total: toRefresh.length, truncated });
 }));
 
 // === Clear account cache ===

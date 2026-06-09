@@ -1,4 +1,5 @@
 import { NotebookPen, Plus, Clock, Trash2 } from 'lucide-react';
+import { formatDurationMin } from '../../utils/formatters';
 
 export default function GoalProgressLog({
   goal, showProgressForm, setShowProgressForm, progressForm, setProgressForm,
@@ -80,9 +81,7 @@ export default function GoalProgressLog({
                   {entry.durationMinutes && (
                     <span className="flex items-center gap-0.5">
                       <Clock className="w-3 h-3" />
-                      {entry.durationMinutes >= 60
-                        ? `${Math.floor(entry.durationMinutes / 60)}h${entry.durationMinutes % 60 ? ` ${entry.durationMinutes % 60}m` : ''}`
-                        : `${entry.durationMinutes}m`}
+                      {formatDurationMin(entry.durationMinutes)}
                     </span>
                   )}
                 </div>

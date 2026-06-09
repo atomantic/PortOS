@@ -7,10 +7,10 @@
  */
 
 import { spawn } from 'child_process';
-import { access, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
+import { access, readdir, readFile, stat, unlink } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -585,7 +585,7 @@ export async function saveState(patch) {
   await ensureDir(join(PATHS.data, 'backup'));
   const current = await getState();
   const updated = { ...current, ...patch };
-  await writeFile(STATE_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+  await atomicWrite(STATE_PATH, updated);
 }
 
 /**

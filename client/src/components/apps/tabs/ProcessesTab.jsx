@@ -4,11 +4,7 @@ import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
-
-const formatMemory = (bytes) => {
-  if (!bytes) return '0 MB';
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-};
+import { formatBytes } from '../../../utils/formatters';
 
 const formatUptime = (ms) => {
   if (!ms) return '-';
@@ -206,7 +202,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                     </td>
                     <td className="px-4 py-3 text-gray-400 font-mono text-sm">{proc.pid || '-'}</td>
                     <td className="px-4 py-3 text-gray-400">{proc.cpu ? `${proc.cpu}%` : '-'}</td>
-                    <td className="px-4 py-3 text-gray-400">{formatMemory(proc.memory)}</td>
+                    <td className="px-4 py-3 text-gray-400">{formatBytes(proc.memory)}</td>
                     <td className="px-4 py-3 text-gray-400">{formatUptime(proc.uptime)}</td>
                     <td className="px-4 py-3 text-gray-400">{proc.restarts}</td>
                     <td className="px-4 py-3 text-right">

@@ -18,10 +18,7 @@
 import { findOrOpenPage, evaluateOnPage, getPages } from './messagePlaywrightSync.js';
 import { navigateToUrl } from './browserService.js';
 import { saveCredentials, getAuthUrl, OAUTH_REDIRECT_URI } from './googleAuth.js';
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+import { sleep } from '../lib/fileUtils.js';
 
 async function getGcpPage() {
   const pages = await getPages();

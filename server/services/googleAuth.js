@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
@@ -55,7 +55,7 @@ export async function clearAuth() {
 }
 
 function createOAuth2Client(credentials) {
-  return new google.auth.OAuth2(
+  return new OAuth2Client(
     credentials.clientId,
     credentials.clientSecret,
     credentials.redirectUri || OAUTH_REDIRECT_URI

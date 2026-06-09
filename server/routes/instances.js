@@ -14,18 +14,9 @@ import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { findTailscale } from '../lib/tailscale.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const execFileAsync = promisify(execFile);
-
-// Safely parse JSON, returning null on malformed input. Used when consuming CLI output
-// that may interleave warnings with the JSON payload or be partial.
-function safeJsonParse(str) {
-  try {
-    return JSON.parse(str);
-  } catch {
-    return null;
-  }
-}
 
 const router = Router();
 
@@ -148,7 +139,7 @@ router.get('/tailnet-suffix', asyncHandler(async (req, res) => {
   const { stdout } = await execFileAsync(bin, ['status', '--json'], { timeout: 5000 }).catch(() => ({ stdout: null }));
   if (!stdout) return res.json({ suffix: null, reason: 'tailscale-not-running' });
   // Guard against non-JSON output (warnings, partial reads, etc.) so we never 500 the endpoint.
-  const status = safeJsonParse(stdout);
+  const status = safeJSONParse(stdout, null);
   if (!status) return res.json({ suffix: null, reason: 'tailscale-parse-error' });
   const suffix = status?.CurrentTailnet?.MagicDNSSuffix ?? status?.MagicDNSSuffix ?? null;
   // Also include the peer map so the UI can auto-match a peer's instanceId/hostname

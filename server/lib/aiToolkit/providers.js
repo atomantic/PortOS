@@ -13,7 +13,7 @@ import {
   ensureAntigravityTuiArgs,
   LEGACY_GEMINI_CLI_ID,
   LEGACY_GEMINI_TUI_ID,
-} from '../antigravity.js';
+} from './internal/antigravity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
@@ -379,7 +379,8 @@ export function createProviderService(config = {}) {
       if (provider.type === 'api') {
         const modelsUrl = `${provider.endpoint}/models`;
         const response = await fetch(modelsUrl, {
-          headers: provider.apiKey ? { 'Authorization': `Bearer ${provider.apiKey}` } : {}
+          headers: provider.apiKey ? { 'Authorization': `Bearer ${provider.apiKey}` } : {},
+          signal: AbortSignal.timeout(10000),
         }).catch(err => ({ ok: false, error: err.message }));
 
         if (!response.ok) {
@@ -435,7 +436,7 @@ export function createProviderService(config = {}) {
     async _refreshAPIProviderModels(provider) {
       if (provider.endpoint?.includes('ollama') || provider.endpoint?.includes(':11434')) {
         const ollamaUrl = `${provider.endpoint}/api/tags`;
-        const response = await fetch(ollamaUrl).catch(() => null);
+        const response = await fetch(ollamaUrl, { signal: AbortSignal.timeout(8000) }).catch(() => null);
 
         if (response?.ok) {
           const data = await response.json().catch(() => null);
@@ -452,7 +453,7 @@ export function createProviderService(config = {}) {
         headers['Authorization'] = `Bearer ${provider.apiKey}`;
       }
 
-      const response = await fetch(modelsUrl, { headers }).catch(() => null);
+      const response = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) }).catch(() => null);
 
       if (!response?.ok) {
         throw new Error(`HTTP ${response?.status || 'error'}`);

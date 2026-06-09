@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
@@ -15,11 +15,6 @@ import {
   TABS,
   STATE_MESSAGES,
   CoSCharacter,
-  CyberCoSAvatar,
-  SigilCoSAvatar,
-  EsotericCoSAvatar,
-  NexusCoSAvatar,
-  MuseCoSAvatar,
   StateLabel,
   TerminalCoSPanel,
   StatusIndicator,
@@ -43,6 +38,16 @@ import {
   BriefingTab
 } from '../components/cos';
 import { resolveDynamicAvatar } from '../components/cos/constants';
+
+// Three.js-based avatars lazy-loaded so the R3F stack isn't bundled unless the
+// user's chosen avatar style actually needs it.
+const LAZY_AVATARS = {
+  cyber:    lazy(() => import('../components/cos/CyberCoSAvatar')),
+  sigil:    lazy(() => import('../components/cos/SigilCoSAvatar')),
+  esoteric: lazy(() => import('../components/cos/EsotericCoSAvatar')),
+  nexus:    lazy(() => import('../components/cos/NexusCoSAvatar')),
+  muse:     lazy(() => import('../components/cos/MuseCoSAvatar')),
+};
 
 const CANVAS_AVATAR_STYLES = new Set(['cyber', 'sigil', 'esoteric', 'nexus', 'muse']);
 
@@ -504,20 +509,13 @@ export default function ChiefOfStaff() {
   );
 
   const renderAvatar = (background = false) => {
-    if (avatarStyle === 'cyber') {
-      return <CyberCoSAvatar state={agentState} speaking={speaking} background={background} />;
-    }
-    if (avatarStyle === 'sigil') {
-      return <SigilCoSAvatar state={agentState} speaking={speaking} background={background} />;
-    }
-    if (avatarStyle === 'esoteric') {
-      return <EsotericCoSAvatar state={agentState} speaking={speaking} background={background} />;
-    }
-    if (avatarStyle === 'nexus') {
-      return <NexusCoSAvatar state={agentState} speaking={speaking} background={background} />;
-    }
-    if (avatarStyle === 'muse') {
-      return <MuseCoSAvatar state={agentState} speaking={speaking} background={background} />;
+    const LazyAvatar = LAZY_AVATARS[avatarStyle];
+    if (LazyAvatar) {
+      return (
+        <Suspense fallback={<div className="flex items-center justify-center h-full"><BrailleSpinner /></div>}>
+          <LazyAvatar state={agentState} speaking={speaking} background={background} />
+        </Suspense>
+      );
     }
     return <CoSCharacter state={agentState} speaking={speaking} />;
   };

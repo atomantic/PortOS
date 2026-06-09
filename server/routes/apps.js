@@ -24,6 +24,9 @@ import { certPaths } from '../../lib/certPaths.js';
 
 const router = Router();
 
+// Delay before restarting PortOS itself so the JSON response reaches the client
+const SELF_RESTART_RESPONSE_DELAY_MS = 500;
+
 /** Async equivalent of existsSync — returns true if the path is accessible */
 const pathExists = (p) => access(p).then(() => true).catch(() => false);
 
@@ -651,7 +654,7 @@ router.post('/:id/restart', loadApp, asyncHandler(async (req, res) => {
         await pm2Service.restartApp(name, app.pm2Home)
           .catch(err => console.error(`❌ Self-restart failed for ${name}: ${err.message}`));
       }
-    }, 500);
+    }, SELF_RESTART_RESPONSE_DELAY_MS);
     return;
   }
 

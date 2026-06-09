@@ -465,11 +465,15 @@ export async function spawnViaRunner(agentId, task, opts) {
 
   // If no output after 3 seconds, transition from initializing to working to show progress
   agentInfo.initializationTimeout = setTimeout(async () => {
-    const agent = runnerAgents.get(agentId);
-    if (agent && !agent.hasStartedWorking) {
-      agent.hasStartedWorking = true;
-      await updateAgent(agentId, { metadata: { phase: 'working' } });
-      emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+    try {
+      const agent = runnerAgents.get(agentId);
+      if (agent && !agent.hasStartedWorking) {
+        agent.hasStartedWorking = true;
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+      }
+    } catch (err) {
+      console.error(`❌ agentLifecycle init timeout failed for ${agentId}: ${err.message}`);
     }
   }, 3000);
 

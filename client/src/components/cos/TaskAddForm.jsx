@@ -217,7 +217,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         description: newTask.description
       }).catch(err => {
         toast('Enhancement failed, using original description', { icon: '\u26a0\ufe0f' });
-        console.warn('Task enhancement failed:', err.message);
+        console.warn(`⚠️ Task enhancement failed: ${err.message}`);
         return null;
       });
 

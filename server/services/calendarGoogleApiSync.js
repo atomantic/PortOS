@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import { calendar } from '@googleapis/calendar';
 import { getAuthenticatedClient } from './googleAuth.js';
 import { getAccount, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
@@ -17,7 +17,7 @@ export async function apiSyncAccount(accountId, io) {
   io?.emit('calendar:sync:started', { accountId, method: 'api' });
   console.log(`📅 Starting Google API sync for ${account.name} (${enabledCalendars.length} calendars)`);
 
-  const calendar = google.calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth });
   const { pastDate, futureDate } = getSyncDateRange();
 
   let totalNew = 0;
@@ -30,7 +30,7 @@ export async function apiSyncAccount(accountId, io) {
     const allEvents = [];
     let pageToken;
     do {
-      const response = await calendar.events.list({
+      const response = await cal.events.list({
         calendarId: sc.calendarId,
         timeMin: pastDate.toISOString(),
         timeMax: futureDate.toISOString(),
@@ -76,21 +76,21 @@ export async function apiDiscoverCalendars(accountId) {
   const auth = await getAuthenticatedClient();
   if (!auth) return { error: 'Google OAuth not configured', status: 401 };
 
-  const calendar = google.calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth });
   const allCalendars = [];
   let pageToken;
 
   do {
-    const response = await calendar.calendarList.list({ pageToken });
+    const response = await cal.calendarList.list({ pageToken });
     allCalendars.push(...(response.data.items || []));
     pageToken = response.data.nextPageToken;
   } while (pageToken);
 
   // Normalize to { id, name, color } shape for merge helper
-  const discovered = allCalendars.map(cal => ({
-    id: cal.id,
-    name: cal.summaryOverride || cal.summary || cal.id,
-    color: cal.backgroundColor || ''
+  const discovered = allCalendars.map(c => ({
+    id: c.id,
+    name: c.summaryOverride || c.summary || c.id,
+    color: c.backgroundColor || ''
   }));
   const merged = mergeDiscoveredSubcalendars(account.subcalendars, discovered);
 

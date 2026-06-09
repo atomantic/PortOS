@@ -3,7 +3,7 @@
  * Uses the shared Google OAuth client from googleAuth.js (same credentials as Calendar).
  */
 
-import { google } from 'googleapis';
+import { gmail } from '@googleapis/gmail';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { getAuthenticatedClient } from './googleAuth.js';
@@ -135,7 +135,7 @@ export async function syncGmail(account, cache, io, options = {}) {
     return { messages: [], status: 'not-configured' };
   }
 
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth });
   const maxMessages = mode === 'full' ? 200 : 100;
   const query = mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
 
@@ -148,7 +148,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   do {
     io?.emit('messages:sync:progress', { accountId: account.id, current: messageIds.length, total: maxMessages });
 
-    const listResult = await gmail.users.messages.list({
+    const listResult = await gmailClient.users.messages.list({
       userId: 'me',
       q: query,
       maxResults: Math.min(100, maxMessages - messageIds.length),
@@ -171,7 +171,7 @@ export async function syncGmail(account, cache, io, options = {}) {
 
     const batch = messageIds.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(batch.map(({ id: gmailId }) =>
-      gmail.users.messages.get({ userId: 'me', id: gmailId, format: 'full' })
+      gmailClient.users.messages.get({ userId: 'me', id: gmailId, format: 'full' })
         .catch(err => { console.log(`📧 Gmail: failed to fetch ${gmailId}: ${err.message}`); return null; })
     ));
 
@@ -234,7 +234,7 @@ export async function sendGmail(account, draft) {
     return { success: false, error: 'Google OAuth not configured', status: 502, code: 'GMAIL_NOT_CONFIGURED' };
   }
 
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth });
 
   // Build RFC 2822 message
   const toLine = Array.isArray(draft.to) ? draft.to.join(', ') : draft.to;
@@ -257,7 +257,7 @@ export async function sendGmail(account, draft) {
 
   const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
 
-  const result = await gmail.users.messages.send({
+  const result = await gmailClient.users.messages.send({
     userId: 'me',
     requestBody: { raw }
   }).catch(err => {

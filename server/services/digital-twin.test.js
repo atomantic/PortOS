@@ -42,6 +42,7 @@ vi.mock('../lib/digitalTwinValidation.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
+  atomicWrite: vi.fn(),
   safeJSONParse: vi.fn((str, defaultValue) => {
     if (!str || !str.trim()) return defaultValue;
     const parsed = JSON.parse(str);
@@ -85,7 +86,7 @@ import { readFile, writeFile, unlink, readdir, mkdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { getProviderById, getActiveProvider } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 import {
@@ -190,8 +191,9 @@ const setupMetaFile = async (meta) => {
   });
   // Prime the module's in-memory cache so loadMeta returns our test data
   await saveMeta(meta);
-  // Clear writeFile calls from the saveMeta priming
+  // Clear write calls from the saveMeta priming
   writeFile.mockClear();
+  atomicWrite.mockClear();
 };
 
 // ============================================================================
@@ -207,6 +209,7 @@ describe('digital-twin.js', () => {
     existsSync.mockReturnValue(true);
     mkdir.mockResolvedValue(undefined);
     writeFile.mockResolvedValue(undefined);
+    atomicWrite.mockResolvedValue(undefined);
     unlink.mockResolvedValue(undefined);
     readdir.mockResolvedValue([]);
     stat.mockResolvedValue({ mtime: new Date('2025-01-01'), size: 1024 });
@@ -303,8 +306,8 @@ describe('digital-twin.js', () => {
 
       await saveMeta(meta);
 
-      expect(writeFile).toHaveBeenCalledTimes(1);
-      const writtenJSON = JSON.parse(writeFile.mock.calls[0][1]);
+      expect(atomicWrite).toHaveBeenCalledTimes(1);
+      const writtenJSON = atomicWrite.mock.calls[0][1];
       expect(writtenJSON.version).toBe('1.0.0');
       expect(emitSpy).toHaveBeenCalledWith('meta:changed', meta);
       emitSpy.mockRestore();
@@ -418,8 +421,9 @@ describe('digital-twin.js', () => {
       expect(result.filename).toBe('NEW_DOC.md');
       expect(result.id).toBe('test-uuid-1');
       expect(result.content).toBe('# New Doc\n\nContent here.');
-      // writeFile called for: the document file + meta save
-      expect(writeFile).toHaveBeenCalledTimes(2);
+      // writeFile for the document file; atomicWrite for the meta save
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      expect(atomicWrite).toHaveBeenCalledTimes(1);
     });
 
     it('should throw if document already exists', async () => {
@@ -491,7 +495,7 @@ describe('digital-twin.js', () => {
       await updateDocument('doc-1', { priority: 5 });
 
       // The saveMeta call should have sorted docs
-      const savedMeta = JSON.parse(writeFile.mock.calls[0][1]);
+      const savedMeta = atomicWrite.mock.calls[0][1];
       expect(savedMeta.documents[0].id).toBe('doc-1');
     });
   });
@@ -1127,9 +1131,9 @@ Forgets the budget and recommends lodging that exceeds it.
       });
 
       // Check that saveMeta was called with completedCategories including core_memories
-      const savedJSON = writeFile.mock.calls.find(c => c[0].includes('meta.json'));
-      expect(savedJSON).toBeTruthy();
-      const savedMeta = JSON.parse(savedJSON[1]);
+      const savedCall = atomicWrite.mock.calls.find(c => c[0].includes('meta.json'));
+      expect(savedCall).toBeTruthy();
+      const savedMeta = savedCall[1];
       expect(savedMeta.enrichment.completedCategories).toContain('core_memories');
     });
   });
@@ -1211,8 +1215,8 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result.category).toBe('favorite_books');
       expect(result.itemCount).toBe(2);
 
-      const savedJSON = writeFile.mock.calls.find(c => c[0].includes('meta.json'));
-      const savedMeta = JSON.parse(savedJSON[1]);
+      const savedCall = atomicWrite.mock.calls.find(c => c[0].includes('meta.json'));
+      const savedMeta = savedCall[1];
       expect(savedMeta.enrichment.completedCategories).toContain('favorite_books');
       expect(savedMeta.enrichment.listItems.favorite_books).toEqual(items);
     });
@@ -1274,6 +1278,7 @@ Forgets the budget and recommends lodging that exceeds it.
       });
       await saveMeta(meta);
       writeFile.mockClear();
+      atomicWrite.mockClear();
       readFile.mockImplementation(async (filePath) => {
         if (filePath.includes('meta.json')) return JSON.stringify(meta);
         if (filePath.includes('SOUL.md')) return '# Soul\n\nIdentity doc.';

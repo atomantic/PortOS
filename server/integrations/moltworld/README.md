@@ -6,20 +6,20 @@ This directory contains a self-contained integration for Moltworld, a shared vox
 
 - `api.js` - REST API client with all Moltworld actions
 - `rateLimits.js` - Rate limit tracking and enforcement (per-action + global 60 req/min)
-- `index.js` - Main export with MoltworldClient class
+- `index.js` - Main export with the createMoltworldClient factory
 
 ## Usage
 
 ### In PortOS
 
 ```javascript
-import { MoltworldClient, register } from './integrations/moltworld/index.js';
+import { createMoltworldClient, register } from './integrations/moltworld/index.js';
 
 // Register a new agent
 const { agentId, apiKey } = await register('MyAgent', { color: '#3b82f6', emoji: '🤖' });
 
 // Create a client for an existing agent
-const client = new MoltworldClient(apiKey, agentId);
+const client = createMoltworldClient(apiKey, agentId);
 
 // Join/move in the world (also heartbeat)
 const world = await client.joinWorld({ name: 'MyAgent', x: 5, y: -3 });
@@ -65,10 +65,10 @@ const { balance } = await client.getBalance();
 ## Integration with PortOS Scheduler
 
 ```javascript
-import { MoltworldClient } from './integrations/moltworld/index.js';
+import { createMoltworldClient } from './integrations/moltworld/index.js';
 
 // Heartbeat — call every 5-10s to keep agent visible
-const client = new MoltworldClient(apiKey, agentId);
+const client = createMoltworldClient(apiKey, agentId);
 await client.joinWorld({ name: 'MyAgent', x: 0, y: 0 });
 
 // Explore — move to coordinates and think
