@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
@@ -13,7 +13,6 @@ import { timeAgo } from '../utils/formatters';
 import InboxTab from '../components/brain/tabs/InboxTab';
 import LinksTab from '../components/brain/tabs/LinksTab';
 import MemoryTab from '../components/brain/tabs/MemoryTab';
-import BrainGraph from '../components/brain/tabs/BrainGraph';
 import DigestTab from '../components/brain/tabs/DigestTab';
 import FeedsTab from '../components/brain/tabs/FeedsTab';
 import TrustTab from '../components/brain/tabs/TrustTab';
@@ -21,6 +20,10 @@ import NotesTab from '../components/brain/tabs/NotesTab';
 import DailyLogTab from '../components/brain/tabs/DailyLogTab';
 import ConfigTab from '../components/brain/tabs/ConfigTab';
 import ImportTab from '../components/brain/tabs/ImportTab';
+
+// BrainGraph uses the three.js stack — lazy-load so it's not bundled until the
+// graph tab is actually opened.
+const BrainGraph = lazy(() => import('../components/brain/tabs/BrainGraph'));
 
 export default function Brain() {
   const { tab } = useParams();
@@ -61,7 +64,7 @@ export default function Brain() {
       case 'daily-log':
         return <DailyLogTab />;
       case 'graph':
-        return <BrainGraph />;
+        return <Suspense fallback={<div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading" /></div>}><BrainGraph /></Suspense>;
       case 'digest':
         return <DigestTab onRefresh={refetch} />;
       case 'feeds':
