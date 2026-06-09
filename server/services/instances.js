@@ -295,11 +295,10 @@ export async function updatePeer(id, updates) {
   // peer object) and consumed after the lock releases.
   const turnedOnKinds = [];
   let backfillPeerInstanceId = null;
-  // When the user changes which categories sync toward this peer, mirror the
-  // change back so the sync is bidirectional (the user owns all machines). We
-  // reciprocate the FULL resulting category map, not just the delta, so the
-  // peer converges even if an earlier reciprocate was missed (peer offline).
-  let reciprocateCategories = null;
+  // Set when a syncCategories change should be mirrored back to the peer so the
+  // sync is bidirectional (the user owns all machines). The actual send reads
+  // the freshest persisted map at send time via the serialized queue below.
+  let reciprocate = false;
   const result = await withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
@@ -318,9 +317,9 @@ export async function updatePeer(id, updates) {
       }
       peer.syncCategories = { ...prev, ...incoming };
       if (turnedOnKinds.length > 0) backfillPeerInstanceId = peer.instanceId || null;
-      // Reciprocate the resulting map so the peer enables the same categories
-      // toward us. Only when we know the peer's identity (post-handshake).
-      if (peer.instanceId) reciprocateCategories = { ...peer.syncCategories };
+      // Reciprocate so the peer enables the same categories toward us. Only when
+      // we know the peer's identity (post-handshake).
+      if (peer.instanceId) reciprocate = true;
     }
     // Optional proxy credential. `null` (or both fields blank) clears it; a
     // valid object replaces it; malformed input (sanitizePeerAuth → undefined)
@@ -408,14 +407,45 @@ export async function updatePeer(id, updates) {
     });
   }
   // Mirror the category change back to the peer so sync is bidirectional.
-  // Fire-and-forget — a peer that's offline / on an older version just stays
-  // one-directional until the next toggle (or the "make mutual" backfill).
-  if (reciprocateCategories && result) {
-    requestReciprocalSync(result, reciprocateCategories).catch((err) => {
-      console.log(`⚠️ peer: reciprocal sync request failed: ${err.message}`);
-    });
+  // Fire-and-forget, but SERIALIZED per peer (see enqueueReciprocalSync): two
+  // rapid toggles must not race — an earlier send arriving after a later one
+  // would push a stale full map and undo the newer change on the peer.
+  if (reciprocate && result?.instanceId) {
+    enqueueReciprocalSync(result.id);
   }
   return result;
+}
+
+// Per-peer tail that serializes reciprocal-sync sends. Two rapid category
+// toggles for the same peer each want to push the full resulting map; if their
+// fire-and-forget requests raced, the earlier (staler) map could land last on
+// the peer and undo the newer change. Chaining per peer.id guarantees in-order
+// delivery, and each send re-reads the FRESHEST persisted category map (not a
+// value captured at enqueue time) so the final send always carries final state.
+const reciprocalSyncTails = new Map();
+
+export function enqueueReciprocalSync(peerId) {
+  const prev = reciprocalSyncTails.get(peerId) || Promise.resolve();
+  const next = prev
+    .catch(() => {}) // a failed prior send must not break the chain
+    .then(async () => {
+      // Re-read the peer fresh at send time — the last enqueued send wins with
+      // the latest persisted syncCategories, regardless of enqueue order.
+      const data = await loadData();
+      const peer = data.peers.find(p => p.id === peerId);
+      if (!peer?.instanceId) return { ok: false, reason: 'no-peer-identity' };
+      return requestReciprocalSync(peer, peer.syncCategories || {}).catch((err) => {
+        console.log(`⚠️ peer: reciprocal sync request failed: ${err.message}`);
+        return { ok: false, reason: err.message };
+      });
+    });
+  reciprocalSyncTails.set(peerId, next);
+  // Evict the tail once it settles and nothing newer has been chained, so the
+  // map doesn't grow unbounded across many peers/toggles.
+  next.finally(() => {
+    if (reciprocalSyncTails.get(peerId) === next) reciprocalSyncTails.delete(peerId);
+  });
+  return next;
 }
 
 // --- Probing ---

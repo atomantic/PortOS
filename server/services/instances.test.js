@@ -63,6 +63,7 @@ import {
   sanitizePeerForClient,
   applyReciprocalSync,
   requestReciprocalSync,
+  enqueueReciprocalSync,
   startPolling,
   stopPolling
 } from './instances.js';
@@ -650,6 +651,65 @@ describe('instances.js', () => {
       const result = await requestReciprocalSync({ id: 'p1', address: '10.0.0.2', port: 5555 }, { brain: true });
       expect(result.ok).toBe(false);
       expect(result.reason).toBe('no-self-identity');
+    });
+  });
+
+  describe('enqueueReciprocalSync', () => {
+    it('reads the FRESHEST persisted categories at send time (last enqueue wins, not enqueue-time snapshot)', async () => {
+      // readJSONFile is re-read on each send; point it at the latest map so the
+      // serialized send carries final state regardless of when it was enqueued.
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true, goals: true } }]
+      });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await enqueueReciprocalSync('p1');
+
+      const body = JSON.parse(fetchMock.mock.calls.at(-1)[1].body);
+      expect(body.syncCategories).toEqual({ brain: true, goals: true });
+    });
+
+    it('serializes per peer so sends leave in enqueue order (no stale-map race)', async () => {
+      // Unique peer id so the module-level per-peer tail can't chain onto another
+      // test's queue. The second send resolves immediately; the first blocks on
+      // resolveFirst. If sends raced, order would be ['second', 'first']; ordered
+      // serialization yields ['first', 'second'].
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p-serial', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true } }]
+      });
+      const order = [];
+      let resolveFirst;
+      const fetchMock = vi.fn()
+        .mockImplementationOnce(() => new Promise(r => { resolveFirst = () => { order.push('first'); r({ ok: true, status: 200 }); }; }))
+        .mockImplementationOnce(async () => { order.push('second'); return { ok: true, status: 200 }; });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const p1 = enqueueReciprocalSync('p-serial');
+      const p2 = enqueueReciprocalSync('p-serial');
+      // The second send resolves immediately; the first blocks until we release
+      // it. If the two ran concurrently (unserialized), 'second' would land
+      // first. Flush microtasks until the first send reaches its (blocked)
+      // fetch, then release it — the recorded order proves serialization.
+      // (beforeEach installs fake timers, so we flush the microtask queue
+      // directly rather than waiting on a real-time setTimeout.)
+      for (let i = 0; i < 20 && !resolveFirst; i++) await Promise.resolve();
+      resolveFirst();
+      await Promise.all([p1, p2]);
+      expect(order).toEqual(['first', 'second']);
+    });
+
+    it('no-ops cleanly for a peer that lost its instanceId', async () => {
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p-noinst', name: 'A', syncCategories: { brain: true } }] // no instanceId
+      });
+      vi.stubGlobal('fetch', vi.fn());
+      const result = await enqueueReciprocalSync('p-noinst');
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('no-peer-identity');
     });
   });
 

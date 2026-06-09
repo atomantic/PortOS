@@ -274,8 +274,11 @@ router.post('/peers/:id/reciprocate', asyncHandler(async (req, res) => {
   const peers = await instances.getPeers();
   const peer = peers.find(p => p.id === req.params.id);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
-  const result = await instances.requestReciprocalSync(peer, peer.syncCategories || {});
-  res.json(result);
+  // Go through the per-peer serialized queue (same path as the auto-reciprocate
+  // on toggle) so a manual "Make mutual" can't race an in-flight toggle send and
+  // land a stale map. The queue re-reads the freshest persisted categories.
+  const result = await instances.enqueueReciprocalSync(peer.id);
+  res.json(result ?? { ok: false, reason: 'no-result' });
 }));
 
 // POST /api/instances/peers/:id/probe — force immediate probe
