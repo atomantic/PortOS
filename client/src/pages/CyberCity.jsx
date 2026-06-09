@@ -100,6 +100,11 @@ function CyberCityInner() {
     updateSetting('explorationMode', !settings?.explorationMode);
   }, [updateSetting, settings?.explorationMode]);
 
+  // V (in exploration mode) swaps the follow-camera character view and first person.
+  const handleToggleCameraView = useCallback(() => {
+    updateSetting('cameraView', settings?.cameraView === 'first' ? 'third' : 'first');
+  }, [updateSetting, settings?.cameraView]);
+
   const keysRef = useKeyboardControls(handleToggleExploration);
 
   // Photo mode (roadmap 3.3): a cinematic capture mode with framing presets and a postcard
@@ -348,6 +353,7 @@ function CyberCityInner() {
         apps={v('apps', apps)}
         agentMap={v('agentMap', agentMap)}
         onBuildingClick={handleBuildingClick}
+        onToggleCameraView={handleToggleCameraView}
         cosStatus={v('cosStatus', cosStatus)}
         reviewCounts={reviewCounts}
         instances={instances}

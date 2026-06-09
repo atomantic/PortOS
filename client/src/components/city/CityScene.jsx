@@ -51,7 +51,7 @@ import { cityDayMix } from './cityConstants';
 import { CityPaletteProvider } from './CityPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -267,8 +267,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
           positions={positions}
           onBuildingProximity={handleBuildingProximity}
           onBuildingClick={onBuildingClick}
+          onToggleCameraView={onToggleCameraView}
           apps={apps}
           active={explorationMode}
+          transitioning={transitioning}
+          cameraView={settings?.cameraView ?? 'third'}
         />
       )}
       {!explorationMode && !transitioning && !photoMode && (

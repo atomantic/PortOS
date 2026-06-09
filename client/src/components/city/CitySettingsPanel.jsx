@@ -251,13 +251,37 @@ export default function CitySettingsPanel() {
 
           {/* Exploration */}
           <div>
-            <SectionHeader title="EXPLORATION" subtitle="Street-level 3rd-person mode" />
+            <SectionHeader title="EXPLORATION" subtitle="Street-level character mode" />
             <SettingToggle
               label="DROP IN MODE"
               value={settings.explorationMode}
               onChange={(v) => updateSetting('explorationMode', v)}
               description="Toggle street-level exploration (Tab)"
             />
+            <div className="mt-2">
+              <div className="grid grid-cols-2 gap-1.5">
+                {[
+                  { key: 'third', label: 'CHARACTER' },
+                  { key: 'first', label: 'FIRST PERSON' },
+                ].map(({ key, label }) => {
+                  const active = (settings.cameraView ?? 'third') === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => updateSetting('cameraView', key)}
+                      className={`font-pixel text-[9px] py-2 rounded border transition-all tracking-wide ${
+                        active
+                          ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                          : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="font-pixel text-[8px] text-gray-600 tracking-wide mt-1.5">CAMERA WHILE EXPLORING (V SWAPS IN-WORLD)</div>
+            </div>
           </div>
 
           <div className="border-t border-cyan-500/10" />

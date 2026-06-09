@@ -44,6 +44,7 @@ const DEFAULT_SETTINGS = {
   qualityPreset: 'high',
   timeOfDay: 'auto', // 'auto' follows the active theme's day/night mode; 'day'/'night' force it
   explorationMode: false,
+  cameraView: 'third', // exploration camera: 'third' follows the cyber-runner; 'first' is classic FPS (V toggles)
   ...QUALITY_PRESETS.high,
 };
 
