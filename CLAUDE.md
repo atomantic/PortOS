@@ -67,20 +67,7 @@ Client → HTTP/WebSocket → Routes (validate) → Services (logic) → JSON fi
 
 ### AI Toolkit (`server/lib/aiToolkit/`)
 
-The AI provider/runner/prompt toolkit is vendored in-tree at `server/lib/aiToolkit/`. (It was previously the `portos-ai-toolkit` npm package.) Keep the directory self-contained — no imports out to other PortOS modules — so future upstream syncs don't fight local edits.
-
-**Key points:**
-- `server/lib/aiToolkit/index.js` exports `createAIToolkit`, `createProviderStatusService`, and the four Router factories (providers / runs / prompts / providerStatus)
-- Provider configuration (models, tiers, fallbacks) lives in `server/lib/aiToolkit/providers.js`
-- `loadProviders()` auto-migrates legacy codex configs to the `codex-configured-default` sentinel; `server/index.js` warms it at startup so the rewrite happens before any request
-- PortOS extends toolkit routes in `server/routes/providers.js` for vision testing and provider status (status routes live in PortOS, not the toolkit, because they call PortOS-side socket helpers)
-- When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update `createProvider()` in `server/lib/aiToolkit/providers.js`
-- `updateProvider()` uses spread so existing providers preserve custom fields, but `createProvider()` has an explicit field list
-
-**Override consistency.** PortOS replaces `aiToolkit.services.runner.executeCliRun` in `server/index.js` with a stdin-based variant that knows the per-CLI argv conventions (Codex `exec -`, Antigravity `agy --print`, Claude Code `-p -`). Two patches follow from this:
-
-- The PortOS variant tracks live child processes in `_portosActiveRuns`, not the toolkit's internal `activeRuns`. **Every sibling method that reads or writes the runner's process map must be patched together** — `stopRun` and `isRunActive` are already overridden alongside `executeCliRun`; if you add a new method (e.g. `pauseRun`, `getActiveRunCount`), add a matching override or the runs router will report inconsistent state.
-- Time-based state transitions need read-side mirrors. `providerStatus.init()` clears expired `estimatedRecovery` entries; every reader (`getStatus`, `getAllStatuses`, `isAvailable`) must re-apply the same recovery check on read — otherwise providers stay "unavailable" past their recovery deadline until the next process restart.
+Vendored in-tree provider/runner/prompt toolkit (self-contained — no imports out to other PortOS modules). PortOS overrides `executeCliRun`/`stopRun`/`isRunActive` and mirrors time-based provider-status recovery on read. **See `server/lib/aiToolkit/CLAUDE.md`** for the override-consistency contract before editing the runner or provider config.
 
 ### Command Palette & Voice Nav — shared backbone (`server/lib/navManifest.js`)
 
@@ -108,20 +95,9 @@ Fail-fast guards at module load catch missing fields, non-slash paths, and dupli
 
 **Tests:** `server/lib/navManifest.test.js` asserts shape invariants + alias resolution; `server/routes/palette.test.js` asserts the manifest endpoint + action dispatch + whitelist enforcement. Any new entry is automatically covered by the shape-invariant tests.
 
-### Dashboard Widgets & Layouts
+### Dashboard Widgets & Layouts (`client/src/components/dashboard/`)
 
-Dashboard widgets are registered in `client/src/components/dashboard/widgetRegistry.jsx` — each entry has `{ id, label, Component, width, defaultH?, gate? }`. The Dashboard page renders the active layout's widget list from this registry; named layouts persist in `data/dashboard-layouts.json` and are managed via `GET/PUT/DELETE /api/dashboard/layouts`. Built-in layouts (`default`, `focus`, `morning-review`, `ops`) are seeded on first read and cannot be deleted.
-
-**Grid positions:** layouts also carry a `grid: [{ id, x, y, w, h }]` array — free-form positions on a 12-column grid (rows ~80px each). When `grid` is empty (legacy/unmigrated layouts) the renderer auto-flows widgets using `synthesizeGrid` based on each widget's `width` keyword and `defaultH`. The "Arrange" button on the Dashboard enters edit mode where every widget exposes a move (top-right) and resize (bottom-right) handle; drag is snap-to-grid with collision-resolve via `placeAndCompact` (pins the moved item, slots others into the smallest non-colliding y). Save persists to the active layout's `grid`. The grid renderer collapses to a single-column stack below 640px viewport width — drag/resize is desktop-only.
-
-**When adding a new dashboard widget:**
-1. Add a `{ id, label, Component, width, defaultH?, gate? }` entry to `WIDGETS` in `widgetRegistry.jsx`. Use a stable `id` (kebab-case) — it's the contract stored in layouts. Pick `defaultH` based on the widget's natural content height (default `4`); this controls the size when it's first auto-placed into a grid.
-2. If the widget needs dashboard data (apps/usage/health), read it from the `dashboardState` prop — do NOT issue a duplicate fetch from inside the widget.
-3. If the widget only makes sense in some cases (e.g. only when apps exist), add a `gate: (state) => boolean` predicate.
-4. Add the widget id to the built-in `default` layout in `server/services/dashboardLayouts.js` if it should appear out of the box.
-5. Users can toggle widgets on/off per layout via the Dashboard's layout picker → Edit, and arrange/resize them via the "Arrange" button.
-
-Switching layouts is also wired into the `⌘K` palette — it synthesizes a `Dashboard: <name>` command per layout at palette-open time, so any layout the user creates is instantly keyboard-reachable without further registration.
+Widgets are registered in `widgetRegistry.jsx` (`{ id, label, Component, width, defaultH?, gate? }`); named layouts persist in `data/dashboard-layouts.json` with free-form 12-column `grid` positions. **See `client/src/components/dashboard/CLAUDE.md`** for the registration steps, grid/arrange mechanics, and ⌘K layout wiring before adding a widget.
 
 ### Backup Service (`server/services/backup.js`)
 
