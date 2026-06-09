@@ -10,8 +10,9 @@
  */
 
 import * as brainStorage from './brainStorage.js';
-import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
+
+const { BRAIN_ENTITY_TYPES } = brainStorage;
 
 /**
  * Apply remote changes from a peer instance.
