@@ -7,13 +7,14 @@
 // three.js / React imports so the topology is unit-testable (mirrors cityFederation.js
 // / cityHealthTower.js).
 
+import { PARCELS } from './cityPlan';
+
 export const MONUMENTS = {
-  // Northeast monument district — a row centered around [30, 0, -40], clear of the
-  // vault (x≈-34), task-queue (x≈+34), voice ([0,0,-40]), health ([48,0,28]),
-  // AI core ([0,0,0]), and productivity district (SW).
-  base: [30, 0, -40], // center of the row
+  // Northeast monument district — a row anchored by the master plan (cityPlan.js), clear
+  // of the vault, task-queue, voice beacon, health tower, AI core, and productivity district.
+  base: PARCELS.goals.anchor, // center of the row
   spacing: 9, // x-distance between adjacent monuments
-  z: -40, // shared depth of the row
+  z: PARCELS.goals.anchor[2], // shared depth of the row
   maxMonuments: 8, // cap; goals beyond this fold into an overflow marker
   minHeight: 2, // floor height so even a 0%-progress site reads as a small structure
   fullHeight: 12, // height of a completed (100%) monument

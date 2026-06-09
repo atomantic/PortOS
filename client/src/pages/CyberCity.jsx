@@ -231,6 +231,19 @@ function CyberCityInner() {
     60_000,
   );
 
+  // Storage introspection drives the Data Harbor district (DB table silos + data/ domain
+  // racks on the waterfront). Server-side cache does the heavy lifting; a 2-minute poll
+  // keeps the harbor current. `compare` strips the always-changing `ts` so a byte-identical
+  // payload keeps its identity and the harbor subtree skips reconciliation.
+  const { data: introspection } = useAutoRefetch(
+    () => api.getCityIntrospection({ silent: true }),
+    120_000,
+    {
+      compare: (prev, next) =>
+        JSON.stringify({ ...prev, ts: null }) === JSON.stringify({ ...next, ts: null }),
+    },
+  );
+
   // JIRA sprint district: the set of apps with JIRA wired up (each carries instanceId+projectKey),
   // collapsed to a stable signature that gates and re-triggers the poll only when that set changes.
   const jiraAppsKey = useMemo(
@@ -351,6 +364,7 @@ function CyberCityInner() {
         memoryGraph={memoryGraph}
         inboxDepth={inboxData?.counts?.needs_review ?? 0}
         jiraTickets={jiraTickets}
+        introspection={introspection}
         playback={playback.active}
         photoMode={photoMode}
         photoPresetId={photoPresetId}

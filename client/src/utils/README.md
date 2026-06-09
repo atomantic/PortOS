@@ -22,7 +22,7 @@ grep -i "what you want to do" client/src/utils/README.md
 
 | Module | Purpose |
 |---|---|
-| `formatters` | Date/time/duration/byte/word formatters (`formatBytes`, `timeAgo`, `formatTimecode`, `formatDurationMs`, `formatDateShort`, `parseTimeoutMs`, `formatCooldown`, `parseSizeGb`, `recommendedRamGb`, …) plus timeout-input bounds and `getAppName`. Do not re-define formatters inside components. |
+| `formatters` | Date/time/duration/byte/word formatters (`formatBytes`, `formatCompactCount`, `timeAgo`, `formatTimecode`, `formatDurationMs`, `formatDateShort`, `parseTimeoutMs`, `formatCooldown`, `parseSizeGb`, `recommendedRamGb`, …) plus timeout-input bounds and `getAppName`. Do not re-define formatters inside components. |
 | `cronHelpers` | Cron preset list, `isCronExpression` detection, and `describeCron` human-readable rendering. |
 | `timeWindow` | Time-of-day window math (`isInTimeWindow`, `timeStringToMinutes`) and morning-layout auto-switch helpers (`pickActiveLayoutId`, `recordManualLayoutPick`). |
 
@@ -71,6 +71,7 @@ its tunable constants and placement helpers.
 | `cityArtifacts` | Earned-artifact milestones (level/goal/streak) → placed artifact descriptors (`computeArtifacts`). |
 | `cityBackupVault` | Backup-vault health/alerting state and color (`computeBackupVault`, `vaultHealth`). |
 | `cityChronotype` | Chronotype energy curve by hour → brightness/tempo modifiers (`computeChronotypeEnergy`). |
+| `cityDataHarbor` | Data Harbor pier district: DB table silos + data/ domain racks from /api/city/introspection (`computeDataHarbor`). |
 | `cityDistrictLayout` | Shared district layout math: auto-columns, grid placement, tallying, metric→height scaling. |
 | `cityEasterEggs` | Unlockable easter eggs from context (date/character/goals) → placements (`computeEasterEggs`). |
 | `cityFederation` | Sync-peer reachability horizon: status color/opacity, bridge state, peer placement (`computeFederationHorizon`). |
@@ -82,6 +83,8 @@ its tunable constants and placement helpers.
 | `cityMemoryDistrict` | Brain-graph memory district: category clustering, bridges, placement (`computeMemoryDistrict`). |
 | `cityMiniMap` | Mini-map projection of building positions into 2D bounds (`computeMiniMap`, `projectPoint`). |
 | `cityPhotoMode` | Photo-mode camera presets, the demand-loop fly stepper, postcard stats, and screenshot filename (`getPreset`, `cyclePreset`, `stepFly`). |
+| `cityPlan` | Master town plan: district parcels, shoreline/bay, plaza, transit loop, street network (`PARCELS`, `WORLD`, `computeStreets`, `computeStreetProps`, `isInWater`). |
+| `cityRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
 | `cityProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
 | `citySeasonalDecor` | Season/holiday resolution → seasonal decoration placements (`computeSeasonalDecor`). |
 | `citySoundscape` | Ambient soundscape: mood/energy classification and chord selection (`computeSoundscape`). |

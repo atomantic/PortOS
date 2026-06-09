@@ -5,9 +5,10 @@
 // React imports so the topology is unit-testable (mirrors cityBackupVault.js).
 
 import { tallyByKey } from './cityDistrictLayout';
+import { PARCELS } from './cityPlan';
 
 export const TASK_QUEUE = {
-  position: [34, 0, -10], // east of the building grid, mirroring the backup vault to the west
+  position: PARCELS.taskQueue.anchor, // east of the building grid, mirroring the backup vault to the west
   maxCrates: 8, // visible-crate cap; beyond this the warehouse reads as "overflow"
   crateSize: 1.5,
   crateGap: 0.18,

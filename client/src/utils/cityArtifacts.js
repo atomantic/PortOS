@@ -9,12 +9,13 @@
 
 import { levelFromXP } from './characterXp';
 import { gridIndexToPosition } from './cityDistrictLayout';
+import { PARCELS } from './cityPlan';
 
-// Hall of Achievements — a clear cluster in the +X / -Z quadrant, between the task-queue
-// (x≈+34, z≈-10), health tower (x≈+48, z≈+28), goal-monument row (z≈-40) and voice marker
-// ([0,0,-40]). Artifacts lay out in a tight grid centered on this base.
+// Hall of Achievements — a clear cluster in the +X / -Z quadrant, between the task-queue,
+// health tower, goal-monument row, and voice beacon. Artifacts lay out in a tight grid
+// centered on this base, anchored by the master plan (cityPlan.js).
 export const ARTIFACTS = {
-  base: [44, 0, -28], // center of the cluster
+  base: PARCELS.artifacts.anchor, // center of the cluster
   spacing: 6, // distance between adjacent pedestals (both x and z)
   columns: 3, // grid width before wrapping to the next row (toward -Z)
   pedestalWidth: 2,

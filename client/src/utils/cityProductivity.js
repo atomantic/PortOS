@@ -5,8 +5,10 @@
 // zero-day streak (present but unlit beyond the base). No three.js / React imports so the
 // topology is unit-testable (mirrors cityBackupVault.js / cityHealthTower.js).
 
+import { PARCELS } from './cityPlan';
+
 export const MONUMENT = {
-  position: [-48, 0, 28], // southwest district — clear of the vault (-34), grid, archive, and the SE wellness tower
+  position: PARCELS.productivity.anchor, // southwest district — anchored by the master plan (cityPlan.js)
   baseWidth: 5, // footprint of the obelisk base
   minHeight: 3, // floor height so a 0-streak monument still reads as a stub, not nothing
   maxHeight: 26, // height at/above STREAK_CAP days

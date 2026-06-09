@@ -6,8 +6,10 @@
 // 0-step day). No three.js / React imports so the topology is unit-testable (mirrors
 // cityBackupVault.js / cityTaskQueue.js).
 
+import { PARCELS } from './cityPlan';
+
 export const TOWER = {
-  position: [48, 0, 28], // far southeast — a wellness district clear of the vault, warehouse, grid, and archive
+  position: PARCELS.health.anchor, // far southeast — a wellness district anchored by the master plan (cityPlan.js)
   baseRadius: 3.2,
   segmentHeight: 3, // height of a fully-lit (level === 1) segment
   segmentGap: 0.25, // vertical gap between stacked segments

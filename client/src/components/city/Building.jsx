@@ -6,6 +6,55 @@ import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import HolographicPanel from './HolographicPanel';
 import BuildingHologram from './BuildingHologram';
+import { computeRooftopKit } from '../../utils/cityRooftops';
+
+// Rooftop fixture geometry/materials are module-scope singletons shared by every
+// building — fixtures are tiny set dressing, so they keep fixed colors (the antenna
+// tip is a red aviation blinker on purpose) instead of per-theme materials.
+const ROOF_METAL_MAT = new THREE.MeshStandardMaterial({ color: '#232d40', roughness: 0.6, metalness: 0.5 });
+const ROOF_TIP_MAT = new THREE.MeshBasicMaterial({ color: '#ff3344', toneMapped: false });
+const ROOF_GEOMS = {
+  antennaMast: new THREE.CylinderGeometry(0.02, 0.035, 1.2, 5),
+  antennaTip: new THREE.SphereGeometry(0.05, 6, 6),
+  tank: new THREE.CylinderGeometry(0.22, 0.22, 0.45, 10),
+  ac: new THREE.BoxGeometry(0.4, 0.22, 0.34),
+  dish: new THREE.SphereGeometry(0.24, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+};
+
+// 0–3 deterministic fixtures (antenna/tank/AC/dish) on the roof, seeded by app name —
+// the same determinism as the window textures, so a building keeps its roof forever.
+function RooftopKit({ name, width, y }) {
+  const kit = useMemo(() => computeRooftopKit(name, width), [name, width]);
+  if (kit.length === 0) return null;
+  return (
+    <group position={[0, y, 0]}>
+      {kit.map((f, i) => (
+        <group key={i} position={[f.x, 0, f.z]} rotation={[0, f.rotation, 0]} scale={f.scale}>
+          {f.type === 'antenna' && (
+            <>
+              <mesh geometry={ROOF_GEOMS.antennaMast} material={ROOF_METAL_MAT} position={[0, 0.6, 0]} />
+              <mesh geometry={ROOF_GEOMS.antennaTip} material={ROOF_TIP_MAT} position={[0, 1.22, 0]} />
+            </>
+          )}
+          {f.type === 'tank' && (
+            <mesh geometry={ROOF_GEOMS.tank} material={ROOF_METAL_MAT} position={[0, 0.225, 0]} />
+          )}
+          {f.type === 'ac' && (
+            <mesh geometry={ROOF_GEOMS.ac} material={ROOF_METAL_MAT} position={[0, 0.11, 0]} />
+          )}
+          {f.type === 'dish' && (
+            <mesh
+              geometry={ROOF_GEOMS.dish}
+              material={ROOF_METAL_MAT}
+              position={[0, 0.12, 0]}
+              rotation={[Math.PI / 5, 0, 0]}
+            />
+          )}
+        </group>
+      ))}
+    </group>
+  );
+}
 
 // 7x7 pixel art icons drawn on building faces via lit office windows
 const PIXEL_ICONS = [
@@ -343,7 +392,7 @@ function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMu
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited }) {
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
@@ -536,6 +585,9 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           />
         )}
       </mesh>
+
+      {/* Rooftop fixtures — deterministic per app name; off on the low preset */}
+      {rooftops && <RooftopKit name={app.name || app.id} width={width} y={height} />}
 
       {/* Glow halo wireframe - slightly larger than building (night only) */}
       {!app.archived && !daytime && (

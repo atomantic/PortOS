@@ -101,6 +101,18 @@ export function timeAgo(dateStr, fallback = 'never') {
  * @param {number} decimals - Number of decimal places
  * @returns {string} Formatted size (e.g., "1.5 KB", "2.3 MB", "4.2 TB")
  */
+/**
+ * Compact decimal count: 950 → "950", 1200 → "1.2K", 3400000 → "3.4M".
+ * @param {number} n - Count to abbreviate
+ * @returns {string} Abbreviated count
+ */
+export function formatCompactCount(n) {
+  if (!Number.isFinite(n)) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 export function formatBytes(bytes, decimals = 1) {
   if (!bytes || bytes === 0) return '0 B';
 
