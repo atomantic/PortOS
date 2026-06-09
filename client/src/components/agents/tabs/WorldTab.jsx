@@ -5,7 +5,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import socket from '../../../services/socket';
 import useMoltworldWs from '../../../hooks/useMoltworldWs';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatCooldown } from '../../../utils/formatters';
 
 const EVENT_ICONS = {
   status: '🔌',
@@ -206,10 +206,11 @@ export default function WorldTab({ agentId }) {
     fetchQueue();
   }, [accountId, fetchStatus, fetchRateLimits, fetchHistory, fetchQueue]);
 
-  // Re-fetch history when filter changes
+  // Re-fetch history when filter changes (fetchHistory already captures accountId + historyFilter
+  // via useCallback, so adding it to deps here ensures a fresh version runs when accountId changes)
   useEffect(() => {
     if (accountId) fetchHistory();
-  }, [historyFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [accountId, historyFilter, fetchHistory]);
 
   // Listen for queue Socket.IO events
   useEffect(() => {
@@ -365,13 +366,6 @@ export default function WorldTab({ agentId }) {
   const getCooldownMs = (action) => {
     const end = cooldownEnds[action];
     return end ? Math.max(0, end - Date.now()) : 0;
-  };
-
-  const formatCooldown = (ms) => {
-    const totalSeconds = Math.ceil(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
   if (loading) {

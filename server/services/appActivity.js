@@ -5,9 +5,8 @@
  * Prevents the CoS from working on the same app in a loop.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.cos;
 const ACTIVITY_FILE = join(DATA_DIR, 'app-activity.json');
@@ -35,7 +34,7 @@ export async function loadAppActivity() {
  */
 export async function saveAppActivity(activity) {
   await ensureDir(DATA_DIR);
-  await writeFile(ACTIVITY_FILE, JSON.stringify(activity, null, 2));
+  await atomicWrite(ACTIVITY_FILE, activity);
 }
 
 /**

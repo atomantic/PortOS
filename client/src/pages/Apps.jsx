@@ -12,6 +12,7 @@ import { useAppOperation } from '../hooks/useAppOperation';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
+import { formatBytes } from '../utils/formatters';
 
 export default function Apps() {
   const [apps, setApps] = useState([]);
@@ -463,7 +464,7 @@ export default function Apps() {
                                   <span className="text-xs text-green-400">{proc.cpu}%</span>
                                 )}
                                 {proc.memory !== undefined && (
-                                  <span className="text-xs text-blue-400">{(proc.memory / 1024 / 1024).toFixed(0)}MB</span>
+                                  <span className="text-xs text-blue-400">{formatBytes(proc.memory)}</span>
                                 )}
                               </div>
                             );

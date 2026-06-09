@@ -4,7 +4,7 @@ import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, Ex
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes, formatContextLength, timeAgo } from '../../utils/formatters';
+import { formatBytes, formatContextLength, timeAgo, parseSizeGb, recommendedRamGb } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
@@ -44,22 +44,6 @@ const CAPABILITY_META = {
   tools: { Icon: Wrench, label: 'Tool use', cls: 'text-blue-400 border-blue-400/50' },
 };
 
-// Parse a human size string ("4.7 GB", "512 MB") back to GB for the RAM hint.
-function parseSizeGb(sizeStr) {
-  const match = /([\d.]+)\s*(TB|GB|MB|KB)/i.exec(String(sizeStr || ''));
-  if (!match) return null;
-  const val = parseFloat(match[1]);
-  if (!Number.isFinite(val)) return null;
-  return val * ({ TB: 1024, GB: 1, MB: 1 / 1024, KB: 1 / (1024 * 1024) }[match[2].toUpperCase()]);
-}
-
-// Rough RAM/VRAM to run a model: weights + ~20% overhead (KV cache/runtime),
-// rounded up to whole GB with a 1 GB floor. Prefers exact bytes when known.
-function recommendedRamGb(m) {
-  const gb = Number.isFinite(m?.sizeBytes) ? m.sizeBytes / 1024 ** 3 : parseSizeGb(m?.size);
-  if (!gb || gb <= 0) return null;
-  return Math.max(1, Math.ceil(gb * 1.2));
-}
 
 // Summarize a migrate result for the success toast (per-model statuses → counts).
 function summarizeMigrate(r) {
@@ -686,7 +670,7 @@ export function LocalLlmTab() {
               )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {group.models.map((m) => {
-                  const ram = recommendedRamGb(m);
+                  const ram = recommendedRamGb(m?.sizeBytes, m?.size);
                   const isHf = m.source === 'huggingface';
                   const createdMs = new Date(m.createdAt).getTime();
                   const updatedMs = new Date(m.updatedAt).getTime();

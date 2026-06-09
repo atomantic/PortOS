@@ -1,8 +1,7 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 
@@ -34,7 +33,7 @@ export async function updateSelectors(provider, selectors) {
   const all = await getSelectors();
   all[provider] = selectors;
   await ensureDir(PATHS.messages);
-  await writeFile(SELECTORS_FILE, JSON.stringify(all, null, 2));
+  await atomicWrite(SELECTORS_FILE, all);
   return all[provider];
 }
 

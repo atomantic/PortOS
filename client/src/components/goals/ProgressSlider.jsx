@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Minus, Clock } from 'lucide-react';
+import { formatDurationMin } from '../../utils/formatters';
 
 export default function ProgressSlider({ goal, onCommit }) {
   const [draft, setDraft] = useState(goal.progress ?? 0);
@@ -49,9 +50,7 @@ export default function ProgressSlider({ goal, onCommit }) {
       {goal.timeTracking?.totalMinutes > 0 && (
         <div className="flex items-center gap-1 mt-1 text-xs text-gray-600">
           <Clock className="w-3 h-3" />
-          {goal.timeTracking.totalMinutes >= 60
-            ? `${Math.floor(goal.timeTracking.totalMinutes / 60)}h${goal.timeTracking.totalMinutes % 60 ? ` ${goal.timeTracking.totalMinutes % 60}m` : ''}`
-            : `${goal.timeTracking.totalMinutes}m`}
+          {formatDurationMin(goal.timeTracking.totalMinutes)}
           {' total'}
           {goal.timeTracking.weeklyAverage > 0 && ` · ${goal.timeTracking.weeklyAverage}m/wk`}
         </div>

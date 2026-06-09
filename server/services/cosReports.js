@@ -5,12 +5,12 @@
  * Handles daily reports, briefings, activity summaries, and recent tasks.
  */
 
-import { readFile, writeFile, readdir } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './cosState.js';
 import { getAgentsByDate } from './cosAgents.js';
-import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
+import { formatDuration, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
 
 // A completed agent's work duration in ms: prefer the recorded `result.duration`,
 // else derive from completedAt − startedAt. Clamped to >=0 so a clock-skewed
@@ -53,7 +53,7 @@ export async function generateReport(date = null) {
 
   // Save report
   const reportFile = join(REPORTS_DIR, `${reportDate}.json`);
-  await writeFile(reportFile, JSON.stringify(report, null, 2));
+  await atomicWrite(reportFile, report);
 
   return report;
 }
