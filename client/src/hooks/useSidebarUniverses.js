@@ -5,5 +5,5 @@ import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 // refreshes on window focus (debounced 30s) so freshly-created or renamed
 // universes surface without a reload.
 export function useSidebarUniverses() {
-  return useFocusRefreshedList(api.listUniverses, { label: 'universes' });
+  return useFocusRefreshedList(api.listUniverses, 'universes');
 }

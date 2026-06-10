@@ -71,31 +71,15 @@ describe('useFocusRefreshedList', () => {
   it('coerces a non-array result to an empty array and warns on rejection', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fetchFn = vi.fn().mockResolvedValue(null);
-    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, { label: 'widgets' }));
+    const { result } = renderHook(() => useFocusRefreshedList(fetchFn, 'widgets'));
     await waitFor(() => expect(fetchFn).toHaveBeenCalled());
     expect(result.current).toEqual([]);
 
     const rejectFn = vi.fn().mockRejectedValue(new Error('boom'));
-    renderHook(() => useFocusRefreshedList(rejectFn, { label: 'widgets' }));
+    renderHook(() => useFocusRefreshedList(rejectFn, 'widgets'));
     await waitFor(() => expect(warn).toHaveBeenCalled());
     expect(warn.mock.calls.some((c) => String(c[0]).includes('widgets'))).toBe(true);
     warn.mockRestore();
-  });
-
-  it('honors a custom signature function', async () => {
-    const fetchFn = vi.fn()
-      .mockResolvedValueOnce([{ id: '1', name: 'A', rev: 1 }])
-      .mockResolvedValue([{ id: '1', name: 'A', rev: 2 }]);
-    const { result } = renderHook(() =>
-      useFocusRefreshedList(fetchFn, { signature: (i) => `${i.id}|${i.rev}` }),
-    );
-    await waitFor(() => expect(result.current[0].rev).toBe(1));
-
-    const now = Date.now();
-    vi.spyOn(Date, 'now').mockReturnValue(now + 31_000);
-    fireFocus();
-    // rev changed → signature differs → array replaced even though name is equal.
-    await waitFor(() => expect(result.current[0].rev).toBe(2));
   });
 
   it('removes the focus listener on unmount', async () => {
