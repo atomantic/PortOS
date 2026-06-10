@@ -13,8 +13,17 @@ vi.mock('../../services/api', () => ({
   // so the import doesn't resolve to undefined if the picker ever mounts eagerly.
   getDirectories: vi.fn(),
 }));
+// The real `toast` is a callable function with `.success`/`.error`/`.warning`
+// attached — the component calls the bare form (`toast('Backup already
+// running')`) as well as the namespaced ones. Mock it faithfully so a future
+// test of those bare-call paths doesn't trip over a non-callable stub.
 vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+  default: Object.assign(vi.fn(), {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  }),
 }));
 
 import {
@@ -141,6 +150,24 @@ describe('BackupTab', () => {
 
       expect(restoreDatabase).toHaveBeenLastCalledWith({ snapshotId: 'snap-2026-06-09', dryRun: false }, { silent: true });
       expect(toast.success).toHaveBeenCalledWith('Database restored from snap-2026-06-09', { icon: '💾' });
+    });
+
+    it('toasts an error when the confirmed restore fails', async () => {
+      withSnapshot();
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 }) // dry-run
+        .mockResolvedValueOnce({ status: 'failed', reason: 'pg_restore_error' }); // real restore fails
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+
+      expect(toast.error).toHaveBeenCalledWith('DB restore failed: pg_restore_error');
+      expect(toast.success).not.toHaveBeenCalled();
     });
 
     it('aborts and toasts when the dry-run reports no dump', async () => {
